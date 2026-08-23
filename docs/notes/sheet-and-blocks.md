@@ -75,8 +75,9 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   targets). The former single base-info block was split three ways: `BaseInfoSection`
   keeps the descriptive **profile** fields (name & details), `CharacterImageSection`
   holds the portrait, and `SystemInfoSection` holds the non-purchasable
-  characteristics — Power Level, the power-point pool, size, speed, initiative, and
-  hero points. Abilities/Resistances/Advantages were split out of the former
+  characteristics — Power Level, the power-point pool, the homebrew-cost notice, the
+  **Power Level limits**, size, reach, speed, movement modes, initiative, hero points
+  and Extra Effort. Abilities/Resistances/Advantages were split out of the former
   `StatsSection`; Abilities and Resistances are `QTableWidget`s built through
   `ui/sections/stat_table.py` (Trait | ABL | Rank | Total, a spanned rule before the
   derived traits), which is also where the *stat-family* pieces they share with the
@@ -86,13 +87,15 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   data-driven blocks take the `GameData` and build widgets by iterating over the
   data lists — no hardcoded ability/skill names.
 - `SystemInfoSection` shows several **derived** readouts computed in `core.rules`, never
-  in the widget: `speed_lines`/`speed_columns` (one line **per movement mode** — see
+  in the widget: `condition_speed_lines`/`speed_columns` (one line **per movement mode** — see
   [Size and movement](size-and-movement.md) — each rank expanded to walk/dash/run distances (walk/dash
   off the ground), with a
   ft-per-round ↔ km/h toggle; a **label per row**, since a line is a mode and what
   granted it goes on the hover), `initiative_modifier` (effective initiative
   ability + Improved Initiative's +4/rank; Alternate Initiative swaps the ability via a
-  per-selection `AdvantageSelection.parameter`), and `effective_size` (the bought size
+  per-selection `AdvantageSelection.parameter`), `movement_mode_lines` (the specialised
+  speeds an active power grants), `character_reach`/`reach_is_altered` (see
+  [Size and movement](size-and-movement.md)), and `effective_size` (the bought size
   shifted by an active Growth/Shrinking, which drives real trait modifiers now and not
   just a label). It exposes `refresh_derived()` for the sheet to
   call when abilities/advantages/powers/conditions change. Movement constants live in
@@ -104,8 +107,38 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   Every change — a click or a GM's command — funnels through
   `SystemInfoSection._on_hero_points_changed`, which is why the `note-requested` topic
   is raised there and a point can never move silently (see [The dice roller](dice-and-rolling.md)).
+  Five pips is the row's **resting** count, not a cap: `characteristics.json` allows 99
+  and the rules put none on a GM handing out a sixth, so the row grows a pip rather than
+  clamping — it used to clamp in `set_value` and then write the clamped number back
+  through `_on_hero_points_changed`, which *destroyed* the point rather than hiding it.
   `HeroPointsWidget` is shared with GM Mode's `PlayerCard`, so its pip size
   (`column.hero-point`) has to suit both.
+- **The block owns Power Level, so it owns what Power Level does.** A `Limits` row
+  (`PowerLevelCapsWidget`) names each character-wide cap the build is **past** —
+  `Dodge + Toughness 22/20`, `Skills (Stealth) 25/20` — from `power_level_cap_summary`,
+  which reduces the per-row skill cap to the row standing closest to it. The arithmetic
+  is `power_level_caps`, and `power_level_violations` is now derived from the same list,
+  so the readout and the warning cannot be two different answers. That function was fully
+  implemented and tested before this and had **no UI surface at all**: its only caller was
+  a minion's build, so a character over Power Level on their own defences got no mark
+  anywhere while a single power got a ⚠. Breaches only, and no row for a legal build —
+  the same bargain Reach and Movement strike, and for the same reason: a legal build is
+  the ordinary case, and three lines of reassurance on every sheet is noise standing
+  where a warning has to be noticed. The spent half of the point pool tints the same way
+  when the build has outrun its budget (`_restate_pool_balance`).
+- **`refresh_limits` is subscribed to three topics, not one.** Its inputs are scattered:
+  the level (this block's own spin box, `caps-changed`), every trait any other block edits
+  (`facts-changed`), and the powers and conditions (`derived-changed`, which is all it
+  had). Hanging it off `refresh_derived` alone left it stale for the two edits that move
+  it most directly — typing a Power Level, and typing a Dodge rank.
+- **Four of the block's rows are not always there** — the cost notice, Reach, Movement,
+  and (for an NPC) Power Level, Hero Points and the limits. They all go through
+  `_set_row_visible`, which calls `QFormLayout.setRowVisible` rather than hiding the field
+  and its caption by hand: hiding a widget takes it off the screen and leaves its **row**
+  in the layout, spacing and all, so every absent row used to leave a blank band behind
+  it. An NPC's Power Level is *estimated* from its traits (`estimated_power_level`), which
+  is why the limits go with it — measuring those traits back against a number derived
+  from them is a tautology, not a limit.
 
 ## Block frames, the canvas API and layout persistence
 

@@ -1,13 +1,21 @@
 """The System / Power Level block: the non-purchasable game characteristics.
 
-Split out of the former base-info block: power level, the power-point pool, size,
-speed, initiative, and hero points. Power level and the point pool feed the build
-(``changed``); the rest are derived readouts or descriptive edits (``edited``).
+Split out of the former base-info block. Ten rows, in the order they are built: power
+level, the power-point pool, the homebrew-cost notice, the **Power Level limits**, size,
+reach, speed, movement modes, initiative, hero points and Extra Effort. Power level and
+the point pool feed the build (``changed``); the rest are derived readouts or
+descriptive edits (``edited``).
 
-Speed, initiative, and effective size are *derived* — computed in
-:mod:`mm_companion.core.rules` from abilities, advantages, and active powers — so
-this block exposes :meth:`refresh_derived` for the sheet to call whenever those
-inputs change. The widgets never compute rules themselves.
+**Four of those rows are not always there.** The cost notice, Reach and Movement appear
+only when they have something to say, and an NPC sheet drops Power Level, Hero Points
+and the limits (see :meth:`SystemInfoSection.set_npc_mode`). All of them go through
+:meth:`SystemInfoSection._set_row_visible`, which takes the *row* out of the form rather
+than only the widgets in it — hiding a widget leaves its row's spacing behind.
+
+Everything below the pool is *derived* — computed in :mod:`mm_companion.core.rules` from
+abilities, advantages, conditions and active powers — so this block exposes
+:meth:`SystemInfoSection.refresh_derived` for the sheet to call whenever those inputs
+change. The widgets never compute rules themselves.
 """
 
 from __future__ import annotations
@@ -46,6 +54,7 @@ from mm_companion.core.rules import (
     initiative_modifier,
     initiative_roll,
     movement_mode_lines,
+    power_level_cap_summary,
     power_level_for_points,
     pushed_effects,
     pushed_trait_labels,
@@ -89,6 +98,13 @@ class HeroPointsWidget(QWidget):
     reconciles rather than redraws (see there), which keeps an arrangement the
     player made wherever the new count still allows it.
 
+    **Five is the resting count, not a cap.** ``characteristics.json`` puts the ceiling
+    at 99 and the rules put none on a GM handing out a sixth, so a row that stopped at
+    five did not merely fail to draw the point — :meth:`set_value` clamped, and
+    ``_on_hero_points_changed`` wrote the clamped number straight back to the model, so
+    the sixth point was *destroyed* rather than hidden. The row grows a pip instead, and
+    shrinks back to five when the count drops.
+
     Hero points stay clickable even when the sheet is locked — they are spent
     during play, not a build value — so this widget has no locked state.
     """
@@ -113,36 +129,64 @@ class HeroPointsWidget(QWidget):
             f"QPushButton:hover {{ background: {theme.wash('accent', 0.18)};"
             f" border-radius: {self._pip_size // 2}px; }}"
         )
-        for i in range(HERO_POINT_PIPS):
+        self._style = style
+        self._row = row
+        self._grow_to(HERO_POINT_PIPS)
+        row.addStretch()
+        self._render()
+
+    def _grow_to(self, count: int) -> None:
+        """Make sure there are at least *count* pips, adding any that are missing.
+
+        Pips are only ever added here and only ever removed by :meth:`_shrink_to`, so a
+        player's arrangement survives a count that goes up and comes back down.
+        """
+
+        while len(self._buttons) < count:
+            index = len(self._buttons)
             button = QPushButton()
             button.setFlat(True)
             button.setFixedSize(self._pip_size, self._pip_size)
             button.setIconSize(QSize(self._pip_size, self._pip_size))
-            button.setStyleSheet(style)
+            button.setStyleSheet(self._style)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
-            button.clicked.connect(lambda _=False, index=i: self._on_click(index))
+            button.clicked.connect(lambda _=False, i=index: self._on_click(i))
             self._buttons.append(button)
-            row.addWidget(button)
-        row.addStretch()
-        self._render()
+            # Before the trailing stretch, so the row stays left-aligned as it grows.
+            self._row.insertWidget(index, button)
+
+    def _shrink_to(self, count: int) -> None:
+        """Drop pips past *count*, never below :data:`HERO_POINT_PIPS`."""
+
+        while len(self._buttons) > max(HERO_POINT_PIPS, count):
+            button = self._buttons.pop()
+            self._lit.discard(len(self._buttons))
+            self._row.removeWidget(button)
+            button.setParent(None)
+            button.deleteLater()
 
     def value(self) -> int:
         return len(self._lit)
 
     def set_value(self, value: int) -> None:
-        """Set the count (clamped to 0…5) without emitting :attr:`valueChanged`.
+        """Set the count without emitting :attr:`valueChanged`, growing the row to fit it.
 
         The caller has a number, not an arrangement, so this *reconciles* to it:
         spending puts out the right-most lit pips, gaining lights the left-most
         dark ones. A player who lit only the fourth pip and then spends a point
         still ends up where they expect, and a load with nothing to preserve
         settles on the left-most ``value`` pips.
+
+        Only the floor is clamped. A count above five grows the row rather than being
+        cut down to it — see the class docstring for what the cut used to cost.
         """
-        target = max(0, min(HERO_POINT_PIPS, int(value)))
+        target = max(0, int(value))
+        self._grow_to(target)
         while len(self._lit) > target:
             self._lit.discard(max(self._lit))
         while len(self._lit) < target:
-            self._lit.add(min(set(range(HERO_POINT_PIPS)) - self._lit))
+            self._lit.add(min(set(range(len(self._buttons))) - self._lit))
+        self._shrink_to(target)
         self._render()
 
     def _on_click(self, index: int) -> None:
@@ -195,16 +239,20 @@ class SpeedWidget(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(1)
+        layout.setSpacing(int(theme.metric("space.xxs")))
 
         self._rows = QWidget()
         rows = QVBoxLayout(self._rows)
         rows.setContentsMargins(0, 0, 0, 0)
-        rows.setSpacing(1)
+        rows.setSpacing(int(theme.metric("space.xxs")))
         layout.addWidget(self._rows)
 
         self._unit_button = QPushButton()
         self._unit_button.setCheckable(False)
+        self._unit_button.setToolTip(
+            "Switch every speed line between the imperial distance covered in one round "
+            "and the equivalent sustained km/h."
+        )
         self._unit_button.clicked.connect(self._toggle_unit)
         layout.addWidget(self._unit_button, alignment=Qt.AlignmentFlag.AlignLeft)
 
@@ -319,7 +367,7 @@ class MovementModesWidget(QWidget):
         self._data = data
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(1)
+        layout.setSpacing(int(theme.metric("space.xxs")))
         self.setVisible(False)
 
     def render_lines(self, lines: list) -> None:
@@ -345,6 +393,63 @@ class MovementModesWidget(QWidget):
         self.setVisible(bool(lines))
 
 
+class PowerLevelCapsWidget(QWidget):
+    """The character-wide Power Level limits this build is **past**, one line each.
+
+    The block owns Power Level, and until now it stated the number and nothing the number
+    *does*. The caps were computed all along — :func:`~mm_companion.core.rules.
+    power_level_violations` has evaluated the paired-resistance caps and the per-skill
+    modifier cap since long before this — but the only caller was a minion's build, so a
+    player whose own Dodge + Toughness was over Power Level got no mark anywhere on the
+    sheet while a single power got a warning glyph. This is that answer, shown.
+
+    **Breaches only.** A line reads ``Dodge + Toughness 22/20`` and is tinted, and a
+    build inside every cap gets no row at all — the same bargain Reach and Movement
+    strike a few rows down. A legal build is the ordinary case, and three lines of
+    reassurance on every sheet is noise standing where a warning has to be noticed.
+    The number a breached line carries is still the whole of it: what the build reads
+    and what it is allowed.
+
+    One label per line rather than one rich-text label, for :class:`MovementModesWidget`'s
+    reason: each cap carries its own tooltip and a tooltip cannot cover part of a label.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(int(theme.metric("space.xxs")))
+        self._lines: list[str] = []
+
+    def rendered_text(self) -> list[str]:
+        """What each line currently reads — the test seam, like :class:`SpeedWidget`'s."""
+        return list(self._lines)
+
+    def render_caps(self, caps: list) -> None:
+        """Redraw from a list of :class:`~mm_companion.core.rules.CapStatus`."""
+
+        layout = self.layout()
+        while layout.count():  # a handful of rows; rebuilt wholesale like the mode list
+            widget = layout.takeAt(0).widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        self._lines = []
+        for cap in caps:
+            name = f"{cap.short} ({cap.detail})" if cap.detail else cap.short
+            text = f"{name} {cap.value}/{cap.limit}"
+            label = QLabel(text)
+            label.setStyleSheet(tinted_style("tint.warning") if cap.over else muted_style())
+            label.setToolTip(
+                cap.message
+                if cap.over
+                else f"{cap.label}: {cap.value} of the {cap.limit} this Power Level allows."
+            )
+            layout.addWidget(label)
+            self._lines.append(text)
+        self.setVisible(bool(caps))
+
+
 def hero_point_note(previous: int, current: int) -> str:
     """The sentence for a hero-point change, or ``""`` when nothing moved.
 
@@ -367,20 +472,41 @@ def _compact(label: str) -> str:
     return label.replace(" feet", " ft").replace(" foot", " ft")
 
 
+#: What the ground line's three columns are, which nothing on the sheet said. Shown
+#: whenever no condition has something more urgent to say in the same place.
+SPEED_TIP = (
+    "Distance covered in one round: a normal move / a move action spent dashing / "
+    "a full round spent running.\n"
+    "Every other line is a movement mode something active grants, which moves and "
+    "dashes but does not run."
+)
+
+
 def _speed_condition_tooltip(speed_mod: int | None) -> str:
-    """Explain a condition's ground-speed overlay in the speed widget's tooltip."""
+    """What the speed widget says on hover — a condition's overlay, or what it is showing.
+
+    The condition wins the tooltip when there is one, because it is the thing that has
+    *changed*. With none, the row explained nothing at all: three numbers separated by
+    slashes, and no statement anywhere on the sheet of which was which."""
     if speed_mod is None:
         return "Immobilised by an active condition — no ground movement."
     if speed_mod:
         return f"Ground speed slowed by an active condition ({speed_mod:+d} rank)."
-    return ""
+    return SPEED_TIP
 
 
 class SystemInfoSection(QGroupBox):
-    """Power level, points pool, size, speed, initiative, and hero points.
+    """Power level, the points pool and the limits it sets, plus the derived readouts.
 
-    Emits :attr:`changed` when an edit affects the point build (power level / points)
-    and :attr:`edited` on any user edit for unsaved-change tracking.
+    The module docstring lists the rows. Emits :attr:`changed` when an edit affects the
+    point build (power level / points) and :attr:`edited` on any user edit for
+    unsaved-change tracking.
+
+    The block owns Power Level, so it owns what Power Level *does*: the **Limits** row
+    (:class:`PowerLevelCapsWidget`) states how close the character is to each
+    character-wide cap, and the spent half of the pool tints when the build has outrun
+    its budget (:meth:`_restate_pool_balance`). Both are readouts over
+    :mod:`mm_companion.core.rules` and neither computes a rule of its own.
     """
 
     changed = Signal()
@@ -435,7 +561,11 @@ class SystemInfoSection(QGroupBox):
         form.addRow("Power Level:", self._build_power_level())
         form.addRow("Power Points:", self._build_power_points())
         form.addRow(self._build_cost_notice())
+        self._limits_row_label = QLabel("Limits:")
+        form.addRow(self._limits_row_label, self._build_limits())
         form.addRow("Size:", self._build_size())
+        # The two self-hiding rows keep a named caption purely as a test seam: nothing
+        # here reads them, since _set_row_visible finds a row's label for itself.
         self._reach_row_label = QLabel("Reach:")
         form.addRow(self._reach_row_label, self._build_reach())
         form.addRow("Speed:", self._build_speed())
@@ -461,6 +591,10 @@ class SystemInfoSection(QGroupBox):
         c = self._by_key.get("power_level")
         self._power_level = make_spin_box(
             c.minimum if c else 0, c.maximum if c else 30, value=int(self._seed("power_level", 10))
+        )
+        self._power_level.setToolTip(
+            "The series Power Level this character is built to. It sets the point budget "
+            "beside it and every cap in the Limits row below."
         )
         self._power_level.valueChanged.connect(self._on_power_level_changed)
         self._editable.append(self._power_level)
@@ -519,16 +653,37 @@ class SystemInfoSection(QGroupBox):
         seed = str(self._seed("size", "Medium"))
         if seed in [self._size_combo.itemText(i) for i in range(self._size_combo.count())]:
             self._size_combo.setCurrentText(seed)
+        self._size_combo.setToolTip(
+            "The size this character is built at. It shifts their Defence, Toughness, "
+            "Damage and Speed limits, their Intimidation and Stealth, and their reach."
+        )
         self._size_combo.currentTextChanged.connect(self._on_size_changed)
         guard_wheel(self._size_combo)
         # Effective size when an active Growth/Shrinking shifts it away from the base.
         self._size_effective = QLabel()
         self._size_effective.setStyleSheet(muted_style())
+        self._size_effective.setToolTip(
+            "The size the character is at right now — an active Growth or Shrinking has "
+            "moved them off the size they were bought at."
+        )
         row.addWidget(self._size_combo)
         row.addWidget(self._size_effective)
         row.addStretch()
         self._editable.append(self._size_combo)
         return container
+
+    def _build_limits(self) -> QWidget:
+        """The Power Level limits readout — see :class:`PowerLevelCapsWidget`.
+
+        It sits under the Power Level and the point pool because those are its two
+        inputs: the caps are read off the level, and the traits they measure are what the
+        points bought. Hidden for an NPC, whose Power Level is *estimated* from its
+        traits rather than bought — measuring those traits back against a number derived
+        from them would be a tautology, not a limit.
+        """
+
+        self._limits = PowerLevelCapsWidget()
+        return self._limits
 
     def _build_reach(self) -> QWidget:
         """The close-attack reach readout — a row that is not there most of the time.
@@ -613,6 +768,7 @@ class SystemInfoSection(QGroupBox):
         self._character.characteristics["power_points"] = value
         self._character.power_points_total = value
         self._link_pl_pp(edited="power_points")
+        self._restate_pool_balance()  # the budget moved; what is left of it moved with it
         self.changed.emit()
         self._emit_edited()
 
@@ -849,6 +1005,27 @@ class SystemInfoSection(QGroupBox):
         self.changed.emit()  # fan out so the pool total re-derives
         self._emit_edited()
 
+    def refresh_limits(self) -> None:
+        """Restate the Power Level limits row, or drop it. **Public: the sheet calls it.**
+
+        Every input moves it and they are scattered across the sheet — the level itself,
+        an ability, a skill rank, a resistance, worn armour, an active Growth — so it is
+        subscribed to three topics rather than one. ``derived-changed`` covers the powers
+        and the conditions, ``caps-changed`` is the Power Level moving (this block's own
+        spin box raises it), and ``facts-changed`` is every block that edits a trait.
+        Hanging it off ``refresh_derived`` alone left it stale for the two edits that
+        move it most directly: typing a Power Level, and typing a Dodge rank.
+
+        Gone entirely for an NPC (see :meth:`_build_limits`), for a ruleset that declares
+        no character-wide caps, and — the ordinary case — for a build that is inside
+        every one of them.
+        """
+
+        caps = [] if self._npc else power_level_cap_summary(self._character, self._data)
+        breaches = [cap for cap in caps if cap.over]
+        self._limits.render_caps(breaches)
+        self._set_row_visible(self._limits, bool(breaches))
+
     def _refresh_cost_notice(self) -> None:
         """Show the homebrew-cost notice when any non-power rate differs from default.
 
@@ -943,6 +1120,30 @@ class SystemInfoSection(QGroupBox):
         if key != "power_points":
             return
         self._pool_current.setText(str(value))
+        self._restate_pool_balance()
+
+    def _restate_pool_balance(self) -> None:
+        """Tint the spent half of the pool when the build has outrun its budget.
+
+        ``170 / 150`` used to read in the same ink as ``140 / 150``, so the one number on
+        the sheet that says the character cannot legally be played said it in a whisper.
+        Over budget is a *build* error rather than a rules one — no cap has been broken,
+        the points simply are not there — so it is tinted rather than badged, and the
+        exact arithmetic goes on the tooltip either way, which is the question a player
+        actually has of this row ("how many have I got left?").
+        """
+
+        try:
+            spent = int(self._pool_current.text())
+        except ValueError:  # the "—" placeholder, before the first fan-out
+            self._pool_current.setStyleSheet("")
+            self._pool_current.setToolTip("Spent — calculated from the build")
+            return
+        total = self._power_points.value()
+        over = spent - total
+        self._pool_current.setStyleSheet(tinted_style("tint.warning") if over > 0 else "")
+        left = f"{over} over budget" if over > 0 else f"{-over} left"
+        self._pool_current.setToolTip(f"Spent — calculated from the build ({left})")
 
     def refresh_estimated_pl(self) -> None:
         """Recompute the NPC sheet's estimated Power Level from the build's traits.
@@ -979,16 +1180,33 @@ class SystemInfoSection(QGroupBox):
         # bought Power Level (replaced by the estimate) and Hero Points.
         self._set_row_visible(self._power_level, not npc)
         self._set_row_visible(self._hero_points, not npc)
+        self.refresh_limits()  # ...and with it the limits read off that level
         self._refresh_cost_notice()
         if npc:
             self.refresh_estimated_pl()
 
     def _set_row_visible(self, field: QWidget, visible: bool) -> None:
-        """Show or hide a whole form row — the field and its caption label."""
+        """Show or hide a whole form row — the field, its caption, and the row itself.
+
+        ``QFormLayout.setRowVisible`` rather than hiding the two widgets by hand, which
+        is what this did. Hiding a widget takes it off the screen but leaves its **row**
+        in the layout, spacing and all, so every absent row left a blank band behind it —
+        and this block hides four of them (Reach and Movement on almost every sheet, plus
+        Power Level and Hero Points on an NPC), which is why the gaps read as a
+        mis-spaced block rather than as a missing row.
+
+        The widgets are still hidden alongside, because ``visibleWidgets`` is what the
+        tests and the rest of the block ask about, and a hidden row does not otherwise
+        change what ``isVisible`` reports for its members.
+        """
+
         field.setVisible(visible)
         label = self._form.labelForField(field)
         if label is not None:
             label.setVisible(visible)
+        row, _role = self._form.getWidgetPosition(field)
+        if row >= 0:
+            self._form.setRowVisible(row, visible)
 
     def refresh_derived(self) -> None:
         """Recompute the derived readouts: speed lines, initiative, effective size.
@@ -999,6 +1217,7 @@ class SystemInfoSection(QGroupBox):
         the same display-only way the stat grids show them — the build math is untouched.
         """
         self._refresh_effort_note()
+        self.refresh_limits()
         self._speed.render_lines(condition_speed_lines(self._character, self._data))
         self._speed.setToolTip(
             _speed_condition_tooltip(condition_speed_rank_mod(self._character, self._data))
@@ -1011,7 +1230,7 @@ class SystemInfoSection(QGroupBox):
 
         modes = movement_mode_lines(self._character, self._data)
         self._movement_modes.render_lines(modes)
-        self._movement_row_label.setVisible(bool(modes))  # no modes, no row at all
+        self._set_row_visible(self._movement_modes, bool(modes))  # no modes, no row at all
 
         modifier = initiative_modifier(self._character, self._data)
         ability = initiative_ability(self._character, self._data)

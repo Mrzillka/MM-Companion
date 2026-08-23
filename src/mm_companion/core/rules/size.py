@@ -364,8 +364,16 @@ def reach_text(reach: Reach) -> str:
 
     Without the ``Reach:`` caption, so the System block can put it in a form label and
     the power's game-term line can put it inline.
+
+    **Zero reads as a word, not as two zeroes.** A character shrunk past the size the
+    table gives reach at has lost it entirely, which is one of the two things the
+    readout exists to announce (:func:`reach_is_altered`) — and ``0 spaces / 0 ft.``
+    states a measurement where there is none to state. One word, because this lands in
+    a form row beside a caption; what it *means* belongs in that row's tooltip.
     """
 
+    if reach.feet <= 0:
+        return "none"
     spaces = reach.spaces
     noun = "space" if spaces == 1 else "spaces"
     tilde = "" if reach.exact else "~"

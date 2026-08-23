@@ -56,10 +56,14 @@
     "border.width.accent-edge": 3,
     "focus.width": 2,
 
+    "_space.xxs": "Tighter than the smallest ordinary gap: the spacing inside a stacked readout whose rows are one quantity read down a column (the System block's speed lines, movement modes and Power Level limits), where an ordinary gap reads as three separate facts instead of one list.",
+    "space.xxs": 1,
     "space.xs": 2,
     "space.sm": 4,
     "space.md": 6,
     "space.lg": 8,
+    "_space.indent": "How far a group card insets the members drawn inside it, so the nesting is legible without a second frame.",
+    "space.indent": 14,
 
     "canvas.hint.height": 120,
     "platform.features.height": 160,
@@ -76,6 +80,8 @@
     "compact.min-height": 150,
     "_compact.button": "The diameter of the round button that floats over the roller's bottom-right corner and is the only way in and out of compact mode. Big enough to be found without hunting, small enough that the slice of roll history it covers is one card's corner.",
     "compact.button": 34,
+    "_column.mode-toggle": "The height of one segment of a card's segmented switch (Independent / Array / Dynamic array / Linked). Set rather than left to the label, so lighting a segment bold never re-heights the strip.",
+    "column.mode-toggle": 22,
     "_gm.damage-button": "The diameter of one round degree-of-failure button on a GM card's damage row. Small: four of them plus a caption share the width of a 210px card, and the row repeats on every creature on the board.",
     "gm.damage-button": 22,
     "_gm.thumb": "The portrait on a collapsed GM card. Big enough to tell two goons apart at a glance and to be an easy click target, since it is still the only thing that opens the sheet.",

@@ -431,7 +431,7 @@ def test_shrinking_out_of_reach_is_a_change_the_feet_cannot_show(data) -> None:
     _growth(char, 2, effect="shrinking")
     assert effective_size(char, data) == "Tiny"
     assert reach_is_altered(char, data)
-    assert reach_text(character_reach(char, data)) == "0 spaces / 0 ft."
+    assert reach_text(character_reach(char, data)) == "none"
 
 
 def test_the_reach_extra_is_stated_from_the_arm_that_swings_it(data) -> None:

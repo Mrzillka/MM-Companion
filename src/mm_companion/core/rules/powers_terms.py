@@ -30,6 +30,7 @@ from .powers_cost import (
 )
 from .runtime import (
     effect_current_rank,
+    live_array_effects,
     resolved_trait_allocation,
     trait_allocation_field,
     trait_display_name,
@@ -1793,6 +1794,45 @@ def array_member_note(dynamic: bool, game_data: GameData) -> str:
     return f"{kind}, {cost} pt"
 
 
+def structure_header(power: Power) -> str:
+    """What a composite power's structure means, as a lead-in line. ``""`` for a simple one.
+
+    In :mod:`core` because it is a statement about the rules, and because there were
+    three copies of the sentence — this one, the sheet card's summary block and the
+    constructor's terms view — which is two too many for a line that has to change with
+    the runtime.
+
+    **An array that has been split stops claiming the restriction.** "One effect active
+    at a time" is what an ordinary array buys, and it is exactly what the second point of
+    a Dynamic alternate buys *out of*: once points are spread across a power's own
+    Dynamic effects they run together (:func:`~.runtime.live_array_effects`), and a
+    header still promising mutual exclusion contradicted the ranks printed under it. So a
+    split says what it is instead — how many effects are running, and that they are doing
+    it on shares. A pool spread over exactly *one* effect still runs one at a time, so the
+    claim would have been true; it is worded differently anyway, because the reason has
+    changed. It is the split deciding now, not the *Using* picker, and that picker has
+    just disappeared off the card.
+
+    Read from the power alone, so every surface showing it — including the Power
+    Constructor, which edits a deep copy that carries the sheet's split with it — tells
+    the same story about the same object. No trailing colon: a caller that wants one
+    (the game-term summary, the constructor) adds it.
+    """
+
+    if len(power.effects) < 2:
+        return ""
+    if power.structure == STRUCTURE_LINKED:
+        return "Linked (all effects activate together)"
+    if power.structure != STRUCTURE_ARRAY:
+        return ""
+    shared = live_array_effects(power)
+    if not shared:
+        return "Array (one effect active at a time)"
+    if len(shared) == 1:
+        return "Array (Dynamic: 1 effect running on its share)"
+    return f"Array (Dynamic: {len(shared)} effects sharing the pool)"
+
+
 def power_game_terms(power: Power, game_data: GameData, char: Character | None = None) -> str:
     """The power's game-term summary: one :func:`effect_game_terms` line per effect.
 
@@ -1810,9 +1850,10 @@ def power_game_terms(power: Power, game_data: GameData, char: Character | None =
     """
 
     lines = [effect_game_terms(e, game_data, char) for e in power.effects]
+    header = structure_header(power)
     if len(power.effects) > 1 and power.structure == STRUCTURE_LINKED:
         body = "\n".join(f"• {line}" for line in lines)
-        return "Linked (all effects activate together):\n" + body
+        return f"{header}:\n" + body
     if len(power.effects) > 1 and power.structure == STRUCTURE_ARRAY:
         base = array_base_index(power, game_data, char)
         tagged = []
@@ -1822,5 +1863,5 @@ def power_game_terms(power: Power, game_data: GameData, char: Character | None =
             else:
                 note = f" ({array_member_note(effect.dynamic, game_data)})"
             tagged.append(f"• {line}{note}")
-        return "Array (one effect active at a time):\n" + "\n".join(tagged)
+        return f"{header}:\n" + "\n".join(tagged)
     return "\n".join(lines)

@@ -170,7 +170,16 @@ _BASE_BLOCKS = [
                 CONDITION_CHANGED,
             ),
         },
-        {DERIVED_CHANGED: "refresh_derived"},
+        {
+            DERIVED_CHANGED: "refresh_derived",
+            # The Power Level limits are read off three things this block does not own:
+            # the level (its own spin box raises CAPS_CHANGED) and every trait any other
+            # block edits (FACTS_CHANGED). Without them the row stayed stale for exactly
+            # the two edits that move it most directly — typing a Power Level, and
+            # typing a Dodge rank — since neither raises DERIVED_CHANGED.
+            CAPS_CHANGED: "refresh_limits",
+            FACTS_CHANGED: "refresh_limits",
+        },
         # the Initiative readout, the note a hero-point change writes, and the +2 Extra
         # Effort buys on a check — the one benefit that lands on the next roll rather
         # than on the build, so it goes to the block that owns the sliders.

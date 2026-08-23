@@ -696,3 +696,30 @@ def test_cancelling_add_specialization_leaves_the_model_untouched(
     monkeypatch.setattr(QInputDialog, "getItem", staticmethod(lambda *a, **k: ("Forgery", True)))
     sheet.skills._add_specialization(skill)
     assert sheet.character.specializations[skill.name] == ["Forgery"]
+
+
+def test_the_reach_row_is_only_there_once_something_has_moved_it(qapp: QApplication) -> None:
+    """Reach is a row that is not there most of the time, caption and all.
+
+    Every character has a reach and almost none of them has an interesting one — the
+    baseline is your own Space, which is what a close attack already means — so the row
+    appears only once a Growth, a Shrinking or an Elongation has moved it off what the
+    bought size gives, and goes away again when they are removed.
+    """
+
+    data = load_game_data()
+    sheet = CharacterSheet(data)
+    system = sheet.system_info
+    assert system._reach.isHidden() and system._reach_row_label.isHidden()
+
+    grown = Power(name="Giant", effects=[PowerEffectInstance("growth", rank=3)])
+    stretched = Power(name="Long Arms", effects=[PowerEffectInstance("elongation", rank=1)])
+    sheet.character.powers.extend([grown, stretched])
+    system.refresh_derived()
+
+    assert not system._reach.isHidden() and not system._reach_row_label.isHidden()
+    assert system._reach.text() == "~5 spaces / 33 ft."
+
+    sheet.character.powers.clear()
+    system.refresh_derived()
+    assert system._reach.isHidden() and system._reach_row_label.isHidden()

@@ -34,7 +34,7 @@ from .runtime import (
     trait_allocation_field,
     trait_display_name,
 )
-from .size import base_size_rank
+from .size import Reach, base_size_rank, character_reach, reach_text
 
 
 def _effect_name(effect: PowerEffectInstance, game_data: GameData) -> str:
@@ -595,6 +595,8 @@ def _effective_stats(
             # Extended Range reaches further — visible in the Distance row, so it is
             # spoken for and doesn't also need listing as a bare Note.
             touched = True
+        if modifier.reach_spaces:
+            touched = True  # the same, for the Reach row (see :func:`effect_reach`)
         if modifier.requires_check:
             touched = True  # gets its own roll row (see :func:`required_check_notes`)
         if touched:
@@ -1187,6 +1189,12 @@ def effect_stat_rows(
             rows.append(EffectStat(key, label, base[key], stats[key], change[key]))
         if key == "range":
             rows.extend(_ranged_distance_rows(effect, game_data, char, base_effect))
+            # Close reach sits beside Range for the same reason the ranged distances do:
+            # both answer "how far", and the Reach extra is the close half of it. Green,
+            # because an extra bought it.
+            reach = effect_reach(effect, game_data, char)
+            if reach is not None:
+                rows.append(EffectStat("reach", "Reach", "", reach_text(reach), "better"))
         if key == "resistance":
             # An effect that makes an opposed check of its own says so here, next to the
             # save it is so easily mistaken for. It is the *wielder's* roll, and it is
@@ -1662,7 +1670,9 @@ def _config_display(field, value, game_data: GameData | None = None) -> str:
     return " + ".join(by_value.get(v, str(v)) for v in values)
 
 
-def effect_game_terms(effect: PowerEffectInstance, game_data: GameData) -> str:
+def effect_game_terms(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+) -> str:
     """One-line game-term summary of an effect, e.g.
     ``Affliction 4: Attack, Ranged range, Standard action, Instant duration``.
 
@@ -1670,6 +1680,13 @@ def effect_game_terms(effect: PowerEffectInstance, game_data: GameData) -> str:
     the non-empty ones; a resistance is appended in parentheses, then any remaining
     configured qualities (Affliction's condition degrees, etc.). Returns ``""`` for
     an unknown effect id.
+
+    ``char`` is the **wielder**, and only the Reach extra needs it: reach is a property
+    of the arm doing the reaching, so an extra that lengthens it is only meaningful added
+    to the reach its wielder already has (:func:`~.size.character_reach`) — the same
+    number the System block shows. Without one (the Power Constructor, where a power has
+    no owner yet) the line states what the extra alone buys, which is what a power being
+    designed can honestly promise.
     """
 
     base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
@@ -1708,9 +1725,38 @@ def effect_game_terms(effect: PowerEffectInstance, game_data: GameData) -> str:
     ]
     if raised:
         chosen.append("Enhances: " + ", ".join(raised))
+    reach = effect_reach(effect, game_data, char)
+    if reach is not None:
+        chosen.insert(0, f"Reach: {reach_text(reach)}")
     if chosen:
         line += "; " + ", ".join(chosen)
     return line
+
+
+def effect_reach(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+) -> Reach | None:
+    """How far this effect reaches in close combat, or ``None`` if it says nothing new.
+
+    Only an effect carrying a reach-extending modifier answers — the Reach extra in the
+    base ruleset, and anything a mod gives a ``reachSpaces`` — and the answer is the
+    wielder's own reach with those Spaces added, not the extra in isolation. A weapon with
+    Reach 2 on a Gargantuan character strikes at five Spaces, and five is the number the
+    player needs; reading ``Reach 2`` off the chip and adding it by hand to a row on
+    another block is the arithmetic this saves.
+    """
+
+    space_feet = game_data.measurements.space_feet()
+    spaces = 0
+    for selection in effect.extras + effect.flaws:
+        modifier = next((m for m in game_data.modifiers if m.id == selection.modifier_id), None)
+        if modifier is None or not modifier.reach_spaces:
+            continue
+        spaces += modifier.reach_spaces * (selection.rank if modifier.ranked else 1)
+    if spaces <= 0:
+        return None
+    own = character_reach(char, game_data).feet if char is not None else 0.0
+    return Reach(feet=own + spaces * space_feet, space_feet=space_feet)
 
 
 def effect_opposed_check(
@@ -1763,7 +1809,7 @@ def power_game_terms(power: Power, game_data: GameData, char: Character | None =
     rather than going on claiming a restriction the split has lifted.
     """
 
-    lines = [effect_game_terms(e, game_data) for e in power.effects]
+    lines = [effect_game_terms(e, game_data, char) for e in power.effects]
     if len(power.effects) > 1 and power.structure == STRUCTURE_LINKED:
         body = "\n".join(f"• {line}" for line in lines)
         return "Linked (all effects activate together):\n" + body

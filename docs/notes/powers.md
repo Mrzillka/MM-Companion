@@ -133,13 +133,19 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   selected alternate **at full rank**, which is the behaviour an array saved before the
   pool existed needs on load. So a Growth parked on "Off" came straight back on, and a
   Diminutive character read Gargantuan under a slider saying the power was off.
-  `_on_share_dialled` therefore flips the member's own master switch too, exactly as a
-  click on its card would, and a notch above zero flips it back. **Only `activated`, and
-  only on this member's own leaves**: it is the one flag `effect_is_active` reads
-  unconditionally, it is the one `_set_array_active` sets again when the player clicks the
-  card back on, and reaching wider (as `_set_power_active` does) would let one share
-  switch off a Linked group the array happens to sit inside — or leave `toggled_on`
-  cleared behind it, so the card click that should revive the member quietly did nothing.
+  `_on_share_dialled` therefore flips the member's own master switches too, exactly as a
+  click on its card would, and a notch above zero flips them back. **Every switch the card
+  flips, and only on this member's own leaves** (`_set_member_running`): raising
+  `activated` alone was not enough, because a card click puts a member down through
+  `_set_power_active`, which clears `activated`, `item_present` *and* every effect's
+  `toggled_on` together — so a share dialled up afterwards spent the points and lit the
+  card while `effect_is_active` went on reading the member as off, and a Speed parked in a
+  Dynamic array by a card click could not be bought back on. Which of the three a given
+  power's gates consult is `effect_is_active`'s business; the dial raises the same three
+  the card does and lets it choose, and `_member_is_running` asks the same question back
+  (`_power_is_active`) so the commit's no-op check cannot disagree with what it wrote.
+  Reaching *wider* is still what is avoided — as `_set_power_active` does, that would let
+  one share switch off a Linked group the array happens to sit inside.
   The share itself still stores `None`, so the sentence above stays true. Two corollaries:
   the *dimming* asks the same question after the pool's (`_node_is_inactive`), or the one
   member the fallback woke would be the only undimmed card on a switched-off array; and

@@ -29,6 +29,11 @@
     "sizeRankColumnNote": "Which Size Table column raises the effective rank of an effect that forces a resistance — how much harder a bigger creature hits. It is a rank, not a trait bonus, so it reaches the save DC and the Power Level cap together and leaves Strength (and with it carrying capacity and the Strength skills) alone. Each effect carries a player-set switch for it, on by default: a giant's fist hits harder, a giant's laser does not."
   },
   "sizeRankColumn": "damageMod",
+  "reachRules": {
+    "spaceDistanceRank": 0,
+    "baselineSizeRank": 0,
+    "note": "How the reach a character can make close attacks at is worked out. A Space is distance rank 0, so the sizeTable 'reach' column converts to feet at that rank's distance value. baselineSizeRank names the size whose reach a readout treats as its zero: a character that size has no reach worth naming and their size adds nothing to the total, while a larger one contributes its whole sizeTable reach. An effect that extends reach declares its own per-rank distance rank (the 'reach' block in effects.json) and adds that real distance on top; a modifier that extends it declares whole Spaces ('reachSpaces' in modifiers.json). Real distances are added, never ranks (see doNotAddRanksNote)."
+  },
   "sizeEffects": [
     { "column": "defenseMod", "category": "resistance", "target": "DEF" },
     { "column": "toughnessMod", "category": "resistance", "target": "TOUGHNESS" },

@@ -197,6 +197,51 @@ data-first; nothing below names a trait, an effect or a column in Python.
   `base_ground_speed_rank` clamps the cancellation at zero and applies it only to a
   *negative* modifier, so lifting a penalty leaves you at your normal pace and no faster,
   and a base-Small character's own −1 survives their Shrinking being cancelled.
+
+## Reach
+
+- **Feet are the truth and Spaces are read off them.** Reach adds sources that do not land
+  on whole Spaces: a Gargantuan character reaches 3 Spaces (18 ft) and an Elongation 1
+  stretches 15 ft further, which is 33 ft — five Spaces *and a half*. Rounding each source
+  to Spaces before adding lost that half at every step, so `Reach` keeps the feet and
+  derives `spaces` (floored — half a Space does not let anyone strike into the next
+  square) and `exact`, which is what the `~` in `~5 spaces / 33 ft.` means. The distances
+  are summed, never the ranks (`measurements.json`'s `doNotAddRanksNote`).
+- **The baseline Space contributes nothing, and that asymmetry is the house rule.**
+  `size_reach_feet` returns 0 for a size at or below `reachRules.baselineSizeRank`
+  (Medium), and the row's *whole* tabulated reach above it. That baseline Space is the
+  character's own body — the reach every character already has, and what a close attack
+  already means — so counting it again beside a stretched limb would charge for it twice.
+  It is also why a Medium character with Elongation 3 reads 45 ft rather than 51.
+- **A row that is not there most of the time.** Both numbers of the System block's Reach
+  row, caption included, hang on `reach_is_altered`: stating the baseline on every sheet
+  is noise, and the row is worth reading exactly when something has moved it. That
+  predicate asks **two** questions, because reach can change without the feet moving —
+  a Shrinking down to a size the table gives no reach at all reads as zero feet either
+  way, since a baseline-size character contributes zero too, and losing your reach
+  entirely is precisely what the row exists to announce. So it compares the size *rows*
+  as well as the feet.
+- **Nothing in Python names Elongation.** An effect extends reach because `effects.json`
+  gave it a `reach` block (`{"perRankDistanceRank": 1}` — each rank is worth the real
+  distance at that rank, 15 ft), and a modifier extends it because `modifiers.json` gave
+  it `reachSpaces` (the Reach extra's 1). A mod's own reach effect joins on the same
+  terms. The rank read is the **dialled** one, the same `effect_current_rank` `size_shift`
+  reads, so an Elongation rationed by a Dynamic array's pool reaches only as far as its
+  share bought.
+- **The Reach extra is stated from the arm that swings it.** `effect_reach` adds the
+  extra's Spaces to the *wielder's* reach, not to nothing, and the result lands in the
+  card's game terms as a `Reach` row beside `Range` (and inline in
+  `effect_game_terms`). A Reach 2 whip on a Gargantuan character strikes at five Spaces,
+  and five is the number the player needs — reading `Reach 2` off a chip and adding it by
+  hand to a row on another block is the arithmetic this saves. The modifier is marked
+  `touched` so it does not *also* appear as a bare `Notes` entry, exactly as Extended
+  Range's distance bonus is. Without a wielder (the Power Constructor) the row states
+  what the extra alone buys, which is what a power being designed can honestly promise.
+- The one thing `measurements.json` had to grow for this is numeric **feet**:
+  `_parse_measurements` kept only the labels and the metric metres, and a readout that
+  adds two distances cannot work from `"15 feet"`. `distance_ft` is the imperial twin of
+  `distance_m`, and `space_feet()` is the distance at `reachRules.spaceDistanceRank`.
+
 - Elongation's **Slithering** and **Swinging** are still prose. They grant Enhanced
   Movement *modes*, whose rate comes from an `alloc_option` tier (often relative to
   ground speed), and a flat `TraitContribution` cannot express that. They need a grant

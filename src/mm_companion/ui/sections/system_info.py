@@ -33,6 +33,7 @@ from mm_companion.core.data_loader import GameData
 from mm_companion.core.rules import (
     PIN_INITIATIVE,
     PinRef,
+    character_reach,
     clear_extra_effort,
     clear_stunts,
     condition_check_penalty,
@@ -48,6 +49,8 @@ from mm_companion.core.rules import (
     power_level_for_points,
     pushed_effects,
     pushed_trait_labels,
+    reach_is_altered,
+    reach_text,
     reconcile_points_to_level,
     speed_columns,
     spend_extra_effort,
@@ -65,6 +68,11 @@ from mm_companion.ui.widgets import make_spin_box, muted_style, tinted_style
 
 HERO_POINT_PIPS = 5
 INITIATIVE_TIP = f"Agility (or an Alternate Initiative ability) plus advantages\n{ROLL_TOOLTIP}"
+REACH_TIP = (
+    "How far this character can make close attacks — their size's own reach, plus "
+    "whatever an active effect stretches on top.\nShown only while something has moved "
+    "it off the reach their bought size gives."
+)
 
 
 class HeroPointsWidget(QWidget):
@@ -428,6 +436,8 @@ class SystemInfoSection(QGroupBox):
         form.addRow("Power Points:", self._build_power_points())
         form.addRow(self._build_cost_notice())
         form.addRow("Size:", self._build_size())
+        self._reach_row_label = QLabel("Reach:")
+        form.addRow(self._reach_row_label, self._build_reach())
         form.addRow("Speed:", self._build_speed())
         self._movement_row_label = QLabel("Movement:")
         form.addRow(self._movement_row_label, self._build_movement_modes())
@@ -519,6 +529,21 @@ class SystemInfoSection(QGroupBox):
         row.addStretch()
         self._editable.append(self._size_combo)
         return container
+
+    def _build_reach(self) -> QWidget:
+        """The close-attack reach readout — a row that is not there most of the time.
+
+        Every character has a reach and almost none of them has an interesting one: the
+        baseline is your own Space, which is what a close attack already means, so
+        stating it on every sheet would be noise. The row appears only once something has
+        moved it (:func:`~mm_companion.core.rules.reach_is_altered`) — a Growth, a
+        Shrinking, an Elongation — which is also the only time it needs reading.
+        """
+
+        self._reach = QLabel("—")
+        self._reach.setToolTip(REACH_TIP)
+        self._reach.setVisible(False)
+        return self._reach
 
     def _build_speed(self) -> QWidget:
         self._speed = SpeedWidget(self._data)
@@ -978,6 +1003,11 @@ class SystemInfoSection(QGroupBox):
         self._speed.setToolTip(
             _speed_condition_tooltip(condition_speed_rank_mod(self._character, self._data))
         )
+
+        altered = reach_is_altered(self._character, self._data)
+        if altered:
+            self._reach.setText(reach_text(character_reach(self._character, self._data)))
+        self._set_row_visible(self._reach, altered)  # unchanged reach, no row at all
 
         modes = movement_mode_lines(self._character, self._data)
         self._movement_modes.render_lines(modes)

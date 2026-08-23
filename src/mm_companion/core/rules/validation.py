@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass, replace
 
 from ..character import Character
 from ..data_loader import GameData
@@ -613,33 +614,122 @@ def power_level_violations(char: Character, game_data: GameData) -> list[str]:
     while the cap is written against Dodge. On the base ruleset the pair then cancels to
     zero all by itself (Dodge −N, Toughness +N), which is the arithmetic the book
     intends and the reason this is not simply "raise both caps".
+
+    The arithmetic itself lives in :func:`power_level_caps`, which measures every limit
+    whether or not the build is past it; this is the prose half of the same answer. A
+    row is named through :func:`~.runtime.trait_display_name`, so a qualified skill row
+    reads ``"Expertise: Law modifier"`` rather than the stored ``Expertise::Law``.
+    """
+
+    return [status.message for status in power_level_caps(char, game_data) if status.over]
+
+
+@dataclass(frozen=True)
+class CapStatus:
+    """One Power Level limit, and what this character currently reads against it.
+
+    The structured form of a :func:`power_level_violations` line, and the reason it
+    exists: the caps were computed only to be turned straight into prose, so the sheet
+    could say a build was *over* a limit and never how close it was to one. A player
+    wants the headroom, not just the alarm — which is what the System block's *Limits*
+    row shows — and the readout and the warning must not be two different arithmetics.
+    So the arithmetic happens once, here, and the prose is derived from it.
+
+    ``label`` is the message's subject (``"Stealth modifier"``, ``"Dodge + Toughness"``);
+    ``short`` is what a narrow readout prints instead; ``detail`` names the row a
+    per-row cap was measured on, so a summary line can say *which* skill is the tight
+    one without re-deriving it.
+    """
+
+    key: str
+    label: str
+    short: str
+    value: int
+    limit: int
+    detail: str = ""
+
+    @property
+    def over(self) -> bool:
+        """Whether the build is past this limit. Sitting exactly on a cap is legal."""
+        return self.value > self.limit
+
+    @property
+    def message(self) -> str:
+        """The warning sentence — the one :func:`power_level_violations` reports."""
+        return f"{self.label} {self.value} exceeds PL cap {self.limit}."
+
+
+def power_level_caps(char: Character, game_data: GameData) -> list[CapStatus]:
+    """Every character-wide Power Level limit, measured — **one entry per row**.
+
+    One :class:`CapStatus` per paired-resistance cap, plus one per skill the character
+    has ranks in, since the skill cap is written per skill and a build can be over it on
+    several at once. :func:`power_level_cap_summary` is the reduced form a readout wants.
+
+    The per-build attack + effect-rank cap is deliberately absent: it is checked power by
+    power in :func:`power_pl_violations`, which both the Powers and the Equipment blocks
+    call, so a weapon's breach is marked on the weapon's own card rather than summarised
+    away from it.
     """
 
     caps = game_data.costs.power_level.caps
     pl = char.power_level
-    violations: list[str] = []
+    statuses: list[CapStatus] = []
 
     skill_cap = caps.get("skill_modifier")
     if skill_cap is not None:
         base_limit = skill_cap.limit(pl)
         for row_id in char.skill_ranks:
-            total = skill_total(char, game_data, row_id)
-            limit = base_limit + size_skill_shift(char, game_data, row_id)
-            if total > limit:
-                violations.append(f"{row_id} modifier {total} exceeds PL cap {limit}.")
+            name = trait_display_name(game_data, row_id)
+            statuses.append(
+                CapStatus(
+                    key="skill_modifier",
+                    label=f"{name} modifier",
+                    short="Skills",
+                    value=skill_total(char, game_data, row_id),
+                    limit=base_limit + size_skill_shift(char, game_data, row_id),
+                    detail=name,
+                )
+            )
 
     for pair in game_data.system.paired_caps:
         cap = caps.get(pair.cap)
         if cap is None:
             continue
-        limit = cap.limit(pl) + sum(
-            size_resistance_shift(char, game_data, key) for key in pair.traits
+        statuses.append(
+            CapStatus(
+                key=pair.cap,
+                label=pair.label,
+                short=pair.label,
+                value=sum(resistance_total(char, game_data, key) for key in pair.traits),
+                limit=cap.limit(pl)
+                + sum(size_resistance_shift(char, game_data, key) for key in pair.traits),
+            )
         )
-        value = sum(resistance_total(char, game_data, key) for key in pair.traits)
-        if value > limit:
-            violations.append(f"{pair.label} {value} exceeds PL cap {limit}.")
 
-    return violations
+    return statuses
+
+
+def power_level_cap_summary(char: Character, game_data: GameData) -> list[CapStatus]:
+    """The same limits reduced to **one line per cap** — what a readout can actually show.
+
+    A cap written per row (the skill modifier) collapses to the row standing closest to
+    it, named in :attr:`CapStatus.detail`: that is the one number that decides whether
+    the character is inside the limit, and listing thirty skills to say so would bury it.
+    Ties break to the highest total, so the line names the skill a player would look at.
+
+    Paired caps pass through untouched — there is one Dodge + Toughness and it is already
+    a single line. Order follows ``system.json``'s ``paired_caps`` with the skill line
+    last, so the two the rules enforce hardest read first.
+    """
+
+    statuses = power_level_caps(char, game_data)
+    summary = [status for status in statuses if status.key != "skill_modifier"]
+    skills = [status for status in statuses if status.key == "skill_modifier"]
+    if skills:
+        tightest = max(skills, key=lambda status: (status.value - status.limit, status.value))
+        summary.append(replace(tightest, label="Skills", short="Skills"))
+    return summary
 
 
 # --- the whole-power check list --------------------------------------------------------

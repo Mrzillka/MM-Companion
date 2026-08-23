@@ -9,7 +9,12 @@ from PySide6.QtWidgets import QApplication, QLabel
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
-from mm_companion.core.rules import power_points_spent, resistance_total, skill_total
+from mm_companion.core.rules import (
+    power_level_violations,
+    power_points_spent,
+    resistance_total,
+    skill_total,
+)
 from mm_companion.ui import theme
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.roll_history import NoteCard
@@ -723,3 +728,116 @@ def test_the_reach_row_is_only_there_once_something_has_moved_it(qapp: QApplicat
     sheet.character.powers.clear()
     system.refresh_derived()
     assert system._reach.isHidden() and system._reach_row_label.isHidden()
+
+
+def test_a_hidden_row_takes_its_whole_form_row_with_it(qapp: QApplication) -> None:
+    """Hiding the two widgets left the *row* — spacing and all — behind.
+
+    This block hides four rows (Reach and Movement on almost every sheet, Power Level and
+    Hero Points on an NPC), so the leftover bands read as a mis-spaced block rather than
+    as a missing row. ``QFormLayout.setRowVisible`` is the API that takes the row too.
+    """
+
+    sheet = CharacterSheet(load_game_data())
+    system = sheet.system_info
+    form = system._form
+
+    row, _role = form.getWidgetPosition(system._reach)
+    assert row >= 0
+    assert not form.isRowVisible(row)  # nothing has moved this character's reach
+
+    sheet.character.powers.append(
+        Power(name="Giant", effects=[PowerEffectInstance("growth", rank=3)])
+    )
+    system.refresh_derived()
+    assert form.isRowVisible(row)
+
+
+def test_the_limits_row_states_every_character_wide_power_level_cap(
+    qapp: QApplication,
+) -> None:
+    """The block owns Power Level, so it owns what Power Level does.
+
+    ``power_level_violations`` has evaluated the paired-resistance caps and the per-skill
+    modifier cap all along, and its only caller was a minion's build — so a character
+    over Power Level on their own defences got no mark anywhere on the sheet while a
+    single power got a warning glyph. And the interesting moment is the one *before* the
+    breach, so the row states the headroom rather than only the alarm.
+    """
+
+    data = load_game_data()
+    sheet = CharacterSheet(data)
+    system = sheet.system_info
+
+    lines = system._limits.rendered_text()
+    assert any(line.startswith("Dodge + Toughness") for line in lines)
+    assert any(line.startswith("Fortitude + Will") for line in lines)
+
+    # PL 10 -> the paired cap is 20, and a build sitting on it is legal and untinted.
+    sheet.character.abilities["STA"] = 10
+    sheet.character.resistances["DEF"] = 10
+    system.refresh_derived()
+    assert "Dodge + Toughness 20/20" in system._limits.rendered_text()
+    assert not power_level_violations(sheet.character, data)
+
+    sheet.character.resistances["DEF"] = 12
+    system.refresh_derived()
+    assert "Dodge + Toughness 22/20" in system._limits.rendered_text()
+    assert power_level_violations(sheet.character, data)
+
+
+def test_the_limits_row_names_the_tightest_skill(qapp: QApplication) -> None:
+    """A cap written per row collapses to the row standing closest to it."""
+
+    data = load_game_data()
+    sheet = CharacterSheet(data)
+    sheet.character.abilities["AGL"] = 15
+    sheet.character.skill_ranks["Stealth"] = 10  # 25, over the PL 10 cap of 20
+    sheet.character.skill_ranks["Athletics"] = 1
+    sheet.system_info.refresh_derived()
+
+    assert "Skills (Stealth) 25/20" in sheet.system_info._limits.rendered_text()
+
+
+def test_an_npc_has_no_limits_row(qapp: QApplication) -> None:
+    """Its Power Level is estimated *from* its traits; measuring them back against it
+    would be a tautology, not a limit."""
+
+    sheet = CharacterSheet(load_game_data())
+    sheet.system_info.set_npc_mode(True)
+    assert sheet.system_info._limits.isHidden()
+
+
+def test_a_build_over_its_budget_says_so(qapp: QApplication) -> None:
+    """``170 / 150`` used to read in the same ink as ``140 / 150``."""
+
+    sheet = CharacterSheet(load_game_data())
+    system = sheet.system_info
+    system._power_points.setValue(150)
+
+    system.set_pool_current("power_points", 140)
+    assert system._pool_current.styleSheet() == ""
+    assert "10 left" in system._pool_current.toolTip()
+
+    system.set_pool_current("power_points", 170)
+    assert theme.color("tint.warning") in system._pool_current.styleSheet()
+    assert "20 over budget" in system._pool_current.toolTip()
+
+
+def test_a_sixth_hero_point_is_not_destroyed(qapp: QApplication) -> None:
+    """Five pips was a cap in Python over a ruleset that allows 99.
+
+    ``set_value`` clamped and ``_on_hero_points_changed`` wrote the clamped number back,
+    so a GM granting a sixth hero point did not merely fail to draw it — it was lost.
+    """
+
+    sheet = CharacterSheet(load_game_data())
+    pips = sheet.system_info._hero_points
+
+    sheet.system_info.set_hero_points(7)
+    assert pips.value() == 7
+    assert sheet.character.characteristics["hero_points"] == 7
+
+    sheet.system_info.set_hero_points(2)
+    assert pips.value() == 2
+    assert len(pips._buttons) == 5  # ...and the row settles back to its resting five

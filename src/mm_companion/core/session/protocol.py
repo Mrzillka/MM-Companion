@@ -63,7 +63,14 @@ from typing import ClassVar
 #: one — and the ``kind="request"`` record it becomes. Additive, and bumped for
 #: the v6 reason word for word: an old server rejects the unknown message type
 #: outright, and an old client renders a request as a d20 that rolled zero.
-PROTOCOL_VERSION = 8
+#:
+#: v9 added the **scene**: :class:`SetScene` / :class:`SceneUpdate` and the
+#: portrait pair beside them, plus ``Welcome.scene``. Additive once more, and
+#: bumped for the reason the last three were — a v8 client joins happily, never
+#: learns the message type exists, and shows an empty board through the whole
+#: fight the rest of the table is watching. A silent wrong answer, refused at
+#: the door.
+PROTOCOL_VERSION = 9
 
 #: Hard cap on one encoded message, including its trailing newline. A character
 #: snapshot is the largest thing that legitimately travels (tens of KB); anything
@@ -349,6 +356,61 @@ class SetNpcPaths(Message):
 
 @_register
 @dataclass(frozen=True)
+class SetScene(Message):
+    """The GM's whole scene, replacing whatever the server held. GM only.
+
+    The scene is the shared half of the GM's board: who is in this fight, in what
+    order, and what state they are visibly in. Unlike :class:`SetNpcPaths` — the
+    other thing a GM stores here — it **is** broadcast, which is the whole point
+    of it.
+
+    It is sent whole rather than as add/remove/reorder deltas because it is
+    small, it changes for half a dozen unrelated reasons (a condition applied, an
+    initiative rolled, a card dragged, a player joining), and a delta stream has
+    to be replayed in order to mean anything. One authority, one payload, no
+    reconciliation.
+
+    ``entries`` is a list of scene entries (see :func:`sanitize_scene` for the
+    shape the server keeps). ``sources`` is the GM's private map of an entry's
+    opaque ``ref`` to what it actually is — ``"npc:<file name>"`` or
+    ``"player:<id>"``. It is stored and handed back to the GM alone, never
+    broadcast, for the reason ``SetNpcPaths`` is not broadcast: an NPC's file
+    name is the GM's, and "TheTraitorIsMarcus.json" is not a thing to put on a
+    player's screen. It is what lets a GM pick the session up on another machine
+    and still have a scene that maps onto their own creatures.
+    """
+
+    TYPE: ClassVar[str] = "set_scene"
+
+    entries: list[dict] = field(default_factory=list)
+    sources: dict = field(default_factory=dict)
+
+
+@_register
+@dataclass(frozen=True)
+class SetScenePortrait(Message):
+    """One scene entry's thumbnail, stored and broadcast on its own. GM only.
+
+    Pictures travel apart from :class:`SetScene` for two reasons, and both are
+    load-bearing. A scene is re-sent every time anything on it changes — often,
+    mid-fight — and re-sending a dozen portraits with it is the one thing that
+    could make a relayed table expensive. And a dozen portraits in one message
+    would blow :data:`MAX_MESSAGE_BYTES` outright, whereas a dozen messages of
+    one portrait each cannot.
+
+    So a portrait is sent **once**, when its entry joins the scene, and replayed
+    one message at a time to a client that joins later. ``portrait`` is a base64
+    JPEG capped at :data:`MAX_SCENE_PORTRAIT_CHARS`; an empty one clears it.
+    """
+
+    TYPE: ClassVar[str] = "set_scene_portrait"
+
+    ref: str
+    portrait: str = ""
+
+
+@_register
+@dataclass(frozen=True)
 class Ping(Message):
     """Keepalive; the server answers :class:`Pong` with the same ``nonce``."""
 
@@ -377,6 +439,13 @@ class Welcome(Message):
     **only for the GM** — empty for every player. The cast list names files in
     the GM's own workspace; it is kept on the server so a GM picking the session
     up from another machine still has it, and it means nothing to anyone else.
+
+    ``scene`` is the current scene and goes to **everyone** — it is the one thing
+    here the whole table is meant to see. ``scene_sources`` is its GM-only half
+    (see :class:`SetScene`) and is filled like ``npc_paths``. The scene's
+    *portraits* are deliberately absent: they follow as individual
+    :class:`ScenePortrait` messages, since a welcome already carrying a roster
+    and a slice of history has no room for a dozen pictures.
     """
 
     TYPE: ClassVar[str] = "welcome"
@@ -390,6 +459,8 @@ class Welcome(Message):
     history: list[dict] = field(default_factory=list)
     is_gm: bool = False
     npc_paths: list[str] = field(default_factory=list)
+    scene: list[dict] = field(default_factory=list)
+    scene_sources: dict = field(default_factory=dict)
 
 
 @_register
@@ -439,6 +510,38 @@ class RollRemoved(Message):
     TYPE: ClassVar[str] = "roll_removed"
 
     seq: int
+
+
+@_register
+@dataclass(frozen=True)
+class SceneUpdate(Message):
+    """The scene, as everyone at the table sees it. Broadcast on every change.
+
+    The GM's :class:`SetScene` reaching everyone else, minus its GM-only
+    ``sources`` half. A client renders this and nothing else — there is no
+    merging to do, because the GM sends the whole board every time.
+    """
+
+    TYPE: ClassVar[str] = "scene_update"
+
+    entries: list[dict] = field(default_factory=list)
+
+
+@_register
+@dataclass(frozen=True)
+class ScenePortrait(Message):
+    """One scene entry's thumbnail reaching the table (see :class:`SetScenePortrait`).
+
+    Broadcast when the GM sends one, and replayed to a joining client one message
+    per portrait just after its :class:`Welcome`. A ``ref`` the receiver has no
+    entry for is kept anyway: the picture may simply have arrived before the
+    scene that names it.
+    """
+
+    TYPE: ClassVar[str] = "scene_portrait"
+
+    ref: str
+    portrait: str = ""
 
 
 @_register
@@ -611,6 +714,134 @@ def sanitize_spec(raw: object, _depth: int = 0) -> dict | None:
     if follow_up is not None:
         spec["follow_up"] = follow_up
     return spec
+
+
+# Bounds on a scene. Same reasoning as the spec bounds above and the same shape of
+# answer — the scene is GM-supplied, is broadcast to every seat and is rendered as
+# text and pictures on their screens, so it is checked into a known shape rather
+# than trusted. Generous next to any real fight; they exist to stop a hostile
+# client, not a legitimate one.
+MAX_SCENE_ENTRIES = 24
+MAX_SCENE_CONDITIONS = 12
+MAX_SCENE_TEXT = 80
+#: Hard cap on one entry's base64 thumbnail. Far smaller than a *sheet* portrait
+#: (:data:`~mm_companion.ui.session_portrait.PORTRAIT_MAX_CHARS`) because a scene
+#: card shows a thumbnail rather than a picture, and because a whole scene's worth
+#: of them is stored per session and replayed to every joiner.
+MAX_SCENE_PORTRAIT_CHARS = 8 * 1024
+
+
+def sanitize_scene(raw: object) -> list[dict]:
+    """Check a GM-supplied scene into a known shape, dropping what does not fit.
+
+    Structural like :func:`sanitize_spec`, and for the same reason: the standalone
+    server loads no game data, so a condition id here is an opaque string and this
+    file has no opinion about whether it names anything.
+
+    One entry is ``{"ref", "name", "player_id", "initiative", "conditions"}``:
+
+    - ``ref`` is the GM's opaque handle for this entry and is the only required
+      field — an entry without one cannot be addressed by a
+      :class:`ScenePortrait`, so it is dropped whole rather than kept unusable.
+    - ``initiative`` is an ``int`` or absent. Absent means *not rolled yet*, which
+      is a different thing from nought and sorts differently.
+    - ``conditions`` are ``{"id", "parameter", "count"}`` dicts — the shape
+      :meth:`~mm_companion.core.character.AppliedCondition.to_dict` writes, minus
+      ``provenance``, which is a bookkeeping detail of the sender's own tracker.
+    """
+
+    if not isinstance(raw, list):
+        return []
+    entries: list[dict] = []
+    seen: set[str] = set()
+    for item in raw[:MAX_SCENE_ENTRIES]:
+        if not isinstance(item, dict):
+            continue
+        ref = item.get("ref")
+        if not isinstance(ref, str) or not ref.strip() or ref in seen:
+            continue
+        seen.add(ref)
+        entry: dict = {"ref": ref[:MAX_SCENE_TEXT]}
+        for key in ("name", "player_id"):
+            value = item.get(key)
+            if isinstance(value, str) and value:
+                entry[key] = value[:MAX_SCENE_TEXT]
+        initiative = item.get("initiative")
+        if isinstance(initiative, int) and not isinstance(initiative, bool):
+            entry["initiative"] = initiative
+        conditions = _sanitize_scene_conditions(item.get("conditions"))
+        if conditions:
+            entry["conditions"] = conditions
+        entries.append(entry)
+    return entries
+
+
+def _sanitize_scene_conditions(raw: object) -> list[dict]:
+    """The ``conditions`` half of one scene entry, whitelisted key by key."""
+
+    if not isinstance(raw, list):
+        return []
+    conditions: list[dict] = []
+    for item in raw[:MAX_SCENE_CONDITIONS]:
+        if not isinstance(item, dict):
+            continue
+        condition_id = item.get("id")
+        if not isinstance(condition_id, str) or not condition_id:
+            continue
+        applied: dict = {"id": condition_id[:MAX_SCENE_TEXT]}
+        parameter = item.get("parameter")
+        if isinstance(parameter, str) and parameter:
+            applied["parameter"] = parameter[:MAX_SCENE_TEXT]
+        count = item.get("count")
+        if isinstance(count, int) and not isinstance(count, bool) and count > 1:
+            applied["count"] = count
+        conditions.append(applied)
+    return conditions
+
+
+def sanitize_scene_portrait(raw: object) -> str:
+    """A scene entry's thumbnail, or ``""`` for anything that is not one.
+
+    Over-long is dropped rather than truncated: half a JPEG is not a smaller
+    JPEG, and a card showing its placeholder is a better answer than one showing
+    a broken image.
+    """
+
+    if not isinstance(raw, str) or len(raw) > MAX_SCENE_PORTRAIT_CHARS:
+        return ""
+    return raw
+
+
+def sanitize_scene_portraits(raw: object) -> dict:
+    """A whole ``ref`` → thumbnail map, each value checked by
+    :func:`sanitize_scene_portrait`. An entry that fails simply loses its picture."""
+
+    if not isinstance(raw, dict):
+        return {}
+    portraits: dict = {}
+    for key, value in list(raw.items())[:MAX_SCENE_ENTRIES]:
+        if not isinstance(key, str) or not key:
+            continue
+        portrait = sanitize_scene_portrait(value)
+        if portrait:
+            portraits[key[:MAX_SCENE_TEXT]] = portrait
+    return portraits
+
+
+def sanitize_scene_sources(raw: object) -> dict:
+    """The GM's private ``ref`` → source map, capped and stringified.
+
+    Never broadcast (see :class:`SetScene`), but stored on the server and handed
+    back on a later welcome, so it is bounded like everything else that persists.
+    """
+
+    if not isinstance(raw, dict):
+        return {}
+    sources: dict = {}
+    for key, value in list(raw.items())[:MAX_SCENE_ENTRIES]:
+        if isinstance(key, str) and isinstance(value, str) and key and value:
+            sources[key[:MAX_SCENE_TEXT]] = value[:MAX_SCENE_TEXT]
+    return sources
 
 
 # --------------------------------------------------------------------------

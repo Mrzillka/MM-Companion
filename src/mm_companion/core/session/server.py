@@ -43,6 +43,7 @@ from .protocol import (
     ERROR_PROTOCOL_VERSION,
     ERROR_RATE_LIMIT,
     ERROR_SESSION_FULL,
+    MAX_SCENE_TEXT,
     PROTOCOL_VERSION,
     REASON_SESSION_CLOSED,
     ApplyCondition,
@@ -64,10 +65,17 @@ from .protocol import (
     RollRemoved,
     RollRequest,
     Roster,
+    ScenePortrait,
+    SceneUpdate,
     SetHeroPoints,
     SetNpcPaths,
+    SetScene,
+    SetScenePortrait,
     SetSessionName,
     Welcome,
+    sanitize_scene,
+    sanitize_scene_portrait,
+    sanitize_scene_sources,
     sanitize_snapshot,
     sanitize_spec,
 )
@@ -114,6 +122,8 @@ EVENT_ROSTER = "roster"  # {"players": [roster dicts — no tokens, no character
 EVENT_SNAPSHOT = "snapshot"  # {"player_id", "character"}
 EVENT_ROLL = "roll"  # a full roll dict, hidden rolls included
 EVENT_ROLL_REMOVED = "roll_removed"  # {"seq"}
+EVENT_SCENE = "scene"  # {"entries": [scene entry dicts]}
+EVENT_SCENE_PORTRAIT = "scene_portrait"  # {"ref", "portrait"}
 EVENT_REFUSED = "refused"  # {"code", "message", "address"}
 EVENT_ERROR = "error"  # {"code", "message"}
 #: The listener stopped handing out connections while we still believe we are
@@ -426,6 +436,67 @@ class SessionServer:
             self.state.touch()
             self._persist()
 
+    # -- the scene ---------------------------------------------------------
+
+    def set_scene(self, entries: object, sources: object = None) -> list[dict]:
+        """Replace the shared scene, persist it, and tell the table.
+
+        The GM's window calls this directly when it is hosting; a remote GM's
+        :class:`~.protocol.SetScene` lands here too. Returns the sanitized
+        entries — what was actually stored — so an in-process caller sees the
+        same board everyone else got rather than assuming its own.
+
+        Portraits of entries that have left the scene are dropped here rather
+        than by whoever removed them: this is the only place that knows the whole
+        new membership, and a session that only ever accumulated pictures would
+        grow its ``session.json`` all campaign.
+        """
+        kept = sanitize_scene(entries)
+        with self._lock:
+            self.state.scene = kept
+            if sources is not None:
+                self.state.scene_sources = sanitize_scene_sources(sources)
+            live = {entry["ref"] for entry in kept}
+            self.state.scene_portraits = {
+                ref: portrait for ref, portrait in self.state.scene_portraits.items() if ref in live
+            }
+            self.state.touch()
+            self._persist()
+        self._emit(EVENT_SCENE, {"entries": [dict(entry) for entry in kept]})
+        self.broadcast(SceneUpdate(entries=[dict(entry) for entry in kept]))
+        return kept
+
+    def set_scene_portrait(self, ref: str, portrait: str) -> None:
+        """Store one scene entry's thumbnail and pass it on to the table.
+
+        An empty *portrait* clears it. A ``ref`` that is not in the scene is
+        still accepted: the GM sends a picture as an entry joins, and the two
+        messages are not ordered against each other.
+        """
+        ref = str(ref)[:MAX_SCENE_TEXT]
+        if not ref:
+            return
+        kept = sanitize_scene_portrait(portrait)
+        with self._lock:
+            if kept:
+                self.state.scene_portraits[ref] = kept
+            else:
+                self.state.scene_portraits.pop(ref, None)
+            self.state.touch()
+            self._persist()
+        self._emit(EVENT_SCENE_PORTRAIT, {"ref": ref, "portrait": kept})
+        self.broadcast(ScenePortrait(ref=ref, portrait=kept))
+
+    def scene(self) -> list[dict]:
+        """The scene as it goes on the wire."""
+        with self._lock:
+            return [dict(entry) for entry in self.state.scene]
+
+    def scene_portraits(self) -> dict[str, str]:
+        """Every stored scene thumbnail, by ``ref``."""
+        with self._lock:
+            return dict(self.state.scene_portraits)
+
     # -- outbound ----------------------------------------------------------
 
     def roster(self) -> list[dict]:
@@ -609,7 +680,12 @@ class SessionServer:
                 ],
                 is_gm=slot.is_gm,
                 npc_paths=list(self.state.npc_paths) if slot.is_gm else [],
+                scene=[dict(entry) for entry in self.state.scene],
+                scene_sources=dict(self.state.scene_sources) if slot.is_gm else {},
             )
+            # Read under the same lock as the welcome so the pictures cannot
+            # describe a scene other than the one just sent; delivered after it.
+            portraits = dict(self.state.scene_portraits)
 
         if replaced is not None and replaced is not connection:
             replaced.close()
@@ -625,6 +701,18 @@ class SessionServer:
         with self._lock:
             if self._connections.get(slot.player_id) is connection:
                 self._welcomed.add(slot.player_id)
+
+        # The scene's pictures, one message each. They are not in the welcome
+        # because a welcome already carries a roster and two hundred rolls, and a
+        # dozen thumbnails on top of that is how you fail to encode a join. Sent
+        # on this connection alone; a failure here costs a placeholder or two,
+        # not the seat, so it is swallowed rather than allowed to unseat a player
+        # who is otherwise in.
+        for ref, portrait in portraits.items():
+            try:
+                connection.send(ScenePortrait(ref=ref, portrait=portrait))
+            except (OSError, ProtocolError):
+                break
 
         if self.mod_fingerprint and message.mod_fingerprint != self.mod_fingerprint:
             # A warning, not a refusal — the session works, but ids coming from
@@ -748,6 +836,13 @@ class SessionServer:
             self.set_session_name(message.name)
         elif isinstance(message, SetNpcPaths) and slot.is_gm:
             self.set_npc_paths(message.paths)
+        elif isinstance(message, SetScene) and slot.is_gm:
+            # The scene is the GM's to author. A player's SetScene is dropped on
+            # the floor like their RemoveRollRequest: the board is what everyone
+            # is looking at, so it has exactly one writer.
+            self.set_scene(message.entries, message.sources)
+        elif isinstance(message, SetScenePortrait) and slot.is_gm:
+            self.set_scene_portrait(message.ref, message.portrait)
 
     def _forward_snapshot_to_gm(self, player_id: str, character: dict) -> None:
         """Send one player's sheet on to a GM who is dialled in over a socket.

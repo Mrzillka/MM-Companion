@@ -15,6 +15,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from mm_companion.core.dice import CheckResult
+from mm_companion.core.session.protocol import (
+    sanitize_scene,
+    sanitize_scene_portraits,
+    sanitize_scene_sources,
+)
 
 
 def utc_now() -> str:
@@ -282,6 +287,21 @@ class SessionState:
     players: dict[str, PlayerSlot] = field(default_factory=dict)
     npc_paths: list[str] = field(default_factory=list)
     rolls: list[RollRecord] = field(default_factory=list)
+    #: The shared board: who is in this fight, in what order, and what state they
+    #: are visibly in. Authored whole by the GM
+    #: (:class:`~.protocol.SetScene`), stored here so a table hosted on a server
+    #: survives the GM's laptop, and broadcast to everyone — the one thing in this
+    #: object that is *meant* to be seen by the table.
+    scene: list[dict] = field(default_factory=list)
+    #: The GM's private half of the scene: an entry's opaque ``ref`` to what it
+    #: actually is (``"npc:<file name>"`` / ``"player:<id>"``). Handed back to the
+    #: GM alone, exactly like :attr:`npc_paths` and for the same reason — an NPC's
+    #: file name is the GM's business, and can be a spoiler outright.
+    scene_sources: dict[str, str] = field(default_factory=dict)
+    #: One base64 thumbnail per scene entry, by ``ref``. Kept apart from
+    #: :attr:`scene` because the scene is re-sent on every change and these are
+    #: not: see :class:`~.protocol.SetScenePortrait`.
+    scene_portraits: dict[str, str] = field(default_factory=dict)
 
     # -- roster ------------------------------------------------------------
 
@@ -486,6 +506,9 @@ class SessionState:
             "updated_at": self.updated_at,
             "players": [slot.to_dict() for slot in self.players.values()],
             "npc_paths": list(self.npc_paths),
+            "scene": [dict(entry) for entry in self.scene],
+            "scene_sources": dict(self.scene_sources),
+            "scene_portraits": dict(self.scene_portraits),
         }
         if include_rolls:
             data["rolls"] = [roll.to_dict() for roll in self.rolls]
@@ -506,6 +529,14 @@ class SessionState:
             updated_at=str(raw.get("updated_at", "")) or utc_now(),
             players={slot.player_id: slot for slot in players},
             npc_paths=[str(p) for p in raw.get("npc_paths", [])],
+            # Sanitized rather than trusted on the way back in for the reason it was
+            # sanitized on the way over the wire: this file is not the authority on
+            # the shape, and a session written by a newer build should degrade to
+            # what this one understands rather than carry a surprise into a
+            # broadcast.
+            scene=sanitize_scene(raw.get("scene")),
+            scene_sources=sanitize_scene_sources(raw.get("scene_sources")),
+            scene_portraits=sanitize_scene_portraits(raw.get("scene_portraits")),
             rolls=[RollRecord.from_dict(r) for r in raw.get("rolls", [])],
         )
 

@@ -59,7 +59,9 @@ AUTO_PLAYERS_LABEL = "Put every player in the Scene automatically"
 AUTO_PLAYERS_HINT = (
     "On, joining the session is enough to be on the board. Off, players are added "
     "with the 👁 on their card or by dragging it in, exactly as NPCs are — for a "
-    "GM who runs the Scene as a spotlight rather than a roster."
+    "GM who runs the Scene as a spotlight rather than a roster. Turning it off "
+    "leaves whoever is already on the Scene there; it only stops the next player "
+    "joining it by themselves."
 )
 
 NOTE_TEXT = (

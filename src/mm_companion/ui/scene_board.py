@@ -5,20 +5,17 @@ one card: the board a player watches and the board a GM drives show the same
 thing in the same order, and only the gestures differ. *gm* turns the drops and
 the drags on.
 
-**One MIME for two gestures.** Dragging an NPC card into the scene and dragging a
-scene card along it are the same question — *put this reference at this index* —
-so they carry the same :data:`~mm_companion.ui.scene_card.SCENE_MIME` payload and
-land in the same handler. A ref the board already holds moves; one it does not
-holds is an addition. Two formats would have meant two nearly-identical drop
-paths that could drift apart, and no gain: the board has to look the dropped ref
-up either way.
+The drop itself belongs to :class:`~mm_companion.ui.card_drop.CardDropFlow`, which
+all three boards share — dragging an NPC card *into* the scene and dragging a
+scene card *along* it are the same question, so they are the same handler. What
+this widget adds is only the pass-through: it re-raises :attr:`dropped` and lets
+the GM window decide what an index means, since what it costs an entry's
+initiative to be dragged out of the rolled zone is a rule about the *board*, not
+about a flow of widgets.
 
-The drop *index* is computed against the rendered order, which is the same
-``rolled first, then manual`` order the NPC block sorts by. What the owner does
-with that index — and what it costs an entry's initiative to be dragged out of
-the rolled zone — is the owner's business, not this widget's: it emits
-:attr:`dropped` and lets the GM window apply the rule it already spells out for
-its own cards.
+Ordering is :func:`~mm_companion.ui.scene_card.order_scene` — rolled entries
+first, then the GM's own arrangement — which is the rule the NPC grid already
+sorts by, so a GM is never holding two orderings in their head.
 """
 
 from __future__ import annotations

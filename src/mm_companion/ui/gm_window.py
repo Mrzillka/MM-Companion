@@ -37,7 +37,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QEasingCurve, QPropertyAnimation, Qt, QTimer
+from PySide6.QtCore import QByteArray, QEasingCurve, QEvent, QPropertyAnimation, Qt, QTimer
 from PySide6.QtGui import QCloseEvent, QShowEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -1131,8 +1131,15 @@ class GMWindow(QMainWindow):
         preference: on, joining the table is enough; off, the GM puts them there by
         hand and their card grows an eye to do it with.
 
-        The preference is re-read here rather than once at startup, so a change made
-        in Settings reaches an open window without reopening it.
+        Turning the preference off does **not** clear whoever is already on the
+        board. "Put every player in the Scene automatically", unticked, says *from
+        now on I decide* — not *throw out the fight in progress*. What it changes
+        at once is that the eyes appear, so the GM can decide.
+
+        The preference is re-read here rather than once at startup. This runs on
+        every roster — a join, a leave, and every snapshot a player pushes — and
+        :meth:`changeEvent` catches the one case that would otherwise wait for one:
+        a GM who changes it in Settings and comes straight back to a quiet table.
         """
         self._scene_auto_players = storage.gm_scene_auto_players()
         before = list(self._scene)
@@ -2365,6 +2372,27 @@ class GMWindow(QMainWindow):
         window.show()
 
     # -- lifecycle ---------------------------------------------------------
+
+    def changeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        """Coming back to this window is when a Settings change should land.
+
+        The Scene's one preference is otherwise re-read on the roster, which is
+        frequent in a live session and never at a quiet table — so a GM who
+        unticked it and came straight back would find the player cards still
+        without their eyes. Guarded on the value actually moving, so an ordinary
+        alt-tab costs a settings read and nothing else.
+        """
+        if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
+            self._reload_scene_preference()
+        super().changeEvent(event)
+
+    def _reload_scene_preference(self) -> None:
+        """Re-read ``gm_scene_auto_players`` and apply it if it has moved."""
+        wanted = storage.gm_scene_auto_players()
+        if wanted == self._scene_auto_players:
+            return
+        self._scene_auto_players = wanted
+        self._sync_scene_players({pid for pid, card in self._cards.items() if card is not None})
 
     def showEvent(self, event: QShowEvent) -> None:  # noqa: N802 (Qt override)
         """Re-arm as the process-wide session — the window is reusable after a close."""

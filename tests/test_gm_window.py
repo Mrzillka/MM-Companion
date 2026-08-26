@@ -2912,3 +2912,51 @@ def test_a_damage_rung_reaches_the_table(window: GMWindow) -> None:
     window._apply_npc_damage(goon, 1)
 
     assert window._scene_payload()[0].get("conditions")
+
+
+def test_coming_back_from_settings_lands_the_scene_preference(window: GMWindow) -> None:
+    """Otherwise it waits for a roster, which is frequent in a live session and
+    never at a quiet table — so a GM who unticked it and came straight back would
+    find the player cards still without their eyes.
+
+    Unticking stops the *automatic* part and does not clear the board: it says
+    "from now on I decide", not "throw out the fight in progress". What it changes
+    at once is that the eyes appear, so the GM can decide.
+    """
+    window._show_roster([{"player_id": "p1", "display_name": "Alex", "connected": True}])
+    assert [(e.kind, e.source) for e in window._scene] == [(SCENE_PLAYER, "p1")]
+
+    storage.set_gm_scene_auto_players(False)
+    window._reload_scene_preference()
+
+    card = window._cards["p1"]
+    assert card._scene_eye.isVisibleTo(card)
+    assert card.in_scene  # still on the board, and the eye says so
+    assert [(e.kind, e.source) for e in window._scene] == [(SCENE_PLAYER, "p1")]
+
+    card.sceneToggled.emit("p1", False)
+    assert window._scene == []
+
+
+def test_turning_the_preference_back_on_seats_the_players_again(window: GMWindow) -> None:
+    storage.set_gm_scene_auto_players(False)
+    window._show_roster([{"player_id": "p1", "display_name": "Alex", "connected": True}])
+    assert window._scene == []
+
+    storage.set_gm_scene_auto_players(True)
+    window._reload_scene_preference()
+
+    assert [(e.kind, e.source) for e in window._scene] == [(SCENE_PLAYER, "p1")]
+
+
+def test_an_unchanged_preference_leaves_the_board_alone(window: GMWindow) -> None:
+    """Guarded on the value actually moving, so an ordinary alt-tab costs a
+    settings read and nothing else."""
+    (goon,) = _npc_files(window, "Goon")
+    window._set_in_scene(SCENE_NPC, goon, True)
+    window._roll_scene_initiative()
+    before = window._npc_state[goon].initiative
+
+    window._reload_scene_preference()
+
+    assert window._npc_state[goon].initiative == before

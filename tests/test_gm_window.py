@@ -145,9 +145,10 @@ def advice_texts(window: GMWindow) -> list[str]:
 # -- the draggable blocks --------------------------------------------------
 
 
-def test_the_gm_window_has_the_three_board_blocks(window: GMWindow) -> None:
-    # The session block moved to the launch dialog; the board is players/npcs/rolls.
-    assert set(window._canvas.block_keys()) == {"players", "npcs", "rolls"}
+def test_the_gm_window_has_the_four_board_blocks(window: GMWindow) -> None:
+    # The session block moved to the launch dialog; the board is the shared Scene
+    # plus the two rosters that feed it, and the roll log.
+    assert set(window._canvas.block_keys()) == {"scene", "players", "npcs", "rolls"}
 
 
 def test_the_view_menu_can_hide_and_show_a_block(window: GMWindow) -> None:

@@ -57,11 +57,11 @@ from mm_companion.core.dice import roll_d20
 from mm_companion.core.library import CharacterSummary
 from mm_companion.core.rules import initiative_modifier
 from mm_companion.ui import theme
+from mm_companion.ui.card_chips import _ConditionChip, _SceneEye
 from mm_companion.ui.card_summary import PortraitButton, character_summary_html
 from mm_companion.ui.damage_row import DamageRow
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.pin_panel import PIN_PANEL_WIDTH, install_pin_panel
-from mm_companion.ui.player_card import _ConditionChip
 from mm_companion.ui.sections.conditions import (
     build_condition_menu,
     condition_display_name,
@@ -174,6 +174,9 @@ class NPCCard(QFrame):
     #: ``(file_name, condition_id, parameter)`` — take it off again.
     removeConditionRequested = Signal(str, str, object)
     #: ``(file_name, total)`` — this NPC just rolled initiative.
+    #: ``(file name, on)`` — the GM put this NPC on the shared board, or took it
+    #: off. The window owns what that means; the card only says it was asked.
+    sceneToggled = Signal(str, bool)
     initiativeRolled = Signal(str, int)
     #: The NPC's file name — its initiative was cleared, so it leaves the order.
     initiativeCleared = Signal(str)
@@ -263,6 +266,13 @@ class NPCCard(QFrame):
         self._name_label.setWordWrap(True)
         header.addWidget(self._name_label, stretch=1)
 
+        # In the header, so it survives a collapse: the two things a GM reaches
+        # for mid-round on a shrunk card are whose turn it is and whether the
+        # table can see this creature at all.
+        self._scene_eye = _SceneEye()
+        self._scene_eye.toggled.connect(lambda on: self.sceneToggled.emit(self.name_key, bool(on)))
+        header.addWidget(self._scene_eye)
+
         # The badge *is* the roll affordance once the explicit button is hidden.
         self._initiative_badge = _InitiativeBadge()
         self._initiative_badge.clicked.connect(self.roll_initiative)
@@ -349,6 +359,17 @@ class NPCCard(QFrame):
     def character(self) -> Character:
         """The NPC's model — the GM edits this directly."""
         return self._character
+
+    def set_in_scene(self, on: bool) -> None:
+        """Show whether this NPC is on the shared board. Silent, like
+        :meth:`set_collapsed`: the window telling a card what it already decided
+        must not bounce back as a fresh request."""
+        self._scene_eye.set_in_scene(on)
+
+    @property
+    def in_scene(self) -> bool:
+        """Whether the eye says this creature is on the board."""
+        return self._scene_eye.isChecked()
 
     def display_name(self) -> str:
         """The NPC's name, as its summary gives it."""

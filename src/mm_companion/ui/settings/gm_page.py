@@ -1,4 +1,4 @@
-"""The GM Mode page: what a card's pinned-parameter strip starts with.
+"""The GM Mode page: the Scene's one choice, and what a card's strip starts with.
 
 Two lists, one per kind of card, editing the ``gm_default_pins`` setting. They are
 separate because the two cards answer different questions: a GM reads a *player's*
@@ -16,6 +16,10 @@ Once a card exists its strip is the GM's own — :meth:`GMWindow._pins_for` writ
 into ``gm_pins`` on first sight precisely so a later change here cannot rearrange
 what is already on the board. Overruling that is a deliberate act, so it is asked
 for outright and confirmed.
+
+Above the lists sits the Scene's one preference, because it is the same kind of
+thing: a standing decision about how a GM runs their table, made once rather than
+per session.
 """
 
 from __future__ import annotations
@@ -24,6 +28,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QCheckBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -50,6 +55,13 @@ PIN_ROLE = Qt.ItemDataRole.UserRole
 #: gets. The keys are the ones ``gm_default_pins`` is stored under.
 KINDS: tuple[tuple[str, str], ...] = (("player", "Player cards"), ("npc", "NPC cards"))
 
+AUTO_PLAYERS_LABEL = "Put every player in the Scene automatically"
+AUTO_PLAYERS_HINT = (
+    "On, joining the session is enough to be on the board. Off, players are added "
+    "with the 👁 on their card or by dragging it in, exactly as NPCs are — for a "
+    "GM who runs the Scene as a spotlight rather than a roster."
+)
+
 NOTE_TEXT = (
     "A card's strip starts from these and is then its own: editing a list here "
     "does not rearrange a card already on the board, only the ones a GM has yet "
@@ -68,8 +80,10 @@ class GMPage(SettingsPage):
         self._lists: dict[str, QListWidget] = {}
         self._pickers: dict[str, PinPickerDialog] = {}
         self._saved: dict[str, list[PinRef]] = {}
+        self._saved_auto_players = True
 
         column = QVBoxLayout(self)
+        column.addWidget(self._build_scene())
         column.addWidget(self._build_heading())
         column.addLayout(self._build_lists(), stretch=1)
         column.addLayout(self._build_actions())
@@ -78,6 +92,20 @@ class GMPage(SettingsPage):
         self._load()
 
     # -- construction ------------------------------------------------------------
+
+    def _build_scene(self) -> QWidget:
+        """The Scene's one preference: does joining the table put you on the board."""
+        box = QGroupBox("Scene")
+        column = QVBoxLayout(box)
+        self._auto_players = QCheckBox(AUTO_PLAYERS_LABEL)
+        self._auto_players.setToolTip(AUTO_PLAYERS_HINT)
+        self._auto_players.toggled.connect(self._on_edited)
+        column.addWidget(self._auto_players)
+        hint = QLabel(AUTO_PLAYERS_HINT)
+        hint.setWordWrap(True)
+        hint.setStyleSheet(muted_style(italic=True))
+        column.addWidget(hint)
+        return box
 
     def _build_heading(self) -> QWidget:
         panel = QWidget()
@@ -153,6 +181,8 @@ class GMPage(SettingsPage):
     # -- the page contract ---------------------------------------------------------
 
     def is_dirty(self) -> bool:
+        if self._auto_players.isChecked() != self._saved_auto_players:
+            return True
         return any(self.pins(kind) != self._saved.get(kind, []) for kind, _heading in KINDS)
 
     def save(self) -> None:
@@ -165,7 +195,9 @@ class GMPage(SettingsPage):
         storage.set_gm_default_pins(
             {kind: [ref.to_dict() for ref in self.pins(kind)] for kind, _heading in KINDS}
         )
+        storage.set_gm_scene_auto_players(self._auto_players.isChecked())
         self._saved = {kind: self.pins(kind) for kind, _heading in KINDS}
+        self._saved_auto_players = self._auto_players.isChecked()
         self._set_status("Saved. New cards will start with these.")
 
     def discard(self) -> None:
@@ -197,6 +229,12 @@ class GMPage(SettingsPage):
         for kind, _heading in KINDS:
             self.set_pins(kind, default_pins(kind, stored))
         self._saved = {kind: self.pins(kind) for kind, _heading in KINDS}
+        # Set without raising the edited signal, which would mark a freshly opened
+        # page dirty before anyone had touched it.
+        self._auto_players.blockSignals(True)
+        self._auto_players.setChecked(storage.gm_scene_auto_players())
+        self._auto_players.blockSignals(False)
+        self._saved_auto_players = self._auto_players.isChecked()
 
     def _on_edited(self, *_args: object) -> None:
         self._set_status("")

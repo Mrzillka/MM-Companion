@@ -29,8 +29,8 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QVBoxLayout, Q
 from mm_companion.core.character import AppliedCondition
 from mm_companion.core.data_loader import Condition, GameData
 from mm_companion.ui import theme
+from mm_companion.ui.card_chips import _ConditionChip
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
-from mm_companion.ui.player_card import _ConditionChip
 from mm_companion.ui.sections.conditions import condition_display_name, condition_tooltip
 from mm_companion.ui.widgets import ElidingLabel
 

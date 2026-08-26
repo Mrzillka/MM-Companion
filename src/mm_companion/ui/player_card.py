@@ -45,6 +45,7 @@ from mm_companion.core import library
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import Condition, GameData
 from mm_companion.ui import theme
+from mm_companion.ui.card_chips import _ConditionChip, _SceneEye
 from mm_companion.ui.card_summary import PortraitButton, character_summary_html
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.pin_panel import PIN_PANEL_WIDTH, install_pin_panel
@@ -55,7 +56,6 @@ from mm_companion.ui.sections.conditions import (
 )
 from mm_companion.ui.sections.system_info import HeroPointsWidget
 from mm_companion.ui.session_portrait import decode_portrait
-from mm_companion.ui.widgets import attach_context_removal
 
 #: How wide the card's own column is. Fixed, so a row of them lines up in the
 #: flow layout; the pinned-parameter strip adds its own width beside it.
@@ -80,6 +80,9 @@ class PlayerCard(QFrame):
     setHeroPointsRequested = Signal(str, int)
     #: The player's id — the GM asked to remove this seat from the session.
     removePlayerRequested = Signal(str)
+    #: ``(player_id, on)`` — the GM put this seat on the shared board, or took it
+    #: off. Only reachable while the eye is shown; see ``_scene_eye``.
+    sceneToggled = Signal(str, bool)
     #: ``(player_id, refs)`` — this card's pinned-parameter strip changed.
     pinsChanged = Signal(str, object)
     #: A ``RollSpec`` — the GM clicked a pinned chip and wants it in the roller.
@@ -156,6 +159,13 @@ class PlayerCard(QFrame):
 
         condition_row = QHBoxLayout()
         condition_row.setContentsMargins(0, 0, 0, 0)
+        # Hidden while the GM has players joining the Scene automatically: an
+        # action that does nothing is worse than none. See
+        # ``storage.gm_scene_auto_players``.
+        self._scene_eye = _SceneEye()
+        self._scene_eye.setVisible(False)
+        self._scene_eye.toggled.connect(lambda on: self.sceneToggled.emit(self.player_id, bool(on)))
+        condition_row.addWidget(self._scene_eye)
         self._condition_button = QToolButton()
         self._condition_button.setText("+")
         self._condition_button.setToolTip("Apply a condition to this player")
@@ -231,6 +241,24 @@ class PlayerCard(QFrame):
         self.setToolTip(
             character_summary_html(character, self._data, library.display_name(character))
         )
+
+    def set_scene_controls(self, shown: bool) -> None:
+        """Show or hide this card's Scene toggle.
+
+        Shown only when the GM adds players to the board by hand. With the
+        automatic setting on there is nothing for it to decide, and a toggle that
+        cannot be turned off is a lie about who is in charge.
+        """
+        self._scene_eye.setVisible(shown)
+
+    def set_in_scene(self, on: bool) -> None:
+        """Show whether this seat is on the shared board. Silent, like the NPC card's."""
+        self._scene_eye.set_in_scene(on)
+
+    @property
+    def in_scene(self) -> bool:
+        """Whether the eye says this seat is on the board."""
+        return self._scene_eye.isChecked()
 
     def _set_portrait(self, data: object) -> None:
         """Show the transmitted thumbnail, or fall back to the placeholder."""
@@ -314,79 +342,3 @@ class PlayerCard(QFrame):
     def connected(self) -> bool:
         """Whether the roster last said this seat had someone in it."""
         return self._connected
-
-
-class _ConditionChip(QFrame):
-    """One condition, as a compact chip a right-click takes off.
-
-    The removal used to be a "×" on the chip. It is a right-click now, everywhere a
-    condition chip appears: the button was a third of the width of a short caption
-    like "Hit ×3", on the one part of a collapsed card that has to hold several of
-    them. See :func:`~mm_companion.ui.widgets.attach_context_removal` for the trade
-    that makes, and for why the tooltip has to say so.
-
-    *compact* is the collapsed GM card's version: the same chip in small print, so a
-    creature carrying five conditions still costs one line of a card that is mostly
-    pinned numbers. Only the type size and the padding change — a chip that reads
-    differently in the two states would be a second thing to recognise.
-    """
-
-    def __init__(
-        self,
-        text: str,
-        *,
-        tooltip: str = "",
-        compact: bool = False,
-        parent: QWidget | None = None,
-    ) -> None:
-        super().__init__(parent)
-        self.setStyleSheet(
-            f"border: {int(theme.metric('border.width'))}px solid"
-            f" {theme.color('tint.worse')};"
-            f"background: {theme.wash('tint.worse', 0.12)};"
-            f"border-radius: {int(theme.metric('radius.chip'))}px;"
-        )
-        if tooltip:
-            self.setToolTip(tooltip)
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(*((3, 0, 1, 0) if compact else (5, 1, 2, 1)))
-        layout.setSpacing(1 if compact else 2)
-        self._label = QLabel(text)
-        self._label.setStyleSheet("border: none; background: transparent;")
-        if compact:
-            # On the QFont, never in the sheet above: a stylesheet ``font-size``
-            # outranks a widget's font everywhere in this app.
-            font = self._label.font()
-            font.setPointSizeF(theme.font_size("size.terms"))
-            self._label.setFont(font)
-        layout.addWidget(self._label)
-        self._compact = compact
-        self._removable = False
-
-    def text(self) -> str:
-        """The chip's caption — what :meth:`PlayerCard.condition_names` reads."""
-        return self._label.text()
-
-    @property
-    def removable(self) -> bool:
-        """Whether a right-click here would take this condition off.
-
-        False on an offline player's chips: their card is a snapshot of somebody
-        else's sheet, and there is nobody to send the command to.
-        """
-        return self._removable
-
-    def arm_removal(self, on_remove) -> None:
-        """Let a right-click ask for this condition to come off."""
-        attach_context_removal(self, on_remove, what=self.text())
-        self._removable = True
-
-    def contextMenuEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        """Swallow a right-click that removal did not claim.
-
-        Reached only on a chip that cannot be removed — an offline player's, whose
-        app there is nobody to send the command to. Doing nothing is the point:
-        left to propagate, the click would reach the *card* and offer to remove the
-        player, which is not what someone aiming at a chip meant to ask for.
-        """
-        event.accept()

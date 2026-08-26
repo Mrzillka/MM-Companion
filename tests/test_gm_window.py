@@ -43,7 +43,7 @@ from mm_companion.core.session.protocol import sanitize_snapshot
 from mm_companion.ui import dice_roller, player_card
 from mm_companion.ui import gm_window as gm_window_module
 from mm_companion.ui import npc_card as npc_card_module
-from mm_companion.ui.gm_window import GMWindow
+from mm_companion.ui.gm_window import SCENE_NPC, SCENE_PLAYER, GMWindow
 from mm_companion.ui.npc_card import NPCCard
 from mm_companion.ui.npc_quick_dialog import QuickNPC, QuickNPCDialog
 from mm_companion.ui.npc_window import NPCWindow
@@ -2578,3 +2578,299 @@ def test_an_offline_request_is_strikeable_like_an_offline_roll(
 
     card = window._history.findChild(RequestCard)
     assert card is not None and card.seq is not None and card.seq < 0
+
+
+# --------------------------------------------------------------------------
+# The Scene
+#
+# The shared board: which creatures are on it, in what order, and what reaches
+# the table. The drop tests matter more than most, because converting the NPC
+# grid's pseudo-drag into a real QDrag is what made a cross-block drag possible
+# at all — and nothing covered the old gesture.
+# --------------------------------------------------------------------------
+
+
+def _npc_files(window: GMWindow, *names: str) -> list[str]:
+    """Save a quick NPC per name into the session's cast, and return the file names."""
+    paths = [
+        library.save_character(
+            quick_npc(window._data, name=name, attack=4, effect=6, defence=6, toughness=6),
+            directory=storage.get_workspace().gm_characters_dir,
+        ).name
+        for name in names
+    ]
+    window._set_npc_paths(paths)
+    window._refresh_npcs()
+    return paths
+
+
+def test_the_eye_puts_an_npc_on_the_scene_and_takes_it_off(window: GMWindow) -> None:
+    goon, _boss = _npc_files(window, "Goon", "Boss")
+
+    window._npc_state[goon].card.sceneToggled.emit(goon, True)
+    assert [e.source for e in window._scene] == [goon]
+    assert window._npc_state[goon].card.in_scene
+
+    window._npc_state[goon].card.sceneToggled.emit(goon, False)
+    assert window._scene == []
+    assert not window._npc_state[goon].card.in_scene
+
+
+def test_the_scene_carries_a_name_and_the_conditions_and_nothing_else(
+    window: GMWindow,
+) -> None:
+    """A player reads the visible battlefield state off a card, not a statblock —
+    and the guarantee is that the other fields are never put on the wire."""
+    (goon,) = _npc_files(window, "Goon")
+    window._set_in_scene(SCENE_NPC, goon, True)
+    window._apply_npc_condition(goon, "dazed", None)
+
+    entry = window._scene_payload()[0]
+
+    assert entry["name"] == "Goon"
+    assert entry["conditions"] == [{"id": "dazed"}]
+    assert set(entry) <= {"ref", "name", "player_id", "initiative", "conditions"}
+
+
+def test_a_scene_ref_says_nothing_about_the_file_it_stands_for(window: GMWindow) -> None:
+    """An NPC's file name can be a spoiler outright, and the Scene is exactly where
+    a GM would find that out too late."""
+    (goon,) = _npc_files(window, "Goon")
+    window._set_in_scene(SCENE_NPC, goon, True)
+
+    entry = window._scene_payload()[0]
+
+    assert "goon" not in entry["ref"].lower()
+    assert entry["ref"] != goon
+
+
+def test_rolling_for_the_scene_rolls_only_what_is_on_it(window: GMWindow) -> None:
+    goon, boss = _npc_files(window, "Goon", "Boss")
+    window._set_in_scene(SCENE_NPC, goon, True)
+
+    window._roll_scene_initiative()
+
+    assert window._npc_state[goon].initiative is not None
+    assert window._npc_state[boss].initiative is None
+
+
+def test_a_scene_roll_shows_up_on_the_npcs_own_card(window: GMWindow) -> None:
+    """One number with one owner: the card badge and the board read the same field,
+    so they cannot come to disagree."""
+    (goon,) = _npc_files(window, "Goon")
+    window._set_in_scene(SCENE_NPC, goon, True)
+
+    window._roll_scene_initiative()
+
+    rolled = window._npc_state[goon].initiative
+    assert window._npc_state[goon].card.initiative == rolled
+    assert window._scene_payload()[0]["initiative"] == rolled
+
+
+def test_the_board_puts_the_rolled_above_the_unrolled(window: GMWindow) -> None:
+    goon, boss = _npc_files(window, "Goon", "Boss")
+    window._set_in_scene(SCENE_NPC, goon, True)
+    window._set_in_scene(SCENE_NPC, boss, True)
+    window._npc_state[boss].initiative = 20
+    window._push_scene()
+
+    assert [e["name"] for e in window._scene_payload()] == ["Goon", "Boss"]
+    ordered = window._scene_board.ordered_refs()
+    assert window._scene_entry(ordered[0]).source == boss
+
+
+def test_dropping_a_card_into_the_manual_zone_costs_it_its_initiative(
+    window: GMWindow,
+) -> None:
+    """The rule the NPC grid already spells out, and for its reason: a drop is the
+    GM arranging by hand, which no rolled number can be sorted around."""
+    goon, boss = _npc_files(window, "Goon", "Boss")
+    window._set_in_scene(SCENE_NPC, goon, True)
+    window._set_in_scene(SCENE_NPC, boss, True)
+    window._npc_state[goon].initiative = 18
+    window._push_scene()
+    ref = window._scene_entry_for(SCENE_NPC, goon).ref
+
+    window._drop_on_scene(ref, 1)
+
+    assert window._npc_state[goon].initiative is None
+
+
+def test_dropping_an_unrolled_card_in_front_of_a_rolled_one_clears_both(
+    window: GMWindow,
+) -> None:
+    """Putting an un-rolled creature first is the GM saying it acts first, which is
+    impossible while the other keeps a number to sort by. One of the two has to go."""
+    goon, boss = _npc_files(window, "Goon", "Boss")
+    window._set_in_scene(SCENE_NPC, goon, True)
+    window._set_in_scene(SCENE_NPC, boss, True)
+    window._npc_state[goon].initiative = 18
+    window._push_scene()
+    boss_ref = window._scene_entry_for(SCENE_NPC, boss).ref
+
+    window._drop_on_scene(boss_ref, 0)
+
+    assert window._npc_state[goon].initiative is None
+    assert window._scene_board.ordered_refs()[0] == boss_ref
+
+
+def test_dragging_a_roster_card_onto_the_scene_adds_it(window: GMWindow) -> None:
+    """The other half of the eye, and the one that needed the gesture to be a real
+    drag: this ref came from a card in a different block."""
+    (goon,) = _npc_files(window, "Goon")
+
+    window._scene_board.dropped.emit(f"{SCENE_NPC}:{goon}", 0)
+
+    assert [e.source for e in window._scene] == [goon]
+
+
+def test_a_ref_from_no_roster_at_all_is_refused(window: GMWindow) -> None:
+    _npc_files(window, "Goon")
+
+    window._scene_board.dropped.emit(f"{SCENE_NPC}:nobody.json", 0)
+
+    assert window._scene == []
+
+
+def test_dragging_an_npc_within_its_own_grid_still_reorders_it(window: GMWindow) -> None:
+    """The regression the QDrag conversion could have caused: the grid's own
+    reorder is the gesture that changed, and nothing covered it before."""
+    alpha, bravo, charlie = _npc_files(window, "Alpha", "Bravo", "Charlie")
+    assert window._ordered_npcs() == [alpha, bravo, charlie]
+
+    window._npc_container.dropped.emit(f"{SCENE_NPC}:{charlie}", 0)
+
+    assert window._ordered_npcs() == [charlie, alpha, bravo]
+
+
+def test_a_player_dropped_on_the_npc_grid_is_refused(window: GMWindow) -> None:
+    """Not a thing that can be done, and refusing quietly beats inventing a meaning."""
+    alpha, bravo = _npc_files(window, "Alpha", "Bravo")
+
+    window._npc_container.dropped.emit(f"{SCENE_PLAYER}:p1", 0)
+
+    assert window._ordered_npcs() == [alpha, bravo]
+
+
+def test_an_npc_removed_from_the_session_leaves_the_scene_with_it(window: GMWindow) -> None:
+    (goon,) = _npc_files(window, "Goon")
+    window._set_in_scene(SCENE_NPC, goon, True)
+
+    window._remove_npc(goon)
+
+    assert window._scene == []
+
+
+def test_a_players_initiative_arrives_on_the_shared_roll_log(window: GMWindow) -> None:
+    """No message of its own: a roll already carries the spec that says what it was,
+    which catches the request card and a player's own sheet at once."""
+    window._show_roster([{"player_id": "p1", "display_name": "Alex", "connected": True}])
+    assert window._scene_entry_for(SCENE_PLAYER, "p1") is not None
+
+    window._on_roll_added(
+        {
+            "kind": "roll",
+            "player_id": "p1",
+            "die": 15,
+            "bonus": 4,
+            "spec": {"kind": "initiative", "label": "Initiative"},
+        }
+    )
+
+    assert window._player_initiative == {"p1": 19}
+    assert window._scene_payload()[0]["initiative"] == 19
+
+
+def test_a_roll_that_is_not_an_initiative_is_left_alone(window: GMWindow) -> None:
+    window._show_roster([{"player_id": "p1", "display_name": "Alex", "connected": True}])
+
+    window._on_roll_added({"kind": "roll", "player_id": "p1", "die": 20, "spec": {"kind": "skill"}})
+
+    assert window._player_initiative == {}
+
+
+def test_a_players_initiative_is_ignored_while_they_are_off_the_board(
+    window: GMWindow,
+) -> None:
+    storage.set_gm_scene_auto_players(False)
+    window._show_roster([{"player_id": "p1", "display_name": "Alex", "connected": True}])
+    assert window._scene == []
+
+    window._on_roll_added(
+        {"kind": "roll", "player_id": "p1", "die": 15, "spec": {"kind": "initiative"}}
+    )
+
+    assert window._player_initiative == {}
+
+
+def test_players_join_the_board_by_themselves_by_default(window: GMWindow) -> None:
+    window._show_roster([{"player_id": "p1", "display_name": "Alex", "connected": True}])
+
+    assert [(e.kind, e.source) for e in window._scene] == [(SCENE_PLAYER, "p1")]
+    assert not window._cards["p1"]._scene_eye.isVisibleTo(window._cards["p1"])
+
+
+def test_with_the_preference_off_a_player_waits_for_the_eye(window: GMWindow) -> None:
+    storage.set_gm_scene_auto_players(False)
+
+    window._show_roster([{"player_id": "p1", "display_name": "Alex", "connected": True}])
+
+    assert window._scene == []
+    card = window._cards["p1"]
+    card.sceneToggled.emit("p1", True)
+    assert [(e.kind, e.source) for e in window._scene] == [(SCENE_PLAYER, "p1")]
+
+
+def test_a_seat_that_leaves_takes_its_place_on_the_board_with_it(window: GMWindow) -> None:
+    window._show_roster([{"player_id": "p1", "display_name": "Alex", "connected": True}])
+    window._on_roll_added(
+        {"kind": "roll", "player_id": "p1", "die": 15, "spec": {"kind": "initiative"}}
+    )
+    assert window._player_initiative
+
+    window._show_roster([])
+
+    assert window._scene == []
+    assert window._player_initiative == {}
+
+
+def test_a_new_scene_clears_the_board_and_every_initiative(
+    window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(GMWindow, "_confirm_new_scene", lambda self: True)
+    (goon,) = _npc_files(window, "Goon")
+    window._set_in_scene(SCENE_NPC, goon, True)
+    window._roll_scene_initiative()
+    assert window._npc_state[goon].initiative is not None
+
+    window._new_scene()
+
+    assert window._scene == []
+    assert window._npc_state[goon].initiative is None
+
+
+def test_a_new_scene_keeps_the_players_when_they_join_by_themselves(
+    window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Clearing them would be undone by the next roster anyway, and a button that
+    visibly does not do what it says is worse than one that does less."""
+    monkeypatch.setattr(GMWindow, "_confirm_new_scene", lambda self: True)
+    (goon,) = _npc_files(window, "Goon")
+    window._set_in_scene(SCENE_NPC, goon, True)
+    window._show_roster([{"player_id": "p1", "display_name": "Alex", "connected": True}])
+
+    window._new_scene()
+
+    assert [(e.kind, e.source) for e in window._scene] == [(SCENE_PLAYER, "p1")]
+
+
+def test_a_new_scene_is_not_confirmed_away_by_accident(
+    window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(GMWindow, "_confirm_new_scene", lambda self: False)
+    (goon,) = _npc_files(window, "Goon")
+    window._set_in_scene(SCENE_NPC, goon, True)
+
+    window._new_scene()
+
+    assert [e.source for e in window._scene] == [goon]

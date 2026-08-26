@@ -28,8 +28,8 @@ server/           python -m mm_companion.server — a headless host for 24/7 upt
 
 | Module | What it holds |
 | --- | --- |
-| `protocol.py` | The message vocabulary. `PROTOCOL_VERSION`, frozen message dataclasses (`Hello`, `CharacterSnapshot`, `RollRequest`, `Welcome`, `Roster`, `RollAdded`, `ApplyCondition`/`RemoveCondition`, `ErrorMessage`, `Kicked`, `Ping`/`Pong`) with generic, annotation-driven validation, and `encode`/`decode` (newline-delimited UTF-8 JSON, capped at `MAX_MESSAGE_BYTES` = 256 KiB). `sanitize_snapshot()` strips a character's `image_path` — a portrait path is meaningless on another machine. |
-| `model.py` | `SessionState` (id, name, timestamps, `players`, `npc_paths`, `rolls`, `host_token`), `PlayerSlot`, and `RollRecord` — a roll, a note *or* a request, per its `kind` (see "Notes" and "Requests" below). Two token layers: the session's **`host_token`** (the join secret carried in the code) and a per-slot **`token`** a returning client presents to reclaim its seat. `visible_rolls()` filters out hidden GM rolls; `new_session(name)` mints one. |
+| `protocol.py` | The message vocabulary. `PROTOCOL_VERSION`, frozen message dataclasses (`Hello`, `CharacterSnapshot`, `RollRequest`, `Welcome`, `Roster`, `RollAdded`, `ApplyCondition`/`RemoveCondition`, `SetScene`/`SceneUpdate`, `SetScenePortrait`/`ScenePortrait`, `ErrorMessage`, `Kicked`, `Ping`/`Pong`) with generic, annotation-driven validation, and `encode`/`decode` (newline-delimited UTF-8 JSON, capped at `MAX_MESSAGE_BYTES` = 256 KiB). `sanitize_snapshot()` strips a character's `image_path` — a portrait path is meaningless on another machine; `sanitize_scene()` does the same job for the GM-supplied board. |
+| `model.py` | `SessionState` (id, name, timestamps, `players`, `npc_paths`, `rolls`, `host_token`, and the three `scene*` fields below), `PlayerSlot`, and `RollRecord` — a roll, a note *or* a request, per its `kind` (see "Notes" and "Requests" below). Two token layers: the session's **`host_token`** (the join secret carried in the code) and a per-slot **`token`** a returning client presents to reclaim its seat. `visible_rolls()` filters out hidden GM rolls; `new_session(name)` mints one. |
 | `store.py` | Workspace persistence, modelled on `core/library.py`: `sessions/<id>/session.json` plus an **appended** `rolls.jsonl`, so a roll never rewrites the whole history. `save_session`, `append_roll`, `load_session` (stitches the two back and clears stale `connected` flags), `list_sessions`, `delete_session`. Session ids are validated against `^[A-Za-z0-9_-]{1,64}$` before they touch a path — an id can arrive over the wire. |
 | `net.py` | `Connection` (framed, buffered, lock-guarded writes), the `Transport`/`Listener` ABCs, and the loopback/LAN `TcpTransport`. `DEFAULT_PORT = 47331`. |
 | `server.py` | `SessionServer` — an accept thread, one reader thread per peer, one `RLock` over every mutation. It **rolls** (a client sends a request; the server resolves with `core.dice.resolve_check`, so no client edits its own number), persists on every change, and broadcasts. A callback `on_event(kind, payload)` reports to the owner; the payload is always a plain dict. No Qt. |
@@ -129,6 +129,66 @@ Three rules that are not a note's:
 Powers and equipment are deliberately not offerable: a pin names a power by an id
 belonging to one character, so there is nothing honest to localize it to on anyone
 else's sheet.
+
+### The scene: the one thing the whole table sees
+
+Everything else the GM holds is the GM's. NPCs are never on the wire at all —
+`npc_paths` is stored and handed back to the GM alone, precisely because it names
+files in their workspace — and players cannot see each other, since
+`PlayerSnapshot` goes to the GM seat only and a `Roster` entry deliberately
+carries no character. The **scene** is the deliberate exception: a curated,
+ordered list of who is in this fight, authored by the GM and rendered on every
+screen.
+
+`SessionState` gains three fields for it and the split between them is the whole
+design:
+
+| Field | Who sees it | Why it is its own field |
+| --- | --- | --- |
+| `scene` | everyone | The board: `{ref, name, player_id, initiative, conditions}` per entry, and nothing else. |
+| `scene_sources` | the GM alone | `ref` → `"npc:<file>"` / `"player:<id>"`, handed back in the GM's `Welcome` like `npc_paths`. |
+| `scene_portraits` | everyone, separately | `ref` → base64 thumbnail, sent once per entry rather than with every board. |
+
+Four messages: `SetScene` / `SetScenePortrait` up, `SceneUpdate` / `ScenePortrait`
+down. `PROTOCOL_VERSION` 9 exists for them, and the failure it prevents is quieter
+than 8's: a v8 client joins happily, never learns the type exists, and shows an
+empty board through a whole fight the rest of the table is watching.
+
+Five decisions worth knowing:
+
+- **The GM is the only writer.** `SetScene` carries `slot.is_gm` the way
+  `RemoveRollRequest` does. The board is what everybody is looking at, so it has
+  exactly one author and there is no reconciliation to get wrong.
+- **It is sent whole, not as deltas.** It is small, it changes for half a dozen
+  unrelated reasons (a condition applied, an initiative rolled, a card dragged, a
+  player joining), and a delta stream only means anything replayed in order.
+- **The pictures travel apart from the board, and are replayed after the welcome.**
+  A scene is re-sent every time anything on it changes; carrying a dozen
+  thumbnails along each time is the one thing that could make a relayed table
+  expensive, and a dozen in one message would blow `MAX_MESSAGE_BYTES` outright. So
+  a portrait goes once, when its entry joins, and the server follows each
+  `Welcome` with one `ScenePortrait` per stored picture — N small messages cannot
+  aggregate past the cap the way one large one can. They are also much smaller
+  than a *sheet* portrait: 96px, capped at 8 KiB (`MAX_SCENE_PORTRAIT_CHARS`),
+  because a board's worth is stored per session and replayed to every joiner.
+- **A ref says nothing.** It is minted by the GM and opaque, because it is the only
+  part of an entry that reaches a player: an NPC's file name can be a spoiler
+  outright, and the scene is exactly where a GM would find that out too late.
+  `scene_sources` is what maps it back, and it never leaves the GM's seat.
+- **A scene card is not a statblock.** A player reads a thumbnail, a name, an
+  initiative and the condition chips off it. The guarantee is not a rule the widget
+  keeps — it is that `sanitize_scene` carries nothing else, so a card cannot show
+  what never left the GM's machine.
+
+**Initiative needed no message of its own.** An NPC's is rolled locally on the GM's
+own card and reaches the table as the board's `initiative` field, because a dozen
+mook rolls in the shared log would bury the line the table is waiting for. A
+player's arrives on the log that already exists: every roll carries the `RollSpec`
+that describes it, so the GM window watches `rollAdded` for `spec.kind ==
+"initiative"` and puts the total on the board. That catches both routes at once —
+answering the request card the GM's **Roll initiative** button posts, and a player
+rolling Initiative off their own sheet — because the two produce the same record.
+Note that `RollRecord.to_dict()` writes the parts and not the sum.
 
 ### The handshake
 
@@ -477,6 +537,10 @@ restart the numbering and corrupt the log.
   The GM's sheet is a **fully-locked read-only view** (`MainWindow(gm_view=True)`):
   only a View menu, no way to unlock, save, or edit. Live re-seeding needs a
   re-seed API on `CharacterSheet`.
+- **A turn marker and a round counter.** The scene is an *order*, not a clock:
+  there is no whose-turn-it-is highlight and no round number. Both are additive
+  (a `turn` index on the scene, advanced by the GM and broadcast with it) and
+  were left out because the order is what a table actually reads aloud.
 - **End-to-end encryption.** TLS terminates at the relay, so the relay *operator*
   could in principle read traffic; self-hosting the relay is the answer for anyone
   who minds (one command). The stdlib has no symmetric cipher usable across

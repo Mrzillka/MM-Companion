@@ -49,12 +49,12 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   in a `BlockFrame`: `BaseInfoSection`, `SystemInfoSection`, `CharacterImageSection`,
   `AbilitiesSection`, `ResistancesSection`, `ConditionsSection`, `AdvantagesSection`,
   `ComplicationsSection`, `SkillsSection`, `PowersSection`, `EquipmentSection`,
-  `NotesSection`, `DiceSection` — and Notes is the one there can be more than one of
+  `NotesSection`, `SceneSection`, `DiceSection` — and Notes is the one there can be more than one of
   (see "Blocks there can be two of" below). The block set is **not** hardcoded in the sheet:
   it comes from the **block registry** (`ui/blocks/`) — one `BlockDescriptor` per
   block (key, dock title, widget factory, `BlockSize`, default row/col, and
   `default_pinned` for a block that starts in the strip instead of a row), held in an
-  ordered `Registry` (`ui/blocks/registry.py`, reusing `core/registry.py`). The thirteen
+  ordered `Registry` (`ui/blocks/registry.py`, reusing `core/registry.py`). The fourteen
   base descriptors register at import; `CharacterSheet` iterates `block_descriptors()`
   to build each section (exposing it as an attribute under its key so the name-based
   cross-block wiring still reaches it) and passes `default_rows()` plus
@@ -195,11 +195,22 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   the System / Power Level block full width, the Abilities | Resistances pair, then
   Conditions, Advantages, Complications, Skills, Powers, Equipment — plus the
   registry's
-  `default_pin_lines()`, which parks the **Dice Roller** block in the strip on the
-  right. The GM window does the same for its **Rolls** block, through the same
-  `default_pinned=` argument and for the same reason — a roller that scrolls away with
-  the board is no use mid-fight — so its page holds only Players and NPCs, and
-  `fill_last` now stretches the NPC cards. A block is in *either* the rows or the strip,
+  `default_pin_lines()`, which parks the **Dice Roller** and the **Scene** in the
+  strip on the right, one line each and in that order. The GM window does the same
+  for its **Rolls** block, through the same `default_pinned=` argument and for the
+  same reason — a roller that scrolls away with the board is no use mid-fight, and
+  neither is a turn order — so its page holds the Scene, the Players and the NPCs,
+  and `fill_last` now stretches the NPC cards.
+
+  Two pinned blocks cost more than one, in two ways worth knowing before adding a
+  third. Along a **vertical** strip the lines stack, so the strip's minimum is their
+  minimums added — which is why the Scene block states no `min_height`: at 120px the
+  default arrangement wanted more vertical room than a small laptop screen has, and
+  the strip answered past `_usable_screen` by growing the scrollbar it exists to
+  avoid. Along a **bottom** strip the lines sit side by side and split its *length*
+  instead, so the roller reflows into less width than it gets with the bar to
+  itself. Both are one drag from being undone, and both are why a block earns the
+  strip rather than being put there for tidiness. A block is in *either* the rows or the strip,
   never both: the arrangement
   model requires every block exactly once, so `default_arrangement()` excludes the
   pinned keys from the rows (including its trailing sweep over unplaced blocks).

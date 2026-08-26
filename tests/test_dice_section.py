@@ -102,8 +102,15 @@ def test_a_bottom_strip_gets_a_row_and_stays_thin(qapp: QApplication) -> None:
     A bottom strip is short and wide. Before the reflow the block stacked its parts
     regardless, so its ~500px content minimum forced the strip open to well over
     half the window height, with everything stretched across its width.
+
+    The Scene block is unpinned first, so this is about how the roller uses a wide
+    bar rather than about how much of one it is given. Both blocks start in the
+    strip, and along a *bottom* one their two lines sit side by side and share its
+    length — see the test below.
     """
     sheet = _laid_out(qapp, _sheet(qapp))
+    sheet.unpin_block("scene")
+    _settle(qapp)
     view = sheet.dice.view
     assert view.is_row is False  # the default right-hand strip: a column
 
@@ -114,6 +121,39 @@ def test_a_bottom_strip_gets_a_row_and_stays_thin(qapp: QApplication) -> None:
     assert view.panel.is_row is True  # both levels, so it is one row of four
     # The strip keeps roughly its default 320px thickness rather than ballooning.
     assert sheet.board.panel.height() < 420
+
+
+def test_two_pinned_blocks_share_a_bottom_strips_length(qapp: QApplication) -> None:
+    """What the default arrangement does once the Scene is pinned beside the roller.
+
+    Along a *vertical* strip the two lines stack and cost thickness, which is what
+    the strip is for. Along a bottom one they sit side by side and split its width,
+    so the roller has less to reflow into — it still becomes a row, but not the one
+    row of four it manages with the bar to itself. That is the honest cost of a
+    second pinned block, and it is one drag away from being undone.
+    """
+    sheet = _laid_out(qapp, _sheet(qapp))
+    sheet.canvas.set_pin_edge("bottom")
+    _settle(qapp)
+
+    assert sheet.is_block_pinned("scene")
+    assert sheet.dice.view.is_row is True
+    assert sheet.block_frame("scene").width() > 0
+    assert sheet.block_frame("dice").width() < sheet.width()
+    # And it still does not balloon the strip open.
+    assert sheet.board.panel.height() < 420
+
+
+def test_an_idle_scene_costs_the_strip_almost_nothing(qapp: QApplication) -> None:
+    """It is pinned for everyone, including a table that never plays online, so an
+    empty one has to be a line of text and not a reserved panel. It states no
+    minimum height of its own for exactly this reason: at 120px the default
+    arrangement wanted more vertical room than a small laptop screen has, and the
+    strip answered by growing the scrollbar it exists to avoid."""
+    sheet = _laid_out(qapp, _sheet(qapp))
+
+    assert sheet.block_frame("scene").minimumSizeHint().height() < 100
+    assert _strip_bars(sheet) == (False, False)
 
 
 def test_returning_to_a_side_strip_restores_the_column(qapp: QApplication) -> None:

@@ -45,7 +45,7 @@ from mm_companion.core import library
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import Condition, GameData
 from mm_companion.ui import theme
-from mm_companion.ui.card_chips import _ConditionChip, _SceneEye
+from mm_companion.ui.card_chips import _ConditionChip, _SceneEye, start_card_drag
 from mm_companion.ui.card_summary import PortraitButton, character_summary_html
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.pin_panel import PIN_PANEL_WIDTH, install_pin_panel
@@ -60,6 +60,11 @@ from mm_companion.ui.session_portrait import decode_portrait
 #: How wide the card's own column is. Fixed, so a row of them lines up in the
 #: flow layout; the pinned-parameter strip adds its own width beside it.
 CARD_WIDTH = 210
+#: How far the pointer must move with the button down to count as a drag. The
+#: same number the NPC card uses, so one gesture feels like one gesture.
+DRAG_THRESHOLD = 8
+#: How this card names itself in a drag (see the NPC card's ``SCENE_KIND``).
+SCENE_KIND = "player"
 #: Shown in place of a character name before the player pushes a snapshot.
 NO_CHARACTER = "no character yet"
 
@@ -114,6 +119,8 @@ class PlayerCard(QFrame):
         # Whether the roster last said someone was in this seat. Distinct from
         # ``_targetable``, which is also false for the GM's own card.
         self._connected = False
+        #: Where a left-button press landed, to tell a drag from a click.
+        self._press_pos = None
 
         layout = QVBoxLayout()
 
@@ -319,6 +326,32 @@ class PlayerCard(QFrame):
             self.applyConditionRequested.emit(self.player_id, condition.id, parameter)
 
     # -- removing the seat -------------------------------------------------
+
+    # -- dragging onto the Scene -------------------------------------------
+    #
+    # A player card never had a gesture of its own — there is nothing to reorder in
+    # a roster — so this one has nothing to share a threshold with. It exists so
+    # that a GM who adds players to the Scene by hand can do it the way they add an
+    # NPC, rather than learning that one card drags and the other does not.
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        if event.button() == Qt.MouseButton.LeftButton and self.player_id:
+            self._press_pos = event.position().toPoint()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        if self._press_pos is None or not (event.buttons() & Qt.MouseButton.LeftButton):
+            super().mouseMoveEvent(event)
+            return
+        if (event.position().toPoint() - self._press_pos).manhattanLength() < DRAG_THRESHOLD:
+            super().mouseMoveEvent(event)
+            return
+        self._press_pos = None
+        start_card_drag(self, f"{SCENE_KIND}:{self.player_id}")
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        self._press_pos = None
+        super().mouseReleaseEvent(event)
 
     def contextMenuEvent(self, event) -> None:  # noqa: N802 (Qt override)
         """Right-click offers to remove the player. Never on the GM's own card.

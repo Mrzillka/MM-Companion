@@ -11,12 +11,16 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QMimeData, QPointF, Qt
+from PySide6.QtGui import QDropEvent
+from PySide6.QtWidgets import QApplication, QLabel
 
 from mm_companion.core import storage
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.session.model import new_session
+from mm_companion.ui.card_chips import SCENE_MIME
+from mm_companion.ui.card_drop import CardDropFlow
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.scene_board import NO_SCENE_PLAYER, NOT_IN_SESSION, SceneBoard
 from mm_companion.ui.scene_card import order_scene
@@ -273,3 +277,97 @@ def _one_pixel_jpeg() -> str:
     buffer.open(QIODevice.OpenModeFlag.WriteOnly)
     image.save(buffer, "JPEG", 80)
     return base64.b64encode(bytes(buffer.data())).decode("ascii")
+
+
+# -- the drop target ---------------------------------------------------------
+#
+# The reorder gesture is a real QDrag now, and had to become one the day a card
+# could be dragged from one block onto another: a card that tracks the pointer
+# itself never crosses a widget boundary, so no other block can know a drag is
+# happening. Nothing tested the old gesture, which is exactly why these exist.
+
+
+def _flow(qapp: QApplication, cards: int = 3) -> CardDropFlow:
+    flow = CardDropFlow("testFlow")
+    for n in range(cards):
+        label = QLabel(str(n))
+        label.setFixedSize(100, 40)
+        flow.add_card(label)
+    flow.resize(400, 200)
+    flow.show()
+    qapp.processEvents()
+    return flow
+
+
+def _drop(flow: CardDropFlow, ref: str, at: tuple[float, float]) -> None:
+    mime = QMimeData()
+    mime.setData(SCENE_MIME, ref.encode("utf-8"))
+    flow.dropEvent(
+        QDropEvent(
+            QPointF(*at),
+            Qt.DropAction.MoveAction,
+            mime,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+    )
+
+
+def test_a_drop_reports_the_slot_the_pointer_is_over(qapp: QApplication) -> None:
+    flow = _flow(qapp)
+    seen: list[tuple[str, int]] = []
+    flow.dropped.connect(lambda ref, index: seen.append((ref, index)))
+
+    _drop(flow, "npc:goon.json", (120, 20))  # over the second card's left half
+
+    assert seen == [("npc:goon.json", 1)]
+
+
+def test_the_ends_of_the_row_are_the_first_and_last_slots(qapp: QApplication) -> None:
+    """The index is measured against the laid-out geometry, because the flow wraps."""
+    flow = _flow(qapp)
+
+    assert flow.drop_index(QPointF(2, 20).toPoint()) == 0
+    assert flow.drop_index(QPointF(390, 20).toPoint()) == flow.count()
+
+
+def test_a_cards_right_half_is_the_slot_after_it(qapp: QApplication) -> None:
+    flow = _flow(qapp)
+    first = flow.flow.itemAt(0).widget().geometry()
+
+    assert flow.drop_index(QPointF(first.left() + 5, 20).toPoint()) == 0
+    assert flow.drop_index(QPointF(first.right() - 5, 20).toPoint()) == 1
+
+
+def test_a_payload_this_flow_does_not_take_is_refused_visibly(qapp: QApplication) -> None:
+    """Never a bare ignore: an ancestor may accept, and the refusal would then be
+    invisible exactly where someone is looking for it."""
+    flow = _flow(qapp)
+    seen: list[tuple[str, int]] = []
+    flow.dropped.connect(lambda ref, index: seen.append((ref, index)))
+
+    mime = QMimeData()
+    mime.setText("not a card")
+    flow.dragEnterEvent(
+        QDropEvent(
+            QPointF(120, 20),
+            Qt.DropAction.MoveAction,
+            mime,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+    )
+
+    assert flow._feedback.state == flow._feedback.REJECT
+    assert seen == []
+
+
+def test_an_empty_flow_takes_a_drop_at_slot_zero(qapp: QApplication) -> None:
+    """The case a first card lands in, and the one an off-by-one would crash on."""
+    flow = _flow(qapp, cards=0)
+    seen: list[tuple[str, int]] = []
+    flow.dropped.connect(lambda ref, index: seen.append((ref, index)))
+
+    _drop(flow, "npc:goon.json", (50, 20))
+
+    assert seen == [("npc:goon.json", 0)]

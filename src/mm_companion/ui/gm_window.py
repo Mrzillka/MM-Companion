@@ -37,7 +37,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QEasingCurve, QPropertyAnimation, QRect, Qt, QTimer
+from PySide6.QtCore import QByteArray, QEasingCurve, QPropertyAnimation, Qt, QTimer
 from PySide6.QtGui import QCloseEvent, QShowEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -89,11 +89,10 @@ from mm_companion.core.session.net import DEFAULT_PORT
 from mm_companion.ui import theme
 from mm_companion.ui.block_canvas import BlockCanvas
 from mm_companion.ui.block_sizes import BlockSize, load_block_sizes
+from mm_companion.ui.card_drop import CardDropFlow
 from mm_companion.ui.compact import CompactController
 from mm_companion.ui.connection_indicator import install_connection_indicator
 from mm_companion.ui.dice_roller import DiceRollerView
-from mm_companion.ui.drop_feedback import DropIndicator
-from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.npc_card import NPCCard
 from mm_companion.ui.npc_quick_dialog import QuickNPCDialog
 from mm_companion.ui.npc_window import NPCWindow
@@ -565,8 +564,10 @@ class GMWindow(QMainWindow):
         self._no_players.setEnabled(False)
         layout.addWidget(self._no_players)
 
-        self._cards_container = FlowContainer()
-        self._cards_flow = FlowLayout(self._cards_container)
+        # A drop target only so a card dragged *out* of it and back reads as a
+        # cancelled drag rather than a refusal; there is no order to edit here.
+        self._cards_container = CardDropFlow("gmPlayerFlow")
+        self._cards_flow = self._cards_container.flow
         layout.addWidget(self._cards_container)
         layout.addStretch()
         return box
@@ -607,12 +608,14 @@ class GMWindow(QMainWindow):
         self._no_npcs.setEnabled(False)
         layout.addWidget(self._no_npcs)
 
-        self._npc_container = FlowContainer()
-        self._npc_flow = FlowLayout(self._npc_container)
+        # A drop target as well as a flow: the reorder gesture is a real drag now
+        # (it had to become one to reach the Scene), so the bar showing where a card
+        # will land is drawn by the container it will land in rather than guessed at
+        # by the card being dragged.
+        self._npc_container = CardDropFlow("gmNpcFlow")
+        self._npc_flow = self._npc_container.flow
+        self._npc_container.dropped.connect(self._drop_on_npcs)
         layout.addWidget(self._npc_container)
-        # A thin accent bar shown between cards while one is dragged, so the GM sees
-        # where it will land before letting go (the same widget the block canvas uses).
-        self._npc_drop_indicator = DropIndicator(self._npc_container)
         layout.addStretch()
         return box
 
@@ -1899,9 +1902,6 @@ class GMWindow(QMainWindow):
             card.initiativeCleared.connect(self._on_npc_initiative_cleared)
             card.sceneToggled.connect(lambda n, on: self._set_in_scene(SCENE_NPC, n, on))
             card.copyRequested.connect(self._copy_npc)
-            card.reorderRequested.connect(self._reorder_npc)
-            card.reorderPreview.connect(self._show_npc_drop_indicator)
-            card.reorderPreviewEnded.connect(self._npc_drop_indicator.hide_indicator)
             card.pinsChanged.connect(lambda n, refs: self._store_pins(_npc_key(n), refs))
             card.loadRequested.connect(self._roller.load_spec)
             card.rollRequested.connect(self._roller.roll_spec)
@@ -1954,23 +1954,17 @@ class GMWindow(QMainWindow):
         entry.initiative = None
         self._refresh_npcs()
 
-    def _show_npc_drop_indicator(self, name: str, target_index: int) -> None:
-        """Position the drop bar before the card at *target_index* (after the last
-        when the drop is past every card)."""
-        count = self._npc_flow.count()
-        if count == 0:
-            self._npc_drop_indicator.hide_indicator()
-            return
-        index = max(0, min(target_index, count))
-        if index >= count:
-            item = self._npc_flow.itemAt(count - 1)
-            geo = item.widget().geometry()
-            rect = QRect(geo.right() + 1, geo.top(), 3, geo.height())
-        else:
-            item = self._npc_flow.itemAt(index)
-            geo = item.widget().geometry()
-            rect = QRect(geo.left() - 3, geo.top(), 3, geo.height())
-        self._npc_drop_indicator.move_to(rect)
+    def _drop_on_npcs(self, ref: str, index: int) -> None:
+        """A card was dropped on the NPC grid.
+
+        Only an NPC's own card means anything here: a *player* dragged onto the
+        cast is not a thing that can be done, and refusing it quietly is better
+        than inventing an interpretation. An NPC's is the reorder this grid has
+        always had, unchanged below.
+        """
+        kind, _, source = ref.partition(":")
+        if kind == SCENE_NPC and source in self._npc_state:
+            self._reorder_npc(source, index)
 
     def _reorder_npc(self, name: str, target_index: int) -> None:
         """Move an NPC to a dropped slot, in the manual (un-rolled) zone.

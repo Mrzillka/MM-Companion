@@ -46,7 +46,8 @@ The shape:
 - `src/mm_companion/ui/` — Qt: `session_bridge.py` (`SessionBridge`, the **only**
   place core `on_event` callbacks become signals; module-level
   `active_session()`/`live_session()`), `connection_indicator.py`, `gm_window.py`,
-  `npc_window.py`, `player_card.py`, `roll_history.py`, and
+  `ui/npc_window.py`, `ui/player_card.py`, `ui/roll_history.py`,
+  `ui/scene_card.py`/`ui/scene_board.py`/`ui/card_drop.py`/`ui/card_chips.py`, and
   `session_player.py`/`session_dialogs.py`. `SessionBridge.joined` follows the
   *socket* (False mid-blip, so a send fails honestly); `in_session` follows the
   *session*, and `live_session()` asks that one — asking `joined` meant a roll
@@ -189,6 +190,80 @@ The shape:
   `storage.clear_gm_card_pins()` plus `GMWindow.reseed_pins_from_defaults()` on
   every open GM window — in that order, or a window still holding its old strips
   writes them back out and undoes the clear.
+- **The scene is the one thing the whole table sees**, and everything about its
+  shape follows from that. `core/session/model.py` holds three fields, not one:
+  `scene` is public, `scene_sources` (an entry's opaque `ref` → `"npc:<file>"` /
+  `"player:<id>"`) goes back to the **GM seat alone** like `npc_paths` and for the
+  same reason, and `scene_portraits` is kept apart because it is not re-sent with
+  the board. The GM **authors** it — `SetScene` carries `slot.is_gm` — and the
+  server only stores and rebroadcasts, since `core/session/` may not import
+  `core.rules` and has no idea what a condition id means.
+- **The pictures travel apart from the board.** A scene is re-sent whole every time
+  anything on it changes (a condition, an initiative, a drag, a join), and carrying
+  a dozen thumbnails each time is the one thing that could make a relayed table
+  expensive — a dozen in *one* message would blow `MAX_MESSAGE_BYTES` outright. So
+  a portrait goes once as its entry joins, and the server follows each `Welcome`
+  with one `ScenePortrait` per stored picture: N small messages cannot aggregate
+  past the cap the way one large one can. They are 96px and capped at 8 KiB, much
+  smaller than a sheet portrait, because a board's worth is stored per session and
+  replayed to every joiner. `SceneBoard` decodes each **once** and keeps it across
+  rebuilds, or ticking a condition would re-decode a dozen JPEGs.
+- **A ref is opaque, and that is the point.** It is the only part of an entry that
+  reaches a player, and an NPC's file name can be a spoiler outright
+  ("TheTraitorIsMarcus.json"). `_SceneEntry` on the GM window is what maps it back;
+  the public payload carries a name, an initiative and the conditions, **and
+  nothing else**. The guarantee is not a rule the card keeps — it is that
+  `sanitize_scene` carries nothing else, so a card cannot show what never left the
+  GM's machine.
+- **The payload is derived on every push, never kept.** Every field on it lives
+  somewhere else and is live there — an NPC's conditions on its model, a player's
+  in their last snapshot — so a copy would be right exactly once. What *is* kept is
+  only what cannot be derived: which creature a place on the board belongs to.
+- **Initiative is one number with one owner.** An NPC's stays on its `_NpcEntry`,
+  where the card badge already reads it, and the board reads the same field — the
+  two cannot come to disagree. A player's arrives on the shared roll log rather
+  than in a message of its own: every roll carries the `RollSpec` describing it, so
+  the GM window watches `rollAdded` for `spec.kind == "initiative"`. That needed no
+  protocol work and catches both routes at once — answering the request card, and
+  rolling Initiative off one's own sheet. `RollRecord.to_dict()` writes the parts
+  and not the sum. **Roll initiative** keeps the NPC rolls local, as the badge's own
+  docstring insists: a dozen mook rolls would bury the line the table is waiting
+  for, and what the players need is the result, which is the board.
+- **The scene orders itself exactly as the NPC grid does** (`order_scene`): rolled
+  entries by initiative descending, then the un-rolled ones in the GM's arrangement.
+  Deliberately the same rule, so a GM is not holding two orderings in their head —
+  and a drop clears the dragged entry's initiative, plus a rolled neighbour it was
+  put in front of, for the reason `_reorder_npc` gives.
+- **The reorder gesture had to become a real `QDrag`.** The NPC card used to track
+  the pointer itself and emit a preview for the window to draw, which is a fine
+  gesture inside one container and cannot leave it: nothing crosses a widget
+  boundary, so no other block can know a drag is happening. `ui/card_drop.py` is the
+  drop target all three boards share — one MIME, one `(ref, index)` answer — and a
+  ref the board already holds is a *move* while one it does not is an *add*, which
+  is how a single handler serves both gestures. The bar showing where a card will
+  land is now drawn by the container it will land in, which is the only way it can
+  be right about a flow the card is not in.
+- **Players join the board by themselves**, unless `gm_scene_auto_players` says
+  otherwise (Settings ▸ GM Mode; read through **`storage.gm_scene_auto_players()`**,
+  never off `load_settings()`, for the reason spelled out on `gm_default_pins` — a
+  key added after a workspace was created reads back as `None`, which is falsy, and
+  would have turned the default off for every existing GM). With it off the player
+  cards grow the same 👁 an NPC card has; with it on that eye is hidden, since an
+  action that does nothing is worse than none.
+- **The player's Scene block is pinned**, beside the roller and for the roller's
+  reason: the strip is the one region that does not scroll with the page, and a
+  turn order that has scrolled away is no use in the round it matters. It states no
+  `min_height` — at 120px the default arrangement wanted more vertical room than a
+  small laptop has, and the strip answered by growing the scrollbar it exists to
+  avoid. Along a **bottom** strip the two pinned lines split its length rather than
+  stacking, so the roller reflows into less than the row of four it manages with the
+  bar to itself: the honest cost of a second pinned block, one drag from undone.
+  Like the Dice block it publishes and subscribes **nothing** — a scene arriving
+  mid-edit must never mark the sheet dirty — and it follows `live_session()` rather
+  than the socket, so a two-second blip does not empty the board.
+- Adding a block invalidates a stored arrangement (the canvas requires every known
+  block to appear exactly once), so shipping this reset every saved `layout` and
+  `gm_layout` once. That is also what puts the block in the strip.
 - `src/mm_companion/server/` and `src/mm_companion/relay/` — the two Qt-free,
   stdlib-only entrypoints (`python -m mm_companion.server` / `.relay`), each a
   thin `cli.py` around the core session server / a `selectors` byte-pump.

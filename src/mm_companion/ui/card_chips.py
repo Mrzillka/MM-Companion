@@ -12,11 +12,35 @@ either, which is what keeps the two directions apart.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QMimeData, QPoint, Qt
+from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QToolButton, QWidget
 
 from mm_companion.ui import theme
 from mm_companion.ui.widgets import attach_context_removal
+
+#: What a dragged card reference is called on the clipboard. One format for
+#: every board, because the drop is the same question everywhere: put this
+#: reference here. See :mod:`~mm_companion.ui.card_drop`.
+SCENE_MIME = "application/x-mm-scene-ref"
+
+
+def start_card_drag(widget, ref: str) -> None:
+    """Begin a real :class:`QDrag` carrying *ref*, with the card as its ghost.
+
+    Shared by the two roster cards and the scene card, because the gesture has to
+    be the same object to cross between their boards: a pseudo-drag that tracks
+    the pointer itself works inside one container and cannot leave it.
+    """
+    drag = QDrag(widget)
+    mime = QMimeData()
+    mime.setData(SCENE_MIME, ref.encode("utf-8"))
+    drag.setMimeData(mime)
+    pixmap = widget.grab()
+    drag.setPixmap(pixmap)
+    drag.setHotSpot(QPoint(pixmap.width() // 2, 12))
+    drag.exec(Qt.DropAction.MoveAction)
+
 
 #: What the Scene toggle wears. An eye, because what it controls is who can *see*
 #: this creature — the players' side of the board, not the GM's.

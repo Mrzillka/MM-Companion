@@ -22,23 +22,17 @@ disagree about what an id means.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QMimeData, QPoint, Qt, Signal
-from PySide6.QtGui import QDrag, QPixmap
+from PySide6.QtCore import QPoint, Qt, Signal
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QVBoxLayout, QWidget
 
 from mm_companion.core.character import AppliedCondition
 from mm_companion.core.data_loader import Condition, GameData
 from mm_companion.ui import theme
-from mm_companion.ui.card_chips import _ConditionChip
+from mm_companion.ui.card_chips import _ConditionChip, start_card_drag
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.sections.conditions import condition_display_name, condition_tooltip
 from mm_companion.ui.widgets import ElidingLabel
-
-#: What a dragged scene reference is called on the clipboard. One format for both
-#: halves of the gesture — dragging a card *into* the scene and dragging one
-#: *within* it — because the drop is the same question either way: put this
-#: reference at this index. See :meth:`~mm_companion.ui.sections.scene.SceneFlow`.
-SCENE_MIME = "application/x-mm-scene-ref"
 
 #: How wide one card's column is, so a row of them lines up in the flow. Narrower
 #: than a GM card (:data:`~mm_companion.ui.npc_card.CARD_WIDTH`): a scene card has
@@ -287,15 +281,8 @@ class SceneCard(QFrame):
 
     def start_drag(self) -> None:
         """Carry this card's ref, so the flow it is dropped in can place it."""
-        drag = QDrag(self)
-        mime = QMimeData()
-        mime.setData(SCENE_MIME, self.ref.encode("utf-8"))
-        drag.setMimeData(mime)
-        pixmap = self.grab()
-        drag.setPixmap(pixmap)
-        drag.setHotSpot(QPoint(pixmap.width() // 2, 12))
         self.dragStarted.emit(self.ref)
-        drag.exec(Qt.DropAction.MoveAction)
+        start_card_drag(self, self.ref)
 
     def contextMenuEvent(self, event) -> None:  # noqa: N802 (Qt override)
         """Right-click means "take that away", the specific answer first.

@@ -23,14 +23,13 @@ its own cards.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRect, Qt, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from mm_companion.core.data_loader import GameData
 from mm_companion.ui import theme
-from mm_companion.ui.drop_feedback import DropFeedback, DropIndicator
-from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
-from mm_companion.ui.scene_card import SCENE_MIME, SceneCard, entry_ref, order_scene
+from mm_companion.ui.card_drop import CardDropFlow
+from mm_companion.ui.scene_card import SceneCard, entry_ref, order_scene
 from mm_companion.ui.session_portrait import decode_portrait
 from mm_companion.ui.widgets import muted_style, preserved_scroll
 
@@ -84,22 +83,15 @@ class SceneBoard(QWidget):
         self._empty.setStyleSheet(muted_style(italic=True))
         layout.addWidget(self._empty)
 
-        self._flow_host = FlowContainer()
-        self._flow = FlowLayout(self._flow_host)
-        layout.addWidget(self._flow_host)
-
+        # A drop target on both screens, and inert on a player's: the flow refuses
+        # a payload nobody there can start. Cheaper than two widgets, and it is the
+        # same board either way.
+        self._flow_host = CardDropFlow("sceneBoard")
+        self._flow = self._flow_host.flow
+        self._flow_host.setAcceptDrops(gm)
         if gm:
-            self.setAcceptDrops(True)
-            # Scoped by object name, never a bare QWidget: an unscoped rule is
-            # inherited by every card inside and would repaint each of them. And a
-            # plain QWidget paints no stylesheet background without this attribute.
-            self.setObjectName("sceneBoard")
-            self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-            self._feedback = DropFeedback(self, "#sceneBoard")
-            self._indicator = DropIndicator(self)
-        else:
-            self._feedback = None
-            self._indicator = None
+            self._flow_host.dropped.connect(self.dropped)
+        layout.addWidget(self._flow_host)
 
     # -- what the board is showing -----------------------------------------
 
@@ -148,12 +140,7 @@ class SceneBoard(QWidget):
 
     def _rebuild(self) -> None:
         with preserved_scroll(self):
-            while self._flow.count():
-                item = self._flow.takeAt(0)
-                widget = item.widget() if item is not None else None
-                if widget is not None:
-                    widget.setParent(None)
-                    widget.deleteLater()
+            self._flow_host.clear()
             self._cards = {}
             for entry in order_scene(self._entries, self._manual):
                 ref = entry_ref(entry)
@@ -167,89 +154,9 @@ class SceneBoard(QWidget):
                     card.removeRequested.connect(self.removeRequested)
                     card.initiativeCleared.connect(self.initiativeCleared)
                 self._cards[ref] = card
-                self._flow.addWidget(card)
+                self._flow_host.add_card(card)
             self._empty.setVisible(not self._entries)
             self._flow_host.setVisible(bool(self._entries))
-
-    # -- the GM's drops ----------------------------------------------------
-
-    def _dropped_ref(self, event) -> str:
-        if not event.mimeData().hasFormat(SCENE_MIME):
-            return ""
-        return bytes(event.mimeData().data(SCENE_MIME)).decode("utf-8")
-
-    def dragEnterEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        if self._dropped_ref(event):
-            event.acceptProposedAction()
-            if self._feedback is not None:
-                self._feedback.show_accept()
-        elif self._feedback is not None:
-            # Never a bare ignore: an ancestor may accept, and then the refusal is
-            # invisible exactly where someone is looking for it.
-            self._feedback.show_reject()
-
-    def dragMoveEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        ref = self._dropped_ref(event)
-        if not ref:
-            return
-        event.acceptProposedAction()
-        self._show_indicator(self._drop_index(event.position().toPoint()))
-
-    def dragLeaveEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        self._clear_feedback()
-        super().dragLeaveEvent(event)
-
-    def dropEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        ref = self._dropped_ref(event)
-        self._clear_feedback()
-        if not ref:
-            return
-        event.acceptProposedAction()
-        self.dropped.emit(ref, self._drop_index(event.position().toPoint()))
-
-    def _clear_feedback(self) -> None:
-        if self._feedback is not None:
-            self._feedback.clear()
-        if self._indicator is not None:
-            self._indicator.hide_indicator()
-
-    def _drop_index(self, point) -> int:
-        """Which slot in the rendered order *point* falls in.
-
-        Measured against the flow's laid-out geometry rather than against the
-        entry list, because the flow wraps: which card is "before" the pointer is
-        a question about rows and columns, not about list positions. A card whose
-        left half the pointer is over takes its own index; its right half is the
-        slot after it.
-        """
-        local = self._flow_host.mapFrom(self, point)
-        for index in range(self._flow.count()):
-            item = self._flow.itemAt(index)
-            widget = item.widget() if item is not None else None
-            if widget is None:
-                continue
-            geo = widget.geometry()
-            if local.y() < geo.bottom() and local.x() < geo.center().x():
-                return index
-        return self._flow.count()
-
-    def _show_indicator(self, index: int) -> None:
-        """Put the drop bar before the card at *index*, or after the last one."""
-        if self._indicator is None:
-            return
-        count = self._flow.count()
-        if count == 0:
-            self._indicator.hide_indicator()
-            return
-        index = max(0, min(index, count))
-        if index >= count:
-            geo = self._flow.itemAt(count - 1).widget().geometry()
-            rect = QRect(geo.right() + 1, geo.top(), 3, geo.height())
-        else:
-            geo = self._flow.itemAt(index).widget().geometry()
-            rect = QRect(geo.left() - 3, geo.top(), 3, geo.height())
-        top_left = self._flow_host.mapTo(self, rect.topLeft())
-        self._indicator.move_to(QRect(top_left, rect.size()))
 
     def set_locked(self, locked: bool) -> None:  # noqa: ARG002 - part of the Block protocol
         """A no-op: the board is a readout, so there is nothing to lock.

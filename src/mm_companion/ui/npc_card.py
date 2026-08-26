@@ -14,6 +14,14 @@ what opens its sheet (see :mod:`~mm_companion.ui.card_summary`). Those were once
 the same gesture, distinguished only by how far the pointer had moved, which meant
 a reorder that fell short of the threshold opened a window instead.
 
+That reorder is a real :class:`~PySide6.QtGui.QDrag` now, and had to become one the
+day a card could be dragged onto the **Scene**. It used to track the pointer
+itself and emit a preview for the window to draw, which is a fine gesture inside
+one container and cannot leave it — nothing crosses a widget boundary, so there is
+no way for another block to know a drag is happening at all. The drop target does
+the work now (:class:`~mm_companion.ui.card_drop.CardDropFlow`), and this card only
+says what is being dragged.
+
 A card **collapses**. Expanded it is a good roster entry and a bad combat readout:
 a 96px portrait, a PL, and two buttons, times a dozen mooks, is three cards on
 screen at a time. Collapsed it keeps only what a GM reads mid-round — who it is,
@@ -57,7 +65,7 @@ from mm_companion.core.dice import roll_d20
 from mm_companion.core.library import CharacterSummary
 from mm_companion.core.rules import initiative_modifier
 from mm_companion.ui import theme
-from mm_companion.ui.card_chips import _ConditionChip, _SceneEye
+from mm_companion.ui.card_chips import _ConditionChip, _SceneEye, start_card_drag
 from mm_companion.ui.card_summary import PortraitButton, character_summary_html
 from mm_companion.ui.damage_row import DamageRow
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
@@ -87,6 +95,10 @@ COLLAPSED_GLYPH = "▸"
 #: The initiative badge before anything has been rolled. Something to click, and a
 #: dash rather than a zero — an unrolled NPC has no initiative, not one of nought.
 NO_INITIATIVE = "init —"
+#: How this card names itself in a drag. The kind matters: a file name and a
+#: player id are not distinguishable by looking at them, so the drop target
+#: would not know which roster a bare one came from.
+SCENE_KIND = "npc"
 
 
 class _InitiativeBadge(QLabel):
@@ -182,15 +194,6 @@ class NPCCard(QFrame):
     initiativeCleared = Signal(str)
     #: The NPC's file name — duplicate it into a new NPC (Goon → Goon-2).
     copyRequested = Signal(str)
-    #: ``(file_name, target_index)`` — the card was dragged to a new slot. A drag
-    #: drops the NPC into the manual (un-rolled) zone, so any rolled initiative is
-    #: cleared by the handler.
-    reorderRequested = Signal(str, int)
-    #: ``(file_name, target_index)`` — a drag is in progress and would currently
-    #: land at this slot. The GM window shows a drop indicator there.
-    reorderPreview = Signal(str, int)
-    #: The drag ended (dropped or cancelled) — hide the drop indicator.
-    reorderPreviewEnded = Signal()
     #: ``(file_name, refs)`` — this card's pinned-parameter strip changed.
     pinsChanged = Signal(str, object)
     #: A ``RollSpec`` — the GM clicked a pinned chip and wants it in the roller.
@@ -537,47 +540,19 @@ class NPCCard(QFrame):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        """While dragging, preview where the drop would land, so the GM sees it."""
-        if self._press_pos is not None:
-            moved = (event.position().toPoint() - self._press_pos).manhattanLength()
-            if moved >= DRAG_THRESHOLD:
-                target = self._drop_target_index(event.globalPosition().toPoint())
-                self.reorderPreview.emit(self.name_key, target)
-        super().mouseMoveEvent(event)
+        """Past the threshold, hand the gesture to Qt as a real drag."""
+        if self._press_pos is None or not (event.buttons() & Qt.MouseButton.LeftButton):
+            super().mouseMoveEvent(event)
+            return
+        if (event.position().toPoint() - self._press_pos).manhattanLength() < DRAG_THRESHOLD:
+            super().mouseMoveEvent(event)
+            return
+        self._press_pos = None
+        start_card_drag(self, f"{SCENE_KIND}:{self.name_key}")
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        if event.button() == Qt.MouseButton.LeftButton and self._press_pos is not None:
-            moved = (event.position().toPoint() - self._press_pos).manhattanLength()
-            self._press_pos = None
-            if moved >= DRAG_THRESHOLD:
-                target = self._drop_target_index(event.globalPosition().toPoint())
-                self.reorderPreviewEnded.emit()
-                self.reorderRequested.emit(self.name_key, target)
+        self._press_pos = None
         super().mouseReleaseEvent(event)
-
-    def _drop_target_index(self, global_pos) -> int:
-        """Where in the sibling flow a drop at *global_pos* lands.
-
-        Walks the sibling cards in layout order and returns the index to insert
-        before — the first card the point sits left-of (on the same row) or inside
-        — or the count when the drop is past every card. Approximate, as befits a
-        wrapping layout; the exact ordering rules live in the GM window's handler.
-        """
-        container = self.parentWidget()
-        layout = container.layout() if container is not None else None
-        if layout is None:
-            return 0
-        point = container.mapFromGlobal(global_pos)
-        for index in range(layout.count()):
-            item = layout.itemAt(index)
-            widget = item.widget() if item is not None else None
-            if widget is None:
-                continue
-            geo = widget.geometry()
-            on_row = geo.top() <= point.y() <= geo.bottom()
-            if geo.contains(point) or (on_row and point.x() < geo.center().x()):
-                return index
-        return layout.count()
 
     def contextMenuEvent(self, event) -> None:  # noqa: N802 (Qt override)
         menu = QMenu(self)

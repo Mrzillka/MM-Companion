@@ -48,8 +48,7 @@
     "min_height": 300
   },
   "scene": {
-    "min_width": 210,
-    "min_height": 120
+    "min_width": 210
   },
   "gm_players": {
     "min_width": 390,

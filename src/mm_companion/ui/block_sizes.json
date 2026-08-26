@@ -47,6 +47,10 @@
     "min_width": 360,
     "min_height": 300
   },
+  "scene": {
+    "min_width": 210,
+    "min_height": 120
+  },
   "gm_players": {
     "min_width": 390,
     "min_height": 130
@@ -58,5 +62,9 @@
   "gm_rolls": {
     "min_width": 360,
     "min_height": 300
+  },
+  "gm_scene": {
+    "min_width": 390,
+    "min_height": 140
   }
 }

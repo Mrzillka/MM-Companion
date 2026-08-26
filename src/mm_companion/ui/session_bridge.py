@@ -89,6 +89,14 @@ class SessionBridge(QObject):
     #: The whole roll history at once — on attach, and on a fresh join.
     historyReplaced = Signal(object)
 
+    #: The scene, as a list of entry dicts. Raised whole every time, because that
+    #: is how the GM sends it: there is no delta to merge. Both sides.
+    sceneChanged = Signal(object)
+    #: ``(ref, portrait)`` — one scene entry's thumbnail, or ``""`` clearing it.
+    #: Arrives apart from :attr:`sceneChanged`; see
+    #: :class:`~mm_companion.core.session.protocol.SetScenePortrait`.
+    scenePortrait = Signal(str, str)
+
     #: A player took a seat (``{"player": ..., "new": bool}``), host side only.
     playerJoined = Signal(object)
     #: A player's socket ended (``{"player": ...}``), host side only.
@@ -376,6 +384,60 @@ class SessionBridge(QObject):
             return self._client.set_npc_paths(paths)
         return False
 
+    # -- the scene ---------------------------------------------------------
+
+    def scene(self) -> list[dict]:
+        """The scene as it stands, for a block attaching late.
+
+        The same reason :meth:`history` exists: a Scene block built after the join
+        would otherwise sit empty until the GM next touched the board — which,
+        mid-fight, could be the whole fight.
+        """
+        if self._server is not None:
+            return self._server.scene()
+        if self._client is not None:
+            return [dict(entry) for entry in self._client.scene]
+        return []
+
+    def scene_portraits(self) -> dict[str, str]:
+        """Every scene thumbnail this end holds, by ``ref``. As :meth:`scene`."""
+        if self._server is not None:
+            return self._server.scene_portraits()
+        if self._client is not None:
+            return dict(self._client.scene_portraits)
+        return {}
+
+    def scene_sources(self) -> dict[str, str]:
+        """The GM's private ``ref`` → source map. Empty for a player."""
+        if self._server is not None:
+            return dict(self._server.state.scene_sources)
+        if self._client is not None:
+            return dict(self._client.scene_sources)
+        return {}
+
+    def set_scene(self, entries: list[dict], sources: dict | None = None) -> bool:
+        """Publish the whole scene to the table (a GM action).
+
+        The host's answer is passed on rather than assumed, the way
+        :meth:`prompt_roll` does it: ``set_scene`` returns what actually survived
+        sanitizing, and a caller that drew its own idea of the board instead would
+        be showing the GM something nobody else got.
+        """
+        if self._server is not None:
+            return self._server.set_scene(entries, sources) is not None
+        if self._client is not None:
+            return self._client.set_scene(entries, sources)
+        return False
+
+    def set_scene_portrait(self, ref: str, portrait: str) -> bool:
+        """Publish one scene entry's thumbnail (a GM action)."""
+        if self._server is not None:
+            self._server.set_scene_portrait(ref, portrait)
+            return True
+        if self._client is not None:
+            return self._client.set_scene_portrait(ref, portrait)
+        return False
+
     # -- hosting -----------------------------------------------------------
 
     def host(
@@ -562,6 +624,10 @@ class SessionBridge(QObject):
             self.rollAdded.emit(payload)
         elif kind == session_server.EVENT_ROLL_REMOVED:
             self.rollRemoved.emit(int(payload.get("seq", 0)))
+        elif kind == session_server.EVENT_SCENE:
+            self.sceneChanged.emit(payload.get("entries", []))
+        elif kind == session_server.EVENT_SCENE_PORTRAIT:
+            self.scenePortrait.emit(str(payload.get("ref", "")), str(payload.get("portrait", "")))
         elif kind == session_server.EVENT_REFUSED:
             self.refused.emit(payload)
         elif kind == session_server.EVENT_LISTENER_LOST:
@@ -574,6 +640,9 @@ class SessionBridge(QObject):
             self.connected.emit(payload)
             self.rosterChanged.emit(payload.get("roster", []))
             self.historyReplaced.emit(payload.get("history", []))
+            # The welcome carries the board; its pictures follow as their own
+            # messages, so a card may draw its placeholder for a beat first.
+            self.sceneChanged.emit(payload.get("scene", []))
         elif kind == session_client.EVENT_DISCONNECTED:
             self.disconnected.emit(str(payload.get("reason", "")))
         elif kind == session_client.EVENT_STATE:
@@ -584,6 +653,10 @@ class SessionBridge(QObject):
             self.rollAdded.emit(payload)
         elif kind == session_client.EVENT_ROLL_REMOVED:
             self.rollRemoved.emit(int(payload.get("seq", 0)))
+        elif kind == session_client.EVENT_SCENE:
+            self.sceneChanged.emit(payload.get("entries", []))
+        elif kind == session_client.EVENT_SCENE_PORTRAIT:
+            self.scenePortrait.emit(str(payload.get("ref", "")), str(payload.get("portrait", "")))
         elif kind == session_client.EVENT_SNAPSHOT:
             # Reaches a GM client only, and deliberately raises the same signal
             # the hosting half does, so the player cards are written once.

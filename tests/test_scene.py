@@ -22,14 +22,14 @@ from mm_companion.core.session.client import EVENT_PONG, EVENT_SCENE, EVENT_SCEN
 from mm_companion.core.session.model import SessionState, new_session
 from mm_companion.core.session.protocol import MAX_SCENE_PORTRAIT_CHARS
 from mm_companion.core.session.server import EVENT_SCENE as SERVER_EVENT_SCENE
-from tests.test_session_server import (  # noqa: F401 - fixtures are used by name
-    TIMEOUT,
-    Events,
-    connect,
-    gm_connect,
-    running_server,
-    wait_for,
-)
+from tests import test_session_server as harness
+from tests.test_session_server import Events, gm_connect, wait_for
+
+# The loopback harness lives with the server tests; a scene test wants the same
+# sockets and the same waiting. Bound rather than imported because a fixture that
+# is also a test parameter reads to the linter as a redefinition.
+running_server = harness.running_server
+connect = harness.connect
 
 THUG = {"ref": "e1", "name": "Thug", "initiative": 14}
 BOSS = {"ref": "e2", "name": "Boss"}

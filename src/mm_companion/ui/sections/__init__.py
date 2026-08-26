@@ -19,6 +19,7 @@ from mm_companion.ui.sections.equipment import EquipmentSection
 from mm_companion.ui.sections.notes import NotesSection
 from mm_companion.ui.sections.powers import PowersSection
 from mm_companion.ui.sections.resistances import ResistancesSection
+from mm_companion.ui.sections.scene import SceneSection
 from mm_companion.ui.sections.skills import SkillsSection
 from mm_companion.ui.sections.system_info import SystemInfoSection
 
@@ -35,5 +36,6 @@ __all__ = [
     "PowersSection",
     "ResistancesSection",
     "SkillsSection",
+    "SceneSection",
     "SystemInfoSection",
 ]

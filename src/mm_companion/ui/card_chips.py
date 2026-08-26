@@ -50,10 +50,17 @@ SCENE_GLYPH = "👁"
 class _SceneEye(QToolButton):
     """The 👁 that puts a creature on the shared board, and takes it back off.
 
-    A toggle whose *state* is the readout: lit means the table can see this
-    creature, unlit means only the GM can. It carries the accent rather than a
-    check mark for the reason the initiative badge does — there is no room on a
-    210px card for a control that also draws a box around itself.
+    A toggle whose *state* is the readout: on means the table can see this
+    creature, off means only the GM can.
+
+    It says which by **filling in**, not by changing colour. The first version
+    tinted the glyph with the accent and left it plain otherwise, which is how the
+    initiative badge carries its affordance — and on a colour emoji that does
+    nothing at all: the font supplies its own colours and ignores the one the
+    stylesheet asks for, so the two states were pixel-identical on a card a GM was
+    meant to read at a glance. A washed background and a border change the *shape*
+    of the control, which no font can override, and it is the same trade the
+    collapse caret makes by pointing two ways rather than being two colours.
 
     Being a ``QToolButton`` it swallows its own press, which is what stops a click
     here being read as the start of the card's drag.
@@ -80,8 +87,19 @@ class _SceneEye(QToolButton):
         self._restyle(on)
 
     def _restyle(self, on: bool) -> None:
-        colour = theme.color("accent") if on else theme.color("text.muted")
-        self.setStyleSheet(f"QToolButton {{ color: {colour}; border: none; }}")
+        if on:
+            rules = (
+                f"color: {theme.color('accent')};"
+                f"background: {theme.wash('accent', 0.22)};"
+                f"border: {int(theme.metric('border.width'))}px solid {theme.color('accent')};"
+                f"border-radius: {int(theme.metric('radius.chip'))}px;"
+            )
+        else:
+            rules = f"color: {theme.color('text.muted')}; background: transparent; border: none;"
+        # Scoped to this widget's own stylesheet rather than the theme's QSS: it is
+        # a per-instance state, and the two GM cards each hold several tool buttons
+        # that must not pick it up.
+        self.setStyleSheet(f"QToolButton {{ {rules} }}")
         self.setToolTip(
             "On the Scene — the players can see this. Click to take it off."
             if on

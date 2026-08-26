@@ -2874,3 +2874,41 @@ def test_a_new_scene_is_not_confirmed_away_by_accident(
     window._new_scene()
 
     assert [e.source for e in window._scene] == [goon]
+
+
+def test_a_condition_on_a_scene_npc_reaches_the_table(window: GMWindow) -> None:
+    """The bug the two-window run caught: the GM's own card updated and the
+    players went on looking at an undazed creature.
+
+    ``_after_npc_condition_change`` is the *only* path that moves an NPC's
+    conditions without going through ``_refresh_npcs`` — the "+", the right-click
+    that sheds one, and every rung of the damage ladder all land there.
+    """
+    (goon,) = _npc_files(window, "Goon")
+    window._set_in_scene(SCENE_NPC, goon, True)
+
+    window._apply_npc_condition(goon, "dazed", None)
+
+    assert window._scene_payload()[0]["conditions"] == [{"id": "dazed"}]
+    ref = window._scene_entry_for(SCENE_NPC, goon).ref
+    assert window._scene_board.card(ref).condition_names() == ["Dazed"]
+
+
+def test_shedding_a_condition_reaches_the_table_too(window: GMWindow) -> None:
+    (goon,) = _npc_files(window, "Goon")
+    window._set_in_scene(SCENE_NPC, goon, True)
+    window._apply_npc_condition(goon, "dazed", None)
+
+    window._remove_npc_condition(goon, "dazed", None)
+
+    assert "conditions" not in window._scene_payload()[0]
+
+
+def test_a_damage_rung_reaches_the_table(window: GMWindow) -> None:
+    """A failed Toughness save is the condition change a table most wants to see."""
+    (goon,) = _npc_files(window, "Goon")
+    window._set_in_scene(SCENE_NPC, goon, True)
+
+    window._apply_npc_damage(goon, 1)
+
+    assert window._scene_payload()[0].get("conditions")

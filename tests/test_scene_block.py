@@ -19,10 +19,16 @@ from mm_companion.core import storage
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.session.model import new_session
+from mm_companion.ui import theme
 from mm_companion.ui.card_chips import SCENE_MIME
 from mm_companion.ui.card_drop import CardDropFlow
 from mm_companion.ui.character_sheet import CharacterSheet
-from mm_companion.ui.scene_board import NO_SCENE_PLAYER, NOT_IN_SESSION, SceneBoard
+from mm_companion.ui.scene_board import (
+    NO_SCENE_GM,
+    NO_SCENE_PLAYER,
+    NOT_IN_SESSION,
+    SceneBoard,
+)
 from mm_companion.ui.scene_card import order_scene
 from mm_companion.ui.sections import SceneSection
 from mm_companion.ui.session_bridge import SessionBridge, set_active_session
@@ -122,6 +128,69 @@ def test_a_card_carries_nothing_the_wire_did_not(qapp: QApplication) -> None:
     assert card.condition_names() == []
 
 
+def test_a_card_wears_the_colour_of_what_it_is(qapp: QApplication) -> None:
+    """The board's one piece of colour, and a player's screen gets it too — the
+    whole reason the field is public rather than the GM's own note."""
+    board = _board()
+    board.set_scene(
+        [
+            dict(GOON, ref="n1", disposition="friendly"),
+            dict(GOON, ref="n2", disposition="neutral"),
+        ]
+    )
+
+    friendly = board.card("n1").styleSheet()
+    neutral = board.card("n2").styleSheet()
+
+    assert theme.color("scene.friendly") in friendly
+    assert theme.color("scene.neutral") in neutral
+    assert friendly != neutral
+
+
+def test_an_entry_with_nothing_said_about_it_is_an_enemy(qapp: QApplication) -> None:
+    """The safe way round: a board is mostly things to fight, so the mistake the
+    default can make is an ally drawn as a threat rather than the other way."""
+    board = _board()
+
+    board.set_scene([dict(GOON), dict(GOON, ref="n2", disposition="nonsense")])
+
+    assert board.card("n1").disposition == "enemy"
+    assert board.card("n2").disposition == "enemy"
+
+
+def test_a_player_watching_the_board_cannot_change_it(qapp: QApplication) -> None:
+    """`gm=False` is the whole of it: no menu, and so no way to relabel a creature
+    the GM has judged."""
+    board = _board()
+    board.set_scene([dict(GOON, disposition="friendly")])
+
+    assert board.card("n1")._gm is False
+    assert board.card("n1").contextMenuEvent(None) is None
+
+
+def test_a_player_can_find_themselves_in_the_turn_order(qapp: QApplication) -> None:
+    """Every seat wears the same blue, so the colour cannot also say which is you —
+    and finding yourself is the first thing anyone does with a turn order."""
+    board = _board()
+    board.set_own_player_id("p1")
+
+    board.set_scene([dict(NOVA), dict(GOON)])
+
+    assert board.card("p1")._name.text() == "Nova (you)"
+    assert board.card("n1")._name.text() == "Goon"
+
+
+def test_nobody_is_marked_when_the_board_does_not_know_whose_it_is(
+    qapp: QApplication,
+) -> None:
+    """The GM's board, where no entry ever carries their id anyway."""
+    board = _board()
+
+    board.set_scene([dict(NOVA)])
+
+    assert board.card("p1")._name.text() == "Nova"
+
+
 def test_a_portrait_survives_a_scene_update(qapp: QApplication) -> None:
     """A scene is re-sent whenever anything on it changes and its pictures are not,
     so a rebuild that dropped them would blank every card on every condition."""
@@ -150,11 +219,31 @@ def test_an_empty_board_says_so(qapp: QApplication) -> None:
     board = _board()
     board.set_placeholder(NO_SCENE_PLAYER)
 
-    assert board._empty.isVisibleTo(board)
-    assert board._empty.text() == NO_SCENE_PLAYER
+    assert board.is_empty()
+    assert board.placeholder_text() == NO_SCENE_PLAYER
 
     board.set_scene([dict(GOON)])
-    assert not board._empty.isVisibleTo(board)
+    assert not board.is_empty()
+
+
+def test_the_empty_board_is_still_the_drop_target(qapp: QApplication) -> None:
+    """The bug that made every session's *first* drop fail.
+
+    The placeholder used to be a sibling of the flow and the flow was hidden while
+    the board was empty — so the one thing on screen saying "drag one here" was the
+    one widget that could not take a drop, and Qt sends no drag events to a hidden
+    widget at all. An empty board is exactly when a GM is dragging.
+    """
+    board = SceneBoard(load_game_data(), gm=True)
+    board.set_placeholder(NO_SCENE_GM)
+    board.resize(400, 200)
+    board.set_scene([])
+
+    host = board._flow_host
+    assert host.isVisibleTo(board)
+    assert host.acceptDrops()
+    # And a band to aim at: an empty FlowLayout reports no size at all.
+    assert host.minimumHeight() > 0
 
 
 # -- the block on the sheet --------------------------------------------------
@@ -173,7 +262,7 @@ def test_the_sheet_builds_a_scene_block_pinned_in_the_strip(qapp: QApplication) 
 def test_the_block_says_there_is_no_session_when_there_is_none(qapp: QApplication) -> None:
     sheet = _sheet(qapp)
 
-    assert sheet.scene.board._empty.text() == NOT_IN_SESSION
+    assert sheet.scene.board.placeholder_text() == NOT_IN_SESSION
 
 
 def test_the_block_follows_the_session_it_is_told_about(qapp: QApplication) -> None:
@@ -185,7 +274,7 @@ def test_the_block_follows_the_session_it_is_told_about(qapp: QApplication) -> N
     set_active_session(bridge)
     try:
         sheet.sync_session()
-        assert sheet.scene.board._empty.text() == NO_SCENE_PLAYER
+        assert sheet.scene.board.placeholder_text() == NO_SCENE_PLAYER
 
         bridge.set_scene([dict(NOVA), dict(GOON)])
 
@@ -226,7 +315,7 @@ def test_the_block_empties_when_the_session_ends(qapp: QApplication) -> None:
     sheet.sync_session()
 
     assert sheet.scene.board.ordered_refs() == []
-    assert sheet.scene.board._empty.text() == NOT_IN_SESSION
+    assert sheet.scene.board.placeholder_text() == NOT_IN_SESSION
 
 
 def test_a_scene_update_is_not_a_character_edit(qapp: QApplication) -> None:

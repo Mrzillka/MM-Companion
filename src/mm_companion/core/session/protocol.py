@@ -730,6 +730,24 @@ MAX_SCENE_TEXT = 80
 #: of them is stored per session and replayed to every joiner.
 MAX_SCENE_PORTRAIT_CHARS = 8 * 1024
 
+#: What a creature on the board is *to the table*. The one field on a scene entry
+#: that is the GM's judgement rather than a reading off a model, and the only
+#: reason it is public: telling friend from foe at a glance is most of what a
+#: player needs the board for, and it is a thing only the GM knows.
+#:
+#: ``player`` is not a fourth choice a GM makes — it is what a player's own entry
+#: always is, set where the entry is built and never offered in the menu.
+DISPOSITION_ENEMY = "enemy"
+DISPOSITION_FRIENDLY = "friendly"
+DISPOSITION_NEUTRAL = "neutral"
+DISPOSITION_PLAYER = "player"
+#: Every value the wire will carry. An entry naming anything else is not dropped —
+#: it simply arrives without a disposition and is drawn as the default, which is
+#: the same thing a pre-disposition sender produces.
+SCENE_DISPOSITIONS = frozenset(
+    {DISPOSITION_ENEMY, DISPOSITION_FRIENDLY, DISPOSITION_NEUTRAL, DISPOSITION_PLAYER}
+)
+
 
 def sanitize_scene(raw: object) -> list[dict]:
     """Check a GM-supplied scene into a known shape, dropping what does not fit.
@@ -738,7 +756,8 @@ def sanitize_scene(raw: object) -> list[dict]:
     server loads no game data, so a condition id here is an opaque string and this
     file has no opinion about whether it names anything.
 
-    One entry is ``{"ref", "name", "player_id", "initiative", "conditions"}``:
+    One entry is
+    ``{"ref", "name", "player_id", "initiative", "disposition", "conditions"}``:
 
     - ``ref`` is the GM's opaque handle for this entry and is the only required
       field — an entry without one cannot be addressed by a
@@ -748,6 +767,16 @@ def sanitize_scene(raw: object) -> list[dict]:
     - ``conditions`` are ``{"id", "parameter", "count"}`` dicts — the shape
       :meth:`~mm_companion.core.character.AppliedCondition.to_dict` writes, minus
       ``provenance``, which is a bookkeeping detail of the sender's own tracker.
+    - ``disposition`` is one of :data:`SCENE_DISPOSITIONS` or absent. Absent is a
+      legitimate answer rather than an error: it is what every sender older than
+      the field produces, and what an entry the GM has not judged produces too.
+
+    This field is **additive without a protocol bump**, unlike the four bumps
+    before it. Each of those prevented an old peer answering *wrongly* — an empty
+    board, a request rendered as a d20 that rolled nought, a client reaped for
+    never pinging. An old peer here draws exactly what it draws today: the same
+    board, correctly, without the colour. That is a smaller readout, not a wrong
+    one, and it is not worth refusing a table at the door for.
     """
 
     if not isinstance(raw, list):
@@ -769,6 +798,9 @@ def sanitize_scene(raw: object) -> list[dict]:
         initiative = item.get("initiative")
         if isinstance(initiative, int) and not isinstance(initiative, bool):
             entry["initiative"] = initiative
+        disposition = item.get("disposition")
+        if isinstance(disposition, str) and disposition in SCENE_DISPOSITIONS:
+            entry["disposition"] = disposition
         conditions = _sanitize_scene_conditions(item.get("conditions"))
         if conditions:
             entry["conditions"] = conditions

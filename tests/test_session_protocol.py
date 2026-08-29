@@ -15,6 +15,7 @@ from mm_companion.core.session import protocol
 from mm_companion.core.session.protocol import (
     MAX_MESSAGE_BYTES,
     PROTOCOL_VERSION,
+    SCENE_DISPOSITIONS,
     ApplyCondition,
     CharacterSnapshot,
     ControlHello,
@@ -395,6 +396,36 @@ def test_an_oversized_portrait_is_dropped_rather_than_truncated() -> None:
     assert sanitize_scene_portrait("A" * (protocol.MAX_SCENE_PORTRAIT_CHARS + 1)) == ""
     assert sanitize_scene_portrait("A" * 16) == "A" * 16
     assert sanitize_scene_portrait(None) == ""
+
+
+def test_a_scene_entry_carries_a_known_disposition_and_no_other() -> None:
+    """Public on purpose — telling friend from foe is most of what a player needs
+    the board for, and it is a thing only the GM knows."""
+    entries = sanitize_scene(
+        [
+            {"ref": "a", "disposition": "friendly"},
+            {"ref": "b", "disposition": "warlord"},
+            {"ref": "c", "disposition": 7},
+            {"ref": "d"},
+        ]
+    )
+
+    assert entries[0]["disposition"] == "friendly"
+    # Not an error, and not dropped: an unknown or absent value is exactly what a
+    # sender older than the field produces, and it renders as the default.
+    assert [e for e in entries if "disposition" not in e] == [
+        {"ref": "b"},
+        {"ref": "c"},
+        {"ref": "d"},
+    ]
+
+
+def test_every_disposition_the_ui_offers_survives_the_wire() -> None:
+    entries = sanitize_scene(
+        [{"ref": value, "disposition": value} for value in sorted(SCENE_DISPOSITIONS)]
+    )
+
+    assert {e["disposition"] for e in entries} == set(SCENE_DISPOSITIONS)
 
 
 def test_scene_sources_keep_only_string_pairs() -> None:

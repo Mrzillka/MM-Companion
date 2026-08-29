@@ -46,9 +46,9 @@ from mm_companion.core.character import Character
 from mm_companion.core.data_loader import Condition, GameData
 from mm_companion.ui import theme
 from mm_companion.ui.card_chips import _ConditionChip, _SceneEye, start_card_drag
-from mm_companion.ui.card_summary import PortraitButton, character_summary_html
+from mm_companion.ui.card_summary import PORTRAIT_SIZE, PortraitButton, character_summary_html
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
-from mm_companion.ui.pin_panel import PIN_PANEL_WIDTH, install_pin_panel
+from mm_companion.ui.pin_panel import install_pin_panel
 from mm_companion.ui.sections.conditions import (
     build_condition_menu,
     condition_display_name,
@@ -57,9 +57,6 @@ from mm_companion.ui.sections.conditions import (
 from mm_companion.ui.sections.system_info import HeroPointsWidget
 from mm_companion.ui.session_portrait import decode_portrait
 
-#: How wide the card's own column is. Fixed, so a row of them lines up in the
-#: flow layout; the pinned-parameter strip adds its own width beside it.
-CARD_WIDTH = 210
 #: How far the pointer must move with the button down to count as a drag. The
 #: same number the NPC card uses, so one gesture feels like one gesture.
 DRAG_THRESHOLD = 8
@@ -100,8 +97,6 @@ class PlayerCard(QFrame):
     def __init__(self, data: GameData, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setFrameShape(QFrame.Shape.StyledPanel)
-        # The card's own column is fixed; the pinned strip adds its width beside it.
-        self.setFixedWidth(CARD_WIDTH + PIN_PANEL_WIDTH + int(theme.metric("space.sm")) * 3)
 
         self._data = data
         self._conditions_by_id: dict[str, Condition] = {c.id: c for c in data.conditions}
@@ -164,7 +159,10 @@ class PlayerCard(QFrame):
         hero_row.addStretch()
         layout.addLayout(hero_row)
 
-        condition_row = QHBoxLayout()
+        # Hosted in a widget rather than added as a bare layout, so the card can
+        # ask it how wide it needs to be — see :meth:`body_width_hint`.
+        self._action_host = QWidget()
+        condition_row = QHBoxLayout(self._action_host)
         condition_row.setContentsMargins(0, 0, 0, 0)
         # Hidden while the GM has players joining the Scene automatically: an
         # action that does nothing is worse than none. See
@@ -180,7 +178,7 @@ class PlayerCard(QFrame):
         self._condition_button.clicked.connect(self._show_condition_menu)
         condition_row.addWidget(self._condition_button)
         condition_row.addStretch()
-        layout.addLayout(condition_row)
+        layout.addWidget(self._action_host)
 
         self._chips = FlowContainer()
         self._chip_flow = FlowLayout(self._chips)
@@ -192,6 +190,34 @@ class PlayerCard(QFrame):
         self.pins.loadRequested.connect(self.loadRequested)
         self.pins.rollRequested.connect(self.rollRequested)
         self.pins.pickRequested.connect(lambda: self.pinPickerRequested.emit(self.player_id))
+        # A width of its own until the window measures the block; see
+        # :meth:`~mm_companion.ui.gm_window.GMWindow._sync_card_widths`.
+        self.apply_width(self.body_width_hint(), self.pins.natural_width())
+
+    # -- how wide the card is ----------------------------------------------
+
+    def body_width_hint(self) -> int:
+        """The narrowest this card's own column can be and still show its controls.
+
+        The same bargain the NPC card's makes, and deliberately the same number in
+        practice: the two cards sit in two blocks a GM reads side by side, and a
+        player card visibly narrower than an NPC card would read as a different
+        kind of thing rather than the same card with different powers over it.
+        """
+        return max(
+            int(theme.metric("gm.card.min")),
+            self._action_host.sizeHint().width(),
+            PORTRAIT_SIZE,
+        )
+
+    def pin_width_hint(self) -> int:
+        """How wide this card's pinned strip wants to be."""
+        return self.pins.natural_width()
+
+    def apply_width(self, body: int, strip: int) -> None:
+        """Wear *body* and *strip* — the block's widest, not this card's own."""
+        self.pins.set_width(strip)
+        self.setFixedWidth(body + strip + int(theme.metric("space.sm")) * 3)
 
     # -- what the card is showing -----------------------------------------
 

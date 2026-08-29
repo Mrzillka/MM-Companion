@@ -125,6 +125,19 @@ def test_a_remote_gms_scene_is_honored(running_server, connect) -> None:
         gm.close()
 
 
+def test_a_creatures_disposition_reaches_the_table(running_server, connect) -> None:
+    """The whole reason the field is public rather than a note in the GM's head:
+    telling friend from foe at a glance is most of what a player needs the board
+    for, and only the GM knows it."""
+    srv = running_server()
+    player, events = connect(srv, "Alex")
+
+    srv.set_scene([dict(THUG, disposition="friendly"), dict(BOSS, disposition="neutral")])
+    events.next_of(EVENT_SCENE)
+
+    assert [e.get("disposition") for e in player.scene] == ["friendly", "neutral"]
+
+
 def test_the_scene_is_replaced_whole_rather_than_merged(running_server) -> None:
     srv = running_server()
     srv.set_scene([dict(THUG), dict(BOSS)])

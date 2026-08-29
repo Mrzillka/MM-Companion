@@ -126,6 +126,15 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
   `event.ignore()` is invisible whenever an ancestor accepts the drag. Its
   counterpart `DropIndicator` (same module) is the thin accent insert line —
   dress the *target* with the first, mark the *place* with the second.
+- **A set of colours that only mean something together belongs in a bucket
+  together.** `scene.enemy` / `.friendly` / `.neutral` / `.player` are one such
+  set: they say what a creature on the Scene is to the table, and their job is to
+  be four colours a *glance* can tell apart, not four pleasant colours. So they get
+  a `scene` bucket of their own in `token_meta.json`'s colour order, and each
+  preset restates all four rather than inheriting — Parchment's accent is a brown
+  and Crimson's is a red, so in both the player edge has to be a blue of its own or
+  a seat and a bystander (or a seat and an enemy) look alike. They are `washed`,
+  so they must stay literal `#rrggbb`.
 - `ui/block_sizes.json` is the *baseline* for block bounds; a preset's `blocks`
   map overrides any bound. The GM window's blocks live there too, under `gm_`
   keys.

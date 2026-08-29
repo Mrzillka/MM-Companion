@@ -20,9 +20,16 @@ Four gestures, and the reasons they don't collide:
 
 The chips stack in a plain :class:`QVBoxLayout` rather than the wrapping
 :class:`~mm_companion.ui.flow_layout.FlowLayout` the condition chips use. The
-strip is a fixed, narrow column, so a flow would put one chip per row anyway —
-and *order* is a thing the GM sets here, which a strict list states and a wrap
-only implies.
+strip is a narrow column, so a flow would put one chip per row anyway — and
+*order* is a thing the GM sets here, which a strict list states and a wrap only
+implies.
+
+**How wide** the column is, is not the panel's to decide. It measures what it
+wants (:meth:`PinPanel.natural_width`) and is *told* (:meth:`PinPanel.set_width`),
+because every card in a block wears the widest strip on that board — otherwise
+the cards stop lining up in columns of the wrapping flow they sit in. It was a
+flat 150px until this, whatever was on it, which is most of a card's width spent
+on "Dodge 12".
 """
 
 from __future__ import annotations
@@ -30,7 +37,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from PySide6.QtCore import QMimeData, QPoint, QRect, QSize, Qt, Signal
-from PySide6.QtGui import QDrag
+from PySide6.QtGui import QDrag, QFontMetrics
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -49,9 +56,21 @@ from mm_companion.ui import theme
 from mm_companion.ui.drop_feedback import DropIndicator
 from mm_companion.ui.widgets import ElidingLabel, muted_style
 
-#: How wide the strip is. Narrow on purpose — it sits beside a 210px card and the
-#: pair has to stay a card, not become a table.
-PIN_PANEL_WIDTH = 150
+#: What a chip's own layout costs it beside its text: the margin at each end, and
+#: the gap between the caption and the reading. Named rather than written inline
+#: because :meth:`PinChip.natural_width` has to add back exactly what the layout
+#: takes away, and a chip that measured one number and laid out another would
+#: elide the caption the measurement exists to protect.
+CHIP_MARGIN = 5
+CHIP_SPACING = 4
+
+#: The pixel a ``QLabel`` keeps for itself beyond the text it draws. Added to the
+#: measured caption in :meth:`PinChip.natural_width`, because a strip sized to the
+#: text *exactly* leaves an :class:`~mm_companion.ui.widgets.ElidingLabel` one
+#: pixel short and it elides — which is the strip failing at the one job it was
+#: narrowed to do. Only the caption needs it: the reading is measured off its own
+#: size hint, which already carries it.
+LABEL_SLACK = 1
 
 #: How far the pointer must travel with the button down before a press counts as
 #: a drag rather than a click. Matches the NPC card's own threshold.
@@ -129,8 +148,8 @@ class PinChip(QFrame):
             self.setToolTip(value.hint)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(5, 1, 5, 1)
-        layout.setSpacing(4)
+        layout.setContentsMargins(CHIP_MARGIN, 1, CHIP_MARGIN, 1)
+        layout.setSpacing(CHIP_SPACING)
 
         self._label = ElidingLabel(value.label)
         self._label.setStyleSheet("border: none; background: transparent;")
@@ -158,6 +177,27 @@ class PinChip(QFrame):
     def text(self) -> str:
         """The chip as one readable string — what the tests assert on."""
         return f"{self._value.label} {self._value.value}"
+
+    def natural_width(self) -> int:
+        """How wide this chip would have to be for nothing to elide.
+
+        Measured, never guessed, and measured two different ways because the two
+        labels answer differently. The **reading** is an ordinary ``QLabel`` that
+        never elides, so its own size hint is the honest number. The **caption** is
+        an :class:`~mm_companion.ui.widgets.ElidingLabel`, which by design reports
+        room for an ellipsis and nothing more and whose hint shrinks once it *has*
+        elided — so asking it would give a different (and self-fulfilling) answer
+        every time. The font is asked instead, plus :data:`LABEL_SLACK`.
+        """
+        metrics = QFontMetrics(self._label.font())
+        return (
+            metrics.horizontalAdvance(self._value.label)
+            + LABEL_SLACK
+            + self._reading.sizeHint().width()
+            + 2 * CHIP_MARGIN
+            + CHIP_SPACING
+            + 2 * int(theme.metric("border.width"))
+        )
 
     @property
     def rollable(self) -> bool:
@@ -259,10 +299,12 @@ class PinPanel(QWidget):
     rollRequested = Signal(object)
     #: The GM asked to add a pin (the "+").
     pickRequested = Signal()
+    #: The strip's chips changed, so :meth:`natural_width` may have. The owner
+    #: re-measures the block and hands every card in it a new width.
+    widthHintChanged = Signal()
 
     def __init__(self, data: GameData, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setFixedWidth(PIN_PANEL_WIDTH)
         self.setAcceptDrops(True)
 
         self._data = data
@@ -309,6 +351,37 @@ class PinPanel(QWidget):
         outer.addStretch()
 
         self._indicator = DropIndicator(self)
+        self.set_width(self.natural_width())
+
+    # -- how wide the strip is ----------------------------------------------
+
+    def natural_width(self) -> int:
+        """How wide this strip wants to be: its widest chip, clamped.
+
+        It used to be a flat 150px whatever was on it, which on a card whose
+        pins read "Dodge 12" and "Parry 12" spent most of the card's width on
+        white space — and a board of a dozen mooks pays for it a dozen times.
+
+        Clamped at both ends rather than taken at its word. The floor keeps the
+        header's "+" reachable on a strip with nothing on it; the cap is the old
+        fixed width, so a long caption elides exactly as it always did and no
+        strip is ever *wider* than it used to be. That is the same elide-plus-
+        tooltip bargain :func:`~mm_companion.ui.sections.row_table.wrapping_column_width`
+        strikes for the sheet's name columns.
+        """
+        widest = max((chip.natural_width() for chip in self._chips), default=0)
+        floor = int(theme.metric("gm.pin-strip.min"))
+        cap = int(theme.metric("gm.pin-strip.max"))
+        return max(floor, min(widest, cap))
+
+    def set_width(self, width: int) -> None:
+        """Fix the strip at *width* — the owner's word, not this panel's.
+
+        A card's strip is not sized alone: every card in a block wears the widest
+        one, so the cards keep lining up in columns of the wrapping flow. The
+        panel only says what it *wants* (:meth:`natural_width`).
+        """
+        self.setFixedWidth(max(1, width))
 
     # -- what the strip is showing ------------------------------------------
 
@@ -398,6 +471,9 @@ class PinPanel(QWidget):
         self._empty.setVisible(not self._chips)
         self._apply_cap()
         self.updateGeometry()
+        # Last, and against the chips that now exist: the owner answers this by
+        # re-measuring every card in the block and handing them all one width.
+        self.widthHintChanged.emit()
 
     # -- editing the strip ---------------------------------------------------
 

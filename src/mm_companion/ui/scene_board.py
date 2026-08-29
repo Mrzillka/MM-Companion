@@ -14,26 +14,33 @@ initiative to be dragged out of the rolled zone is a rule about the *board*, not
 about a flow of widgets.
 
 Ordering is :func:`~mm_companion.ui.scene_card.order_scene` — rolled entries
-first, then the GM's own arrangement — which is the rule the NPC grid already
-sorts by, so a GM is never holding two orderings in their head.
+first, then the GM's own arrangement. It is the **only** board that sorts by
+initiative: the NPC grid used to as well, and two boards showing one ordering
+meant the cast re-arranged itself under the GM's hands every time a mook rolled.
+The cast is a cast now, and the turn order is here.
+
+The board is one widget deep on purpose. The drop target fills it and is never
+hidden, so the whole block takes a card — see
+:meth:`~mm_companion.ui.card_drop.CardDropFlow.set_placeholder` for the bug that
+forced that, which was that an empty board could not be given its first entry.
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from mm_companion.core.data_loader import GameData
 from mm_companion.ui import theme
 from mm_companion.ui.card_drop import CardDropFlow
 from mm_companion.ui.scene_card import SceneCard, entry_ref, order_scene
 from mm_companion.ui.session_portrait import decode_portrait
-from mm_companion.ui.widgets import muted_style, preserved_scroll
+from mm_companion.ui.widgets import preserved_scroll
 
 #: What an empty board says. Different on the two screens, because "nothing is
 #: happening" and "you have not put anything here" are different facts and only
 #: one of them is actionable.
-NO_SCENE_GM = "No scene yet — click the 👁 on a card, or drag one here."
+NO_SCENE_GM = "No scene yet — drag a card here."
 NO_SCENE_PLAYER = "The GM has not set a scene."
 NOT_IN_SESSION = "Not in a session."
 
@@ -49,6 +56,10 @@ class SceneBoard(QWidget):
     removeRequested = Signal(str)
     #: ``ref`` — put this entry back in the un-rolled zone. GM only.
     initiativeCleared = Signal(str)
+    #: ``ref`` — roll this entry's initiative. GM only, and never a player's entry.
+    initiativeRollRequested = Signal(str)
+    #: ``(ref, disposition)`` — what this creature is to the table. GM only.
+    dispositionChanged = Signal(str, str)
 
     def __init__(
         self,
@@ -69,26 +80,34 @@ class SceneBoard(QWidget):
         #: not re-sent with one.
         self._portraits: dict[str, object] = {}
         self._cards: dict[str, SceneCard] = {}
+        #: The reader's own seat, so their entry can say so. Empty on the GM's
+        #: board, where it would never match anyway: a GM is not a player on their
+        #: own roster, so no scene entry carries their id.
+        self._own_id = ""
         self._placeholder_text = NO_SCENE_GM if gm else NOT_IN_SESSION
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(int(theme.metric("space.xs")))
 
-        self._empty = QLabel(self._placeholder_text)
-        self._empty.setWordWrap(True)
-        self._empty.setStyleSheet(muted_style(italic=True))
-        layout.addWidget(self._empty)
-
         # A drop target on both screens, and inert on a player's: the flow refuses
         # a payload nobody there can start. Cheaper than two widgets, and it is the
         # same board either way.
+        #
+        # It takes every pixel the board is given (``stretch=1``) and is **never
+        # hidden**, including while the scene is empty. Both are the same rule:
+        # what a GM aims a dragged card at is the Scene *block*, not the thin band
+        # its cards happen to occupy — and a board with nothing on it is exactly
+        # when they are aiming. The empty-state sentence is the flow's own
+        # placeholder, so it sits inside the rectangle that accepts the drop
+        # rather than beside it.
         self._flow_host = CardDropFlow("sceneBoard")
         self._flow = self._flow_host.flow
         self._flow_host.setAcceptDrops(gm)
+        self._flow_host.set_placeholder(self._placeholder_text)
         if gm:
             self._flow_host.dropped.connect(self.dropped)
-        layout.addWidget(self._flow_host)
+        layout.addWidget(self._flow_host, stretch=1)
 
     # -- what the board is showing -----------------------------------------
 
@@ -99,6 +118,13 @@ class SceneBoard(QWidget):
         self._manual = [ref for ref in self._manual if ref in live]
         self._manual += [ref for ref in live if ref not in self._manual]
         self._portraits = {ref: p for ref, p in self._portraits.items() if ref in live}
+        self._rebuild()
+
+    def set_own_player_id(self, player_id: str) -> None:
+        """Tell the board whose screen it is, so one card can say "(you)"."""
+        if player_id == self._own_id:
+            return
+        self._own_id = player_id
         self._rebuild()
 
     def set_manual_order(self, refs: list[str]) -> None:
@@ -125,7 +151,15 @@ class SceneBoard(QWidget):
     def set_placeholder(self, text: str) -> None:
         """What an empty board says. Shown only while there is nothing on it."""
         self._placeholder_text = text
-        self._empty.setText(text)
+        self._flow_host.set_placeholder(text)
+
+    def placeholder_text(self) -> str:
+        """The sentence an empty board is showing."""
+        return self._flow_host.placeholder_text()
+
+    def is_empty(self) -> bool:
+        """Whether the board is showing the placeholder rather than cards."""
+        return not self._entries
 
     def ordered_refs(self) -> list[str]:
         """The refs in rendered order — what the board actually reads top to bottom."""
@@ -145,15 +179,16 @@ class SceneBoard(QWidget):
                     entry,
                     self._data,
                     gm=self._gm,
+                    own=bool(self._own_id) and entry.get("player_id") == self._own_id,
                     portrait=self._portraits.get(ref),  # type: ignore[arg-type]
                 )
                 if self._gm:
                     card.removeRequested.connect(self.removeRequested)
                     card.initiativeCleared.connect(self.initiativeCleared)
+                    card.initiativeRollRequested.connect(self.initiativeRollRequested)
+                    card.dispositionChanged.connect(self.dispositionChanged)
                 self._cards[ref] = card
                 self._flow_host.add_card(card)
-            self._empty.setVisible(not self._entries)
-            self._flow_host.setVisible(bool(self._entries))
 
     def set_locked(self, locked: bool) -> None:  # noqa: ARG002 - part of the Block protocol
         """A no-op: the board is a readout, so there is nothing to lock.

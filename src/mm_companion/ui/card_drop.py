@@ -19,15 +19,23 @@ The index is measured against the **laid-out geometry**, not against anyone's
 list, because the flow wraps: which card is "before" the pointer is a question
 about rows and columns. A card whose left half the pointer is over takes its own
 index; its right half is the slot after it.
+
+An **empty** flow is still a drop target, which is the whole of
+:meth:`CardDropFlow.set_placeholder`. It has to be: the first card of a session
+lands on a board that holds nothing, and a target that only exists once it has
+something in it can never be given its first thing.
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import QRect, Qt, Signal
+from PySide6.QtWidgets import QLabel
 
+from mm_companion.ui import theme
 from mm_companion.ui.card_chips import SCENE_MIME
 from mm_companion.ui.drop_feedback import DropFeedback, DropIndicator
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
+from mm_companion.ui.widgets import muted_style
 
 #: How wide the bar between two cards is drawn.
 INDICATOR_WIDTH = 3
@@ -39,8 +47,14 @@ class CardDropFlow(FlowContainer):
     #: ``(ref, index)`` — a card was dropped at *index* among these cards.
     dropped = Signal(str, int)
 
-    def __init__(self, name: str, parent=None) -> None:
+    def __init__(self, name: str, parent=None, *, accepts=None) -> None:
         super().__init__(parent)
+        #: An optional narrowing of what this flow will take, given the dragged
+        #: reference. Without one every board takes every card, which is right for
+        #: the two that reorder — but the Players block accepts a drop only so a
+        #: player's own card dragged out and back reads as a cancelled drag, and it
+        #: was lighting up green for an NPC and then silently dropping it.
+        self._accepts = accepts
         self.flow = FlowLayout(self)
         self.setAcceptDrops(True)
         # Scoped by object name, never a bare QWidget: an unscoped rule is
@@ -50,12 +64,15 @@ class CardDropFlow(FlowContainer):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._feedback = DropFeedback(self, f"#{name}")
         self._indicator = DropIndicator(self)
+        #: What the flow says while it holds nothing. See :meth:`set_placeholder`.
+        self._placeholder: QLabel | None = None
 
     # -- adding and taking away --------------------------------------------
 
     def add_card(self, widget) -> None:
         """Put one card at the end of the flow."""
         self.flow.addWidget(widget)
+        self._sync_placeholder()
 
     def clear(self) -> None:
         """Take every card out and destroy it — what a rebuilt board starts with."""
@@ -65,10 +82,74 @@ class CardDropFlow(FlowContainer):
             if widget is not None:
                 widget.setParent(None)
                 widget.deleteLater()
+        self._sync_placeholder()
 
     def count(self) -> int:
         """How many cards are in the flow."""
         return self.flow.count()
+
+    # -- the empty state ---------------------------------------------------
+
+    def set_placeholder(self, text: str) -> None:
+        """What this flow says while it holds no cards.
+
+        A child **of the flow host**, never a sibling of it, and that is the point
+        rather than a detail. The host is the widget that accepts the drop, so the
+        sentence inviting a drag has to live inside its rectangle. The first
+        version of the Scene put the label beside the flow and hid the flow while
+        the board was empty — so the one thing on screen saying "drag one here"
+        was the one widget in the block that could not take a drop, and the first
+        drop of every session was refused. Qt sends no drag events to a hidden
+        widget, and the refusal looked exactly like a broken gesture.
+
+        Outside the :class:`FlowLayout` as well as inside the widget: a label in
+        the flow would be an item :meth:`drop_index` has to count, and it would
+        wrap and re-flow like a card. It is positioned by hand instead, and made
+        transparent to the mouse so it can never eat the drag it is asking for.
+        """
+        if self._placeholder is None:
+            self._placeholder = QLabel(self)
+            self._placeholder.setWordWrap(True)
+            self._placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._placeholder.setStyleSheet(muted_style(italic=True))
+            self._placeholder.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._placeholder.setText(text)
+        self._sync_placeholder()
+
+    def placeholder_text(self) -> str:
+        """The empty-state sentence, or ``""`` if this flow never set one."""
+        return "" if self._placeholder is None else self._placeholder.text()
+
+    def _sync_placeholder(self) -> None:
+        """Show the sentence over an empty flow, and keep a band to drop it on.
+
+        The minimum row height is what stops an empty flow collapsing to nothing:
+        :meth:`FlowLayout.minimumSize` answers ``QSize(0, 0)`` with no items, and a
+        drop target nought pixels tall is not one.
+
+        The band a drop needs is *more* than the sentence needs, so the extra is
+        claimed only by a flow that actually takes drops. A player's Scene board is
+        the same widget with the drops off and it lives in the **pinned strip**,
+        where the lines stack and every block's minimum is added to the next — so
+        a dozen free pixels there is the strip growing the scrollbar it exists to
+        avoid, bought for a gesture that screen does not have.
+        """
+        if self._placeholder is None:
+            return
+        empty = self.flow.count() == 0
+        self._placeholder.setVisible(empty)
+        if not empty:
+            self.set_minimum_row_height(0)
+            return
+        self._placeholder.setGeometry(self.rect())
+        self._placeholder.raise_()
+        band = int(theme.metric("space.md")) * 2 if self.acceptDrops() else 0
+        width = max(1, self.width())
+        self.set_minimum_row_height(self._placeholder.heightForWidth(width) + band)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().resizeEvent(event)
+        self._sync_placeholder()
 
     # -- the drop ----------------------------------------------------------
 
@@ -131,9 +212,11 @@ class CardDropFlow(FlowContainer):
             rect = QRect(geo.left() - INDICATOR_WIDTH, geo.top(), INDICATOR_WIDTH, geo.height())
         self._indicator.move_to(rect)
 
-    @staticmethod
-    def _ref(event) -> str:
+    def _ref(self, event) -> str:
         """The dragged reference, or ``""`` for a payload this flow does not take."""
         if not event.mimeData().hasFormat(SCENE_MIME):
             return ""
-        return bytes(event.mimeData().data(SCENE_MIME)).decode("utf-8")
+        ref = bytes(event.mimeData().data(SCENE_MIME)).decode("utf-8")
+        if ref and self._accepts is not None and not self._accepts(ref):
+            return ""
+        return ref

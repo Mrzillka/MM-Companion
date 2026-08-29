@@ -145,14 +145,22 @@ design:
 
 | Field | Who sees it | Why it is its own field |
 | --- | --- | --- |
-| `scene` | everyone | The board: `{ref, name, player_id, initiative, conditions}` per entry, and nothing else. |
-| `scene_sources` | the GM alone | `ref` → `"npc:<file>"` / `"player:<id>"`, handed back in the GM's `Welcome` like `npc_paths`. |
+| `scene` | everyone | The board: `{ref, name, player_id, initiative, disposition, conditions}` per entry, and nothing else. |
+| `scene_sources` | the GM alone | `ref` → `"npc:<file>"` / `"player:<id>"`, handed back in the GM's `Welcome` like `npc_paths` — and read back by `_restore_scene`, so a GM who closes the app mid-fight returns to the board they left. |
 | `scene_portraits` | everyone, separately | `ref` → base64 thumbnail, sent once per entry rather than with every board. |
 
 Four messages: `SetScene` / `SetScenePortrait` up, `SceneUpdate` / `ScenePortrait`
 down. `PROTOCOL_VERSION` 9 exists for them, and the failure it prevents is quieter
 than 8's: a v8 client joins happily, never learns the type exists, and shows an
 empty board through a whole fight the rest of the table is watching.
+
+`disposition` (`enemy` / `friendly` / `neutral` / `player`) is the one field on an
+entry that is the GM's **judgement** rather than a reading off a model, and the
+only reason it is public: telling friend from foe at a glance is most of what a
+player needs the board for, and nothing but the GM knows it. It was added
+**without** a version bump, unlike everything above — an old peer draws the same
+board correctly, just without the colour, which is a smaller readout rather than a
+wrong one and not worth refusing a table at the door for.
 
 Five decisions worth knowing:
 
@@ -180,9 +188,10 @@ Five decisions worth knowing:
   keeps — it is that `sanitize_scene` carries nothing else, so a card cannot show
   what never left the GM's machine.
 
-**Initiative needed no message of its own.** An NPC's is rolled locally on the GM's
-own card and reaches the table as the board's `initiative` field, because a dozen
-mook rolls in the shared log would bury the line the table is waiting for. A
+**Initiative needed no message of its own.** An NPC's is rolled locally — on the
+scene card's badge, or for the whole board at once — and reaches the table as the
+board's `initiative` field, because a dozen mook rolls in the shared log would bury
+the line the table is waiting for. A
 player's arrives on the log that already exists: every roll carries the `RollSpec`
 that describes it, so the GM window watches `rollAdded` for `spec.kind ==
 "initiative"` and puts the total on the board. That catches both routes at once —

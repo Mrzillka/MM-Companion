@@ -21,8 +21,8 @@ import time
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QEvent, QPointF, Qt
-from PySide6.QtGui import QContextMenuEvent, QMouseEvent
+from PySide6.QtCore import QEvent, QMimeData, QPointF, Qt
+from PySide6.QtGui import QContextMenuEvent, QDragEnterEvent, QDropEvent, QMouseEvent
 from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMenu, QMessageBox, QPushButton
 
 from mm_companion.core import library, storage
@@ -31,6 +31,7 @@ from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.npc import quick_npc
 from mm_companion.core.rules import (
     KIND_SKILL,
+    PinnedValue,
     PinRef,
     RollSpec,
     apply_condition,
@@ -40,9 +41,9 @@ from mm_companion.core.rules import (
 from mm_companion.core.session import discovery, store
 from mm_companion.core.session.model import new_session
 from mm_companion.core.session.protocol import sanitize_snapshot
-from mm_companion.ui import dice_roller, player_card
+from mm_companion.ui import card_chips, dice_roller, player_card, theme
 from mm_companion.ui import gm_window as gm_window_module
-from mm_companion.ui import npc_card as npc_card_module
+from mm_companion.ui.drop_feedback import DropFeedback
 from mm_companion.ui.gm_window import SCENE_NPC, SCENE_PLAYER, GMWindow
 from mm_companion.ui.npc_card import NPCCard
 from mm_companion.ui.npc_quick_dialog import QuickNPC, QuickNPCDialog
@@ -1224,10 +1225,15 @@ def test_saving_a_new_npc_puts_it_in_the_cast(qapp: QApplication, window: GMWind
     assert npc_names(window) == ["Bank Robber"]
 
 
-def test_the_quick_wizard_saves_a_playable_npc_and_opens_it(
+def test_the_quick_wizard_saves_a_playable_npc_and_opens_nothing(
     qapp: QApplication, window: GMWindow, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Five numbers, and the creature is in the cast before anything else is filled in."""
+    """Five numbers, and the creature is in the cast before anything else is filled in.
+
+    And **no window**: a GM making five mooks wanted five cards, not five sheets to
+    close. The card lands collapsed for the same reason — a batch of goons is a
+    batch, and a shrunk card is what a board wants a dozen of.
+    """
     entered = QuickNPC(name="Bandit", attack=6, effect=5, defence=7, toughness=4, image_path=None)
     monkeypatch.setattr(QuickNPCDialog, "exec", lambda self: QDialog.DialogCode.Accepted)
     monkeypatch.setattr(QuickNPCDialog, "value", lambda self: entered)
@@ -1238,11 +1244,14 @@ def test_the_quick_wizard_saves_a_playable_npc_and_opens_it(
     # Saved and in the cast straight away — no trip through an unsaved sheet.
     assert window._state.npc_paths == ["bandit.json"]
     assert npc_names(window) == ["Bandit"]
-
-    # And it opened in the ordinary NPC sheet, carrying its two powers.
-    (sheet,) = window._npc_windows.values()
-    assert isinstance(sheet, NPCWindow)
-    assert [power.name for power in sheet.sheet.character.powers] == ["Damage", "Affliction"]
+    assert window._npc_windows == {}
+    (card,) = npc_cards(window)
+    assert card.collapsed is True
+    # It is still a playable creature, carrying its two powers.
+    assert [p.name for p in window._npc_state["bandit.json"].character.powers] == [
+        "Damage",
+        "Affliction",
+    ]
 
 
 def test_cancelling_the_quick_wizard_creates_nothing(
@@ -1516,25 +1525,23 @@ def register_npcs(window: GMWindow, *names: str) -> None:
         window._register_npc(write_npc(name))
 
 
-def test_rolled_npcs_sort_highest_initiative_first(window: GMWindow) -> None:
+def test_the_cast_never_sorts_itself_by_initiative(window: GMWindow) -> None:
+    """It used to, exactly as the Scene does — one ordering on two boards.
+
+    The cost was that the grid re-arranged itself under the GM's hands in the
+    middle of a round, on the very cards they were reaching into. The turn order
+    lives on the Scene; this is a cast list and it stays where it is put.
+    """
     register_npcs(window, "Alpha", "Bravo", "Charlie")
 
-    window._on_npc_initiative("alpha.json", 12)
-    window._on_npc_initiative("bravo.json", 24)
-    window._on_npc_initiative("charlie.json", 18)
+    window._npc_state["bravo.json"].initiative = 24
+    window._npc_state["charlie.json"].initiative = 18
+    window._refresh_npcs()
 
-    assert npc_names(window) == ["Bravo", "Charlie", "Alpha"]
-
-
-def test_unrolled_npcs_sit_below_rolled(window: GMWindow) -> None:
-    register_npcs(window, "Alpha", "Bravo")
-
-    window._on_npc_initiative("bravo.json", 15)
-
-    assert npc_names(window) == ["Bravo", "Alpha"]
+    assert npc_names(window) == ["Alpha", "Bravo", "Charlie"]
 
 
-def test_manual_order_among_unrolled_is_honored(window: GMWindow) -> None:
+def test_manual_order_is_honored(window: GMWindow) -> None:
     register_npcs(window, "Alpha", "Bravo", "Charlie")
 
     window._reorder_npc("charlie.json", 0)  # drag Charlie to the front
@@ -1542,14 +1549,19 @@ def test_manual_order_among_unrolled_is_honored(window: GMWindow) -> None:
     assert npc_names(window) == ["Charlie", "Alpha", "Bravo"]
 
 
-def test_dragging_a_rolled_card_clears_its_initiative(window: GMWindow) -> None:
+def test_dragging_a_card_in_the_cast_leaves_its_initiative_alone(window: GMWindow) -> None:
+    """A drag here is an arrangement and nothing more.
+
+    It used to clear the dragged NPC's roll, and a rolled neighbour's too, which
+    was the right rule while this grid *was* the turn order. That rule lives on
+    the Scene now, where the ordering it protects is.
+    """
     register_npcs(window, "Alpha", "Bravo")
-    window._on_npc_initiative("alpha.json", 25)
-    assert npc_names(window) == ["Alpha", "Bravo"]
+    window._npc_state["alpha.json"].initiative = 25
 
-    window._reorder_npc("alpha.json", 99)  # drag Alpha down into the manual zone
+    window._reorder_npc("alpha.json", 99)
 
-    assert window._npc_state["alpha.json"].initiative is None
+    assert window._npc_state["alpha.json"].initiative == 25
     assert npc_names(window) == ["Bravo", "Alpha"]
 
 
@@ -1608,40 +1620,51 @@ def write_agile_npc(name: str, agility: int) -> Path:
     return library.save_character(character, directory=storage.get_workspace().gm_characters_dir)
 
 
-def test_rolling_npc_initiative_uses_its_modifier_and_shows_a_badge(
+def test_rolling_an_entrys_initiative_uses_its_modifier_and_shows_a_badge(
     window: GMWindow, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Rolled from the scene card, which is the one board that sorts by the number."""
     path = write_agile_npc("Ogre", agility=3)
     window._register_npc(path)
-    from mm_companion.ui import npc_card as npc_card_module
+    window._set_in_scene(SCENE_NPC, path.name, True)
+    monkeypatch.setattr(gm_window_module, "roll_d20", lambda *a, **k: 15)
+    (ref,) = window._scene_board.ordered_refs()
 
-    monkeypatch.setattr(npc_card_module, "roll_d20", lambda *a, **k: 15)
+    window._scene_board.card(ref)._badge.clicked.emit()
 
-    (card,) = npc_cards(window)
-    total = card.roll_initiative()
-
-    assert total == 18  # d20 15 + Agility 3
-    assert card.initiative == 18
-    assert "18" in card._initiative_badge.text()
-    # The GM window remembered it for the ordering to come.
+    # d20 15 + Agility 3, on the window's own state and on the board that reads it.
     assert window._npc_state[path.name].initiative == 18
+    assert window._scene_board.card(ref).initiative == 18
+    assert window._scene_board.card(ref)._badge.text() == "18"
 
 
-def test_a_rolled_initiative_survives_a_refresh(
+def test_a_rolled_initiative_survives_a_refresh_of_the_cast(
     window: GMWindow, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     path = write_agile_npc("Ogre", agility=0)
     window._register_npc(path)
-    from mm_companion.ui import npc_card as npc_card_module
-
-    monkeypatch.setattr(npc_card_module, "roll_d20", lambda *a, **k: 12)
-    npc_cards(window)[0].roll_initiative()
+    window._set_in_scene(SCENE_NPC, path.name, True)
+    monkeypatch.setattr(gm_window_module, "roll_d20", lambda *a, **k: 12)
+    window._roll_entry_initiative(window._scene_board.ordered_refs()[0])
 
     window._refresh_npcs()
 
-    (card,) = npc_cards(window)
-    assert card.initiative == 12
-    assert "12" in card._initiative_badge.text()
+    assert window._npc_state[path.name].initiative == 12
+    (ref,) = window._scene_board.ordered_refs()
+    assert window._scene_board.card(ref)._badge.text() == "12"
+
+
+def test_only_the_gm_side_of_a_scene_card_rolls(window: GMWindow) -> None:
+    """A player rolls their own initiative on their own sheet, so a GM's click on
+    their badge would be rolling somebody else's die."""
+    (goon,) = _npc_files(window, "Goon")
+    window._show_roster([{"player_id": "p1", "display_name": "Alex", "connected": True}])
+    window._set_in_scene(SCENE_NPC, goon, True)
+
+    by_name = {c._name.text(): c for c in window._scene_board._cards.values()}
+
+    assert by_name["Goon"]._badge._live is True
+    assert by_name["Alex"]._badge._live is False
 
 
 # --------------------------------------------------------------------------
@@ -2284,6 +2307,117 @@ def test_a_collapsed_card_is_much_shorter(qapp: QApplication, window: GMWindow) 
     window.hide()
 
 
+# --------------------------------------------------------------------------
+# How wide a card is
+#
+# A card knows what it needs; only the block knows what its columns need. The
+# wrapping flow lays items out at their own size hint, so cards of differing
+# widths stop lining up — which is why the width used to be a flat 210 + 150
+# constant that no board ever actually wanted.
+# --------------------------------------------------------------------------
+
+
+def test_the_pinned_strip_fits_what_is_on_it(window: GMWindow) -> None:
+    """It was a flat 150px whatever was pinned, which on a card reading "Dodge 12"
+    is most of the card's width spent on white space."""
+    quick_npc_file(window)
+    (card,) = npc_cards(window)
+    seeded = card.pins.natural_width()
+    assert seeded < 150  # what the strip used to cost regardless
+
+    card.pins.set_pins([])
+
+    # Nothing pinned, nothing to fit — down to the floor that keeps the "+" reachable.
+    assert card.pins.natural_width() < seeded
+    assert card.pins.natural_width() == int(theme.metric("gm.pin-strip.min"))
+
+
+def test_a_chip_measures_its_own_caption_and_reading(qapp: QApplication) -> None:
+    from mm_companion.ui.pin_panel import PinChip
+
+    ref = PinRef(kind="ability", key="AGL")
+    short = PinChip(PinnedValue(ref=ref, label="Dodge", value="12"), 0)
+    long = PinChip(PinnedValue(ref=ref, label="Fortitude save", value="12"), 0)
+
+    assert short.natural_width() < long.natural_width()
+
+
+def test_the_strip_never_grows_past_what_it_used_to_cost(window: GMWindow) -> None:
+    """The cap is the old fixed width, so a long caption elides exactly as it
+    always did and no strip is ever *wider* than before."""
+    quick_npc_file(window)
+    (card,) = npc_cards(window)
+    card.pins.values = lambda: [  # type: ignore[method-assign]
+        PinnedValue(
+            ref=PinRef(kind="ability", key="AGL"),
+            label="A caption nobody would ever really pin",
+            value="12",
+        )
+    ]
+    card.pins.refresh()
+
+    assert card.pins.natural_width() == int(theme.metric("gm.pin-strip.max"))
+
+
+def test_every_card_in_a_block_is_one_width(window: GMWindow) -> None:
+    """Otherwise the flow stops forming columns and re-flows on every pin change."""
+    quick_npc_file(window, name="Goon")
+    quick_npc_file(window, name="Brute")
+    quick_npc_file(window, name="Ogre")
+    cards = npc_cards(window)
+    window._npc_state["goon.json"].card.pins.set_pins([])
+
+    window._sync_card_widths()
+
+    assert len({card.width() for card in cards}) == 1
+    assert len({card.pins.width() for card in cards}) == 1
+
+
+def test_collapsing_a_card_never_reflows_its_neighbours(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    """One card shrinking must not shuffle the columns the others sit in.
+
+    That is what the shared width buys, and it is why the width is the *block's*
+    and not the card's. The 96px portrait is still in `body_width_hint` and a
+    collapsed card sheds it — a ruleset whose damage ladder is narrower than a
+    portrait would see a wholly shut board narrow — but with the bundled one the
+    ladder wins, so the collapse takes its room out of the height as it always has.
+    """
+    quick_npc_file(window, name="Goon")
+    quick_npc_file(window, name="Brute")
+    window.show()
+    qapp.processEvents()
+    cards = npc_cards(window)
+    before = cards[0].width()
+    tall = cards[0].sizeHint().height()
+
+    cards[0]._collapse_button.click()
+    qapp.processEvents()
+
+    assert {card.width() for card in npc_cards(window)} == {before}
+
+    window._collapse_all_button.click()
+    qapp.processEvents()
+
+    assert {card.width() for card in npc_cards(window)} == {before}
+    assert all(card.sizeHint().height() < tall for card in npc_cards(window))
+    window.hide()
+
+
+def test_the_board_is_far_narrower_than_the_constant_it_replaced(
+    window: GMWindow,
+) -> None:
+    """Every card used to be 210 + 150 + spacing = 372px whatever was on it."""
+    quick_npc_file(window)
+    (card,) = npc_cards(window)
+
+    assert card.width() < 300
+    assert card.width() == card.body_width_hint() + card.pin_width_hint() + (
+        int(theme.metric("space.sm")) * 3
+    )
+
+
 def test_collapsing_is_remembered_per_card(window: GMWindow) -> None:
     """It survives the rebuild every initiative roll and condition change causes."""
     name = quick_npc_file(window)
@@ -2440,18 +2574,6 @@ def test_the_damage_buttons_say_what_they_will_do(window: GMWindow) -> None:
     assert "Stunned" in card._damage.button_tooltips()[1]
 
 
-def test_the_initiative_badge_rolls(window: GMWindow) -> None:
-    """It is the roll affordance once the explicit button is collapsed away."""
-    quick_npc_file(window)
-    (card,) = npc_cards(window)
-    assert card.initiative is None
-
-    card._initiative_badge.clicked.emit()
-
-    assert card.initiative is not None
-    assert npc_cards(window)[0]._initiative_badge.text().startswith("init ")
-
-
 def test_collapse_all_shrinks_every_card_and_says_what_it_will_do(
     window: GMWindow,
 ) -> None:
@@ -2494,28 +2616,35 @@ def test_collapse_all_is_dead_with_no_cast(window: GMWindow) -> None:
     assert window._collapse_all_button.isEnabled() is True
 
 
-def test_the_card_has_no_initiative_button(window: GMWindow) -> None:
-    """The badge rolls in both states, so the button was a second way to do one
-    thing — and the one that existed on the expanded card only."""
+def test_an_npc_card_carries_no_initiative_and_no_eye(window: GMWindow) -> None:
+    """Both moved to the Scene, which is the board that is about the fight.
+
+    Two eyes for one fact and two boards sorting by one number were each the GM
+    holding the same thing in two places.
+    """
     quick_npc_file(window)
     (card,) = npc_cards(window)
 
+    assert not hasattr(card, "_initiative_badge")
     assert not hasattr(card, "_initiative_button")
+    assert not hasattr(card, "_scene_eye")
+    assert not hasattr(card, "roll_initiative")
 
 
-def test_right_clicking_the_badge_clears_the_initiative(window: GMWindow) -> None:
-    quick_npc_file(window, name="Goon")
-    quick_npc_file(window, name="Brute")
-    goon = npc_cards(window)[0]
-    goon.roll_initiative()
-    assert npc_cards(window)[0].initiative is not None
+def test_right_clicking_a_scene_badge_clears_the_initiative(window: GMWindow) -> None:
+    goon, brute = _npc_files(window, "Goon", "Brute")
+    for name in (goon, brute):
+        window._set_in_scene(SCENE_NPC, name, True)
+    window._roll_scene_initiative()
+    assert window._npc_state[goon].initiative is not None
+    ref = next(e.ref for e in window._scene if e.source == goon)
 
-    right_click(npc_cards(window)[0]._initiative_badge)
+    right_click(window._scene_board.card(ref)._badge)
 
-    # Cleared on the card, in the window's state, and back in the un-rolled zone.
-    assert all(card.initiative is None for card in npc_cards(window))
-    assert all(entry.initiative is None for entry in window._npc_state.values())
-    assert npc_cards(window)[0]._initiative_badge.text() == npc_card_module.NO_INITIATIVE
+    # Cleared in the window's state, and back in the un-rolled zone on the board.
+    assert window._npc_state[goon].initiative is None
+    assert window._scene_board.card(ref)._badge.text() == card_chips.NO_INITIATIVE
+    assert window._scene_board.ordered_refs()[-1] == ref
 
 
 def test_right_clicking_an_npc_chip_sheds_the_condition(window: GMWindow) -> None:
@@ -2542,7 +2671,6 @@ def test_a_chip_right_click_never_reaches_the_cards_own_menu(
     monkeypatch.setattr(QMenu, "exec", lambda self, *a, **k: opened.append(self))
 
     right_click(card._chip_flow.itemAt(0).widget())
-    right_click(card._initiative_badge)
 
     assert opened == []
 
@@ -2604,16 +2732,64 @@ def _npc_files(window: GMWindow, *names: str) -> list[str]:
     return paths
 
 
-def test_the_eye_puts_an_npc_on_the_scene_and_takes_it_off(window: GMWindow) -> None:
+def test_a_real_drag_lands_on_an_empty_scene(qapp: QApplication, window: GMWindow) -> None:
+    """The regression the whole rework started from: the *first* drop always failed.
+
+    Driven with real drag events at a real point, because that is the half that
+    was broken. The handler was always fine — the empty board simply had nothing
+    under the pointer that would take a payload, since the flow was hidden while it
+    held no cards and the sentence saying "drag one here" was a plain label beside
+    it. Asserting the widget under the middle of the board is what pins that down.
+    """
+    (goon,) = _npc_files(window, "Goon")
+    window.show()
+    qapp.processEvents()
+    board = window._scene_board
+    assert board.is_empty()
+
+    assert board.childAt(board.rect().center()) is board._flow_host
+
+    host = board._flow_host
+    mime = QMimeData()
+    mime.setData(card_chips.SCENE_MIME, f"{SCENE_NPC}:{goon}".encode())
+    point = host.rect().center()
+    enter = QDragEnterEvent(
+        point,
+        Qt.DropAction.MoveAction,
+        mime,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    qapp.sendEvent(host, enter)
+    assert enter.isAccepted()
+
+    qapp.sendEvent(
+        host,
+        QDropEvent(
+            QPointF(point),
+            Qt.DropAction.MoveAction,
+            mime,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        ),
+    )
+    qapp.processEvents()
+
+    assert [e.source for e in window._scene] == [goon]
+    window.hide()
+
+
+def test_a_dragged_npc_joins_the_scene_and_its_card_takes_it_off(window: GMWindow) -> None:
+    """The two gestures the eye used to be, split between the two boards that own
+    them: the cast says "put this on the board" and the board says "take it off"."""
     goon, _boss = _npc_files(window, "Goon", "Boss")
 
-    window._npc_state[goon].card.sceneToggled.emit(goon, True)
+    window._drop_on_scene(f"{SCENE_NPC}:{goon}", 0)
     assert [e.source for e in window._scene] == [goon]
-    assert window._npc_state[goon].card.in_scene
 
-    window._npc_state[goon].card.sceneToggled.emit(goon, False)
+    (ref,) = window._scene_board.ordered_refs()
+    window._scene_board.card(ref).removeRequested.emit(ref)
     assert window._scene == []
-    assert not window._npc_state[goon].card.in_scene
 
 
 def test_the_scene_carries_a_name_and_the_conditions_and_nothing_else(
@@ -2629,7 +2805,18 @@ def test_the_scene_carries_a_name_and_the_conditions_and_nothing_else(
 
     assert entry["name"] == "Goon"
     assert entry["conditions"] == [{"id": "dazed"}]
-    assert set(entry) <= {"ref", "name", "player_id", "initiative", "conditions"}
+    # Disposition is public on purpose and is the only field here that is the GM's
+    # *judgement* rather than a reading: telling friend from foe is most of what a
+    # player needs the board for, and it is a thing only the GM knows.
+    assert entry["disposition"] == "enemy"
+    assert set(entry) <= {
+        "ref",
+        "name",
+        "player_id",
+        "initiative",
+        "disposition",
+        "conditions",
+    }
 
 
 def test_a_scene_ref_says_nothing_about_the_file_it_stands_for(window: GMWindow) -> None:
@@ -2654,17 +2841,33 @@ def test_rolling_for_the_scene_rolls_only_what_is_on_it(window: GMWindow) -> Non
     assert window._npc_state[boss].initiative is None
 
 
-def test_a_scene_roll_shows_up_on_the_npcs_own_card(window: GMWindow) -> None:
-    """One number with one owner: the card badge and the board read the same field,
-    so they cannot come to disagree."""
+def test_a_scene_roll_shows_up_on_the_board_that_owns_it(window: GMWindow) -> None:
+    """One number with one owner: the window holds it and the board reads the same
+    field, so the two cannot come to disagree."""
     (goon,) = _npc_files(window, "Goon")
     window._set_in_scene(SCENE_NPC, goon, True)
 
     window._roll_scene_initiative()
 
     rolled = window._npc_state[goon].initiative
-    assert window._npc_state[goon].card.initiative == rolled
+    (ref,) = window._scene_board.ordered_refs()
+    assert window._scene_board.card(ref).initiative == rolled
     assert window._scene_payload()[0]["initiative"] == rolled
+
+
+def test_rolling_for_the_board_leaves_the_cast_cards_where_they_are(
+    window: GMWindow,
+) -> None:
+    """It used to rebuild the whole grid to re-sort it, taking every hover and
+    scroll position with it. Nothing about the cast depends on initiative now."""
+    goon, boss = _npc_files(window, "Goon", "Boss")
+    for name in (goon, boss):
+        window._set_in_scene(SCENE_NPC, name, True)
+    before = [id(entry.card) for entry in window._npc_state.values()]
+
+    window._roll_scene_initiative()
+
+    assert [id(entry.card) for entry in window._npc_state.values()] == before
 
 
 def test_the_board_puts_the_rolled_above_the_unrolled(window: GMWindow) -> None:
@@ -2691,9 +2894,30 @@ def test_dropping_a_card_into_the_manual_zone_costs_it_its_initiative(
     window._push_scene()
     ref = window._scene_entry_for(SCENE_NPC, goon).ref
 
-    window._drop_on_scene(ref, 1)
+    # Slot 2: past the Boss, so it is a real move rather than its own place back.
+    window._drop_on_scene(ref, 2)
 
     assert window._npc_state[goon].initiative is None
+
+
+def test_a_card_dropped_back_on_its_own_slot_keeps_its_roll(window: GMWindow) -> None:
+    """Every path through a drop clears an initiative, so a GM who picked a rolled
+    card up and put it down again would silently lose it."""
+    goon, boss = _npc_files(window, "Goon", "Boss")
+    for name in (goon, boss):
+        window._set_in_scene(SCENE_NPC, name, True)
+    window._npc_state[goon].initiative = 18
+    window._push_scene()
+    ref = window._scene_entry_for(SCENE_NPC, goon).ref
+    order = window._scene_board.ordered_refs()
+    assert order[0] == ref
+
+    # Both gaps either side of a card name its own place.
+    window._drop_on_scene(ref, 0)
+    window._drop_on_scene(ref, 1)
+
+    assert window._npc_state[goon].initiative == 18
+    assert window._scene_board.ordered_refs() == order
 
 
 def test_dropping_an_unrolled_card_in_front_of_a_rolled_one_clears_both(
@@ -2743,13 +2967,20 @@ def test_dragging_an_npc_within_its_own_grid_still_reorders_it(window: GMWindow)
     assert window._ordered_npcs() == [charlie, alpha, bravo]
 
 
-def test_a_player_dropped_on_the_npc_grid_is_refused(window: GMWindow) -> None:
-    """Not a thing that can be done, and refusing quietly beats inventing a meaning."""
+def test_a_player_dropped_on_the_npc_grid_is_refused(qapp: QApplication, window: GMWindow) -> None:
+    """Not a thing that can be done — and refused *visibly*, which is the half that
+    was missing: the grid used to light up green for a player and then drop it on
+    the floor, which reads as a broken gesture rather than a refused one."""
     alpha, bravo = _npc_files(window, "Alpha", "Bravo")
 
     window._npc_container.dropped.emit(f"{SCENE_PLAYER}:p1", 0)
-
     assert window._ordered_npcs() == [alpha, bravo]
+
+    _drag_enter(qapp, window._npc_container, f"{SCENE_PLAYER}:p1")
+    assert window._npc_container._feedback.state == DropFeedback.REJECT
+
+    _drag_enter(qapp, window._npc_container, f"{SCENE_NPC}:{alpha}")
+    assert window._npc_container._feedback.state == DropFeedback.ACCEPT
 
 
 def test_an_npc_removed_from_the_session_leaves_the_scene_with_it(window: GMWindow) -> None:
@@ -2837,7 +3068,6 @@ def test_a_seat_that_leaves_takes_its_place_on_the_board_with_it(window: GMWindo
 def test_a_new_scene_clears_the_board_and_every_initiative(
     window: GMWindow, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(GMWindow, "_confirm_new_scene", lambda self: True)
     (goon,) = _npc_files(window, "Goon")
     window._set_in_scene(SCENE_NPC, goon, True)
     window._roll_scene_initiative()
@@ -2854,7 +3084,6 @@ def test_a_new_scene_keeps_the_players_when_they_join_by_themselves(
 ) -> None:
     """Clearing them would be undone by the next roster anyway, and a button that
     visibly does not do what it says is worse than one that does less."""
-    monkeypatch.setattr(GMWindow, "_confirm_new_scene", lambda self: True)
     (goon,) = _npc_files(window, "Goon")
     window._set_in_scene(SCENE_NPC, goon, True)
     window._show_roster([{"player_id": "p1", "display_name": "Alex", "connected": True}])
@@ -2864,16 +3093,337 @@ def test_a_new_scene_keeps_the_players_when_they_join_by_themselves(
     assert [(e.kind, e.source) for e in window._scene] == [(SCENE_PLAYER, "p1")]
 
 
-def test_a_new_scene_is_not_confirmed_away_by_accident(
+def test_a_new_scene_takes_two_clicks_and_opens_no_dialog(
     window: GMWindow, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(GMWindow, "_confirm_new_scene", lambda self: False)
+    """The button asks in its own caption instead of stopping the table with a
+    modal, which is the wrong thing to do in the middle of a round."""
+    monkeypatch.setattr(
+        gm_window_module.QMessageBox,
+        "question",
+        lambda *a, **k: pytest.fail("New scene must not open a dialog"),
+    )
     (goon,) = _npc_files(window, "Goon")
     window._set_in_scene(SCENE_NPC, goon, True)
+    button = window._new_scene_button
 
-    window._new_scene()
+    button.click()
+
+    assert button.armed is True
+    assert button.text() != "New scene"
+    assert [e.source for e in window._scene] == [goon]
+
+    button.click()
+
+    assert button.armed is False
+    assert button.text() == "New scene"
+    assert window._scene == []
+
+
+def test_an_armed_new_scene_disarms_itself(window: GMWindow) -> None:
+    """A stray click must not leave a live trigger sitting on the board."""
+    (goon,) = _npc_files(window, "Goon")
+    window._set_in_scene(SCENE_NPC, goon, True)
+    button = window._new_scene_button
+
+    button.click()
+    button.disarm()  # what the timer does when nobody comes back
+    button.click()
+
+    assert button.armed is True
+    assert [e.source for e in window._scene] == [goon]
+
+
+# --------------------------------------------------------------------------
+# Coming back to a fight in progress
+#
+# `scene_sources` is written on every push, persisted with the session and handed
+# back in the GM's own Welcome — for this, exactly as `npc_paths` is. It had no
+# reader for a while, and the cost was that a GM who closed the app mid-fight came
+# back to a full cast and an empty board, and the first push after that wrote the
+# empty board over the stored one.
+# --------------------------------------------------------------------------
+
+
+def _reopened(qapp: QApplication, window: GMWindow) -> GMWindow:
+    """Close *window* and open a second one onto the same stored session."""
+    session_id = window._state.id
+    window.close()
+    qapp.processEvents()
+    return GMWindow(bind="127.0.0.1", state=store.load_session(session_id))
+
+
+def test_the_board_survives_closing_the_app_mid_fight(qapp: QApplication, window: GMWindow) -> None:
+    goon, boss = _npc_files(window, "Goon", "Boss")
+    start_hosting(qapp, window, canned())
+    for name in (goon, boss):
+        window._set_in_scene(SCENE_NPC, name, True)
+    window._set_disposition(window._scene_entry_for(SCENE_NPC, boss).ref, "friendly")
+    window._npc_state[goon].initiative = 18
+    window._push_scene()  # what every real mutation ends with
+
+    reopened = _reopened(qapp, window)
+    try:
+        assert [(e.source, e.disposition) for e in reopened._scene] == [
+            (goon, "enemy"),
+            (boss, "friendly"),
+        ]
+        # The numbers come back with it: a turn order without them is most of the
+        # way to no turn order at all.
+        assert reopened._npc_state[goon].initiative == 18
+        assert reopened._scene_board.ordered_refs()[0] == reopened._scene[0].ref
+    finally:
+        reopened.close()
+
+
+def test_a_creature_deleted_between_sessions_is_not_restored(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    """Its place is dropped rather than restored as a card standing for nothing."""
+    goon, boss = _npc_files(window, "Goon", "Boss")
+    start_hosting(qapp, window, canned())
+    for name in (goon, boss):
+        window._set_in_scene(SCENE_NPC, name, True)
+    session_id = window._state.id
+    window.close()
+    qapp.processEvents()
+    (storage.get_workspace().gm_characters_dir / boss).unlink()
+
+    reopened = GMWindow(bind="127.0.0.1", state=store.load_session(session_id))
+    try:
+        assert [e.source for e in reopened._scene] == [goon]
+    finally:
+        reopened.close()
+
+
+def test_the_seats_are_left_for_the_players_to_take_back(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    """A restored seat would be dropped by the very next roster anyway — there is
+    nothing to show for a player who is not there, which is the rule
+    ``_sync_scene_players`` already keeps."""
+    start_hosting(qapp, window, canned())
+    window._show_roster(roster({"display_name": "Aria"}))
+    assert any(e.kind == SCENE_PLAYER for e in window._scene)
+
+    reopened = _reopened(qapp, window)
+    try:
+        assert reopened._scene == []
+    finally:
+        reopened.close()
+
+
+def test_a_board_already_built_is_never_overwritten_by_a_restore(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    """The restore runs once at startup. Called again it must be a no-op, or a
+    later one would drag a fight that has moved on back to where it began."""
+    (goon,) = _npc_files(window, "Goon")
+    start_hosting(qapp, window, canned())
+    window._set_in_scene(SCENE_NPC, goon, True)
+    before = list(window._scene)
+
+    window._restore_scene()
+
+    assert window._scene == before
+
+
+# --------------------------------------------------------------------------
+# More on the board than the wire will carry
+# --------------------------------------------------------------------------
+
+
+def test_a_board_past_the_wires_limit_says_so(qapp: QApplication, window: GMWindow) -> None:
+    """``sanitize_scene`` keeps the first `MAX_SCENE_ENTRIES` and drops the rest,
+    silently and by *insertion* order — which is not the order the board reads in,
+    so what falls off can be a creature at the top of the initiative. The GM's own
+    board shows all of it either way."""
+    limit = gm_window_module.MAX_SCENE_ENTRIES
+    names = _npc_files(window, *[f"Mook {n}" for n in range(limit + 2)])
+    start_hosting(qapp, window, canned())
+    for name in names[:limit]:
+        window._set_in_scene(SCENE_NPC, name, True)
+
+    assert window._notice_label.text() == ""
+
+    window._set_in_scene(SCENE_NPC, names[limit], True)
+
+    assert "1 more creature is" in window._notice_label.text()
+    assert str(limit) in window._notice_label.text()
+
+    window._set_in_scene(SCENE_NPC, names[limit + 1], True)
+
+    assert "2 more creatures are" in window._notice_label.text()
+
+
+# --------------------------------------------------------------------------
+# What a creature is to the table
+#
+# The board's one piece of colour, and the only field on an entry that is the
+# GM's judgement rather than a reading off a model. Public on purpose: telling
+# friend from foe at a glance is most of what a player needs the board for, and
+# it is a thing only the GM knows.
+# --------------------------------------------------------------------------
+
+
+def test_an_npc_starts_an_enemy_and_a_seat_starts_a_player(window: GMWindow) -> None:
+    """The safe way round rather than the tidy one: a board is mostly things to
+    fight, so the mistake the default can make is an ally drawn as a threat."""
+    (goon,) = _npc_files(window, "Goon")
+    window._show_roster([{"player_id": "p1", "display_name": "Alex", "connected": True}])
+    window._set_in_scene(SCENE_NPC, goon, True)
+
+    by_name = {e["name"]: e["disposition"] for e in window._scene_payload()}
+
+    assert by_name == {"Goon": "enemy", "Alex": "player"}
+
+
+def test_the_gm_can_say_what_a_creature_is(window: GMWindow) -> None:
+    (vale,) = _npc_files(window, "Vale")
+    window._set_in_scene(SCENE_NPC, vale, True)
+    (ref,) = window._scene_board.ordered_refs()
+
+    window._scene_board.card(ref).dispositionChanged.emit(ref, "friendly")
+
+    assert window._scene_entry(ref).disposition == "friendly"
+    assert window._scene_payload()[0]["disposition"] == "friendly"
+    assert window._scene_board.card(ref).disposition == "friendly"
+
+
+def test_a_seat_can_never_be_called_anything_but_a_player(window: GMWindow) -> None:
+    """A seat is a player. The card offers no way to say otherwise and the window
+    refuses it anyway — the signal is public, and the lie would reach the table."""
+    window._show_roster([{"player_id": "p1", "display_name": "Alex", "connected": True}])
+    (ref,) = window._scene_board.ordered_refs()
+
+    window._set_disposition(ref, "enemy")
+
+    assert window._scene_entry(ref).disposition == "player"
+
+
+def test_a_player_entrys_card_offers_no_disposition_menu(window: GMWindow) -> None:
+    (goon,) = _npc_files(window, "Goon")
+    window._show_roster([{"player_id": "p1", "display_name": "Alex", "connected": True}])
+    window._set_in_scene(SCENE_NPC, goon, True)
+    cards = {c._name.text(): c for c in window._scene_board._cards.values()}
+
+    offered = {
+        name: [a.text() for a in card.build_context_menu().actions()]
+        for name, card in cards.items()
+    }
+
+    assert "Mark as" not in offered["Alex"]
+    assert "Mark as" in offered["Goon"]
+
+
+def test_the_mark_as_menu_ticks_what_the_creature_already_is(window: GMWindow) -> None:
+    """It is a state with one answer at a time, so the tick is half of what the
+    menu is for."""
+    (vale,) = _npc_files(window, "Vale")
+    window._set_in_scene(SCENE_NPC, vale, True)
+    (ref,) = window._scene_board.ordered_refs()
+    window._set_disposition(ref, "neutral")
+
+    import gc
+
+    menu = window._scene_board.card(ref).build_context_menu()
+    # Collected aggressively, for the reason
+    # ``test_the_submenus_outlive_the_call_that_built_them`` gives: an unparented
+    # submenu vanishes out from under the menu that is showing it.
+    gc.collect()
+    (marks,) = [a.menu() for a in menu.actions() if a.menu() is not None]
+
+    assert [a.text() for a in marks.actions()] == ["Enemy", "Friendly", "Neutral"]
+    assert [a.text() for a in marks.actions() if a.isChecked()] == ["Neutral"]
+
+
+def test_each_disposition_draws_its_own_edge(window: GMWindow) -> None:
+    """Four colours a glance can tell apart, and four tokens a preset can retune."""
+    names = _npc_files(window, "A", "B", "C")
+    for name in names:
+        window._set_in_scene(SCENE_NPC, name, True)
+    refs = window._scene_board.ordered_refs()
+    for ref, value in zip(refs, ("enemy", "friendly", "neutral"), strict=True):
+        window._set_disposition(ref, value)
+
+    sheets = [window._scene_board.card(r).styleSheet() for r in refs]
+
+    for sheet, value in zip(sheets, ("enemy", "friendly", "neutral"), strict=True):
+        assert theme.color(f"scene.{value}") in sheet
+    assert len(set(sheets)) == 3
+
+
+def test_the_card_says_what_it_is_in_words_as_well(window: GMWindow) -> None:
+    """A fact told only in colour is told to fewer people than one told twice."""
+    (vale,) = _npc_files(window, "Vale")
+    window._set_in_scene(SCENE_NPC, vale, True)
+    (ref,) = window._scene_board.ordered_refs()
+    window._set_disposition(ref, "friendly")
+
+    assert "Friendly" in window._scene_board.card(ref)._name.toolTip()
+
+
+# --------------------------------------------------------------------------
+# Putting a creature on the board without a mouse
+# --------------------------------------------------------------------------
+
+
+def test_an_npc_card_can_seat_itself_from_its_own_menu(window: GMWindow) -> None:
+    """The drag is the quick answer; this is the one that always works — from a
+    keyboard, without a steady hand, and when the Scene block is hidden outright."""
+    (goon,) = _npc_files(window, "Goon")
+    (card,) = npc_cards(window)
+    assert card.in_scene is False
+
+    card.sceneToggled.emit(goon, True)
 
     assert [e.source for e in window._scene] == [goon]
+    assert npc_cards(window)[0].in_scene is True
+
+    npc_cards(window)[0].sceneToggled.emit(goon, False)
+
+    assert window._scene == []
+    assert npc_cards(window)[0].in_scene is False
+
+
+def test_the_menu_item_says_which_way_it_will_go(window: GMWindow) -> None:
+    (goon,) = _npc_files(window, "Goon")
+
+    before = [a.text() for a in npc_cards(window)[0].build_context_menu().actions()]
+    window._set_in_scene(SCENE_NPC, goon, True)
+    after = [a.text() for a in npc_cards(window)[0].build_context_menu().actions()]
+
+    assert "Put on the Scene" in before
+    assert "Take off the Scene" in after
+
+
+def test_the_players_block_visibly_refuses_an_npc(qapp: QApplication, window: GMWindow) -> None:
+    """It takes a drop only so a player's own card dragged out and back reads as a
+    cancelled drag. It used to take every card and silently drop the rest."""
+    flow = window._cards_container
+
+    _drag_enter(qapp, flow, f"{SCENE_NPC}:goon.json")
+    assert flow._feedback.state == DropFeedback.REJECT
+
+    _drag_enter(qapp, flow, f"{SCENE_PLAYER}:p1")
+    assert flow._feedback.state == DropFeedback.ACCEPT
+
+
+def _drag_enter(qapp: QApplication, widget, ref: str) -> None:
+    """Drive a real drag over *widget*. The mime is held for the send: the event
+    does not own it, and a collected one reads back as a bare ``QObject``."""
+    mime = QMimeData()
+    mime.setData(card_chips.SCENE_MIME, ref.encode())
+    qapp.sendEvent(
+        widget,
+        QDragEnterEvent(
+            widget.rect().center(),
+            Qt.DropAction.MoveAction,
+            mime,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        ),
+    )
 
 
 def test_a_condition_on_a_scene_npc_reaches_the_table(window: GMWindow) -> None:

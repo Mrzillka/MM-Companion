@@ -12,7 +12,7 @@ either, which is what keeps the two directions apart.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QMimeData, QPoint, Qt
+from PySide6.QtCore import QMimeData, QPoint, Qt, Signal
 from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QToolButton, QWidget
 
@@ -105,6 +105,88 @@ class _SceneEye(QToolButton):
             if on
             else "Put this on the Scene, where the players can see it."
         )
+
+
+#: The initiative badge before anything has been rolled. A dash rather than a
+#: zero: not rolled yet is not an initiative of nought, and the two sort
+#: differently.
+NO_INITIATIVE = "—"
+
+
+class InitiativeBadge(QLabel):
+    """A creature's initiative, and the only thing that rolls or clears it.
+
+    It lives on the **scene card** — the one board that sorts by initiative. It
+    used to be on the NPC card as well, which meant a GM read the turn order off
+    two places and the cast re-arranged itself under their hands every time a mook
+    rolled. The number's owner has not moved (it is still the GM window's
+    ``_NpcEntry``); only the one control that touches it has.
+
+    A ``QLabel`` for the same reason
+    :class:`~mm_companion.ui.card_summary.PortraitButton` is one: a ``QToolButton``
+    wraps its text in some forty pixels of its own chrome, which on a card this
+    narrow leaves the name a stub. It carries the affordance instead — a pointing
+    hand, a tooltip, an accent — and **swallows its press**, so clicking it can
+    never be read as the start of the card's drag.
+
+    Left-click rolls, right-click clears. The pair belongs on the one widget: the
+    number *is* the thing being set, and a GM who has mis-rolled otherwise has to
+    drag the card out of the rolled zone to be rid of it.
+    """
+
+    clicked = Signal()
+    #: Right-clicked — take this creature back out of the initiative order.
+    cleared = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(NO_INITIATIVE, parent)
+        font = self.font()
+        font.setBold(True)
+        font.setPointSizeF(theme.font_size("size.terms"))
+        self.setFont(font)
+        self.setStyleSheet(f"color: {theme.color('accent')};")
+        # A readout until somebody says otherwise, which is what a player's own
+        # screen leaves it as.
+        self.set_live(False)
+        self.set_initiative(None)
+
+    def set_live(self, live: bool) -> None:
+        """Whether this badge rolls, or is only a readout.
+
+        Off for a **player's** entry and on every player's own screen: a player
+        rolls their own initiative on their own sheet, and a GM's click here would
+        be rolling somebody else's die. A dead badge shows the same number in the
+        same place and simply says nothing about being clicked.
+        """
+        self._live = live
+        self.setCursor(Qt.CursorShape.PointingHandCursor if live else Qt.CursorShape.ArrowCursor)
+
+    def set_initiative(self, total: int | None) -> None:
+        """Show a rolled number, or the dash that means nobody has rolled."""
+        self.setText(NO_INITIATIVE if total is None else str(total))
+        if not self._live:
+            self.setToolTip("Waiting for their roll" if total is None else "Initiative")
+        else:
+            self.setToolTip("Roll initiative for this creature. Right-click to clear it.")
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        if (
+            self._live
+            and event.button() == Qt.MouseButton.LeftButton
+            and self.rect().contains(event.position().toPoint())
+        ):
+            self.clicked.emit()
+        event.accept()
+
+    def contextMenuEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        # Consumed either way: propagating would reach the card's own menu, which
+        # is not what someone aiming at the initiative number asked for.
+        if self._live:
+            self.cleared.emit()
+        event.accept()
 
 
 class _ConditionChip(QFrame):

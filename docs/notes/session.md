@@ -100,28 +100,51 @@ The shape:
   coordinates are mapped through the scrolled host (`_drop_index`,
   `_indicator_rect`) — chip geometries are the host's, drop events are the
   panel's, and the indicator is the panel's child.
+- **An NPC card is a cast list entry, not a turn-order one.** It carries no
+  initiative and no 👁: a creature reaches the shared board by being *dragged* onto
+  the Scene and leaves by its scene card's right-click, and its place in the order
+  is read and set there. Both used to live here too, which meant one turn order on
+  two boards and — worse — a grid that re-sorted itself under the GM's hands
+  mid-round, on the cards they were reaching into. The card's **right-click menu**
+  seats it and un-seats it, and that is not a convenience: with the 👁 gone the
+  drag was briefly the only way onto the board, which needs a mouse, cannot be
+  reached from a keyboard, and is impossible outright when the Scene block is
+  hidden from the View menu — a GM could reach a state with no way at all to seat a
+  creature. The drag is the quick answer; the menu is the one that always works. `_ordered_npcs` is now the GM's
+  arrangement and nothing else, and `_reorder_npc` is a pure arrangement: it must
+  not clear a number it no longer displays. The number's *owner* has not moved —
+  it is still `_NpcEntry.initiative` — so nothing about the wire changed.
+- **A card's width is not its own.** It reports what its contents need
+  (`body_width_hint`, `pin_width_hint`) and `GMWindow._sync_card_widths` gives
+  every card in a block the widest of those. Both halves matter: measuring is what
+  gets a card down from the flat `210 + 150 + spacing` = 372px it used to cost
+  regardless of what was on it (a strip pinned to "Dodge 12" spent most of a card
+  on white space), and *sharing* is what keeps the cards column-aligned, since the
+  wrapping `FlowLayout` lays items out at their own size hint and a card that
+  merely fitted its own content would make the grid ragged and re-flow it on every
+  pin change. Per block, not across both: the two grids are two flows with no
+  columns in common. The pinned strip clamps between `gm.pin-strip.min` and
+  `gm.pin-strip.max` — the floor keeps its "+" reachable when nothing is pinned,
+  and the cap is the old fixed width, so a long caption elides exactly as it always
+  did and nothing is ever *wider* than before. `PinPanel.widthHintChanged` is what
+  re-triggers the measurement when a pin comes or goes.
 - **An NPC card collapses** (`ui/npc_card.py`). Expanded it is a good roster entry
   and a bad combat readout — a 96px portrait, a PL and two buttons, times a dozen
   mooks, is two cards on screen. Collapsed it keeps only what a GM reads mid-round:
-  a thumbnail (still the *only* thing that opens the sheet), the name, an
-  initiative badge, the pinned strip, the conditions and the damage row. Width is
-  unchanged in both states, so cards stay column-aligned in the wrapping flow — the
-  win is height. Three things worth knowing. The two name labels share **one slot**,
-  exactly one showing: collapsed it elides (a wrapped name would need a second line
-  the thumbnail's row height hasn't got), expanded it wraps, and giving the wrapped
-  one a row of its own left a near-empty strip above the card's own name. The
-  **initiative badge is a `QLabel`**, not a `QToolButton`, for the reason
-  `PortraitButton` is one — a tool button wraps a word in forty pixels of chrome —
-  and it swallows its press so clicking it can't start the card's drag-to-reorder.
-  It is also the *only* control for initiative: left-click rolls, right-click
-  clears (`initiativeCleared` → `_on_npc_initiative_cleared`, the twin of the roll
-  handler), and the explicit "Initiative" button is gone rather than exist on one
-  state only. And `set_collapsed` is **silent** like `PinPanel.set_pins`; only the
-  caret emits `collapsedChanged`, since the owner telling a card what it already
-  decided must not have the window save what it just read.
+  a thumbnail (still the *only* thing that opens the sheet), the name, the pinned
+  strip, the conditions and the damage row. The win is **height**: the portrait is
+  in `body_width_hint` and a collapsed card sheds it, so a wholly shut board *can*
+  narrow — but with the bundled ruleset the damage ladder is wider than 96px
+  anyway, so in practice it does not. Two other things worth knowing. The two name
+  labels share **one slot**, exactly one showing: collapsed it elides (a wrapped
+  name would need a second line the thumbnail's row height hasn't got), expanded it
+  wraps, and giving the wrapped one a row of its own left a near-empty strip above
+  the card's own name. And `set_collapsed` is **silent** like `PinPanel.set_pins`;
+  only the caret emits `collapsedChanged`, since the owner telling a card what it
+  already decided must not have the window save what it just read.
 - **Right-click means "take that away"**, and the specific answer always wins over
-  the general one. A condition chip sheds its condition, the initiative badge
-  clears its roll, and the card itself offers Remove/Delete — so the first two
+  the general one. A condition chip sheds its condition, a scene card's badge
+  clears its roll, and an NPC card itself offers Remove/Delete — so the first two
   **consume** the event rather than letting it reach the third. The chips' gesture
   is `widgets.attach_context_removal`, an event filter on a `QObject` parented to
   the chip (so it dies with it), used by both GM cards' `_ConditionChip` *and* the
@@ -208,6 +231,49 @@ The shape:
   smaller than a sheet portrait, because a board's worth is stored per session and
   replayed to every joiner. `SceneBoard` decodes each **once** and keeps it across
   rebuilds, or ticking a condition would re-decode a dozen JPEGs.
+- **The board comes back.** `scene_sources` is written on every push, persisted
+  with the session and handed back in the GM's own `Welcome` — *for this*, exactly
+  as `npc_paths` is. It had no reader for a while, and `_SceneEntry.from_wire_source`
+  sat unused beside it: a GM who closed the app mid-fight came back to a full cast
+  and an empty board, and the first push after that wrote the empty board over the
+  stored one, so the fight was not merely forgotten but deleted under any player
+  still watching. `_restore_scene` runs once, **after** `_refresh_npcs`, so a
+  creature whose file went away is simply not found; it rebuilds in the *public*
+  scene's order (that is the list the refs were written in) and brings the rolled
+  initiatives with it, since a turn order without its numbers is most of the way to
+  no turn order. **NPCs only** — a restored seat would be dropped by the very next
+  roster anyway, which is the rule `_sync_scene_players` already keeps.
+- **What a creature is to the table is public, and it is the only field on an
+  entry that is a *judgement*.** Everything else on the wire is read off a model;
+  `disposition` is the GM's answer to a question nothing else can answer, and
+  telling friend from foe at a glance is most of what a player needs the board for.
+  Four values (`enemy` / `friendly` / `neutral` / `player`), four colour tokens
+  (`scene.*`, retuned per preset and editable in Settings ▸ Themes), drawn as the
+  card's **edge** — readable at the size a dozen cards are on screen at once, which
+  is the one thing a border does better than text. The card says it in words too,
+  in its hover text and in the menu that sets it: a fact told only in colour is
+  told to fewer people. A seat is always `player` and the GM is offered no way to
+  say otherwise, on the card *or* through the signal. An absent or unknown value is
+  **enemy**, which is the safe way round rather than the tidy one — a board is
+  mostly things to fight, so the mistake the default can make is an ally drawn as a
+  threat rather than a threat drawn as an ally.
+- **The colours say *what*, a word says *who*.** Every seat wears the same blue, so
+  the disposition cannot also answer "which one is me" — and that is the first
+  thing a player does with a turn order. Their own entry reads `Nova (you)`, the
+  same way a player card already marks the GM's own seat, from
+  `bridge.own_player_id()`. A word rather than a fifth colour, which would have to
+  compete with the four that already mean something.
+- **The field is additive with no protocol bump**, unlike the four bumps before it.
+  Each of those prevented an old peer answering *wrongly* — an empty board, a
+  request drawn as a d20 that rolled nought, a client reaped for never pinging. An
+  old peer here draws the same board correctly, without the colour: a smaller
+  readout, not a wrong one, and not worth refusing a table at the door for.
+- **A board bigger than the wire says so.** `sanitize_scene` keeps the first
+  `MAX_SCENE_ENTRIES` (24) and drops the rest — silently, and by *insertion* order,
+  which is not the order the board reads in, so what falls off the end can be a
+  creature at the top of the initiative. The GM's own board shows all of it either
+  way, so without `_warn_if_scene_is_truncated` the two screens disagree and only
+  the players can tell.
 - **A ref is opaque, and that is the point.** It is the only part of an entry that
   reaches a player, and an NPC's file name can be a spoiler outright
   ("TheTraitorIsMarcus.json"). `_SceneEntry` on the GM window is what maps it back;
@@ -226,14 +292,30 @@ The shape:
   the GM window watches `rollAdded` for `spec.kind == "initiative"`. That needed no
   protocol work and catches both routes at once — answering the request card, and
   rolling Initiative off one's own sheet. `RollRecord.to_dict()` writes the parts
-  and not the sum. **Roll initiative** keeps the NPC rolls local, as the badge's own
-  docstring insists: a dozen mook rolls would bury the line the table is waiting
-  for, and what the players need is the result, which is the board.
-- **The scene orders itself exactly as the NPC grid does** (`order_scene`): rolled
-  entries by initiative descending, then the un-rolled ones in the GM's arrangement.
-  Deliberately the same rule, so a GM is not holding two orderings in their head —
-  and a drop clears the dragged entry's initiative, plus a rolled neighbour it was
-  put in front of, for the reason `_reorder_npc` gives.
+  and not the sum. Both **Roll initiative** and the per-entry badge keep the NPC
+  rolls local: a dozen mook rolls would bury the line the table is waiting for, and
+  what the players need is the result, which is the board.
+- **The one control for initiative is the scene card's badge** (`InitiativeBadge`
+  in `ui/card_chips.py`). Left-click rolls (`_roll_entry_initiative`), right-click
+  clears — the pair belongs on one widget because the number *is* the thing being
+  set. It is a `QLabel`, not a `QToolButton`, for the reason `PortraitButton` is
+  one (a tool button wraps a word in forty pixels of chrome), and it swallows its
+  press so a click can't start the card's drag. It is **live only for a GM, and
+  only on an NPC's entry**: a player rolls their own on their own sheet, so a GM's
+  click there would be rolling somebody else's die — `set_entry` tells the two
+  apart by whether the wire entry carries a `player_id`. Rolling no longer rebuilds
+  the NPC grid, which it had to while that grid sorted by initiative and which cost
+  every hover and scroll position on the board.
+- **The scene is the only board that sorts by initiative** (`order_scene`): rolled
+  entries by initiative descending, then the un-rolled ones in the GM's
+  arrangement. The NPC grid used to sort the same way, deliberately — and that was
+  the mistake: it is one ordering shown twice, and the second copy re-arranged the
+  cast under the GM's hands mid-round. A drop here clears the dragged entry's
+  initiative, plus a rolled neighbour it was put in front of, because putting an
+  un-rolled creature before a rolled one is impossible while the other keeps a
+  number to sort by. A drop back on the entry's **own** slot is not a move and
+  clears nothing (`_is_same_slot`) — both gaps either side of a card name its own
+  place, and without that a GM who nudged a rolled card silently lost the roll.
 - **The reorder gesture had to become a real `QDrag`.** The NPC card used to track
   the pointer itself and emit a preview for the window to draw, which is a fine
   gesture inside one container and cannot leave it: nothing crosses a widget
@@ -242,14 +324,47 @@ The shape:
   ref the board already holds is a *move* while one it does not is an *add*, which
   is how a single handler serves both gestures. The bar showing where a card will
   land is now drawn by the container it will land in, which is the only way it can
-  be right about a flow the card is not in.
+  be right about a flow the card is not in. **A board that will not use a payload
+  refuses it out loud** (`CardDropFlow(accepts=…)`): the two rosters took every
+  card this app can drag, lit up green and then dropped the wrong ones on the
+  floor — an NPC on the Players block, a player on the cast — which reads as a
+  broken gesture rather than a refused one, and is the exact thing `DropFeedback`
+  exists to stop a target doing.
+- **An empty board is still a drop target**, and getting that wrong made the
+  *first* drop of every session fail. The empty-state sentence used to be a sibling
+  of the flow and the flow was hidden while the board held nothing — so the one
+  thing on screen saying "drag one here" was the one widget in the block that could
+  not take a drop, and Qt sends no drag events to a hidden widget at all. It is
+  `CardDropFlow.set_placeholder` now: a child *of* the flow host, outside the
+  `FlowLayout` (a label in the flow would be an item `drop_index` has to count) and
+  transparent to the mouse, with `set_minimum_row_height` keeping a band to aim at
+  since an empty `FlowLayout` reports `QSize(0, 0)`. The flow also takes the
+  board's whole height (`stretch=1`, and the Scene box lost its trailing
+  `addStretch`), because what a GM aims a card at is the *block*, not the thin band
+  its cards happen to occupy.
+- **"New scene" arms itself rather than opening a dialog** (`widgets.ConfirmButton`,
+  the app's third answer for a destructive action alongside `QMessageBox.question`
+  and right-click-plus-undo). Clearing the board is not reversible and is done
+  mid-round, which is the one case a modal is worst for: it stops the table to ask
+  something the button can say in its own caption. One click arms it — caption to
+  "Confirm?", `tint.worse`, a single-shot timer — and the next within
+  `CONFIRM_ARM_MS` goes through; a stray click disarms itself rather than leaving a
+  live trigger on the board. The armed look is a *widget-level* stylesheet, since
+  `QToolButton:checked` is in the app QSS and push buttons are not.
+- **Quick NPC opens nothing.** It used to throw the new mook's full sheet up,
+  which is exactly wrong for what the button is for: five numbers is all a mook
+  needs, and a GM making five of them wanted five cards, not five windows to close.
+  The card lands **collapsed** for the same reason. The sheet is one click on the
+  card's portrait away either way.
 - **Players join the board by themselves**, unless `gm_scene_auto_players` says
   otherwise (Settings ▸ GM Mode; read through **`storage.gm_scene_auto_players()`**,
   never off `load_settings()`, for the reason spelled out on `gm_default_pins` — a
   key added after a workspace was created reads back as `None`, which is falsy, and
   would have turned the default off for every existing GM). With it off the player
-  cards grow the same 👁 an NPC card has; with it on that eye is hidden, since an
-  action that does nothing is worse than none.
+  cards grow a 👁; with it on that eye is hidden, since an action that does nothing
+  is worse than none. It is the **only** eye left — an NPC card has none — and it
+  survives because it is also the readout for the one case a drag cannot express:
+  a seat that has joined the session but is sitting out the fight.
 - **The player's Scene block is pinned**, beside the roller and for the roller's
   reason: the strip is the one region that does not scroll with the page, and a
   turn order that has scrolled away is no use in the round it matters. It states no

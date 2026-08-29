@@ -12,12 +12,14 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
-from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer
+from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QAbstractScrollArea,
     QDoubleSpinBox,
     QFrame,
     QLabel,
+    QPushButton,
     QSpinBox,
     QTableWidgetItem,
     QWidget,
@@ -168,6 +170,131 @@ class ElidingLabel(QLabel):
             else metrics.elidedText(self._full_text, Qt.TextElideMode.ElideRight, width)
         )
         self.setToolTip(self._hover_text or ("" if fits else self._full_text))
+
+
+#: How long a :class:`ConfirmButton` stays armed with nobody touching it. Long
+#: enough to read the changed caption and reach it, short enough that a button
+#: left armed by a stray click is back to its safe self before it is passed again.
+CONFIRM_ARM_MS = 3000
+
+
+class ConfirmButton(QPushButton):
+    """A button that asks a second time, in place, instead of opening a dialog.
+
+    The app's usual answer for a destructive action is
+    ``QMessageBox.question`` defaulting to No, and for a reversible one no
+    question at all plus undo. This is the third case: an action that is not
+    reversible and is taken **mid-round**, where a modal dialog stops the table
+    to say something the button could have said itself.
+
+    One click arms it — the caption becomes *confirm_text* and the button wears
+    ``tint.worse`` — and the next click within :data:`CONFIRM_ARM_MS` does the
+    thing. Nothing happens if the second click never comes: a single-shot timer
+    puts the caption back, so a stray press disarms itself rather than leaving a
+    live trigger on the board. The armed caption is the whole warning, which is
+    why it must read as a *question* about what is about to happen.
+
+    The look is a widget-level stylesheet built from tokens rather than a theme
+    rule: ``QToolButton:checked`` is in the app's QSS and push buttons are not,
+    so a checked-style push button has to define its own state or Classic (which
+    emits almost no sheet) would show no change at all.
+    """
+
+    #: The second click landed while armed — do the thing.
+    confirmed = Signal()
+
+    def __init__(
+        self,
+        text: str,
+        *,
+        confirm_text: str = "Confirm?",
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(text, parent)
+        self._resting_text = text
+        self._confirm_text = confirm_text
+        self._armed = False
+        self._resting_tooltip = ""
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(CONFIRM_ARM_MS)
+        self._timer.timeout.connect(self.disarm)
+        # Not ``clicked`` from the outside: a caller connecting to ``clicked``
+        # would fire on the arming press too, which is the accident this exists
+        # to prevent.
+        self.clicked.connect(self._on_clicked)
+        self._reserve_width()
+
+    @property
+    def armed(self) -> bool:
+        """Whether the next click would go through."""
+        return self._armed
+
+    def setText(self, text: str) -> None:  # noqa: N802 - Qt override
+        """Set the resting caption, even while armed.
+
+        Recorded rather than shown when armed, so a caller restating a caption
+        cannot silently cancel a confirmation the user is halfway through.
+        """
+        self._resting_text = text
+        self._reserve_width()
+        if not self._armed:
+            super().setText(text)
+
+    def _reserve_width(self) -> None:
+        """Hold one width, whichever caption the button is wearing.
+
+        A button that resized as it armed would move out from under the pointer on
+        its way to the second click — which is the one click that has to land where
+        the first one did. Both captions are measured **bold**, since the armed one
+        is, and the chrome the style adds is taken from the button's own hint
+        rather than guessed at.
+        """
+        bold = QFont(self.font())
+        bold.setBold(True)
+        metrics = QFontMetrics(bold)
+        text = max(
+            metrics.horizontalAdvance(self._resting_text),
+            metrics.horizontalAdvance(self._confirm_text),
+        )
+        chrome = self.sizeHint().width() - QFontMetrics(self.font()).horizontalAdvance(
+            super().text()
+        )
+        self.setMinimumWidth(text + max(0, chrome))
+
+    def setToolTip(self, text: str) -> None:  # noqa: N802 - Qt override
+        self._resting_tooltip = text
+        if not self._armed:
+            super().setToolTip(text)
+
+    def disarm(self) -> None:
+        """Back to the safe caption — the timer ran out, or the deed is done."""
+        self._timer.stop()
+        if not self._armed:
+            return
+        self._armed = False
+        super().setText(self._resting_text)
+        super().setToolTip(self._resting_tooltip)
+        self.setStyleSheet("")
+
+    def _arm(self) -> None:
+        self._armed = True
+        super().setText(self._confirm_text)
+        super().setToolTip("Click again to go ahead, or wait for this to clear.")
+        self.setStyleSheet(
+            f"QPushButton {{ color: {theme.color('tint.worse')}; font-weight: bold;"
+            f" border: {int(theme.metric('border.width.emphasis'))}px solid"
+            f" {theme.color('tint.worse')};"
+            f" border-radius: {int(theme.metric('radius.chip'))}px; }}"
+        )
+        self._timer.start()
+
+    def _on_clicked(self) -> None:
+        if self._armed:
+            self.disarm()
+            self.confirmed.emit()
+        else:
+            self._arm()
 
 
 def hline_separator() -> QFrame:

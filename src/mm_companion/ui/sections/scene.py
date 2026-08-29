@@ -50,9 +50,12 @@ class SceneSection(TitledSection):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(*theme.box("group.margins"))
         layout.setSpacing(int(theme.metric("space.xs")))
+        # Given the block's whole height rather than sat on top of a stretch: the
+        # board's empty-state sentence is centred in the room it is given, and a
+        # turn order that grows mid-round should push into space the block already
+        # has rather than make the page reflow.
         self.board = SceneBoard(data, gm=False)
-        layout.addWidget(self.board)
-        layout.addStretch()
+        layout.addWidget(self.board, stretch=1)
 
         self.set_block_title(TITLE)
         self.sync_session()
@@ -81,6 +84,7 @@ class SceneSection(TitledSection):
         if bridge is None:
             self._show_no_session()
             return
+        self.board.set_own_player_id(bridge.own_player_id())
         bridge.sceneChanged.connect(self._on_scene)
         bridge.scenePortrait.connect(self.board.set_portrait)
         # Seeded rather than waited for: a block built after the join would
@@ -93,6 +97,7 @@ class SceneSection(TitledSection):
 
     def _show_no_session(self) -> None:
         self.board.set_placeholder(NOT_IN_SESSION)
+        self.board.set_own_player_id("")
         self.board.set_scene([])
 
     def _on_scene(self, entries: object) -> None:

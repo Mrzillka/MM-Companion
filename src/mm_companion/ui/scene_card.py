@@ -28,31 +28,77 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QVBoxLayout, Q
 
 from mm_companion.core.character import AppliedCondition
 from mm_companion.core.data_loader import Condition, GameData
+from mm_companion.core.session.protocol import (
+    DISPOSITION_ENEMY,
+    DISPOSITION_FRIENDLY,
+    DISPOSITION_NEUTRAL,
+    DISPOSITION_PLAYER,
+    SCENE_DISPOSITIONS,
+)
 from mm_companion.ui import theme
-from mm_companion.ui.card_chips import _ConditionChip, start_card_drag
+from mm_companion.ui.card_chips import (
+    InitiativeBadge,
+    _ConditionChip,
+    start_card_drag,
+)
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.sections.conditions import condition_display_name, condition_tooltip
 from mm_companion.ui.widgets import ElidingLabel
 
-#: How wide one card's column is, so a row of them lines up in the flow. Narrower
-#: than a GM card (:data:`~mm_companion.ui.npc_card.CARD_WIDTH`): a scene card has
-#: no pinned strip, no damage row and no buttons, and the block it lives in is
-#: pinned to the strip on a player's sheet where every pixel of width is dear.
+#: How wide one card's column is, so a row of them lines up in the flow. Stated
+#: rather than measured, unlike a GM card (whose ``body_width_hint`` is), and
+#: narrower than one: a scene card has no pinned strip, no damage row and no
+#: buttons, so there is nothing on it whose size a ruleset can change — and the
+#: block it lives in is pinned to the strip on a player's sheet, where every pixel
+#: of width is dear.
 SCENE_CARD_WIDTH = 178
 
 #: How far the pointer must move with the button down to count as a drag. The
 #: same number the GM cards use, so one gesture feels like one gesture.
 DRAG_THRESHOLD = 8
 
-#: The badge before anything has been rolled. A dash rather than a zero, for the
-#: reason :data:`~mm_companion.ui.npc_card.NO_INITIATIVE` is one: not rolled yet
-#: is not an initiative of nought, and the two sort differently.
-NO_INITIATIVE = "—"
+
+#: What each disposition is called on the card and in the menu that sets it, and
+#: which colour token draws its edge. One mapping so the caption and the colour
+#: cannot come to disagree, and ordered the way the menu offers them: what a GM
+#: reaches for most, first.
+DISPOSITION_LABELS: dict[str, str] = {
+    DISPOSITION_ENEMY: "Enemy",
+    DISPOSITION_FRIENDLY: "Friendly",
+    DISPOSITION_NEUTRAL: "Neutral",
+    DISPOSITION_PLAYER: "Player",
+}
+#: The three a GM chooses between. A player's entry is not in it: a seat is a
+#: player, and offering to call it an enemy would be offering a lie.
+#: How strongly the disposition colour is washed behind a card. Faint on purpose:
+#: the edge is the signal, and a fill strong enough to compete with it would make
+#: the name and the condition chips harder to read on every card at once.
+EDGE_WASH = 0.08
+
+GM_DISPOSITIONS: tuple[str, ...] = (
+    DISPOSITION_ENEMY,
+    DISPOSITION_FRIENDLY,
+    DISPOSITION_NEUTRAL,
+)
 
 
 def entry_ref(entry: dict) -> str:
     """The opaque handle a scene entry answers to."""
     return str(entry.get("ref", ""))
+
+
+def entry_disposition(entry: dict) -> str:
+    """What this entry is to the table, defaulting to :data:`DISPOSITION_ENEMY`.
+
+    An absent or unknown value is *enemy* rather than a fifth "unknown" state,
+    and that is the safe way round: a board is mostly things to fight, so the
+    default is the common case, and a friendly NPC the GM has not marked reads as
+    dangerous rather than a threat reading as safe.
+    """
+    value = entry.get("disposition")
+    if isinstance(value, str) and value in SCENE_DISPOSITIONS:
+        return value
+    return DISPOSITION_ENEMY
 
 
 def entry_initiative(entry: dict) -> int | None:
@@ -103,6 +149,10 @@ class SceneCard(QFrame):
     removeRequested = Signal(str)
     #: Put this entry back in the un-rolled zone (GM only).
     initiativeCleared = Signal(str)
+    #: Roll this entry's initiative (GM only, and never for a player's entry).
+    initiativeRollRequested = Signal(str)
+    #: ``(ref, disposition)`` — the GM said what this creature is to the table.
+    dispositionChanged = Signal(str, str)
 
     def __init__(
         self,
@@ -111,14 +161,26 @@ class SceneCard(QFrame):
         parent: QWidget | None = None,
         *,
         gm: bool = False,
+        own: bool = False,
         portrait: QPixmap | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setFrameShape(QFrame.Shape.StyledPanel)
+        # Named for the stylesheet that colours its edge, never a bare ``QFrame``:
+        # an unscoped rule would repaint every chip and label inside it.
+        self.setObjectName("SceneCard")
+        self.setFrameShape(QFrame.Shape.NoFrame)
         self.setFixedWidth(SCENE_CARD_WIDTH)
+        #: What this creature is to the table; :meth:`set_entry` reads it off the
+        #: wire and :meth:`_restyle` paints the edge with it.
+        self._disposition = DISPOSITION_ENEMY
 
         self._data = data
         self._gm = gm
+        #: Whether this entry is the person reading it. The four disposition
+        #: colours say *what* each creature is; every seat is the same blue, so
+        #: they cannot also say which one is you — and finding yourself in a
+        #: twelve-row turn order is the first thing a player does with the board.
+        self._own = own
         self._conditions_by_id: dict[str, Condition] = {c.id: c for c in data.conditions}
         self.ref = entry_ref(entry)
         #: Where a left-button press landed, to tell a drag from a click.
@@ -150,12 +212,14 @@ class SceneCard(QFrame):
         self._name.setFont(name_font)
         header.addWidget(self._name, stretch=1)
 
-        self._badge = QLabel(NO_INITIATIVE)
-        badge_font = self._badge.font()
-        badge_font.setBold(True)
-        badge_font.setPointSizeF(theme.font_size("size.terms"))
-        self._badge.setFont(badge_font)
-        self._badge.setStyleSheet(f"color: {theme.color('accent')};")
+        # This is where initiative is rolled now — the one board that sorts by it.
+        # Live only on a GM's screen and only for an NPC: a player rolls their own
+        # on their own sheet, so a click here would be rolling somebody else's die.
+        # Whether it is live is set in :meth:`set_entry`, which is the first place
+        # that knows whose entry this is.
+        self._badge = InitiativeBadge()
+        self._badge.clicked.connect(lambda: self.initiativeRollRequested.emit(self.ref))
+        self._badge.cleared.connect(lambda: self.initiativeCleared.emit(self.ref))
         header.addWidget(self._badge)
         layout.addLayout(header)
 
@@ -165,6 +229,37 @@ class SceneCard(QFrame):
 
         self.set_entry(entry)
         self.set_portrait(portrait)
+
+    # -- what this creature is to the table --------------------------------
+
+    @property
+    def disposition(self) -> str:
+        """Enemy, friendly, neutral, or player."""
+        return self._disposition
+
+    def _restyle(self) -> None:
+        """Paint the edge in this creature's colour.
+
+        The **edge**, and a wash behind it, rather than the name or a badge: it
+        has to be readable at the size a dozen of these are on screen at once and
+        from the corner of an eye, which is the one thing a border is better at
+        than text. The card carries the word as well — in its hover text, and in
+        the menu that sets it — because a fact told only in colour is told to
+        fewer people than a fact told twice.
+
+        A frameless ``QFrame`` painted by a scoped rule rather than the styled
+        panel it used to be: a ``StyledPanel`` draws the platform's own border
+        *over* a stylesheet one, so the two would fight and the platform would win
+        on some styles.
+        """
+        token = f"scene.{self._disposition}"
+        self.setStyleSheet(
+            f"#SceneCard {{"
+            f" border: {int(theme.metric('border.width.emphasis'))}px solid"
+            f" {theme.color(token)};"
+            f" background: {theme.wash(token, EDGE_WASH)};"
+            f" border-radius: {int(theme.metric('radius.card'))}px; }}"
+        )
 
     # -- what the card is showing -----------------------------------------
 
@@ -177,12 +272,17 @@ class SceneCard(QFrame):
         """
         self.ref = entry_ref(entry)
         name = str(entry.get("name", "")) or "Unnamed"
-        self._name.setText(name)
+        # "(you)", the way a player card already marks the GM's own seat — a word
+        # rather than a fifth colour, which would have to compete with the four
+        # that already mean something here.
+        self._name.setText(f"{name} (you)" if self._own else name)
         self._initiative = entry_initiative(entry)
-        self._badge.setText(NO_INITIATIVE if self._initiative is None else str(self._initiative))
-        self._badge.setToolTip(
-            "Has not rolled initiative yet" if self._initiative is None else "Initiative"
-        )
+        self._disposition = entry_disposition(entry)
+        self._restyle()
+        # A player's entry carries their id; an NPC's carries nothing that says
+        # what it stands for, which is the whole point of an opaque ref.
+        self._badge.set_live(self._gm and not entry.get("player_id"))
+        self._badge.set_initiative(self._initiative)
         self._show_conditions(entry.get("conditions") or [])
         self._name.set_hover_text(self._hover_text(name))
 
@@ -253,7 +353,7 @@ class SceneCard(QFrame):
         this small is most of it — and one that reads "drag to reorder" while the
         pointer sits over a condition chip is answering a question nobody asked.
         """
-        parts = [name]
+        parts = [f"{name} (you)" if self._own else name, DISPOSITION_LABELS[self._disposition]]
         if self._initiative is not None:
             parts.append(f"Initiative {self._initiative}")
         if self._gm:
@@ -293,8 +393,37 @@ class SceneCard(QFrame):
         """
         if not self._gm or not self.ref:
             return
+        self.build_context_menu().exec(event.globalPos())
+
+    def build_context_menu(self) -> QMenu:
+        """The right-click menu, built but not shown.
+
+        Separate from showing it for the reason
+        :func:`~mm_companion.ui.sections.conditions.build_condition_menu` is a
+        function: a menu that only exists inside ``exec`` cannot be read by
+        anything, and what this one *offers* is the interesting half.
+        """
         menu = QMenu(self)
+        if self._disposition != DISPOSITION_PLAYER:
+            # A submenu rather than three flat items: it is a *state* with one
+            # answer at a time, so the tick beside the current one is half of what
+            # this menu is for. A player's entry gets none of it — a seat is a
+            # player, and offering to call it an enemy would be offering a lie.
+            # Parented to the menu, never ``menu.addMenu(title)``: that hands
+            # ownership *back* to the caller, so a submenu with no Python
+            # reference is collected out from under the menu while it is open —
+            # the lesson ``build_condition_menu`` already carries.
+            marks = QMenu("Mark as", menu)
+            menu.addMenu(marks)
+            for value in GM_DISPOSITIONS:
+                action = marks.addAction(DISPOSITION_LABELS[value])
+                action.setCheckable(True)
+                action.setChecked(value == self._disposition)
+                action.triggered.connect(
+                    lambda _checked=False, v=value: self.dispositionChanged.emit(self.ref, v)
+                )
+            menu.addSeparator()
         if self._initiative is not None:
             menu.addAction("Clear initiative", lambda: self.initiativeCleared.emit(self.ref))
         menu.addAction("Remove from scene", lambda: self.removeRequested.emit(self.ref))
-        menu.exec(event.globalPos())
+        return menu

@@ -43,6 +43,8 @@ from .protocol import (
     ERROR_PROTOCOL_VERSION,
     ERROR_RATE_LIMIT,
     ERROR_SESSION_FULL,
+    MAX_MOD_KEY,
+    MAX_MOD_TEXT,
     MAX_SCENE_TEXT,
     PROTOCOL_VERSION,
     REASON_SESSION_CLOSED,
@@ -53,6 +55,9 @@ from .protocol import (
     Kicked,
     KickRequest,
     Message,
+    ModNote,
+    ModRequest,
+    ModStateUpdate,
     NoteRequest,
     Ping,
     PlayerSnapshot,
@@ -68,11 +73,13 @@ from .protocol import (
     ScenePortrait,
     SceneUpdate,
     SetHeroPoints,
+    SetModState,
     SetNpcPaths,
     SetScene,
     SetScenePortrait,
     SetSessionName,
     Welcome,
+    sanitize_mod_id,
     sanitize_scene,
     sanitize_scene_portrait,
     sanitize_scene_sources,
@@ -124,6 +131,10 @@ EVENT_ROLL = "roll"  # a full roll dict, hidden rolls included
 EVENT_ROLL_REMOVED = "roll_removed"  # {"seq"}
 EVENT_SCENE = "scene"  # {"entries": [scene entry dicts]}
 EVENT_SCENE_PORTRAIT = "scene_portrait"  # {"ref", "portrait"}
+EVENT_MOD_STATE = "mod_state"  # {"mod_id", "key", "payload"} — payload None means gone
+#: A mod at some seat asking the GM's mod for something. Reaches the hosting
+#: process only, and only when it *is* the GM's — see :meth:`SessionServer._forward_mod_request`.
+EVENT_MOD_REQUEST = "mod_request"  # {"mod_id", "topic", "player_id", "payload"}
 EVENT_REFUSED = "refused"  # {"code", "message", "address"}
 EVENT_ERROR = "error"  # {"code", "message"}
 #: The listener stopped handing out connections while we still believe we are
@@ -345,6 +356,26 @@ class SessionServer:
             raise KeyError(f"no player {player_id!r}")
         return self._record_note(slot, text)
 
+    def record_mod_note(
+        self, mod_id: str, text: str, *, player_id: str | None = None
+    ) -> RollRecord | None:
+        """Write a mod's line in the shared log for the GM (or for *player_id*).
+
+        The counterpart of :meth:`note` for a line a mod composed rather than a
+        person, and the one path in for the same reason: a
+        :class:`~.protocol.ModNote` from a dialled-in GM lands here too, so a GM
+        hosting on their own laptop and one driving a session on a server put the
+        identical record in the identical log.
+
+        Answers ``None`` when the mod id or the text does not survive checking —
+        see :meth:`_record_mod_note`.
+        """
+        with self._lock:
+            slot = self.state.players.get(player_id) if player_id else self.gm_slot()
+        if slot is None:
+            raise KeyError(f"no player {player_id!r}")
+        return self._record_mod_note(slot, mod_id, text)
+
     def prompt_roll(self, spec: dict | None, *, player_id: str | None = None) -> RollRecord | None:
         """Ask the table for a roll on behalf of the GM (or of *player_id*).
 
@@ -496,6 +527,102 @@ class SessionServer:
         """Every stored scene thumbnail, by ``ref``."""
         with self._lock:
             return dict(self.state.scene_portraits)
+
+    # -- mod state ---------------------------------------------------------
+
+    def set_mod_state(self, mod_id: str, key: str, payload: object) -> dict | None:
+        """Store one mod's entry, persist it, and tell the table.
+
+        The GM's window calls this directly when it is hosting; a remote GM's
+        :class:`~.protocol.SetModState` lands here too. Returns what was actually
+        stored — ``None`` when the entry was deleted *or* when the payload did not
+        survive sanitizing — so an in-process caller sees what everyone else got
+        rather than assuming its own. That mattering is the lesson
+        :meth:`~mm_companion.ui.session_bridge.SessionBridge.set_scene` already
+        learned: reporting a dropped payload as success leaves a mod believing the
+        table can see something it cannot.
+
+        The broadcast goes out either way. A deletion is as much news as a change
+        — it is what a share toggle turning off looks like from the other side.
+        """
+        with self._lock:
+            kept = self.state.set_mod_state(mod_id, key, payload)
+            # Re-read the id and key the state actually used, rather than echoing
+            # what arrived: the broadcast has to name the entry as *stored*, or a
+            # client would key its copy differently from the server and never
+            # manage to overwrite it.
+            checked_id = sanitize_mod_id(mod_id)
+            checked_key = key[:MAX_MOD_KEY] if isinstance(key, str) and key.strip() else ""
+            if checked_id and checked_key:
+                self._persist()
+        if not checked_id or not checked_key:
+            return None
+        detail = {"mod_id": checked_id, "key": checked_key, "payload": kept}
+        self._emit(EVENT_MOD_STATE, detail)
+        self.broadcast(ModStateUpdate(mod_id=checked_id, key=checked_key, payload=kept))
+        return kept
+
+    def mod_state(self) -> dict[str, dict[str, dict]]:
+        """Every mod's shared state, as it goes on the wire (a deep-enough copy)."""
+        with self._lock:
+            return {
+                mod: {key: dict(payload) for key, payload in entries.items()}
+                for mod, entries in self.state.mod_state.items()
+            }
+
+    def _forward_mod_request(self, slot: PlayerSlot, message: ModRequest) -> None:
+        """Pass one seat's mod request on to the GM's seat, and nowhere else.
+
+        Aimed like :meth:`_forward_snapshot_to_gm`, and unlike everything else a
+        mod sends: nothing is stored and nothing is broadcast, because a request
+        is one mod talking to one other mod rather than a thing the table is meant
+        to see. ``player_id`` is stamped here from the *slot* — never from what
+        the sender wrote — so the channel cannot be used to impersonate a seat.
+
+        A request from the GM's own seat is dropped rather than looped back: the
+        GM's mod already has whatever it was going to ask itself.
+        """
+        mod_id = sanitize_mod_id(message.mod_id)
+        if not mod_id:
+            return
+        gm_id = self._gm_id()
+        if not gm_id or gm_id == slot.player_id:
+            return
+        stamped = ModRequest(
+            mod_id=mod_id,
+            topic=message.topic[:MAX_MOD_TEXT],
+            payload=message.payload,
+            player_id=slot.player_id,
+        )
+        # A GM hosting in this process has no connection to send down, so the
+        # event is what reaches them; ``send_to`` covers the dialled-in GM.
+        self._emit(EVENT_MOD_REQUEST, stamped.to_dict())
+        self.send_to(gm_id, stamped)
+
+    def _record_mod_note(self, slot: PlayerSlot, mod_id: str, text: str) -> RollRecord | None:
+        """Append a mod's line to the shared log, the way a note is appended.
+
+        Dropped rather than recorded when the mod id does not check out or the
+        text is empty — a blank line in the history is worse than no line, and
+        unlike a roll there is nothing else on the record to read.
+        """
+        checked_id = sanitize_mod_id(mod_id)
+        line = text.strip()[:MAX_NOTE_CHARS]
+        if not checked_id or not line:
+            return None
+        with self._lock:
+            record = self.state.record_mod_note(
+                player_id=slot.player_id,
+                player_name=slot.display_name,
+                mod_id=checked_id,
+                text=line,
+            )
+            self._append_roll(record)
+
+        payload = record.to_dict()
+        self._emit(EVENT_ROLL, payload)
+        self.broadcast(RollAdded(roll=payload))
+        return record
 
     # -- outbound ----------------------------------------------------------
 
@@ -682,6 +809,14 @@ class SessionServer:
                 npc_paths=list(self.state.npc_paths) if slot.is_gm else [],
                 scene=[dict(entry) for entry in self.state.scene],
                 scene_sources=dict(self.state.scene_sources) if slot.is_gm else {},
+                # Everyone's, unlike scene_sources: mod state exists to be seen.
+                # It fits in the welcome because it is bounded three ways over
+                # (MAX_MOD_IDS x MAX_MOD_KEYS x MAX_MOD_PAYLOAD_CHARS), which is
+                # exactly what the scene's portraits are not.
+                mod_state={
+                    mod: {key: dict(payload) for key, payload in entries.items()}
+                    for mod, entries in self.state.mod_state.items()
+                },
             )
             # Read under the same lock as the welcome so the pictures cannot
             # describe a scene other than the one just sent; delivered after it.
@@ -843,6 +978,17 @@ class SessionServer:
             self.set_scene(message.entries, message.sources)
         elif isinstance(message, SetScenePortrait) and slot.is_gm:
             self.set_scene_portrait(message.ref, message.portrait)
+        elif isinstance(message, SetModState) and slot.is_gm:
+            # A mod's shared state is the GM's to author, exactly as the scene is.
+            # A player's mod says its piece with a ModRequest instead.
+            self.set_mod_state(message.mod_id, message.key, message.payload)
+        elif isinstance(message, ModNote) and slot.is_gm:
+            self._record_mod_note(slot, message.mod_id, message.text)
+        elif isinstance(message, ModRequest):
+            # Deliberately not GM-only, and the only half of the mod channel that
+            # is not: this is how a player's mod reaches the GM's, and it obliges
+            # the GM's mod to do nothing at all.
+            self._forward_mod_request(slot, message)
 
     def _forward_snapshot_to_gm(self, player_id: str, character: dict) -> None:
         """Send one player's sheet on to a GM who is dialled in over a socket.

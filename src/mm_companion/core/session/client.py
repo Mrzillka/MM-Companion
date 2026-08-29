@@ -62,6 +62,9 @@ from .protocol import (
     Kicked,
     KickRequest,
     Message,
+    ModNote,
+    ModRequest,
+    ModStateUpdate,
     NoteRequest,
     Ping,
     PlayerSnapshot,
@@ -77,6 +80,7 @@ from .protocol import (
     ScenePortrait,
     SceneUpdate,
     SetHeroPoints,
+    SetModState,
     SetNpcPaths,
     SetScene,
     SetScenePortrait,
@@ -93,6 +97,10 @@ EVENT_ROLL = "roll"  # one roll dict
 EVENT_ROLL_REMOVED = "roll_removed"  # {"seq"}
 EVENT_SCENE = "scene"  # {"entries": [scene entry dicts]}
 EVENT_SCENE_PORTRAIT = "scene_portrait"  # {"ref", "portrait"}
+EVENT_MOD_STATE = "mod_state"  # {"mod_id", "key", "payload"} — payload None means gone
+#: A mod at another seat asking this one's mod for something. Reaches a GM client
+#: only; the server forwards it nowhere else.
+EVENT_MOD_REQUEST = "mod_request"  # {"mod_id", "topic", "player_id", "payload"}
 # Reaches a GM client only. Named to match the hosting side's EVENT_SNAPSHOT so
 # the Qt bridge can raise one signal from either half.
 EVENT_SNAPSHOT = "snapshot"  # {"player_id", "character"}
@@ -205,6 +213,15 @@ class SessionClient:
         #: because that is how they arrive, and because a picture outliving its
         #: entry by a moment is harmless while a missing one is a placeholder.
         self.scene_portraits: dict[str, str] = {}
+        #: Every mod's shared state, ``{mod_id: {key: payload}}``. Seeded whole
+        #: from the Welcome and then amended one entry at a time by
+        #: :class:`~.protocol.ModStateUpdate` — the opposite of the scene, which
+        #: is replaced whole, because a mod's entries are independent of each
+        #: other and of every other mod's. State for a ``mod_id`` this app has no
+        #: mod for is kept rather than dropped: the two ends of a table can
+        #: legitimately load different mods, and this client is not the one that
+        #: gets to decide whose state matters.
+        self.mod_state: dict[str, dict[str, dict]] = {}
 
         #: Where the connection stands right now — one of the ``STATE_*`` values.
         #: Unlike :attr:`connected` this stays truthful across a blip, which is
@@ -312,6 +329,11 @@ class SessionClient:
         self.npc_paths = list(message.npc_paths)
         self.scene = [dict(entry) for entry in message.scene]
         self.scene_sources = dict(message.scene_sources)
+        self.mod_state = {
+            mod: {key: dict(payload) for key, payload in entries.items()}
+            for mod, entries in message.mod_state.items()
+            if isinstance(entries, dict)
+        }
         # Not cleared: the portraits for this scene follow the welcome as their
         # own messages, and a redial into the same seat would otherwise blank
         # every card between the welcome and their arrival.
@@ -481,6 +503,33 @@ class SessionClient:
         """Publish one scene entry's thumbnail (honored only for the GM)."""
         return self.send(SetScenePortrait(ref=str(ref), portrait=str(portrait)))
 
+    def set_mod_state(self, mod_id: str, key: str, payload: dict | None) -> bool:
+        """Publish one of a mod's entries to the table (honored only for the GM).
+
+        A ``payload`` of ``None`` deletes the entry. It comes back as
+        :data:`EVENT_MOD_STATE` once the server has stored it — the same way it
+        reaches everyone else — so a mod never has to reconcile what it sent with
+        what the table got.
+        """
+        return self.send(SetModState(mod_id=str(mod_id), key=str(key), payload=payload))
+
+    def send_mod_request(self, mod_id: str, topic: str, payload: dict | None = None) -> bool:
+        """Ask the GM's copy of a mod for something. Any seat may.
+
+        The server stamps this seat's id onto it and forwards it to the GM alone.
+        Nothing comes back — a request is not a call, and a mod that needs an
+        answer gets one when the GM's mod pushes state.
+        """
+        return self.send(ModRequest(mod_id=str(mod_id), topic=str(topic), payload=payload))
+
+    def post_mod_note(self, mod_id: str, text: str) -> bool:
+        """Write one of a mod's lines into the shared history (honored only for the GM).
+
+        Comes back as :data:`EVENT_ROLL` like a roll, a note and a request do —
+        one history, one feed.
+        """
+        return self.send(ModNote(mod_id=str(mod_id), text=str(text)))
+
     # -- reading -----------------------------------------------------------
 
     def _run(self) -> None:
@@ -633,6 +682,19 @@ class SessionClient:
             else:
                 self.scene_portraits.pop(message.ref, None)
             self._emit(EVENT_SCENE_PORTRAIT, {"ref": message.ref, "portrait": message.portrait})
+        elif isinstance(message, ModStateUpdate):
+            entries = self.mod_state.setdefault(message.mod_id, {})
+            if message.payload is None:
+                entries.pop(message.key, None)
+                if not entries:
+                    # Mirror the server: an empty mod is not a mod with no state,
+                    # it is a mod with nothing here.
+                    self.mod_state.pop(message.mod_id, None)
+            else:
+                entries[message.key] = dict(message.payload)
+            self._emit(EVENT_MOD_STATE, message.to_dict())
+        elif isinstance(message, ModRequest):
+            self._emit(EVENT_MOD_REQUEST, message.to_dict())
         elif isinstance(message, PlayerSnapshot):
             self._emit(
                 EVENT_SNAPSHOT,

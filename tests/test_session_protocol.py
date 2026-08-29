@@ -27,6 +27,9 @@ from mm_companion.core.session.protocol import (
     Kicked,
     KickRequest,
     ListSessionsRequest,
+    ModNote,
+    ModRequest,
+    ModStateUpdate,
     NoteRequest,
     Ping,
     PlayerSnapshot,
@@ -46,6 +49,7 @@ from mm_companion.core.session.protocol import (
     SessionInfo,
     SessionStatusRequest,
     SetHeroPoints,
+    SetModState,
     SetNpcPaths,
     SetScene,
     SetScenePortrait,
@@ -53,6 +57,9 @@ from mm_companion.core.session.protocol import (
     Welcome,
     decode,
     encode,
+    sanitize_mod_id,
+    sanitize_mod_payload,
+    sanitize_mod_state,
     sanitize_scene,
     sanitize_scene_portrait,
     sanitize_scene_sources,
@@ -80,6 +87,11 @@ ROUND_TRIP_CASES = [
     ),
     SetScene(),  # a scene the GM has just emptied
     SetScenePortrait(ref="e1", portrait="AAAA"),
+    SetModState(mod_id="timers", key="t1", payload={"kind": "timer", "remaining": 90}),
+    SetModState(mod_id="timers", key="t1"),  # the deletion a share toggle sends
+    ModNote(mod_id="timers", text="Timer Bomb finished"),
+    ModRequest(mod_id="timers", topic="nudge", payload={"id": "t1"}),
+    ModRequest(mod_id="timers", topic="nudge", player_id="p1"),  # as forwarded
     Ping(nonce=7),
     Welcome(
         session_id="s1",
@@ -97,10 +109,13 @@ ROUND_TRIP_CASES = [
         npc_paths=["thug.json"],
         scene=[{"ref": "e1", "name": "Thug"}],
         scene_sources={"e1": "npc:thug.json"},
+        mod_state={"timers": {"t1": {"kind": "timer"}}},
     ),
     Roster(players=[{"player_id": "p1"}, {"player_id": "p2"}]),
     PlayerSnapshot(player_id="p1", character={"power_level": 10}),
     RollAdded(roll={"seq": 3, "die": 20, "degree": 2}),
+    ModStateUpdate(mod_id="timers", key="t1", payload={"kind": "counter", "filled": [0, 2]}),
+    ModStateUpdate(mod_id="timers", key="t1"),  # the entry is gone, not empty
     RollRemoved(seq=3),
     SceneUpdate(entries=[{"ref": "e1", "name": "Thug", "initiative": 14}]),
     ScenePortrait(ref="e1", portrait="AAAA"),
@@ -151,11 +166,14 @@ def test_the_protocol_version_is_the_one_the_keepalive_needs() -> None:
     :class:`RollPrompt`, which a v7 server rejects as an unknown type and a v7
     client would render as a d20 that rolled zero. v9 adds the scene, whose
     failure is quieter and worse: a v8 client joins, never learns the message
-    type exists, and shows an empty board for the whole fight. Either way
-    changing this number is a decision about who can still join, so it should not
-    be possible to do by accident.
+    type exists, and shows an empty board for the whole fight. v10 opens the wire
+    to mods, and fails the same quiet way: ``_handle`` has no ``else``, so a v9
+    server drops a ``set_mod_state`` without a word and the GM runs the fight
+    believing the table can see their timers. Either way changing this number is a
+    decision about who can still join, so it should not be possible to do by
+    accident.
     """
-    assert PROTOCOL_VERSION == 9
+    assert PROTOCOL_VERSION == 10
 
 
 def test_every_registered_type_is_reachable_by_tag() -> None:
@@ -432,3 +450,171 @@ def test_scene_sources_keep_only_string_pairs() -> None:
     sources = sanitize_scene_sources({"e1": "npc:thug.json", 2: "npc:x", "e3": None, "": "npc:y"})
 
     assert sources == {"e1": "npc:thug.json"}
+
+
+# --------------------------------------------------------------------------
+# The mod channel
+#
+# What is bounded here is the payload's *shape* rather than its fields. Every
+# other sanitizer in this file whitelists keys it knows; a mod payload by
+# definition has none this file has heard of, so the tests are about depth,
+# width, size and which JSON types may appear.
+# --------------------------------------------------------------------------
+
+
+def test_a_mod_id_may_not_be_a_path() -> None:
+    """It becomes a dict key here and a *filename* in ``core.storage``.
+
+    Refusing the shape once, at the door, is what means no later caller has to
+    remember that it arrived over a socket.
+    """
+    assert sanitize_mod_id("timers") == "timers"
+    assert sanitize_mod_id("my.mod-2_x") == "my.mod-2_x"
+
+    assert sanitize_mod_id("../../etc/passwd") == ""
+    assert sanitize_mod_id("a/b") == ""
+    assert sanitize_mod_id("a\b") == ""
+    assert sanitize_mod_id("") == ""
+    assert sanitize_mod_id("   ") == ""
+    assert sanitize_mod_id("x" * (protocol.MAX_MOD_ID + 1)) == ""
+    assert sanitize_mod_id(7) == ""
+
+
+def test_a_mod_payload_keeps_plain_json_and_drops_everything_else() -> None:
+    payload = sanitize_mod_payload(
+        {
+            "kind": "timer",
+            "remaining": 97,
+            "stamped_at": 1756468800.5,
+            "running": True,
+            "filled": [0, 1, 4],
+            "cleared": None,
+            "callback": print,  # not JSON, and not something to carry
+        }
+    )
+
+    assert payload == {
+        "kind": "timer",
+        "remaining": 97,
+        "stamped_at": 1756468800.5,
+        "running": True,
+        "filled": [0, 1, 4],
+        "cleared": None,
+    }
+
+
+def test_a_float_survives_here_and_a_nan_does_not() -> None:
+    """``float`` is admitted in this sanitizer and no other.
+
+    Everywhere else in this file a number is a rank or a modifier, where a float
+    is a bug. A mod state routinely carries a wall-clock stamp, and rounding that
+    to a whole second would cost the precision that keeps two screens' countdowns
+    agreeing. The infinities and NaN still go: ``json.dumps`` renders them as bare
+    words no other JSON parser accepts, so a payload carrying one would encode
+    here and fail to decode at the far end.
+    """
+    payload = sanitize_mod_payload(
+        {"ok": 1.5, "nan": float("nan"), "inf": float("inf"), "ninf": float("-inf")}
+    )
+
+    assert payload == {"ok": 1.5}
+
+
+def test_a_payload_that_is_not_an_object_is_no_payload() -> None:
+    assert sanitize_mod_payload([1, 2, 3]) is None
+    assert sanitize_mod_payload("timer") is None
+    assert sanitize_mod_payload(None) is None
+    assert sanitize_mod_payload(7) is None
+
+
+def test_a_deep_payload_is_cut_rather_than_followed() -> None:
+    deep: dict = {"bottom": 1}
+    for _ in range(50):
+        deep = {"down": deep}
+
+    payload = sanitize_mod_payload(deep)
+
+    depth = 0
+    node = payload
+    while isinstance(node, dict) and "down" in node:
+        depth += 1
+        node = node["down"]
+    assert depth == protocol.MAX_MOD_DEPTH
+
+
+def test_a_payload_is_capped_by_width_text_and_encoded_size() -> None:
+    wide = sanitize_mod_payload({f"k{i}": i for i in range(protocol.MAX_MOD_ITEMS * 4)})
+    assert len(wide) == protocol.MAX_MOD_ITEMS
+
+    long_list = sanitize_mod_payload({"xs": list(range(protocol.MAX_MOD_ITEMS * 4))})
+    assert len(long_list["xs"]) == protocol.MAX_MOD_ITEMS
+
+    text = sanitize_mod_payload({"label": "L" * 5000})
+    assert len(text["label"]) == protocol.MAX_MOD_TEXT
+
+    # Over the encoded cap is dropped whole rather than trimmed: half a payload
+    # is not a smaller payload, and a mod showing nothing beats one showing a
+    # mangled half of something.
+    huge = {str(i): "y" * protocol.MAX_MOD_TEXT for i in range(protocol.MAX_MOD_ITEMS)}
+    assert sanitize_mod_payload(huge) is None
+
+
+def test_mod_state_drops_what_it_cannot_keep_and_counts_what_it_can() -> None:
+    state = sanitize_mod_state(
+        {
+            "timers": {"t1": {"x": 1}, "t2": "not a payload"},
+            "../evil": {"t1": {"x": 1}},
+            "empty": {"t1": "not a payload"},
+            "wrong": "not a mapping",
+        }
+    )
+
+    # A mod whose entries all fail is dropped rather than kept empty, so the cap
+    # counts mods that actually hold something.
+    assert state == {"timers": {"t1": {"x": 1}}}
+
+
+def test_mod_state_is_bounded_in_both_directions() -> None:
+    too_many_keys = {f"k{i}": {"i": i} for i in range(protocol.MAX_MOD_KEYS * 3)}
+    state = sanitize_mod_state({"timers": too_many_keys})
+    assert len(state["timers"]) == protocol.MAX_MOD_KEYS
+
+    too_many_mods = {f"mod{i}": {"k": {"i": i}} for i in range(protocol.MAX_MOD_IDS * 3)}
+    state = sanitize_mod_state(too_many_mods)
+    assert len(state) == protocol.MAX_MOD_IDS
+
+
+def test_a_whole_mod_state_fits_in_one_welcome() -> None:
+    """The bound that makes ``Welcome.mod_state`` safe to send whole.
+
+    The scene's portraits are *not* in the welcome precisely because a dozen of
+    them can aggregate past the message cap. Mod state is in it because it cannot
+    — but that is true because of :data:`MAX_MOD_STATE_CHARS`, **not** because of
+    the per-entry caps. Those multiply out to 2 MiB, eight times the message cap,
+    which is exactly the assumption this test was written to check and which it
+    caught being wrong.
+
+    So the aggregate cap is the guarantee, and this keeps it honest against the
+    message cap if anyone retunes either.
+    """
+    assert protocol.MAX_MOD_STATE_CHARS < MAX_MESSAGE_BYTES
+
+    # And the per-entry caps on their own emphatically do not give it, which is
+    # why the aggregate one exists at all.
+    per_entry = protocol.MAX_MOD_IDS * protocol.MAX_MOD_KEYS * protocol.MAX_MOD_PAYLOAD_CHARS
+    assert per_entry > MAX_MESSAGE_BYTES
+
+
+def test_mod_state_is_clamped_to_the_aggregate_cap() -> None:
+    """A full map is trimmed at the tail rather than emptied.
+
+    A session file that has somehow grown past the cap should come back mostly
+    intact — the alternative is a GM opening a campaign to a blank board.
+    """
+    fat = {"x": "y" * (protocol.MAX_MOD_TEXT - 1)}
+    raw = {f"mod{i}": {f"k{j}": dict(fat) for j in range(protocol.MAX_MOD_KEYS)} for i in range(8)}
+
+    state = sanitize_mod_state(raw)
+
+    assert protocol.mod_state_chars(state) <= protocol.MAX_MOD_STATE_CHARS
+    assert state, "the cap should trim the tail, not empty the map"

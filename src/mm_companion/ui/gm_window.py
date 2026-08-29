@@ -95,6 +95,13 @@ from mm_companion.core.session.protocol import (
 from mm_companion.ui import theme
 from mm_companion.ui.block_canvas import BlockCanvas
 from mm_companion.ui.block_sizes import BlockSize, load_block_sizes
+from mm_companion.ui.blocks.gm_registry import (
+    GMBlockDescriptor,
+    gm_block_descriptors,
+    gm_default_pin_lines,
+    gm_default_rows,
+    register_gm_block,
+)
 from mm_companion.ui.card_drop import CardDropFlow
 from mm_companion.ui.compact import CompactController
 from mm_companion.ui.connection_indicator import install_connection_indicator
@@ -363,31 +370,22 @@ class GMWindow(QMainWindow):
         # Players and NPCs get a growable width just wider than one card, so their
         # FlowLayout keeps at least one card per row and fits more as the window
         # widens.
-        panels = [
-            # The Scene first: it is what a GM watches through a fight, while the
-            # two rosters under it are where they go to change something.
-            ("scene", "Scene", self._build_scene_box()),
-            ("players", "Players", self._build_players_box()),
-            ("npcs", "NPCs", self._build_npcs_box()),
-            ("rolls", "Rolls", self._build_rolls_box()),
-        ]
+        # Built from the registry rather than a literal list, so a mod can put a
+        # block in front of the GM the way it can add one to the sheet. The four
+        # base panels register themselves at this module's import (see
+        # register_base_gm_blocks); their order, sizes and default places all
+        # travel on their descriptors.
+        descriptors = gm_block_descriptors()
+        panels = [(d.key, d.title, d.factory(self)) for d in descriptors]
         for _key, _title, box in panels:
             strip_groupbox_caption(box)  # the block's title bar carries the name now
-        # The GM blocks' bounds live in block_sizes.json alongside the sheet's, under
-        # gm_-prefixed keys, so a theme can retune them the same way (the canvas keys
-        # them without the prefix, since the GM window has its own block namespace).
-        shipped = load_block_sizes()
-        sizes = {key: shipped.get(f"gm_{key}", BlockSize()) for key, _title, _box in panels}
-        # The Rolls block starts in the strip rather than on the page, for the reason
-        # the sheet's Dice block does: a roller that scrolls away with the board is
-        # no use mid-fight. Both boards use the same seam, and the strip's default
-        # edge is the right-hand one.
-        default_rows = [["scene"], ["players"], ["npcs"]]
+        sizes = {d.key: d.size for d in descriptors}
+        default_rows = gm_default_rows()
         # Only a handful of blocks, so a top-aligned stack would leave a wide gap
         # under the last one; let the bottom block (the NPC cards) stretch to fill
         # the page instead.
         self._canvas = BlockCanvas(
-            panels, sizes, default_rows, fill_last=True, default_pinned=[["rolls"]]
+            panels, sizes, default_rows, fill_last=True, default_pinned=gm_default_pin_lines()
         )
 
         self._scroll = QScrollArea()
@@ -2709,3 +2707,55 @@ class _Notice(QFrame):
     def _settle(self) -> None:
         if self._effect.opacity() <= 0.01:
             self.setVisible(False)
+
+
+# --------------------------------------------------------------------------
+# The base GM blocks
+#
+# The four panels the GM window has always had, now stated as descriptors so the
+# window builds itself from the same registry a mod extends. Registered at import
+# rather than in ``__init__``, mirroring ``register_base_blocks`` on the sheet
+# side: a mod's Python runs at startup (``mods.initialize_mods``) and must be able
+# to find the base set already there, whether or not a GM window has ever been
+# opened.
+# --------------------------------------------------------------------------
+
+# (key, title, the GMWindow method that builds it, row, col). The Scene comes
+# first because it is what a GM watches through a fight, while the two rosters
+# under it are where they go to change something.
+_BASE_GM_BLOCKS = [
+    ("scene", "Scene", "_build_scene_box", 0, 0, False),
+    ("players", "Players", "_build_players_box", 1, 0, False),
+    ("npcs", "NPCs", "_build_npcs_box", 2, 0, False),
+    # The Rolls block starts in the strip rather than on the page, for the reason
+    # the sheet's Dice block does: a roller that scrolls away with the board is no
+    # use mid-fight. Both boards use the same seam, and the strip's default edge
+    # is the right-hand one.
+    ("rolls", "Rolls", "_build_rolls_box", 3, 0, True),
+]
+
+
+def register_base_gm_blocks(*, replace: bool = False) -> None:
+    """Register the four base GM blocks (called once at import)."""
+    # The GM blocks' bounds live in block_sizes.json alongside the sheet's, under
+    # gm_-prefixed keys, so a theme can retune them the same way — the canvas keys
+    # them without the prefix, since the GM window is its own block namespace.
+    shipped = load_block_sizes()
+    for key, title, builder, row, col, pinned in _BASE_GM_BLOCKS:
+        register_gm_block(
+            GMBlockDescriptor(
+                key,
+                title,
+                # Bound at build time to the window being constructed, which is
+                # what lets a descriptor name an instance method it cannot hold.
+                (lambda name: lambda window: getattr(window, name)())(builder),
+                shipped.get(f"gm_{key}", BlockSize()),
+                row,
+                col,
+                pinned,
+            ),
+            replace=replace,
+        )
+
+
+register_base_gm_blocks(replace=True)

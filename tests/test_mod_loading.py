@@ -8,7 +8,9 @@ behaviour both show up.
 
 from __future__ import annotations
 
+import json
 import shutil
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -258,3 +260,107 @@ def test_untrusted_equipment_mod_buys_the_item_but_grants_nothing(_home: Path) -
 
     assert item_ep_cost(item, data) == 3
     assert resistance_total(char, data, "TOUGHNESS") == 0
+
+
+# --- installing from an archive ---------------------------------------------
+#
+# The distribution path: a mod is downloaded as a .zip and opened *before* the
+# user has decided whether to trust its Python, which is the least trusted moment
+# there is. Every test here is about that.
+
+
+def _zip_sample(tmp_path: Path, mod_dirname: str, *, wrap: bool = True) -> Path:
+    """Zip a shipped sample mod, with or without a wrapping folder."""
+    archive = tmp_path / f"{mod_dirname}.zip"
+    source = SAMPLE_MODS / mod_dirname
+    with zipfile.ZipFile(archive, "w") as zf:
+        for path in sorted(source.rglob("*")):
+            if path.is_file():
+                inner = path.relative_to(source)
+                zf.write(path, str(Path(mod_dirname) / inner) if wrap else str(inner))
+    return archive
+
+
+def test_a_mod_installs_from_a_wrapped_archive(_home: Path, tmp_path: Path) -> None:
+    """The shape every zip tool produces when you compress a directory."""
+    storage.ensure_workspace()
+    archive = _zip_sample(tmp_path, "campaign-notes", wrap=True)
+
+    mod = mods.import_mod_archive(archive)
+
+    assert mod.id == "campaign-notes"
+    assert (storage.get_workspace().mods_dir / "campaign-notes" / "mod.json").exists()
+    assert [m.id for m in mods.discover_workspace_mods()] == ["campaign-notes"]
+
+
+def test_a_mod_installs_from_a_flat_archive(_home: Path, tmp_path: Path) -> None:
+    """Telling a user their mod is "wrongly zipped" is a worse answer than
+    looking one level down — so both shapes work."""
+    storage.ensure_workspace()
+    archive = _zip_sample(tmp_path, "campaign-notes", wrap=False)
+
+    assert mods.import_mod_archive(archive).id == "campaign-notes"
+
+
+def test_an_archive_cannot_write_outside_the_workspace(_home: Path, tmp_path: Path) -> None:
+    """Zip slip. ``extractall`` follows a ``..`` out of the directory you gave it,
+    and this runs on a file from the internet."""
+    storage.ensure_workspace()
+    outside = tmp_path / "outside.txt"
+    archive = tmp_path / "evil.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("evil/mod.json", json.dumps({"id": "evil", "name": "E", "version": "1"}))
+        zf.writestr("../outside.txt", "pwned")
+        zf.writestr("evil/../../outside.txt", "pwned")
+
+    mods.import_mod_archive(archive)
+
+    assert not outside.exists()
+    assert not (tmp_path.parent / "outside.txt").exists()
+
+
+def test_an_archive_leaves_no_compiled_python_behind(_home: Path, tmp_path: Path) -> None:
+    """A ``.pyc`` compiled against another Python would shadow the ``.py``
+    beside it and fail obscurely at import time."""
+    storage.ensure_workspace()
+    archive = tmp_path / "kit.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("kit/mod.json", json.dumps({"id": "kit", "name": "K", "version": "1"}))
+        zf.writestr("kit/kit_mod.py", "X = 1\n")
+        zf.writestr("kit/__pycache__/kit_mod.cpython-312.pyc", "not really bytecode")
+
+    mods.import_mod_archive(archive)
+
+    installed = storage.get_workspace().mods_dir / "kit"
+    assert (installed / "kit_mod.py").exists()
+    assert not (installed / "__pycache__").exists()
+
+
+def test_a_file_that_is_not_an_archive_is_refused(_home: Path, tmp_path: Path) -> None:
+    not_a_zip = tmp_path / "mod.zip"
+    not_a_zip.write_text("this is not a zip", encoding="utf-8")
+
+    with pytest.raises(mods.ModImportError):
+        mods.import_mod_archive(not_a_zip)
+
+
+def test_an_archive_with_no_manifest_is_refused(_home: Path, tmp_path: Path) -> None:
+    archive = tmp_path / "empty.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("readme.txt", "nothing to install here")
+
+    with pytest.raises(mods.ModImportError):
+        mods.import_mod_archive(archive)
+
+
+def test_an_archive_holding_two_mods_is_refused_rather_than_guessed(
+    _home: Path, tmp_path: Path
+) -> None:
+    """Which one was meant is genuinely ambiguous, and guessing is worse."""
+    archive = tmp_path / "two.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        for name in ("one", "two"):
+            zf.writestr(f"{name}/mod.json", json.dumps({"id": name, "name": name, "version": "1"}))
+
+    with pytest.raises(mods.ModImportError):
+        mods.import_mod_archive(archive)

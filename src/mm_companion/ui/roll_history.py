@@ -44,7 +44,7 @@ from mm_companion.core.rules import (
     outcome_is_failure,
     resistance_outcome,
 )
-from mm_companion.core.session.model import KIND_NOTE, KIND_REQUEST, KIND_ROLL
+from mm_companion.core.session.model import KIND_MOD, KIND_NOTE, KIND_REQUEST, KIND_ROLL
 from mm_companion.ui import theme
 from mm_companion.ui.session_bridge import SessionBridge
 from mm_companion.ui.widgets import muted_style, tinted_style
@@ -755,7 +755,13 @@ class RollHistoryPanel(QWidget):
             self._seen.add(seq)
 
         card: HistoryCard
-        if roll.get("kind") == KIND_NOTE:
+        if roll.get("kind") in (KIND_NOTE, KIND_MOD):
+            # A mod's line is drawn as a note, and that is the point rather than a
+            # shortcut. The two ends of a table can load different mods, so this
+            # card has to read sensibly for a mod this app has never heard of —
+            # and a plain sentence attributed to the seat that sent it is exactly
+            # what a note already is. A mod that *is* installed can dress its own
+            # line up later; nothing here has to know which.
             card = NoteCard(roll, can_remove=self._gm)
             card.removeRequested.connect(self._request_remove)
         elif roll.get("kind") == KIND_REQUEST:

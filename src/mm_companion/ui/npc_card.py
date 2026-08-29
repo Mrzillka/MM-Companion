@@ -4,15 +4,31 @@ Unlike a :class:`~mm_companion.ui.player_card.PlayerCard` — which shows a *rem
 player's live sheet and can only *ask* their app to change it — an NPC is the
 GM's own, held locally as an ordinary :class:`~mm_companion.core.character.Character`
 saved in the workspace ``gm_characters/`` dir. So this card acts on the model
-directly: conditions apply straight onto it (persisted like any sheet edit),
-initiative is rolled here, and the whole thing can be copied. The card is keyed
+directly: conditions apply straight onto it (persisted like any sheet edit), the
+damage ladder lands on it, and the whole thing can be copied. The card is keyed
 by its file name, which is the stable identity a session's cast
 (:attr:`~mm_companion.core.session.model.SessionState.npc_paths`) records.
 
-The card body's press-drag reorders it in the initiative list; the **portrait** is
-what opens its sheet (see :mod:`~mm_companion.ui.card_summary`). Those were once
-the same gesture, distinguished only by how far the pointer had moved, which meant
-a reorder that fell short of the threshold opened a window instead.
+**This card is a cast list, not a turn order.** It carries no initiative and no
+👁, and it does not sort itself: a creature reaches the shared board by being
+dragged onto the **Scene**, its place in the order is read and set on its scene
+card, and its initiative belongs to the window that owns the number. Both used to
+be here, which meant a GM read one turn order off two boards and watched the cast
+re-arrange itself under their hands every time a mook rolled.
+
+The card body's press-drag reorders it in the GM's own arrangement of the cast —
+nothing else; the **portrait** is what opens its sheet (see
+:mod:`~mm_companion.ui.card_summary`). Those were once the same gesture,
+distinguished only by how far the pointer had moved, which meant a reorder that
+fell short of the threshold opened a window instead.
+
+That reorder is a real :class:`~PySide6.QtGui.QDrag` now, and had to become one the
+day a card could be dragged onto the **Scene**. It used to track the pointer
+itself and emit a preview for the window to draw, which is a fine gesture inside
+one container and cannot leave it — nothing crosses a widget boundary, so there is
+no way for another block to know a drag is happening at all. The drop target does
+the work now (:class:`~mm_companion.ui.card_drop.CardDropFlow`), and this card only
+says what is being dragged.
 
 A card **collapses**. Expanded it is a good roster entry and a bad combat readout:
 a 96px portrait, a PL, and two buttons, times a dozen mooks, is three cards on
@@ -21,19 +37,28 @@ whose turn it is, the pinned numbers, what conditions it is under — and the da
 row below. Everything shed is still one click away, and *which* state a card is in
 is the GM's, remembered per creature by the window that owns them.
 
-Two things the collapsed state must not lose, and so neither state has them where
-they used to be: the **"+"** that applies a condition now sits beside the damage
-row, the two of them being the two ways to put something on a creature; and
-**initiative** is rolled by its own badge, the explicit button having gone rather
-than exist on one state only. Both **swallow their press** — the badge by hand, the
-"+" by being a button — because a press that reaches the card starts its
-drag-to-reorder, which is the same reason
+One thing the collapsed state must not lose, and so neither state has it where it
+used to be: the **"+"** that applies a condition sits beside the damage row, the
+two of them being the two ways to put something on a creature. It **swallows its
+press** by being a button, because a press that reaches the card starts its
+drag-to-reorder — the same reason
 :class:`~mm_companion.ui.card_summary.PortraitButton` swallows its own.
 
+A card's **width is not its own**. It reports what its contents need
+(:meth:`NPCCard.body_width_hint`, :meth:`NPCCard.pin_width_hint`) and the window
+gives every card in the grid the widest of those. Both halves matter: measuring is
+what gets a card down from the flat 372px it used to cost regardless of what was on
+it, and *sharing* is what keeps the cards lining up in columns of a wrapping flow —
+a card that merely fitted its own content would make the grid ragged and re-flow it
+every time a pin was added. The expanded card's 96px portrait is in the measurement
+and a collapsed card sheds it, so a wholly shut board *can* narrow; with the
+bundled ruleset the damage ladder is wider than a portrait anyway, so in practice
+the collapse still takes its room out of the height.
+
 **Right-click means "take that away"** wherever it lands on this card: on a
-condition chip it sheds the condition, on the initiative badge it clears the roll,
-and on the card itself it offers to remove or delete the NPC. Each of the first two
-consumes the event, so the general answer never fires over a specific one.
+condition chip it sheds the condition, and on the card itself it offers to remove
+or delete the NPC. The chip consumes the event, so the general answer never fires
+over the specific one.
 """
 
 from __future__ import annotations
@@ -53,15 +78,13 @@ from PySide6.QtWidgets import (
 from mm_companion.core import library
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import Condition, GameData
-from mm_companion.core.dice import roll_d20
 from mm_companion.core.library import CharacterSummary
-from mm_companion.core.rules import initiative_modifier
 from mm_companion.ui import theme
-from mm_companion.ui.card_summary import PortraitButton, character_summary_html
+from mm_companion.ui.card_chips import _ConditionChip, start_card_drag
+from mm_companion.ui.card_summary import PORTRAIT_SIZE, PortraitButton, character_summary_html
 from mm_companion.ui.damage_row import DamageRow
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
-from mm_companion.ui.pin_panel import PIN_PANEL_WIDTH, install_pin_panel
-from mm_companion.ui.player_card import _ConditionChip
+from mm_companion.ui.pin_panel import install_pin_panel
 from mm_companion.ui.sections.conditions import (
     build_condition_menu,
     condition_display_name,
@@ -69,11 +92,6 @@ from mm_companion.ui.sections.conditions import (
 )
 from mm_companion.ui.widgets import ElidingLabel
 
-#: How wide the card's own column is. Fixed, so a row of them lines up in the
-#: flow layout; the pinned-parameter strip adds its own width beside it. The same
-#: in both states on purpose: collapsing wins its room in *height*, and a card that
-#: also narrowed would break the columns its neighbours line up in.
-CARD_WIDTH = 210
 #: How far the pointer must move with the button down to count as a drag rather
 #: than a click, in pixels.
 DRAG_THRESHOLD = 8
@@ -84,58 +102,10 @@ COLLAPSED_PIN_ROWS = 4
 #: What the collapse toggle reads: the caret points the way the card will go.
 EXPANDED_GLYPH = "▾"
 COLLAPSED_GLYPH = "▸"
-#: The initiative badge before anything has been rolled. Something to click, and a
-#: dash rather than a zero — an unrolled NPC has no initiative, not one of nought.
-NO_INITIATIVE = "init —"
-
-
-class _InitiativeBadge(QLabel):
-    """The NPC's initiative, and the only thing that rolls or clears it.
-
-    A ``QLabel`` for the same reason
-    :class:`~mm_companion.ui.card_summary.PortraitButton` is one: a ``QToolButton``
-    wraps its text in some forty pixels of its own chrome, and four of those across
-    a 210px card leave the name a stub. It carries the affordance instead — a
-    pointing hand, a tooltip, an accent — and, like the portrait, **swallows its
-    press**, so clicking it can never be read as the start of the card's
-    drag-to-reorder.
-
-    Left-click rolls, right-click clears. The pair belongs on the one widget: the
-    number *is* the thing being set, there is nowhere else on a collapsed card to
-    put a second control, and a GM who has mis-rolled an NPC's place in the order
-    otherwise has to drag the card out of the rolled zone to be rid of it.
-    """
-
-    clicked = Signal()
-    #: Right-clicked — take this NPC back out of the initiative order.
-    cleared = Signal()
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__("", parent)
-        font = self.font()
-        font.setBold(True)
-        font.setPointSizeF(theme.font_size("size.terms"))
-        self.setFont(font)
-        self.setStyleSheet(f"color: {theme.color('accent')};")
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setToolTip("Roll initiative for this NPC.\n\nRight-click to clear it.")
-
-    def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        event.accept()
-
-    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(
-            event.position().toPoint()
-        ):
-            self.clicked.emit()
-        event.accept()
-
-    def contextMenuEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        # Consumed either way: propagating would reach the card's own
-        # "Remove from this session / Delete" menu, which is not what someone
-        # aiming at the initiative number asked for.
-        self.cleared.emit()
-        event.accept()
+#: How this card names itself in a drag. The kind matters: a file name and a
+#: player id are not distinguishable by looking at them, so the drop target
+#: would not know which roster a bare one came from.
+SCENE_KIND = "npc"
 
 
 def _small_button(text: str = "") -> QToolButton:
@@ -173,21 +143,11 @@ class NPCCard(QFrame):
     applyConditionRequested = Signal(str, str, object)
     #: ``(file_name, condition_id, parameter)`` — take it off again.
     removeConditionRequested = Signal(str, str, object)
-    #: ``(file_name, total)`` — this NPC just rolled initiative.
-    initiativeRolled = Signal(str, int)
-    #: The NPC's file name — its initiative was cleared, so it leaves the order.
-    initiativeCleared = Signal(str)
+    #: ``(file name, on)`` — the GM asked, from the card's own menu, to put this
+    #: creature on the shared board or take it off.
+    sceneToggled = Signal(str, bool)
     #: The NPC's file name — duplicate it into a new NPC (Goon → Goon-2).
     copyRequested = Signal(str)
-    #: ``(file_name, target_index)`` — the card was dragged to a new slot. A drag
-    #: drops the NPC into the manual (un-rolled) zone, so any rolled initiative is
-    #: cleared by the handler.
-    reorderRequested = Signal(str, int)
-    #: ``(file_name, target_index)`` — a drag is in progress and would currently
-    #: land at this slot. The GM window shows a drop indicator there.
-    reorderPreview = Signal(str, int)
-    #: The drag ended (dropped or cancelled) — hide the drop indicator.
-    reorderPreviewEnded = Signal()
     #: ``(file_name, refs)`` — this card's pinned-parameter strip changed.
     pinsChanged = Signal(str, object)
     #: A ``RollSpec`` — the GM clicked a pinned chip and wants it in the roller.
@@ -211,13 +171,10 @@ class NPCCard(QFrame):
         data: GameData,
         parent: QWidget | None = None,
         *,
-        initiative: int | None = None,
         collapsed: bool = False,
     ) -> None:
         super().__init__(parent)
         self.setFrameShape(QFrame.Shape.StyledPanel)
-        # The card's own column is fixed; the pinned strip adds its width beside it.
-        self.setFixedWidth(CARD_WIDTH + PIN_PANEL_WIDTH + int(theme.metric("space.sm")) * 3)
 
         self._data = data
         self._character = character
@@ -227,6 +184,11 @@ class NPCCard(QFrame):
         self.name_key = summary.path.name if summary.path is not None else ""
         #: Where a left-button press landed, to tell a drag from a click.
         self._press_pos = None
+        #: Whether this creature is on the shared board. Not drawn — the card has
+        #: no 👁 any more — but the right-click menu is a different question in
+        #: each state, and a menu that offered "Put on the Scene" for something
+        #: already on it would be offering nothing.
+        self._in_scene = False
 
         layout = QVBoxLayout()
 
@@ -263,12 +225,12 @@ class NPCCard(QFrame):
         self._name_label.setWordWrap(True)
         header.addWidget(self._name_label, stretch=1)
 
-        # The badge *is* the roll affordance once the explicit button is hidden.
-        self._initiative_badge = _InitiativeBadge()
-        self._initiative_badge.clicked.connect(self.roll_initiative)
-        self._initiative_badge.cleared.connect(self.clear_initiative)
-        header.addWidget(self._initiative_badge)
-
+        # No 👁 and no initiative badge here any more, and for one reason: the
+        # Scene is the board. A creature gets there by being dragged onto it and
+        # leaves by its scene card's right-click, and its place in the turn order
+        # is read and set on that card. Two eyes on two cards for one fact, and
+        # two boards sorting by one number, were both a GM holding the same thing
+        # in two places.
         self._collapse_button = _small_button()
         self._collapse_button.clicked.connect(self._toggle_collapsed)
         header.addWidget(self._collapse_button)
@@ -303,13 +265,15 @@ class NPCCard(QFrame):
         buttons_row.addStretch()
         layout.addWidget(buttons_host)
 
-        self.set_initiative(initiative)
-
         # The two ways to put something on this creature, side by side and on both
         # states: pick a condition by hand, or take a rung of the damage ladder. A
         # GM who never collapses a card still wants a failed Toughness save to cost
         # one click rather than three trips through a menu of thirty-nine.
-        action_row = QHBoxLayout()
+        # Hosted in a widget rather than added as a bare layout, so the card can
+        # ask it how wide it needs to be: it is the widest thing on a collapsed
+        # card, and a ruleset with more rungs on its damage ladder needs more room.
+        self._action_host = QWidget()
+        action_row = QHBoxLayout(self._action_host)
         action_row.setContentsMargins(0, 0, 0, 0)
         action_row.setSpacing(int(theme.metric("space.xs")))
         self._condition_button = _small_button("+")
@@ -322,7 +286,7 @@ class NPCCard(QFrame):
             lambda index: self.damageRequested.emit(self.name_key, index)
         )
         action_row.addWidget(self._damage, stretch=1)
-        layout.addLayout(action_row)
+        layout.addWidget(self._action_host)
 
         self._chips = FlowContainer()
         self._chip_flow = FlowLayout(self._chips)
@@ -341,6 +305,10 @@ class NPCCard(QFrame):
         self.pins.pickRequested.connect(lambda: self.pinPickerRequested.emit(self.name_key))
 
         self.set_collapsed(collapsed)
+        # A width of its own until the window measures the block and hands every
+        # card the widest. A card built for a test, or the first of a fresh grid,
+        # is then never zero-width.
+        self.apply_width(self.body_width_hint(), self.pins.natural_width())
         self._refresh_tooltip()
 
     # -- what the card is showing -----------------------------------------
@@ -350,14 +318,53 @@ class NPCCard(QFrame):
         """The NPC's model — the GM edits this directly."""
         return self._character
 
+    def set_in_scene(self, on: bool) -> None:
+        """Record whether this creature is on the board. Silent, like
+        :meth:`set_collapsed`: the window telling a card what it already decided
+        must not come back as a fresh request."""
+        self._in_scene = on
+
+    @property
+    def in_scene(self) -> bool:
+        """Whether the window last said this creature was on the board."""
+        return self._in_scene
+
     def display_name(self) -> str:
         """The NPC's name, as its summary gives it."""
         return self._summary.name
 
-    @property
-    def initiative(self) -> int | None:
-        """The NPC's rolled initiative this session, or ``None`` if unrolled."""
-        return self._initiative
+    # -- how wide the card is ----------------------------------------------
+
+    def body_width_hint(self) -> int:
+        """The narrowest this card's own column can be and still show its controls.
+
+        Measured off the widgets rather than named as a constant, because what is
+        on a card is the *ruleset's* answer: the damage ladder is one button per
+        degree of failure, so a ruleset with five rungs needs a wider card than one
+        with three, and both used to get 210px whether they wanted it or not.
+
+        The 96px portrait is the expanded card's own floor, and a collapsed card
+        sheds it — which is what lets **Collapse all** narrow the block rather than
+        only shorten it.
+        """
+        needs = [int(theme.metric("gm.card.min")), self._action_host.sizeHint().width()]
+        if not self._collapsed:
+            needs.append(PORTRAIT_SIZE)
+        return max(needs)
+
+    def pin_width_hint(self) -> int:
+        """How wide this card's pinned strip wants to be."""
+        return self.pins.natural_width()
+
+    def apply_width(self, body: int, strip: int) -> None:
+        """Wear *body* and *strip* — the block's widest, not this card's own.
+
+        Told rather than decided, so every card in the grid is one width and the
+        wrapping flow still lays them out in columns. See
+        :meth:`~mm_companion.ui.gm_window.GMWindow._sync_card_widths`.
+        """
+        self.pins.set_width(strip)
+        self.setFixedWidth(body + strip + int(theme.metric("space.sm")) * 3)
 
     @property
     def collapsed(self) -> bool:
@@ -390,34 +397,6 @@ class NPCCard(QFrame):
         """The caret: flip the state *and* say so, so the window can remember it."""
         self.set_collapsed(not self._collapsed)
         self.collapsedChanged.emit(self.name_key, self._collapsed)
-
-    # -- initiative --------------------------------------------------------
-
-    def set_initiative(self, total: int | None) -> None:
-        """Show (or clear) the NPC's initiative badge."""
-        self._initiative = total
-        self._initiative_badge.setText(NO_INITIATIVE if total is None else f"init {total}")
-
-    def roll_initiative(self) -> int:
-        """Roll d20 + this NPC's initiative modifier, show it, and announce it.
-
-        Local by design — an NPC is the GM's own and never on the wire, so this
-        is not routed through the session server the way a shared roll is.
-        """
-        total = roll_d20() + initiative_modifier(self._character, self._data)
-        self.set_initiative(total)
-        self.initiativeRolled.emit(self.name_key, total)
-        return total
-
-    def clear_initiative(self) -> None:
-        """Take this NPC back out of the initiative order.
-
-        The undo for a roll made on the wrong creature, or for a round that is
-        over. It drops the card into the un-rolled zone, which is also where a drag
-        would have put it — this is just the way to say so without one.
-        """
-        self.set_initiative(None)
-        self.initiativeCleared.emit(self.name_key)
 
     def _set_portrait(self, image_path: str | None) -> None:
         """Show the NPC's picture (a local file, so it resolves normally)."""
@@ -516,50 +495,42 @@ class NPCCard(QFrame):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        """While dragging, preview where the drop would land, so the GM sees it."""
-        if self._press_pos is not None:
-            moved = (event.position().toPoint() - self._press_pos).manhattanLength()
-            if moved >= DRAG_THRESHOLD:
-                target = self._drop_target_index(event.globalPosition().toPoint())
-                self.reorderPreview.emit(self.name_key, target)
-        super().mouseMoveEvent(event)
+        """Past the threshold, hand the gesture to Qt as a real drag."""
+        if self._press_pos is None or not (event.buttons() & Qt.MouseButton.LeftButton):
+            super().mouseMoveEvent(event)
+            return
+        if (event.position().toPoint() - self._press_pos).manhattanLength() < DRAG_THRESHOLD:
+            super().mouseMoveEvent(event)
+            return
+        self._press_pos = None
+        start_card_drag(self, f"{SCENE_KIND}:{self.name_key}")
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        if event.button() == Qt.MouseButton.LeftButton and self._press_pos is not None:
-            moved = (event.position().toPoint() - self._press_pos).manhattanLength()
-            self._press_pos = None
-            if moved >= DRAG_THRESHOLD:
-                target = self._drop_target_index(event.globalPosition().toPoint())
-                self.reorderPreviewEnded.emit()
-                self.reorderRequested.emit(self.name_key, target)
+        self._press_pos = None
         super().mouseReleaseEvent(event)
 
-    def _drop_target_index(self, global_pos) -> int:
-        """Where in the sibling flow a drop at *global_pos* lands.
-
-        Walks the sibling cards in layout order and returns the index to insert
-        before — the first card the point sits left-of (on the same row) or inside
-        — or the count when the drop is past every card. Approximate, as befits a
-        wrapping layout; the exact ordering rules live in the GM window's handler.
-        """
-        container = self.parentWidget()
-        layout = container.layout() if container is not None else None
-        if layout is None:
-            return 0
-        point = container.mapFromGlobal(global_pos)
-        for index in range(layout.count()):
-            item = layout.itemAt(index)
-            widget = item.widget() if item is not None else None
-            if widget is None:
-                continue
-            geo = widget.geometry()
-            on_row = geo.top() <= point.y() <= geo.bottom()
-            if geo.contains(point) or (on_row and point.x() < geo.center().x()):
-                return index
-        return layout.count()
-
     def contextMenuEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        """The card's own menu — and the one way onto the Scene that is not a drag.
+
+        The 👁 that used to do this went when the Scene became the board, and for
+        a while the *only* way to put a creature on it was to drag the card there.
+        That is a poor single answer: it needs a mouse and a steady hand, it
+        cannot be reached from a keyboard, and it is impossible outright when the
+        Scene block is hidden from the View menu — a GM could get into a state
+        with no way at all to seat a creature. The drag is still the quick answer;
+        this is the one that always works.
+        """
+        self.build_context_menu().exec(event.globalPos())
+
+    def build_context_menu(self) -> QMenu:
+        """The right-click menu, built but not shown — see the note on
+        :meth:`~mm_companion.ui.scene_card.SceneCard.build_context_menu`."""
         menu = QMenu(self)
+        menu.addAction(
+            "Take off the Scene" if self._in_scene else "Put on the Scene",
+            lambda: self.sceneToggled.emit(self.name_key, not self._in_scene),
+        )
+        menu.addSeparator()
         menu.addAction(
             "Remove from this session",
             lambda: self.removeRequested.emit(self.name_key),
@@ -568,4 +539,4 @@ class NPCCard(QFrame):
             f"Delete {self._summary.name}",
             lambda: self.deleteRequested.emit(self.name_key),
         )
-        menu.exec(event.globalPos())
+        return menu

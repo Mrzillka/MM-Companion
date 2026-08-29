@@ -86,7 +86,7 @@ def test_a_fresh_sheet_starts_with_the_dice_block_pinned(make_sheet) -> None:
     # default_pinned, so the die is in view beside the page from the first launch.
     sheet = make_sheet(empty_strip=False)
 
-    assert _pinned(sheet)["lines"] == [["dice"]]
+    assert _pinned(sheet)["lines"] == [["dice"], ["scene"]]
     assert sheet.is_block_pinned("dice")
     assert not sheet.board.panel.is_empty()
     assert all("dice" not in row for row in sheet.arrangement()["rows"])
@@ -206,13 +206,14 @@ def test_reset_layout_restores_the_default_strip(make_sheet) -> None:
     sheet.reset_layout()
     _settle()
 
-    # Back to the default strip — the Dice block, on the right edge, filling it —
-    # and the block this test pinned returned to the page. The live pixel sizes are
-    # whatever the one rendered line measures, so they are not part of the default.
+    # Back to the default strip — the Dice block and the Scene, one line each on
+    # the right edge, filling it — and the block this test pinned returned to the
+    # page. The live pixel sizes are whatever the rendered lines measure, so they
+    # are not part of the default.
     pinned = _pinned(sheet)
     assert (pinned["edge"], pinned["lines"], pinned["align"], pinned["extent"]) == (
         "right",
-        [["dice"]],
+        [["dice"], ["scene"]],
         "fill",
         320,
     )
@@ -758,7 +759,7 @@ def test_the_strip_survives_a_save_and_restore(make_sheet) -> None:
 
     sheet.reset_layout()
     _settle()
-    assert _pinned(sheet)["lines"] == [["dice"]]  # back to the default strip
+    assert _pinned(sheet)["lines"] == [["dice"], ["scene"]]  # back to the default strip
 
     assert sheet.restore_layout(blob) is True
     _settle()
@@ -952,10 +953,13 @@ def test_a_restore_rebuilds_the_strip_even_with_the_same_blocks_in_it(make_sheet
     assert len(within) == 2
     total = sum(within)
     floors = [sheet.block_frame(k).minimumSizeHint().width() for k in ("conditions", "advantages")]
-    assert total > sum(floors) + 40, "no slack to redistribute; widen the strip further"
-    # Give the second block everything the first does not need.
-    model["pinned"]["line_sizes"][0] = [floors[0], total - floors[0]]
+    assert total > sum(floors), "no slack to redistribute; widen the strip further"
+    # Give the *first* block everything the second does not need. The other way
+    # round is where a strip settles on its own once it has room, and this test
+    # then passed or failed on how much of that the page happened to leave over.
+    model["pinned"]["line_sizes"][0] = [total - floors[1], floors[1]]
     before = board.block_sizes()[0]
+    assert before != model["pinned"]["line_sizes"][0], "already there; nothing to restore"
 
     sheet.canvas.apply_arrangement(model)
     _settle()

@@ -32,8 +32,14 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   children are cards the player ordered themselves). **A split pool takes the picker
   away**, the same way it disarms a member card's click one level up: with every Dynamic
   effect running at once the selection decides nothing, and a picker that still moved
-  `active_effect` would be a control with nothing visible behind it. The game-terms
-  header stops claiming the restriction too.
+  `active_effect` would be a control with nothing visible behind it. **The header stops
+  claiming the restriction too** — `structure_header` in `core.rules.powers_terms` reads
+  `live_array_effects` and says `Array (Dynamic: 2 effects sharing the pool)` instead of
+  `Array (one effect active at a time)`. It lives in `core` because it is a statement
+  about the rules and because there were *three* copies of that sentence: the game-term
+  summary, the sheet card's effects block and the constructor's terms view. Two of them
+  never learned about the split, so a card whose effects were running together went on
+  printing the mutual exclusion above the ranks that disproved it.
 - **A Dynamic array is the structure switch's fourth answer.** An ordinary alternate is
   mutually exclusive with its siblings and costs 1 point; a **Dynamic** one shares the
   array's point pool and runs *alongside* the array's other Dynamic members at reduced
@@ -55,6 +61,22 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   record). The segment lights when **any** member is Dynamic rather than all of them, so
   a mixed array saved while the flag was per-member reads as what it is instead of as a
   plain array that quietly costs more; nothing is migrated.
+- **`dynamic` is a fact about a node's *place*, so a drag has to re-seat it**
+  (`_reseat_dynamic`, called from `_on_move`/`_on_combine` through
+  `_after_structural_change`). It was the one piece of build state a drag never touched,
+  and it went wrong in both directions: a card dropped into a Dynamic array joined as a
+  plain 1-point alternate — no share dial, mutually exclusive with siblings that were
+  not, mispriced — while the switch above it went on reading *Dynamic array*, and a card
+  dragged *out* kept the flag and its share, so dropping it into some other array turned
+  that array Dynamic with nobody saying so. A node landing inside a Dynamic array now
+  joins it; one landing anywhere else stops claiming to be in one. Its **share** is only
+  ever cleared, never invented. Scoped to the node that moved and run after the tidying
+  (a collapsing singleton re-parents its child a second time), because the same rule
+  applied to every child on every rebuild would migrate exactly the mixed array the
+  paragraph above says nothing migrates. `_set_group_mode` clears the pair for the same
+  reason on **every** mode that is not a Dynamic array — it used to clear it only on the
+  way to a plain array, so a group sent to Linked kept every share, dead in the file and
+  instantly live again the moment anyone chose Dynamic array a second time.
 - **The pool a Dynamic member shares is `dynamic_points`** — *runtime* state beside the
   build flag, and now on all three things an array's members can be: `Power` and
   `PowerGroup` for a group of whole cards, `PowerEffectInstance` for a power's own
@@ -78,8 +100,12 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   *replace* the dialled rank rather than taking the smaller of the two — which is also why
   nothing clears `current_rank`: a Growth dialled to Large keeps its rung stored and gets
   it back the moment the split is cleared. The one slider answers to the rank dial's own
-  names (`_share_caption`): "Size" on a Growth, "Rank" on a Flight, with the points on the
-  label — `Large · 4 PP`.
+  names (`_share_caption`): "Size" on a Growth, "Rank" on a Flight — **and to the rank
+  dial's own words**, so a size effect's notches are the sizes it becomes rather than bare
+  ranks (`_notch_name`, sharing `_dial_labels` with the rank dial). Moving a Growth into a
+  Dynamic array used to swap Large/Huge/Gargantuan for numbers, so the one control the
+  player had left said less than the one it replaced. Price first, rung second:
+  `5 PP · Huge`.
 - **The groove ends where the pool does.** A share slider's right-hand end *is* the most
   that member can be set to, and it gains a division for every point a sibling hands back:
   a Growth 6 holding all six of a six-point pool leaves an Elongation 3 with one notch,
@@ -120,10 +146,25 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   points slider. Each slider is bounded by what is left of the pool once the *others*
   are paid, so the split can be walked up to the pool and never past it and any member
   can always be turned down to free points for another. Sliding every member to nothing
-  is the way back to an ordinary array — what *Clear the split* used to be a button for
-  — and stores `None` rather than `0`, so a file is byte-for-byte what it was before
-  anyone split anything. The group header keeps the one number no single slider can
-  show, a muted `4/10 PP split` (`_pool_readout`). A Dynamic array's sliders are
+  is still *a* way back to an ordinary array, and stores `None` rather than `0`, so a file
+  is byte-for-byte what it was before anyone split anything — but it is not the only one
+  any more, because it was one gesture per member for a decision made once and a split
+  array's cards are not clickable, so the way *out* of the pool was the one thing the
+  array offered no control for. The group header carries a **↺ hand-back button**
+  (`_pool_release`/`_release_pool`) that clears every share and puts the selected
+  alternate back on through the same `_set_array_active` a card click would have used. It
+  is there only while there is a split to hand back, and it stays live in a **locked**
+  sheet, like the share dials themselves: it is the same free action.
+  The header also keeps the one number no single slider can show (`_pool_readout`,
+  worded by `_SplitGroup.readout_text` so the label built before the sliders exist and the
+  one restated mid-drag cannot disagree). It is there **before** the first split too —
+  `Pool: 8 PP — not split` — which is the moment it is most needed: it used to appear only
+  once something had been assigned, so the pool was invisible for exactly the gesture that
+  spends it. That line is also where a Dynamic array says which of its two regimes it is
+  in — pick one alternate by clicking a card, or move a slider and run several at once.
+  A power's **own** effect-level split gets the same pair on its card header
+  (`_effect_pool_readout`, `_effect_pool_release`); an array exists at two levels and so
+  does its pool, but only the group level used to say so. A Dynamic array's sliders are
   therefore **not optional**: the Extended-settings box that governs them is forced on
   and made read-only while the array is Dynamic, since taking them away would leave the
   split with no control at all.
@@ -133,13 +174,19 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   selected alternate **at full rank**, which is the behaviour an array saved before the
   pool existed needs on load. So a Growth parked on "Off" came straight back on, and a
   Diminutive character read Gargantuan under a slider saying the power was off.
-  `_on_share_dialled` therefore flips the member's own master switch too, exactly as a
-  click on its card would, and a notch above zero flips it back. **Only `activated`, and
-  only on this member's own leaves**: it is the one flag `effect_is_active` reads
-  unconditionally, it is the one `_set_array_active` sets again when the player clicks the
-  card back on, and reaching wider (as `_set_power_active` does) would let one share
-  switch off a Linked group the array happens to sit inside — or leave `toggled_on`
-  cleared behind it, so the card click that should revive the member quietly did nothing.
+  `_on_share_dialled` therefore flips the member's own master switches too, exactly as a
+  click on its card would, and a notch above zero flips them back. **Every switch the card
+  flips, and only on this member's own leaves** (`_set_member_running`): raising
+  `activated` alone was not enough, because a card click puts a member down through
+  `_set_power_active`, which clears `activated`, `item_present` *and* every effect's
+  `toggled_on` together — so a share dialled up afterwards spent the points and lit the
+  card while `effect_is_active` went on reading the member as off, and a Speed parked in a
+  Dynamic array by a card click could not be bought back on. Which of the three a given
+  power's gates consult is `effect_is_active`'s business; the dial raises the same three
+  the card does and lets it choose, and `_member_is_running` asks the same question back
+  (`_power_is_active`) so the commit's no-op check cannot disagree with what it wrote.
+  Reaching *wider* is still what is avoided — as `_set_power_active` does, that would let
+  one share switch off a Linked group the array happens to sit inside.
   The share itself still stores `None`, so the sentence above stays true. Two corollaries:
   the *dimming* asks the same question after the pool's (`_node_is_inactive`), or the one
   member the fallback woke would be the only undimmed card on a switched-off array; and
@@ -154,13 +201,18 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   → rank conversion, so the handle lands on the notch that would buy what it is already
   running, full rank landing on the member's whole cost and a member dialled down
   mid-play on what that rung costs. A member holding several effects is priced whole.
-  It is a **reading, not a claim**, and two things follow. The array's `_SplitGroup`
+  It is a **reading, not a claim**, and three things follow. The array's `_SplitGroup`
   counts such an entry as nothing while its handle sits where it was drawn (a *phantom*
   entry), or the first split of an untouched array would find the pool already eaten by a
-  share nobody assigned — and it becomes real the moment the handle moves. And a commit
+  share nobody assigned — and it becomes real the moment the handle moves. A commit
   that lands back on that seat writes nothing, so leaving the handle alone keeps the array
   unsplit; only dragging it somewhere else splits the pool, and dragging it to zero still
-  puts the member down.
+  puts the member down. And **that one notch carries no price on its label** — `Gargantuan`
+  rather than `10 PP · Gargantuan` — because moving the handle anywhere else spends the
+  points that notch names while the seat spends none, and reading the full pool's price
+  under a header saying the array is not split invited exactly the wrong conclusion. Every
+  other notch is priced as it always was, and the seat gains its price the moment it is
+  moved to.
 - **A notch is a share *and* a rank, because a share buys a ceiling.** The two are
   different ladders wherever a member does not cost a round number of points a rank: a
   Growth 6 discounted to 5 PP by a Quirk is rationed six ranks to five points, so 4 PP
@@ -171,7 +223,7 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   bigger is easier to hit and impossible to hide, so the rung is the point. So
   `_share_notches` carries **one notch per rank**, priced at the cheapest share that
   reaches it, and the notch remembers the rank it stops at — the two notches that share a
-  price (`5 PP · Growth 5` beside `5 PP · Growth 6`) differ only by that. A member holding
+  price (`5 PP · Huge` beside `5 PP · Gargantuan`) differ only by that. A member holding
   *several* effects still gets price notches and no ranks: one share rations them all
   together, so there is no single rank to stand at.
 - **The hold is a pair, and that is what keeps it from biting.** `_hold_member` writes the
@@ -680,7 +732,18 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   the text out). That look is a **continuous** quantity —
   `_DraggableCard.set_off_progress(0..1)` interpolates opacity, type size and
   padding together — so a flip *eases* over `PowersSection.TRANSITION_MS` instead
-  of cutting. Every runtime setter ends in `_rebuild_list()` (flipping one power
+  of cutting. **A dial does not recede with it** (`_DraggableCard.keep_lit`): zero on a
+  rank or share dial is off and sliding up wakes the power, so it is the one live
+  control on a card that is showing itself switched off, and greying it out said the
+  only usable thing there was dead. On a Dynamic member parked at "Off" by its own share
+  dial it is the *only* way back, since a split array's cards are not clickable. A
+  `QGraphicsEffect` paints its whole subtree through one buffer, so a descendant cannot
+  opt out of its ancestor's opacity: a card with something to keep lit therefore dims its
+  layout's children one at a time instead of dimming itself, and its own frame — the drag
+  target and the click target, both live on a receded card — stays lit with them. Only a
+  dial that is genuinely live is kept: inside a switched-off Linked group the members'
+  dials are transparent to the mouse, nothing is exempted, and the group card's own
+  dimming covers them. Every runtime setter ends in `_rebuild_list()` (flipping one power
   can restate another card's numbers), so no card survives a toggle: the section
   instead remembers each node's on-screen progress in `_card_off` and the
   replacement card eases on from there, the running animation writing that
@@ -816,21 +879,32 @@ deleted when it finished; the pass-by-pass record is in the `docs/powers-rules-a
   old allocator could not — one handle between two members always spread the whole pool,
   which is why the spin boxes stayed authoritative beside it — but a per-member slider
   can simply be left short. Nothing tints it: a wasteful split is a legal build, and the
-  group's `4/10 PP split` readout states what is spent rather than what is wrong.
+  group's `4/10 PP split · 6 left` readout states what is spent rather than what is wrong.
+  It reads `Pool: 10 PP — not split` before anyone has spread anything, so the pool is
+  visible for the gesture that spends it and the array says which regime it is in.
 - **A split array's ordinary members go dark.** `live_array_children` gives the pool
   priority: once any Dynamic member holds a share, the array's *non*-Dynamic alternates are
   not running, since they cannot hold a share and the whole pool is spoken for. That is the
-  rules-correct reading, but it does mean the way back to an ordinary alternate is sliding
-  every share to nothing rather than clicking its card. While the pool is split
-  `_activation_role` therefore returns `""` for every member — the click used to be armed
-  and moved `active_child_id` with nothing visible happening — and the card keeps the
-  tooltip saying why it has stopped being a control. The dimming outlives the role:
-  `_node_is_inactive` asks the array (`_selectable_array_member`), not the card.
+  rules-correct reading, but it does mean the way back to an ordinary alternate is not a
+  card click. While the pool is split `_activation_role` therefore returns `""` for every
+  member — the click used to be armed and moved `active_child_id` with nothing visible
+  happening — and the card keeps the tooltip saying why it has stopped being a control,
+  which now **points at the ↺ hand-back button** rather than describing a chore ("slide
+  them all to nothing"). The dimming outlives the role: `_node_is_inactive` asks the array
+  (`_selectable_array_member`), not the card.
 - **The split does not follow a rebuild.** A share is an absolute number of points, so
   editing the array moves the pool underneath a split already made. Nothing renormalises: the
   shares stay put and may now sum to less than the pool (legal, just wasteful) or, if the base
   got cheaper, to more than it. Every slider re-bounds itself the moment the cards are rebuilt,
   so the fix is one gesture; a rebuild that quietly rescaled a player's split would be worse.
+  An over-spent split is the one thing the header tints (`tint.warning`), and the ↺ button
+  beside it is the other one gesture out.
+- **A Dynamic member with no share dial keeps its rank dial.** `_rank_is_shared` is
+  necessary but not sufficient: `_share_dial` declines a member the pool cannot ration (a
+  pool of nothing, a member costing nothing, a ladder with one rung), and standing the
+  rank dial down on the flag alone left that card with neither control and no way to turn
+  the power up at all. `_make_card` builds the share dial first and tells `_rank_dials`
+  what actually happened.
 - **`effect_current_rank` can return 0** — only through the pool, and only for a member
   below its minimum. Every reader has been checked against that: none divides by it, the
   size readout returns early on it, and everywhere else it is a summand or a fallback

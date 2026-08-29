@@ -180,3 +180,78 @@ def test_the_layout_survives_a_workspace_that_predates_the_key(_home: Path) -> N
     _drop_key("dice_layout")
 
     assert storage.dice_layout() == storage.DICE_LAYOUT_AUTO
+
+
+# --------------------------------------------------------------------------
+# A mod's own local state
+#
+# Distinct from the two things it is easy to confuse it with: mod *options* are
+# configuration the user set, and a session's mod_state is the shared copy the
+# table sees. This one is private, local, and survives having no session at all.
+# --------------------------------------------------------------------------
+
+
+def test_the_workspace_has_a_place_for_mod_state(_home: Path) -> None:
+    ws = ensure_workspace()
+
+    assert ws.mod_state_dir == _home / "mod_state"
+    assert ws.mod_state_dir.is_dir()
+
+
+def test_local_mod_state_round_trips(_home: Path) -> None:
+    ensure_workspace()
+
+    storage.set_local_mod_state("timers", {"items": [{"id": "t1", "duration": 90}]})
+
+    assert storage.local_mod_state("timers") == {"items": [{"id": "t1", "duration": 90}]}
+
+
+def test_local_mod_state_is_empty_before_anything_wrote_it(_home: Path) -> None:
+    ensure_workspace()
+
+    assert storage.local_mod_state("never-seen") == {}
+
+
+def test_a_corrupt_state_file_reads_as_empty_rather_than_raising(_home: Path) -> None:
+    """A mod's own saved state must never be able to stop the app starting, and
+    there is nothing useful a caller could do with the exception anyway."""
+    ws = ensure_workspace()
+    (ws.mod_state_dir / "timers.json").write_text("{not json", encoding="utf-8")
+
+    assert storage.local_mod_state("timers") == {}
+
+
+def test_a_state_file_that_is_not_an_object_reads_as_empty(_home: Path) -> None:
+    ws = ensure_workspace()
+    (ws.mod_state_dir / "timers.json").write_text("[1, 2, 3]", encoding="utf-8")
+
+    assert storage.local_mod_state("timers") == {}
+
+
+def test_a_mod_id_cannot_escape_the_state_directory(_home: Path) -> None:
+    """The id becomes a *filename*, and it came from a manifest the user
+    downloaded. Both halves are no-ops rather than traversals.
+    """
+    ensure_workspace()
+    settings_before = (_home / "settings.json").read_text(encoding="utf-8")
+
+    storage.set_local_mod_state("../settings", {"pwned": True})
+    storage.set_local_mod_state("..", {"pwned": True})
+    storage.set_local_mod_state("a/b", {"pwned": True})
+
+    assert storage.local_mod_state("../settings") == {}
+    assert (_home / "settings.json").read_text(encoding="utf-8") == settings_before
+    assert list((_home / "mod_state").iterdir()) == []
+
+
+def test_state_that_cannot_be_rendered_as_json_is_dropped_not_half_written(
+    _home: Path,
+) -> None:
+    """Losing the write is the right failure — a half-written file reads back as
+    ``{}`` next launch anyway, and this way the previous state survives."""
+    ensure_workspace()
+    storage.set_local_mod_state("timers", {"good": 1})
+
+    storage.set_local_mod_state("timers", {"bad": object()})
+
+    assert storage.local_mod_state("timers") == {"good": 1}

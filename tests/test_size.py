@@ -8,16 +8,21 @@ from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
 from mm_companion.core.rules import (
+    base_character_reach,
     base_ground_speed_rank,
     base_size_rank,
+    character_reach,
     defense_class,
     effect_current_rank,
+    effect_stat_rows,
     effective_ability,
     effective_size,
     effective_size_rank,
     estimated_power_level,
     power_pl_violations,
     power_total_cost,
+    reach_is_altered,
+    reach_text,
     resistance_total,
     size_contributions,
     size_resistance_shift,
@@ -364,3 +369,97 @@ def test_being_large_does_not_inflate_the_estimated_power_level(data) -> None:
 
         assert estimated_power_level(char, data) == baseline
         assert power_pl_violations(char.powers[0], char, data) == []
+
+
+# -- reach -----------------------------------------------------------------------------
+
+
+def test_size_gives_reach_and_elongation_stretches_it_further(data) -> None:
+    """The two sources add as real distances, because that is the only way they can.
+
+    A Gargantuan character reaches three Spaces (18 ft) and an Elongation 1 stretches 15
+    ft further, which is 33 ft — five Spaces and a half. Rounding each source to Spaces
+    before adding would quietly lose that half at every step, so the feet are the truth
+    and the Spaces are read back off them.
+    """
+
+    char = _char(data)
+    _growth(char, 3)
+    assert reach_text(character_reach(char, data)) == "3 spaces / 18 ft."
+
+    _growth(char, 1, effect="elongation")
+    assert reach_text(character_reach(char, data)) == "~5 spaces / 33 ft."
+
+
+def test_elongation_reaches_its_own_distance_rank_per_rank(data) -> None:
+    """Each rank is worth the distance value at the rank ``effects.json`` names — 15 ft.
+
+    Not a rank added to a rank: reach sums several sources, and ranks are never added to
+    each other. The Spaces are rounded down and flagged, since half a Space of reach does
+    not let anyone strike into the next square.
+    """
+
+    char = _char(data)
+    _growth(char, 3, effect="elongation")
+    assert reach_text(character_reach(char, data)) == "~7 spaces / 45 ft."
+
+
+def test_an_unchanged_reach_is_not_a_reading(data) -> None:
+    """The baseline Space is what a close attack already means, so nothing states it.
+
+    A character nothing has stretched reaches exactly as far as their bought size says,
+    and that is the number every other reach is stated against — so the System block's
+    row asks :func:`reach_is_altered` rather than printing it on every sheet.
+    """
+
+    char = _char(data)
+    assert not reach_is_altered(char, data)
+    assert character_reach(char, data).feet == base_character_reach(char, data).feet
+
+    big = _char(data, "Huge")  # ...and a bought size is still that character's baseline
+    assert not reach_is_altered(big, data)
+
+
+def test_shrinking_out_of_reach_is_a_change_the_feet_cannot_show(data) -> None:
+    """Shrinking to a size the table gives no reach reads as zero feet either way.
+
+    A baseline-size character contributes zero feet too, so the subtraction alone would
+    call this unchanged — and losing your reach entirely is exactly what the row is for.
+    """
+
+    char = _char(data)
+    _growth(char, 2, effect="shrinking")
+    assert effective_size(char, data) == "Tiny"
+    assert reach_is_altered(char, data)
+    assert reach_text(character_reach(char, data)) == "none"
+
+
+def test_the_reach_extra_is_stated_from_the_arm_that_swings_it(data) -> None:
+    """A Reach 2 weapon on a Gargantuan character strikes at five Spaces, not two.
+
+    Reach belongs to the arm doing the reaching, so the extra is only meaningful added to
+    the reach its wielder already has — and five is the number the player needs, rather
+    than a ``Reach 2`` chip to add by hand to a row on another block.
+    """
+
+    char = _char(data)
+    _growth(char, 3)
+    effect = PowerEffectInstance("damage", rank=3, extras=[ModifierSelection("reach", rank=2)])
+    rows = {row.label: row.value for row in effect_stat_rows(effect, data, char)}
+    assert rows["Reach"] == "5 spaces / 30 ft."
+    assert "Reach 2" not in rows.get("Notes", "")  # spoken for by the row above
+
+    # Without a wielder (the Power Constructor) the line states what the extra alone buys.
+    bare = {row.label: row.value for row in effect_stat_rows(effect, data)}
+    assert bare["Reach"] == "2 spaces / 12 ft."
+
+
+def test_a_rationed_elongation_reaches_only_as_far_as_its_share_bought(data) -> None:
+    """The reach follows the dialled rank, like every other number a Dynamic pool holds."""
+
+    char = _char(data)
+    power = _growth(char, 4, effect="elongation")
+    assert reach_text(character_reach(char, data)) == "10 spaces / 60 ft."
+    power.effects[0].current_rank = 1
+    assert effect_current_rank(power.effects[0], data, char) == 1
+    assert reach_text(character_reach(char, data)) == "~2 spaces / 15 ft."

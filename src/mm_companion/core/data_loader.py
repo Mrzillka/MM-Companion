@@ -647,6 +647,22 @@ class EffectConfigField:
 
 
 @dataclass(frozen=True)
+class EffectReach:
+    """How an effect extends the reach its wielder makes close attacks at.
+
+    ``per_rank_distance_rank`` is the distance rank **one rank buys**: the effect adds
+    its rank times the real distance at that rank, which for Elongation is rank 1 (15
+    feet a rank). A real distance, not a rank, because reach sums several sources and
+    ranks are never added to each other (``measurements.json``'s ``doNotAddRanksNote``).
+
+    Nothing in code names Elongation — an effect extends reach because the ruleset gave
+    it this block, and a mod's own reach effect joins on exactly the same terms.
+    """
+
+    per_rank_distance_rank: int = 0
+
+
+@dataclass(frozen=True)
 class Measure:
     """A rank-derived real-world measurement an effect exposes (see ``measurements.json``).
 
@@ -942,6 +958,9 @@ class Effect:
     #: How far this effect reaches once its range resolves to Ranged. Seeded from the
     #: system-wide default and overridden by the effect's own ``rangeDistance`` block.
     range_distance: RangeDistance | None = None
+    #: How much *close*-attack reach the effect grants its wielder while it is active
+    #: (Elongation). ``None`` for every effect that grants none; see :class:`EffectReach`.
+    reach: EffectReach | None = None
 
 
 @dataclass(frozen=True)
@@ -1071,6 +1090,11 @@ class Modifier:
     #: How many distance ranks each rank of this modifier adds to a Ranged effect's
     #: reach (Extended Range's ``1``). Zero for every modifier that doesn't reach further.
     distance_rank_bonus: int = 0
+    #: How many whole **Spaces** of *close*-attack reach each rank of this modifier adds
+    #: (the Reach extra's ``1``). Spaces rather than a distance rank because that is how
+    #: the rules state it, and because it lands on the same total the Size Table's reach
+    #: column does. Zero for every modifier that extends no reach.
+    reach_spaces: int = 0
     adds_ability: str = ""
     cost_scope: str = ""
     cost_per_points: int = 0
@@ -1425,6 +1449,26 @@ class SizeEffect:
 
 
 @dataclass(frozen=True)
+class ReachRules:
+    """How far a character can make close attacks (``measurements.json``'s ``reachRules``).
+
+    Two numbers, both of them so the rules stay out of Python. ``space_distance_rank``
+    is the distance rank one Space *is*, which is the only thing that converts the Size
+    Table's ``reach`` column (counted in Spaces) into a real distance an effect's own
+    extension can be added to. ``baseline_size_rank`` names the size a reach readout
+    treats as its **zero**: a character that size has no reach worth naming, so their
+    size contributes nothing, while a larger one contributes its whole tabulated reach.
+
+    That asymmetry is deliberate and is the house rule this readout was asked for: the
+    baseline Space is the character's own body, already counted in every larger row of
+    the table, so adding it again to a stretched limb would charge for it twice.
+    """
+
+    space_distance_rank: int = 0
+    baseline_size_rank: int = 0
+
+
+@dataclass(frozen=True)
 class Measurements:
     """The rank → real-world measurement conversion tables (from ``measurements.json``).
 
@@ -1449,8 +1493,10 @@ class Measurements:
     by_rank: dict[int, dict[str, dict[str, str]]]  # rank -> system -> column -> label
     size_by_rank: dict[int, SizeRow] = field(default_factory=dict)
     distance_m_by_rank: dict[int, float] = field(default_factory=dict)
+    distance_ft_by_rank: dict[int, float] = field(default_factory=dict)
     size_effects: tuple[SizeEffect, ...] = ()
     size_rank_column: str = ""
+    reach_rules: ReachRules = field(default_factory=ReachRules)
 
     def label(self, column: str, rank: int, system: str = "imperial") -> str:
         return self.by_rank.get(rank, {}).get(system, {}).get(column, "")
@@ -1458,6 +1504,19 @@ class Measurements:
     def distance_m(self, rank: int) -> float:
         """The numeric metric distance (metres) for a rank, or ``0.0`` if off-table."""
         return self.distance_m_by_rank.get(rank, 0.0)
+
+    def distance_ft(self, rank: int) -> float:
+        """The numeric imperial distance (feet) for a rank, or ``0.0`` if off-table.
+
+        The imperial twin of :meth:`distance_m`, and parsed for the same reason: a
+        readout that has to *add* two distances (reach) cannot work from the labels,
+        and must not add the ranks (``doNotAddRanksNote``).
+        """
+        return self.distance_ft_by_rank.get(rank, 0.0)
+
+    def space_feet(self) -> float:
+        """How many feet one Space is — the distance value at ``space_distance_rank``."""
+        return self.distance_ft(self.reach_rules.space_distance_rank)
 
     def size_row(self, size_rank: int) -> SizeRow | None:
         """The size-table row for ``size_rank``, clamped to the tabulated range."""
@@ -2623,7 +2682,14 @@ def _parse_effect(e: dict, ranged_distance: RangeDistance | None = None) -> Effe
         implicit_modifiers=tuple(e.get("implicitModifiers", ())),
         range_distance=_parse_range_distance(e.get("rangeDistance"), default_distance)
         or default_distance,
+        reach=_parse_effect_reach(e.get("reach")),
     )
+
+
+def _parse_effect_reach(raw: dict | None) -> EffectReach | None:
+    if not raw:
+        return None
+    return EffectReach(per_rank_distance_rank=int(raw.get("perRankDistanceRank", 0)))
 
 
 # ``overrides`` keys are camelCase in the JSON like every other key there, but the
@@ -2652,6 +2718,7 @@ def _parse_modifier(m: dict, category: str | None = None) -> Modifier:
         step_field=m.get("stepField", ""),
         step_by=int(m.get("stepBy", 0)),
         distance_rank_bonus=int(m.get("distanceRankBonus", 0)),
+        reach_spaces=int(m.get("reachSpaces", 0)),
         adds_ability=m.get("addsAbility", ""),
         cost_scope=m.get("costScope", ""),
         cost_per_points=int(m.get("costPerPoints", 0)),
@@ -2741,6 +2808,7 @@ def _parse_measurements(raw: dict) -> Measurements:
 
     by_rank: dict[int, dict[str, dict[str, str]]] = {}
     distance_m_by_rank: dict[int, float] = {}
+    distance_ft_by_rank: dict[int, float] = {}
     for row in raw.get("rankMeasures", []):
         rank = int(row["rank"])
         time_label = row.get("time", {}).get("label", "")
@@ -2756,6 +2824,9 @@ def _parse_measurements(raw: dict) -> Measurements:
         metric_distance = row.get("metric", {}).get("distance", {}).get("m")
         if metric_distance is not None:
             distance_m_by_rank[rank] = float(metric_distance)
+        imperial_distance = row.get("imperial", {}).get("distance", {}).get("ft")
+        if imperial_distance is not None:
+            distance_ft_by_rank[rank] = float(imperial_distance)
 
     size_by_rank: dict[int, SizeRow] = {}
     for row in raw.get("sizeTable", []):
@@ -2780,12 +2851,18 @@ def _parse_measurements(raw: dict) -> Measurements:
         )
         for entry in raw.get("sizeEffects", [])
     )
+    reach_raw = raw.get("reachRules", {})
     return Measurements(
         by_rank=by_rank,
         size_by_rank=size_by_rank,
         distance_m_by_rank=distance_m_by_rank,
+        distance_ft_by_rank=distance_ft_by_rank,
         size_effects=size_effects,
         size_rank_column=raw.get("sizeRankColumn", ""),
+        reach_rules=ReachRules(
+            space_distance_rank=int(reach_raw.get("spaceDistanceRank", 0)),
+            baseline_size_rank=int(reach_raw.get("baselineSizeRank", 0)),
+        ),
     )
 
 

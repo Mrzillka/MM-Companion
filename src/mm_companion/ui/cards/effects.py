@@ -35,6 +35,7 @@ from mm_companion.core.rules import (
     effect_is_selected,
     effect_stat_rows,
     modifier_label,
+    structure_header,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.power_constructor.terms_grid import TermsGridStyle, build_terms_grid
@@ -225,15 +226,4 @@ def role_note(power: Power, index: int, character: Character, data: GameData) ->
             return "base, dynamic" if effect.dynamic else "base"
         kind = "dynamic alternate" if effect.dynamic else "alternate"
         return f"{kind} ({array_alternate_cost(data, dynamic=effect.dynamic)} pt)"
-    return ""
-
-
-def structure_header(power: Power) -> str:
-    """What a composite power's structure means, as the card's lead-in line."""
-    if len(power.effects) < 2:
-        return ""
-    if power.structure == STRUCTURE_LINKED:
-        return "Linked (all effects activate together)"
-    if power.structure == STRUCTURE_ARRAY:
-        return "Array (one effect active at a time)"
     return ""

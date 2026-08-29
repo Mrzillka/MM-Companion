@@ -42,6 +42,23 @@ mods/
     blocks.json
 ```
 
+Beside `mods/` the workspace also holds `mod_state/`, one JSON file per mod id,
+for what a mod writes about itself — see *Local state* below. It is deliberately
+not *inside* `mods/`: removing a mod deletes what it **is**, and a mod
+reinstalled later should still find what it had **done**.
+
+**Installing one.** The Mod Manager (the launcher's *Manage Mods*, or a sheet's
+*Settings ▸ Mods…*) offers two routes, and they end in the same place:
+
+- **Add Mod…** picks a folder and copies it in — what you want while writing one.
+- **Add from Zip…** takes a `.zip`, which is how a mod normally arrives (a release
+  asset). The archive may hold the mod at its root or inside one wrapping folder;
+  both work, since the latter is what every zip tool produces. An archive holding
+  *two* mods is refused rather than guessed at.
+
+Mods load once, at startup, so the manager offers to relaunch when something
+changed.
+
 ## The manifest (`mod.json`)
 
 ```json
@@ -49,7 +66,7 @@ mods/
   "id": "campaign-notes",           // unique id (required)
   "name": "Campaign Notes",          // display name (defaults to id)
   "version": "1.0",                  // free-form version string
-  "priority": 10,                    // higher applies later / wins (default 0)
+  "priority": 10,                    // where a newly-added mod first lands (default 0)
   "requires": ["base"],              // optional: ids this mod depends on
   "files": ["advantages.json"],      // content files this mod ships
   "python_module": "my_module"       // optional: importable module (data+Python mods)
@@ -60,9 +77,13 @@ mods/
   are read. Use the same filenames as the base ruleset to *override/extend* that
   content (`advantages.json`, `effects.json`, `conditions.json`, `equipment.json`,
   …), or `blocks.json` to add a declarative sheet block.
-- **`priority`** decides load order. The base ruleset is priority `0` and always
-  loads first; enabled mods then apply in ascending priority (higher wins). Ties
-  are broken by the order in the `enabled_mods` setting.
+- **`priority`** only *seeds* where a newly-added mod first lands. The real load
+  order is the user's, set by dragging in the Mod Manager and stored in the
+  `mod_order` setting: the base ruleset is always first, then the enabled mods in
+  that order, later applying later and winning. A mod that is enabled but not yet
+  in `mod_order` trails the ordered ones by ascending `priority`, which is the
+  only thing this number does. So pick a number above any mod you expect to
+  override, and know that the user can then move you.
 - A malformed manifest is **skipped**, not fatal — one bad mod can't stop the app.
 
 A few data keys worth knowing about, because they let a ruleset retune behaviour
@@ -197,6 +218,7 @@ handler, replace=False)`), so extending them is the same call everywhere:
 | `ui.power_constructor.CONFIG_WIDGET_BUILDERS` | ui | config-field **input widgets** |
 | `ui.power_constructor.REPEATABLE_CELL_KINDS` | ui | `repeatable` **column cells** — one row's inputs |
 | `ui.blocks.register_block(BlockDescriptor)` | ui | whole **sheet blocks** (Python) |
+| `ui.blocks.gm_registry.register_gm_block(GMBlockDescriptor)` | ui | whole **GM-window blocks** |
 
 `BASE_COST_KINDS` has its own helper too, `register_base_cost_kind(mode, kind)`, and
 decides *how* a record is priced rather than what it grants. A `BaseCostKind` is a
@@ -245,6 +267,77 @@ five kinds — `bonus`, `speed`, `sense`, `penalty_removed`, `penalty_replaced` 
 
 Core registries are safe to touch from a headless module; the `ui.*` ones import
 PySide6 (only import them from a mod that targets the GUI).
+
+## Talking to the table, and remembering things
+
+Two seams a mod gets beyond content and widgets. Both are Python, so a mod using
+them must be **trusted** as well as enabled.
+
+### The session channel
+
+A mod can put state in front of the whole table. One `SessionBridge` serves it —
+`mm_companion.ui.session_bridge.live_session()` hands you the live one, or `None`
+when there is no session, and every call below answers `False` in that case rather
+than raising. A mod runs whether or not there is a table.
+
+```python
+from mm_companion.ui.session_bridge import live_session
+
+bridge = live_session()
+if bridge is not None:
+    # GM only: publish one keyed entry. Everyone sees it, now and on joining.
+    bridge.set_mod_state("my-mod", "timer-1", {"remaining": 90, "running": True})
+    # ...and None deletes that entry, for everyone.
+    bridge.set_mod_state("my-mod", "timer-1", None)
+
+    # Read it back — never keep a copy a missed signal could leave stale.
+    entries = bridge.mod_state("my-mod")
+
+    # Any seat: ask the GM's copy of this mod for something. Nothing comes back.
+    bridge.send_mod_request("my-mod", "nudge", {"id": "timer-1"})
+
+    # GM only: write one line into the shared roll history.
+    bridge.post_mod_note("my-mod", "Timer Bomb finished")
+
+# Two signals, connected once:
+#   bridge.modStateChanged(mod_id, key, payload)   payload None means gone
+#   bridge.modRequest(mod_id, topic, player_id, payload)   reaches the GM only
+```
+
+Five rules that are not negotiable, because the protocol enforces them:
+
+- **Only the GM authors state.** A player's `set_mod_state` is dropped silently.
+  That is what makes the channel worth trusting; a player's mod speaks with
+  `send_mod_request`, which obliges the GM's mod to do nothing at all.
+- **The payload is opaque and bounded.** Plain JSON only — `str`, `int`, `float`,
+  `bool`, `None`, `dict`, `list` — nested at most 4 deep, 64 items wide, strings
+  clipped to 200 characters, and ~4 KB per entry with ~64 KB across every mod in
+  the session. Over the size cap is **dropped, not trimmed**, and `set_mod_state`
+  answers `False`, so check it. The server never interprets any of it.
+- **Everything you put there is public.** There is no GM-only half. Keep secrets
+  in `local_mod_state` below.
+- **Push on change, never on a tick.** A relayed session gets 256 KB/s, and a
+  countdown re-sent every second would spend it on nothing. Send a stamp and let
+  each client's own clock do the counting.
+- **Attribution is the server's.** `player_id` on a request is stamped from the
+  sending seat, whatever the sender wrote.
+
+### Local state
+
+For what a mod remembers for *itself* — including anything it must not share:
+
+```python
+from mm_companion.core import storage
+
+state = storage.local_mod_state("my-mod")          # {} if nothing was ever written
+storage.set_local_mod_state("my-mod", {"items": [...]})
+```
+
+One JSON file per mod id under the workspace `mod_state/` dir. A missing,
+unreadable or malformed file reads back as `{}` rather than raising — a mod's own
+saved state must never be able to stop the app starting. Don't confuse it with
+the mod *options* above: those are configuration the **user** set in the Mod
+Manager, this is what the mod itself wrote.
 
 ## Enabling, trust, and load order (settings)
 

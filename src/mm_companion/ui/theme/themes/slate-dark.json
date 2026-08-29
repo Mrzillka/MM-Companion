@@ -28,6 +28,10 @@
 
     "accent": "#5b9ee0",
     "accent.dice": "#7c9ad8",
+    "scene.enemy": "#e8767a",
+    "scene.friendly": "#4fbf76",
+    "scene.neutral": "#e0b442",
+    "scene.player": "#5b9ee0",
     "tint.better": "#4fbf76",
     "tint.worse": "#e8767a",
     "tint.warning": "#e0b442",

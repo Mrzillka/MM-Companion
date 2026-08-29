@@ -32,6 +32,7 @@ from mm_companion.core.rules import (
     effect_roll_numbers,
     effect_total_cost,
     effective_size,
+    ground_speed_rank,
     live_powers,
     node_cost,
     power_trait_bonuses,
@@ -1556,6 +1557,39 @@ def test_the_last_share_dialled_to_nothing_switches_its_member_off(
     assert effective_size(char, data) == "Large"  # Diminutive, plus four ranks
 
 
+def test_a_share_revives_every_switch_the_card_click_put_down(
+    qapp: QApplication,
+) -> None:
+    """A member switched off by clicking its card came back dead when paid for.
+
+    The card's own switch clears three flags together — ``activated``, ``item_present``
+    and every effect's ``toggled_on`` — while the share dial used to raise only the
+    first. So dialling points onto a member the player had clicked off spent the pool
+    and lit the card while ``effect_is_active`` went on reading it as off: the Speed
+    parked in this array bought its rank and the sheet never walked any faster.
+    """
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    armour = Power(name="Force Field", effects=[PowerEffectInstance("protection", rank=8)])
+    sprint = Power(name="Sprint", effects=[PowerEffectInstance("speed", rank=1)])
+    armour.dynamic = sprint.dynamic = True
+    group = PowerGroup(mode=STRUCTURE_ARRAY, children=[armour, sprint])
+    char.powers.append(group)
+    sec = _sheet_for(char).powers
+
+    walking = ground_speed_rank(char, data)
+    sec._set_power_active(sprint, False)  # the card click, which puts all three down
+    assert not sprint.activated and not sprint.item_present
+    assert not sprint.effects[0].toggled_on
+
+    _share_dials(sec)[1]._slider.setValue(1)  # ...and now pay for it again
+
+    assert sprint.dynamic_points == 1
+    assert sec._member_is_running(sprint)
+    assert ground_speed_rank(char, data) == walking + 1
+
+
 def test_an_unsplit_arrays_share_dial_seats_where_its_member_is_running(
     qapp: QApplication,
 ) -> None:
@@ -1579,7 +1613,10 @@ def test_an_unsplit_arrays_share_dial_seats_where_its_member_is_running(
 
     size_dial, reach_dial = _share_dials(sec)
     assert effective_size(char, data) == "Gargantuan"  # Diminutive, plus all six ranks
-    assert size_dial._labels[size_dial.value()] == "6 PP · Growth 6"
+    # Named by the size it *is* (the rank dial's own words), and with no price on it:
+    # this member was found running, not paid for, and the pool is not split.
+    assert size_dial._labels[size_dial.value()] == "Gargantuan"
+    assert size_dial._labels[3] == "3 PP · Medium"  # ...while every other notch is priced
     # The alternate nobody selected is off, and its groove still reaches the whole pool:
     # the seat above is a reading, not a claim on points anyone has assigned.
     assert reach_dial.value() == 0
@@ -1595,7 +1632,7 @@ def test_an_unsplit_arrays_share_dial_seats_where_its_member_is_running(
     sec._rebuild_list()
     dial = _share_dials(sec)[0]
     assert effective_size(char, data) == "Medium"
-    assert dial._labels[dial.value()] == "3 PP · Growth 3"
+    assert dial._labels[dial.value()] == "Medium"
 
 
 def test_a_share_dial_can_stop_at_a_rank_its_share_overshoots(qapp: QApplication) -> None:
@@ -1624,11 +1661,15 @@ def test_a_share_dial_can_stop_at_a_rank_its_share_overshoots(qapp: QApplication
     ladder = sec._share_notches(growth, 5, 0)
     assert ladder[-2:] == [(5, 5), (5, 6)]
     dial = _share_dials(sec)[0]
-    assert dial._labels[5] == "5 PP · Growth 5"
-    assert dial._labels[6] == "5 PP · Growth 6"
+    assert dial._labels[5] == "5 PP · Huge"
+    # Notch 6 is where this member was found running on nobody's points (the array is
+    # unsplit), so it names the rung without quoting a price for it.
+    assert dial._labels[6] == "Gargantuan"
 
     dial._slider.setValue(5)
     assert effective_size(char, data) == "Huge"
+    # Now the points really are spoken for, so every notch quotes its price again.
+    assert _share_dials(sec)[0]._labels[6] == "5 PP · Gargantuan"
     assert growth.dynamic_points == 5  # paid for six...
     assert effect.current_rank == 5  # ...and standing at five
     assert _share_dials(sec)[0].value() == 5  # and the handle comes back to that notch
@@ -1747,3 +1788,203 @@ def test_a_split_array_still_dims_by_what_is_running_with_no_role_left(
     assert sec._activation_role(armour, group) == ""
     assert sec._node_is_inactive(armour, group, "") is True
     assert sec._node_is_inactive(flight, group, "") is False
+
+
+# -- a Dynamic array's edges: joining it, leaving it, and getting back out of it ------
+
+
+def _pool_label(sec: PowersSection, node_id: str) -> str:
+    """What the pool readout for one host currently says."""
+    return sec._pool_labels[node_id].text()
+
+
+def test_a_card_dragged_into_a_dynamic_array_joins_it(qapp: QApplication) -> None:
+    """``dynamic`` is a fact about a node's place, and a drag changes its place.
+
+    A card dropped into a Dynamic array used to join as a plain 1-point alternate: no
+    share dial, mutually exclusive with siblings that were not, and mispriced — while
+    the group's switch went on reading *Dynamic array*, which lights on any member.
+    """
+
+    sheet, char, group = _pool_array(qapp)
+    sec = sheet.powers
+    stray = Power(name="Ice Blast", effects=[PowerEffectInstance("damage", rank=4)])
+    char.powers.append(stray)
+    assert not stray.dynamic
+
+    sec._on_move(stray.id, group.id, len(group.children))
+
+    assert stray in group.children
+    assert stray.dynamic  # ...and so it is priced as one, and gets a share dial
+    assert len(_share_dials(sec)) == 3
+
+
+def test_a_card_dragged_out_of_an_array_stops_claiming_a_share(qapp: QApplication) -> None:
+    """Leaving takes the flag *and* the share, so it cannot revive somewhere else."""
+
+    sheet, char, group = _pool_array(qapp)
+    sec = sheet.powers
+    armour = group.children[0]
+    armour.dynamic_points = 4
+
+    sec._on_move(armour.id, "", 0)  # dropped at the top level
+
+    assert armour in char.powers
+    assert not armour.dynamic
+    assert armour.dynamic_points is None
+
+
+def test_a_mode_round_trip_does_not_revive_the_old_split(qapp: QApplication) -> None:
+    """Dynamic array -> Linked -> Dynamic array is not a way to get the split back.
+
+    The shares used to be cleared only on the way to a *plain* array, so a group sent to
+    Linked kept every one of them — dead in the file, and instantly live again the moment
+    anyone chose Dynamic array a second time.
+    """
+
+    sheet, _char, group = _pool_array(qapp)
+    sec = sheet.powers
+    armour, flight = group.children
+    armour.dynamic_points = 5
+
+    sec._set_group_mode(group, STRUCTURE_LINKED)
+    assert [c.dynamic for c in group.children] == [False, False]
+    assert [c.dynamic_points for c in group.children] == [None, None]
+
+    sec._set_group_mode(group, MODE_ARRAY_DYNAMIC)
+    assert [c.dynamic for c in group.children] == [True, True]
+    assert [c.dynamic_points for c in group.children] == [None, None]
+    assert flight.dynamic_points is None
+
+
+def test_the_pool_readout_is_there_before_the_first_split(qapp: QApplication) -> None:
+    """The pool has to be visible for the gesture that spends it, not only after it.
+
+    It used to appear only once something had been assigned, so a player could not see
+    how many points there were to spread until they had already spread some — and the
+    line that says the array is still running one alternate at a time was missing too.
+    """
+
+    sheet, _char, group = _pool_array(qapp)
+    sec = sheet.powers
+
+    assert _pool_label(sec, group.id) == "Pool: 8 PP — not split"
+
+    _share_dials(sec)[1]._slider.setValue(1)  # give the Flight its first notch
+    assert "PP split" in _pool_label(sec, group.id)
+
+
+def test_the_hand_back_button_clears_a_split_in_one_gesture(qapp: QApplication) -> None:
+    """Sliding every member to nothing was the only way out, and a split array's cards
+    are not clickable — so the way *back* was the one thing the array had no control for.
+    """
+
+    sheet, char, group = _pool_array(qapp)
+    sec = sheet.powers
+    armour, flight = group.children
+
+    assert sec._pool_release(group) is None  # nothing split: nothing to hand back
+    _share_dials(sec)[1]._slider.setValue(1)
+    assert flight.dynamic_points
+
+    button = sec._pool_release(group)
+    assert button is not None
+    sec._release_pool(group)
+
+    assert [c.dynamic_points for c in group.children] == [None, None]
+    assert group.active_child_id == armour.id
+    assert sec._power_is_active(armour)  # the selected alternate is running again
+    assert sec._activation_role(armour, group) == "select"  # and the cards click again
+    assert _pool_label(sec, group.id) == "Pool: 8 PP — not split"
+
+
+def test_a_powers_own_split_states_its_pool_on_the_card(qapp: QApplication) -> None:
+    """An array exists at two levels and so does its pool; only one of them said so.
+
+    A power whose own effects were split coordinated their sliders live and stated the
+    pool nowhere, which is the one number no single slider can show.
+    """
+
+    char = Character.new_default(load_game_data())
+    bolt = PowerEffectInstance("damage", rank=8)
+    beam = PowerEffectInstance("damage", rank=4)
+    bolt.dynamic = beam.dynamic = True
+    power = Power(name="Cosmic Power", effects=[bolt, beam], structure=STRUCTURE_ARRAY)
+    char.powers.append(power)
+    sec = _sheet_for(char).powers
+
+    assert _pool_label(sec, power.id) == "Pool: 8 PP — not split"
+
+    _share_dials(sec)[0]._slider.setValue(2)
+    assert "PP split" in _pool_label(sec, power.id)
+
+    sec._release_effect_pool(power)
+    assert [e.dynamic_points for e in power.effects] == [None, None]
+    assert _pool_label(sec, power.id) == "Pool: 8 PP — not split"
+
+
+def test_a_member_with_no_share_dial_keeps_its_rank_dial(qapp: QApplication) -> None:
+    """Standing the rank dial down is only right where a share dial takes its place.
+
+    ``_rank_is_shared`` said yes for every Dynamic member, but the share dial declines a
+    member that costs nothing to ration — which left that card with neither control and
+    no way to turn the power up at all.
+    """
+
+    char = Character.new_default(load_game_data())
+    char.characteristics["size"] = "Medium"
+    growth = Power(name="Giant Form", effects=[PowerEffectInstance("growth", rank=4)])
+    growth.cost_override = 0  # a member the pool cannot ration
+    flight = Power(name="Flight", effects=[PowerEffectInstance("flight", rank=3)])
+    growth.dynamic = flight.dynamic = True
+    char.powers.append(PowerGroup(mode=STRUCTURE_ARRAY, children=[growth, flight]))
+    sec = _sheet_for(char).powers
+
+    assert sec._share_dial(growth, sec._character.powers[0], True) is None
+    assert sec._rank_dials(growth, sec._character.powers[0], True, shared=False)
+
+
+def test_a_receded_card_keeps_its_dial_at_full_strength(qapp: QApplication) -> None:
+    """A dial is the one live control on a card that is showing itself switched off.
+
+    Zero is off and sliding up wakes the power, so greying the dial out with the rest of
+    the card told the player the only usable thing on it was dead — and on a Dynamic
+    member parked at "Off" by its own share dial, that dial is the *only* way back:
+    a split array's cards are not clickable.
+    """
+
+    sheet, _char, group = _pool_array(qapp)
+    sec = sheet.powers
+    armour, flight = group.children
+    _share_dials(sec)[1]._slider.setValue(1)  # split the pool onto the Flight alone
+
+    card = next(c for c in sec._list_host.findChildren(_DraggableCard) if c.node_id == armour.id)
+    assert card.off_progress() == pytest.approx(1.0)  # the Force Field has receded...
+    # ...and it is its layout's children that carry the dimming, never the dial.
+    dial = card.findChild(_RankDial)
+    assert dial is not None
+    assert dial.graphicsEffect() is None
+    assert card.graphicsEffect() is None  # not the card either, or the dial would go too
+    name = next(label for label in card.findChildren(QLabel) if label.text() == "Force Field")
+    assert name.parentWidget().graphicsEffect() is not None  # the rest of it is dim
+
+
+def test_an_inert_dial_recedes_with_the_group_it_cannot_control(qapp: QApplication) -> None:
+    """A Linked group that is off drives its whole subtree, so nothing under it is live.
+
+    The members' dials go transparent to the mouse there, and a control that cannot be
+    used has no business staying lit — so nothing is exempted, and the group card's own
+    dimming covers them like everything else it holds.
+    """
+
+    char = Character.new_default(load_game_data())
+    growth = Power(name="Giant Form", effects=[PowerEffectInstance("growth", rank=4)])
+    flight = Power(name="Flight", effects=[PowerEffectInstance("flight", rank=3)])
+    group = PowerGroup(mode=STRUCTURE_LINKED, children=[growth, flight])
+    char.powers.append(group)
+    sec = _sheet_for(char).powers
+    sec._set_group_active(group, False)
+
+    cards = {c.node_id: c for c in sec._list_host.findChildren(_DraggableCard)}
+    assert cards[group.id].graphicsEffect() is not None  # dimmed whole, nothing exempted
+    assert cards[growth.id]._lit == []  # the member kept nothing lit under it

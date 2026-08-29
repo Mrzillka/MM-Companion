@@ -96,9 +96,43 @@ class DraggableCard(QFrame):
         # card is fully built), so scaling is always relative to the built size and
         # never compounds across frames.
         self._base_points: list[tuple[QWidget, float]] | None = None
+        # Controls that must not recede with the card (see :meth:`keep_lit`).
+        self._lit: list[QWidget] = []
         self._restyle()
 
     # -- the switched-off look --------------------------------------------
+    def keep_lit(self, *widgets: QWidget) -> None:
+        """Register controls that stay at full strength while the card recedes.
+
+        A receded card is *showing* that its subject is off, and everything on it is
+        description of a thing that is not happening — except the control that turns it
+        back on. A rank or share dial is exactly that: zero is off and sliding up wakes
+        the power at the notch asked for, so it is live on a card that is not, and
+        greying it out told the player the one usable thing on the card was dead.
+
+        Must be called before the first :meth:`set_off_progress`, which is when the card
+        captures the type sizes it scales from.
+
+        The widget has to be a **direct child of the card's layout**, and that is a
+        limitation of the mechanism rather than a style rule: a ``QGraphicsEffect``
+        paints its whole subtree through one buffer, so a descendant cannot opt out of
+        its ancestor's opacity. A card with something to keep lit therefore dims its
+        layout's children one by one instead of dimming itself, which is why its own
+        frame stays lit too — the frame is the drag target and the click target, and
+        those are live on a receded card as well.
+        """
+
+        self._lit.extend(w for w in widgets if w is not None)
+
+    def _lit_subtree(self) -> set[QWidget]:
+        """Every widget that must stay at full strength — the registered ones and theirs."""
+
+        kept: set[QWidget] = set()
+        for widget in self._lit:
+            kept.add(widget)
+            kept.update(widget.findChildren(QWidget))
+        return kept
+
     def set_off_progress(self, progress: float) -> None:
         """Show this card *progress* of the way to its switched-off state.
 
@@ -117,22 +151,46 @@ class DraggableCard(QFrame):
         return self._off
 
     def _apply_opacity(self, progress: float) -> None:
-        if progress <= 0.0:
-            # A live card carries no effect at all: a graphics effect forces the card's
-            # whole subtree to paint through an offscreen buffer, which is worth paying
-            # for only while it is actually dimmed (same rule as BlockCanvas._fade_in).
-            if self.graphicsEffect() is not None:
-                self.setGraphicsEffect(None)
+        opacity = lerp(1.0, theme.metric("opacity.inactive"), progress)
+        if not self._lit:
+            self._dim(self, progress, opacity)
             return
-        effect = self.graphicsEffect()
+        # Something on this card has to stay live, and an effect on the card would cover
+        # it: the whole subtree paints through one buffer (see :meth:`keep_lit`). So the
+        # card dims its layout's children one at a time and skips the lit ones.
+        self._dim(self, 0.0, opacity)  # never both
+        kept = self._lit_subtree()
+        layout = self.layout()
+        for index in range(layout.count() if layout is not None else 0):
+            child = layout.itemAt(index).widget()
+            if child is not None:
+                self._dim(child, 0.0 if child in kept else progress, opacity)
+
+    @staticmethod
+    def _dim(widget: QWidget, progress: float, opacity: float) -> None:
+        """Put *widget* at *opacity*, or take its effect off entirely at full strength.
+
+        A live widget carries no effect at all: a graphics effect forces its whole
+        subtree to paint through an offscreen buffer, which is worth paying for only
+        while it is actually dimmed (same rule as ``BlockCanvas._fade_in``).
+        """
+
+        if progress <= 0.0:
+            if widget.graphicsEffect() is not None:
+                widget.setGraphicsEffect(None)
+            return
+        effect = widget.graphicsEffect()
         if not isinstance(effect, QGraphicsOpacityEffect):
-            effect = QGraphicsOpacityEffect(self)
-            self.setGraphicsEffect(effect)
-        effect.setOpacity(lerp(1.0, theme.metric("opacity.inactive"), progress))
+            effect = QGraphicsOpacityEffect(widget)
+            widget.setGraphicsEffect(effect)
+        effect.setOpacity(opacity)
 
     def _apply_fonts(self, progress: float) -> None:
         if self._base_points is None:
-            self._base_points = [(w, w.font().pointSizeF()) for w in self._own_widgets()]
+            kept = self._lit_subtree()
+            self._base_points = [
+                (w, w.font().pointSizeF()) for w in self._own_widgets() if w not in kept
+            ]
         scale = lerp(1.0, theme.font_size("scale.inactive"), progress)
         for widget, base in self._base_points:
             font = widget.font()

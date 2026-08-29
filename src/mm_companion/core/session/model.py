@@ -15,6 +15,19 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from mm_companion.core.dice import CheckResult
+from mm_companion.core.session.protocol import (
+    MAX_MOD_IDS,
+    MAX_MOD_KEY,
+    MAX_MOD_KEYS,
+    MAX_MOD_STATE_CHARS,
+    mod_state_chars,
+    sanitize_mod_id,
+    sanitize_mod_payload,
+    sanitize_mod_state,
+    sanitize_scene,
+    sanitize_scene_portraits,
+    sanitize_scene_sources,
+)
 
 
 def utc_now() -> str:
@@ -124,14 +137,21 @@ KIND_NOTE = "note"
 #: rolls it on their own sheet — the asker's screen included (see
 #: :meth:`SessionState.record_request`).
 KIND_REQUEST = "request"
+#: A line a **mod** wrote: "Timer *Bomb* finished". Like a note it carries only
+#: ``text`` and no dice, and unlike one it names the mod that wrote it in
+#: ``mod_id`` — which is what lets a client that has that mod render the line its
+#: own way while one that does not still reads the plain sentence. Written by the
+#: GM's mod alone, so a countdown a dozen screens are watching says so once (see
+#: :meth:`SessionState.record_mod_note`).
+KIND_MOD = "mod"
 
 
 @dataclass(frozen=True)
 class RollRecord:
     """One entry in the shared history: a resolved roll, a note, or a request.
 
-    ``kind`` says which (:data:`KIND_ROLL`, :data:`KIND_NOTE` or
-    :data:`KIND_REQUEST`). One record type covers all three because the history
+    ``kind`` says which (:data:`KIND_ROLL`, :data:`KIND_NOTE`, :data:`KIND_REQUEST`
+    or :data:`KIND_MOD`). One record type covers all four because the history
     *is* the log — seq-numbered, appended to
     ``rolls.jsonl``, replayed to a late joiner, strikeable by the GM — and a note
     wants every one of those. A note leaves the dice fields at their defaults and
@@ -153,6 +173,12 @@ class RollRecord:
     :func:`~mm_companion.core.session.protocol.sanitize_spec`. It is what lets
     *another* player's screen offer the save an attack forced, and read the same
     outcome off the same ladder. Opaque here — this module never interprets it.
+
+    ``mod_id`` names the mod behind a :data:`KIND_MOD` line and is empty for
+    everything else. It is a field of its own rather than something parsed back
+    out of ``label`` because a reader has to be able to tell "a mod I have wrote
+    this" from "a mod I do not have wrote this" *before* deciding how to draw it,
+    and a prose label cannot answer that.
     """
 
     seq: int
@@ -169,6 +195,7 @@ class RollRecord:
     spec: dict | None = None
     kind: str = KIND_ROLL
     text: str = ""
+    mod_id: str = ""
     timestamp: str = field(default_factory=utc_now)
 
     @property
@@ -197,6 +224,7 @@ class RollRecord:
             "spec": self.spec,
             "kind": self.kind,
             "text": self.text,
+            "mod_id": self.mod_id,
             "timestamp": self.timestamp,
         }
 
@@ -220,6 +248,7 @@ class RollRecord:
             # A line written to rolls.jsonl before notes existed is a roll.
             kind=str(raw.get("kind", "")) or KIND_ROLL,
             text=str(raw.get("text", "")),
+            mod_id=str(raw.get("mod_id", "")),
             timestamp=str(raw.get("timestamp", "")) or utc_now(),
         )
 
@@ -282,6 +311,27 @@ class SessionState:
     players: dict[str, PlayerSlot] = field(default_factory=dict)
     npc_paths: list[str] = field(default_factory=list)
     rolls: list[RollRecord] = field(default_factory=list)
+    #: The shared board: who is in this fight, in what order, and what state they
+    #: are visibly in. Authored whole by the GM
+    #: (:class:`~.protocol.SetScene`), stored here so a table hosted on a server
+    #: survives the GM's laptop, and broadcast to everyone — the one thing in this
+    #: object that is *meant* to be seen by the table.
+    scene: list[dict] = field(default_factory=list)
+    #: The GM's private half of the scene: an entry's opaque ``ref`` to what it
+    #: actually is (``"npc:<file name>"`` / ``"player:<id>"``). Handed back to the
+    #: GM alone, exactly like :attr:`npc_paths` and for the same reason — an NPC's
+    #: file name is the GM's business, and can be a spoiler outright.
+    scene_sources: dict[str, str] = field(default_factory=dict)
+    #: One base64 thumbnail per scene entry, by ``ref``. Kept apart from
+    #: :attr:`scene` because the scene is re-sent on every change and these are
+    #: not: see :class:`~.protocol.SetScenePortrait`.
+    scene_portraits: dict[str, str] = field(default_factory=dict)
+    #: Every mod's shared state, as ``{mod_id: {key: payload}}``. Authored by the
+    #: GM (:class:`~.protocol.SetModState`), stored here so a table hosted on a
+    #: server survives the GM's laptop, and handed whole to every joiner. Opaque:
+    #: this module knows what shape a payload is and nothing whatever about what
+    #: it means.
+    mod_state: dict[str, dict[str, dict]] = field(default_factory=dict)
 
     # -- roster ------------------------------------------------------------
 
@@ -423,6 +473,99 @@ class SessionState:
         self.touch()
         return record
 
+    def record_mod_note(
+        self, *, player_id: str, player_name: str, mod_id: str, text: str
+    ) -> RollRecord:
+        """Append a line a mod wrote. The fourth kind, and the thinnest.
+
+        Deliberately :meth:`record_note` plus one field. A mod's line is a note in
+        every respect that matters to the log — it is seq-numbered, replayed to a
+        joiner, and strikeable — so giving it its own record type would have bought
+        nothing and cost every reader a second shape to handle. What it does need
+        is to say *which* mod wrote it, so a client holding that mod can draw the
+        line its own way and one that does not can still read it.
+        """
+        record = RollRecord(
+            seq=self.next_seq(),
+            player_id=player_id,
+            player_name=player_name,
+            die=0,
+            kind=KIND_MOD,
+            text=text,
+            mod_id=mod_id,
+        )
+        self.rolls.append(record)
+        self.touch()
+        return record
+
+    # -- mod state ---------------------------------------------------------
+
+    def set_mod_state(self, mod_id: str, key: str, payload: object) -> dict | None:
+        """Store one mod's entry, or drop it; return what was stored (``None`` if gone).
+
+        The caps are enforced here rather than at the door because this is where
+        the *accumulated* state lives: one message is small by
+        :func:`~.protocol.sanitize_mod_payload`, and what has to stay bounded is
+        the pile of them that goes out in every :class:`~.protocol.Welcome`.
+
+        A new key past :data:`~.protocol.MAX_MOD_KEYS`, a new mod past
+        :data:`~.protocol.MAX_MOD_IDS`, or anything that would push the whole map
+        past :data:`~.protocol.MAX_MOD_STATE_CHARS`, is **refused rather than
+        evicting an older one**. Evicting would make a mod's own state silently
+        lossy in a way it could not detect, and the mod that lost an entry would
+        not be the one that overran the cap.
+
+        The last of those three is the one that keeps :attr:`~.protocol.Welcome`
+        sendable: the per-entry caps multiply out to eight times
+        :data:`~.protocol.MAX_MESSAGE_BYTES`, so without an aggregate bound a
+        session could accumulate state its own welcome could not encode — and the
+        failure would land on the next player to join, not on whoever filled it.
+
+        A ``payload`` that sanitizes to ``None`` deletes the key — see
+        :func:`~.protocol.sanitize_mod_payload` for why a rejected payload and a
+        deliberate deletion deliberately look the same.
+        """
+        checked_id = sanitize_mod_id(mod_id)
+        if not checked_id or not isinstance(key, str) or not key.strip():
+            return None
+        checked_key = key[:MAX_MOD_KEY]
+        entries = self.mod_state.get(checked_id)
+        checked = sanitize_mod_payload(payload)
+
+        if checked is None:
+            if entries is not None and entries.pop(checked_key, None) is not None:
+                if not entries:
+                    # An empty mod is dropped rather than kept, so the MAX_MOD_IDS
+                    # cap counts mods that actually hold something.
+                    del self.mod_state[checked_id]
+                self.touch()
+            return None
+
+        if entries is None:
+            if len(self.mod_state) >= MAX_MOD_IDS:
+                return None
+            entries = self.mod_state.setdefault(checked_id, {})
+        if checked_key not in entries and len(entries) >= MAX_MOD_KEYS:
+            return None
+
+        # Measured against the map as it *would* be, and rolled back if it does
+        # not fit, so an overlarge write leaves the previous value in place rather
+        # than a hole. Overwriting a key with something smaller therefore always
+        # works, even when the map is already at the cap.
+        previous = entries.get(checked_key)
+        entries[checked_key] = checked
+        if mod_state_chars(self.mod_state) > MAX_MOD_STATE_CHARS:
+            if previous is None:
+                del entries[checked_key]
+                if not entries:
+                    del self.mod_state[checked_id]
+            else:
+                entries[checked_key] = previous
+            return None
+
+        self.touch()
+        return checked
+
     def record_request(
         self, *, player_id: str, player_name: str, label: str, dc: int | None, spec: dict | None
     ) -> RollRecord:
@@ -486,6 +629,10 @@ class SessionState:
             "updated_at": self.updated_at,
             "players": [slot.to_dict() for slot in self.players.values()],
             "npc_paths": list(self.npc_paths),
+            "scene": [dict(entry) for entry in self.scene],
+            "scene_sources": dict(self.scene_sources),
+            "scene_portraits": dict(self.scene_portraits),
+            "mod_state": {mod: dict(entries) for mod, entries in self.mod_state.items()},
         }
         if include_rolls:
             data["rolls"] = [roll.to_dict() for roll in self.rolls]
@@ -506,6 +653,15 @@ class SessionState:
             updated_at=str(raw.get("updated_at", "")) or utc_now(),
             players={slot.player_id: slot for slot in players},
             npc_paths=[str(p) for p in raw.get("npc_paths", [])],
+            # Sanitized rather than trusted on the way back in for the reason it was
+            # sanitized on the way over the wire: this file is not the authority on
+            # the shape, and a session written by a newer build should degrade to
+            # what this one understands rather than carry a surprise into a
+            # broadcast.
+            scene=sanitize_scene(raw.get("scene")),
+            scene_sources=sanitize_scene_sources(raw.get("scene_sources")),
+            scene_portraits=sanitize_scene_portraits(raw.get("scene_portraits")),
+            mod_state=sanitize_mod_state(raw.get("mod_state")),
             rolls=[RollRecord.from_dict(r) for r in raw.get("rolls", [])],
         )
 

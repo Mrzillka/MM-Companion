@@ -482,6 +482,96 @@ def build(target: str):
             if key not in ("powers", "system_info"):
                 sheet.hide_block(key)
         win.resize(820, 900)
+    elif target in ("dynamic-array", "dynamic-array-split"):
+        # A Dynamic array on the sheet, in both of the two regimes it has. Unsplit, the
+        # header states the pool and says it is *not* split, the cards are still
+        # clickable, and each member's slider is seated where the member is actually
+        # running with no price on that one notch. Split, the header counts the pool
+        # down, a hand-back button appears beside it, and every member runs at once.
+        # The System block rides along for its Limits row and its Size readout.
+        from mm_companion.core.powers import (
+            STRUCTURE_ARRAY,
+            Power,
+            PowerEffectInstance,
+            PowerGroup,
+        )
+        from mm_companion.ui.main_window import MainWindow
+        from mm_companion.ui.sections.powers import _RankDial
+
+        win = MainWindow(locked=False)
+        sheet = win._sheet
+        char = sheet.character
+        char.profile["hero_name"] = "Empyrean"
+        char.abilities["STA"] = 6
+        char.resistances["DEF"] = 8
+        char.skill_ranks["Stealth"] = 6
+        growth = Power(name="Giant Form", effects=[PowerEffectInstance("growth", rank=6)])
+        flight = Power(name="Cosmic Flight", effects=[PowerEffectInstance("flight", rank=5)])
+        armour = Power(name="Force Field", effects=[PowerEffectInstance("protection", rank=8)])
+        growth.dynamic = flight.dynamic = armour.dynamic = True
+        char.powers.append(
+            PowerGroup(
+                mode=STRUCTURE_ARRAY,
+                name="Cosmic Power",
+                children=[growth, flight, armour],
+                active_child_id=growth.id,
+            )
+        )
+        sheet.powers.refresh()
+        sheet.system_info.refresh_derived()
+        if target == "dynamic-array-split":
+            # Spread the pool through the real controls, so the header counts down and
+            # the hand-back button appears exactly as it would under a mouse.
+            dials = [
+                d
+                for d in sheet.powers._list_host.findChildren(_RankDial)
+                if any("PP" in text for text in d._labels.values())
+            ]
+            dials[1]._slider.setValue(2)  # some Flight...
+            dials = [
+                d
+                for d in sheet.powers._list_host.findChildren(_RankDial)
+                if any("PP" in text for text in d._labels.values())
+            ]
+            dials[2]._slider.setValue(2)  # ...and some Force Field, at the same time
+            sheet.system_info.refresh_derived()
+        for key in sheet.block_keys():
+            if key not in ("powers", "system_info"):
+                sheet.hide_block(key)
+        win.resize(900, 980)
+    elif target == "dynamic-effects":
+        # The other level the same pool exists at: one power whose *own* effects are an
+        # array, two of them Dynamic and sharing its points. The readout and the
+        # hand-back button ride on the card's own header, because a leaf card has no
+        # group bar above it to put them on.
+        from mm_companion.core.powers import (
+            STRUCTURE_ARRAY,
+            Power,
+            PowerEffectInstance,
+        )
+        from mm_companion.ui.main_window import MainWindow
+        from mm_companion.ui.sections.powers import _RankDial
+
+        win = MainWindow(locked=False)
+        sheet = win._sheet
+        bolt = PowerEffectInstance("damage", rank=8)
+        shield = PowerEffectInstance("protection", rank=6)
+        bolt.dynamic = shield.dynamic = True
+        sheet.character.powers.append(
+            Power(name="Cosmic Power", effects=[bolt, shield], structure=STRUCTURE_ARRAY)
+        )
+        sheet.powers.refresh()
+        dials = [
+            d
+            for d in sheet.powers._list_host.findChildren(_RankDial)
+            if any("PP" in text for text in d._labels.values())
+        ]
+        dials[0]._slider.setValue(2)
+        sheet.system_info.refresh_derived()
+        for key in sheet.block_keys():
+            if key not in ("powers", "system_info"):
+                sheet.hide_block(key)
+        win.resize(900, 820)
     elif target == "size-ladder-reload":
         # The round trip a size power's rung has to survive: a Growth 3 dialled to
         # Large through the real rank dial, written to the workspace with
@@ -1188,6 +1278,9 @@ def main(argv: list[str] | None = None) -> int:
             "enhanced-trait-sheet",
             "sheet-size",
             "size-ladder",
+            "dynamic-array",
+            "dynamic-array-split",
+            "dynamic-effects",
             "size-ladder-narrow",
             "size-ladder-reload",
             "equipment-constructor",

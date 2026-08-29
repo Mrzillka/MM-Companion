@@ -16,7 +16,7 @@ from PySide6.QtWidgets import QApplication
 
 from mm_companion.core import storage
 from mm_companion.core.session import client as session_client
-from mm_companion.core.session import discovery, store
+from mm_companion.core.session import discovery, protocol, store
 from mm_companion.core.session.client import SessionClient, SessionClientError
 from mm_companion.core.session.model import new_session
 from mm_companion.ui import session_bridge
@@ -458,3 +458,113 @@ def test_a_lost_listener_reaches_qt(qapp: QApplication, bridge: SessionBridge) -
         time.sleep(0.01)
 
     assert seen and seen[0]["session_id"] == bridge.server.state.id
+
+
+# -- the mod channel -------------------------------------------------------
+#
+# The bridge is the only place a core callback becomes a Qt signal, so these are
+# about the translation: the payload arriving intact, and the host's real answer
+# being passed on rather than assumed.
+
+
+def test_a_hosting_gm_publishes_mod_state_and_hears_it_back(
+    qapp: QApplication, bridge: SessionBridge
+) -> None:
+    host_locally(bridge)
+    seen = collect(bridge.modStateChanged)
+
+    assert bridge.set_mod_state("timers", "t1", {"kind": "timer", "remaining": 90})
+
+    drain(qapp, seen)
+    assert seen[0] == ("timers", "t1", {"kind": "timer", "remaining": 90})
+    assert bridge.mod_state("timers") == {"t1": {"kind": "timer", "remaining": 90}}
+
+
+def test_a_nested_mod_payload_survives_the_signal(
+    qapp: QApplication, bridge: SessionBridge
+) -> None:
+    """``object`` rather than ``dict`` on the signal, for the reason every other
+    payload here is: ``dict`` maps to ``QVariantMap``, which flattens the nested
+    values and the ``None`` that carries a deletion's whole meaning.
+    """
+    host_locally(bridge)
+    seen = collect(bridge.modStateChanged)
+
+    bridge.set_mod_state("timers", "t1", {"filled": [0, 1, 4], "label": None})
+
+    drain(qapp, seen)
+    assert seen[0][2] == {"filled": [0, 1, 4], "label": None}
+
+
+def test_deleting_a_mod_entry_reports_success_not_failure(
+    qapp: QApplication, bridge: SessionBridge
+) -> None:
+    """The asymmetry a deletion forces: a successful delete also stores nothing,
+    so "nothing stored" cannot be read as failure."""
+    host_locally(bridge)
+    bridge.set_mod_state("timers", "t1", {"kind": "timer"})
+    seen = collect(bridge.modStateChanged)
+
+    assert bridge.set_mod_state("timers", "t1", None) is True
+
+    drain(qapp, seen)
+    assert seen[0] == ("timers", "t1", None)
+    assert bridge.mod_state("timers") == {}
+
+
+def test_a_payload_the_wire_will_not_carry_is_reported_as_a_failure(
+    bridge: SessionBridge,
+) -> None:
+    """The lesson ``set_scene`` and ``prompt_roll`` already learned: reporting a
+    dropped payload as success leaves a mod believing the table can see something
+    it cannot."""
+    host_locally(bridge)
+    oversized = {str(i): "y" * protocol.MAX_MOD_TEXT for i in range(protocol.MAX_MOD_ITEMS)}
+
+    assert bridge.set_mod_state("timers", "t1", oversized) is False
+    assert bridge.mod_state("timers") == {}
+
+
+def test_junk_values_are_dropped_rather_than_refusing_the_whole_entry(
+    bridge: SessionBridge,
+) -> None:
+    """Consistent with every other sanitizer here: unrepresentable *values* go and
+    the entry survives. Only something the wire genuinely cannot carry — see the
+    test above — is refused outright.
+    """
+    host_locally(bridge)
+
+    assert bridge.set_mod_state("timers", "t1", {"ok": 1, "bad": object()}) is True
+    assert bridge.mod_state("timers") == {"t1": {"ok": 1}}
+
+
+def test_the_mod_channel_is_inert_with_no_session(bridge: SessionBridge) -> None:
+    """A mod runs whether or not there is a table, so every one of these has to
+    answer rather than raise."""
+    assert bridge.set_mod_state("timers", "t1", {"kind": "timer"}) is False
+    assert bridge.send_mod_request("timers", "nudge") is False
+    assert bridge.post_mod_note("timers", "hello") is False
+    assert bridge.mod_state("timers") == {}
+    assert bridge.mod_state() == {}
+
+
+def test_a_hosting_gm_has_nobody_to_send_a_mod_request_to(bridge: SessionBridge) -> None:
+    """Their own mod is already the one that would have handled it, so the
+    request is refused rather than looped back."""
+    host_locally(bridge)
+
+    assert bridge.send_mod_request("timers", "nudge") is False
+
+
+def test_a_hosting_gm_writes_a_mod_line_into_the_shared_history(
+    qapp: QApplication, bridge: SessionBridge
+) -> None:
+    host_locally(bridge)
+    seen = collect(bridge.rollAdded)
+
+    assert bridge.post_mod_note("timers", "Timer Bomb finished")
+
+    drain(qapp, seen)
+    assert seen[0][0]["kind"] == "mod"
+    assert seen[0][0]["mod_id"] == "timers"
+    assert seen[0][0]["text"] == "Timer Bomb finished"

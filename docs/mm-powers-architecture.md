@@ -341,7 +341,8 @@ therefore a data edit with no Python behind it.
 `array_members_cost` charges `dynamicCostValue` (2) for a Dynamic alternate and one Alternate
 Effect rank for a Dynamic base, at both levels an array exists at — so a Dynamic array costs
 what the book prints. The **runtime allocation** rides beside it as `dynamic_points` on
-`Power` / `PowerGroup`: how many of the array's points that member currently holds. Three
+`Power`, `PowerGroup` *and* `PowerEffectInstance` — all three things an array's member can
+be — recording how many of the array's points that member currently holds. Three
 functions turn it into behaviour, all in `core/rules`:
 
 - `array_pool_points(group, ...)` — the pool, which is the *base* member's full cost, since
@@ -568,6 +569,9 @@ Modifier (from modifiers.json)
 └── description
 
 PowerEffectInstance  (part of a character's Power)
+  // Field names below are the *content* file's camelCase for readability; the keys in a
+  // saved character are snake_case (`effect_id`, `current_rank`, `rank_dial`,
+  // `dynamic_points`, `extra_effort`, `size_scales_damage`) — see `Power.to_dict`.
 ├── effectId, rank, config{}, extras[]{modifierId, rank?}, flaws[]{modifierId, rank?}, descriptors[]
 │   // a selection also carries appliesFrom/appliesTo — the rank *band* it covers, 0/0
 │   // meaning every rank. Per-rank modifiers only: a flat charge costs the same over
@@ -587,13 +591,15 @@ PowerEffectInstance  (part of a character's Power)
 │                                          // by validation, which take the *bought*
 │                                          // rank (`effect_build_rank`): dialling down
 │                                          // refunds nothing and legalises nothing.
-├── rankDial (bool, default false)        // build: whether the card carries that slider
-│                                          // at all. A size effect gets one regardless.
+├── rankDial (bool|null, default null)    // build: whether the card carries that slider
+│                                          // at all. Tri-state: null means "the ruleset
+│                                          // decides", which is what an untouched effect
+│                                          // carries. A size effect gets one regardless.
 ├── dynamic (bool, default false)         // build: a Dynamic member of this power's array
 │                                          // (§4) - shares the pool and runs alongside the
 │                                          // other Dynamic members, for 2 points instead
 │                                          // of 1. `Power`/`PowerGroup` carry the same
-│                                          // flag for a group-level array, and there also
+│                                          // flag for a group-level array, and all three
 │                                          // carry `dynamicPoints` (int|null): runtime,
 │                                          // how much of the array's pool this member
 │                                          // currently holds. Null - the default - is no

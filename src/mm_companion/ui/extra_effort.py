@@ -19,7 +19,8 @@ benefits for two rungs (p86). The arithmetic is all
 the player chose.
 
 The controls are *play*, not build, so they stay available while the sheet is locked —
-the same bargain the array's Split points button and the card clicks strike.
+the same bargain a Dynamic array's share dials, its hand-back button and the card clicks
+all strike.
 """
 
 from __future__ import annotations

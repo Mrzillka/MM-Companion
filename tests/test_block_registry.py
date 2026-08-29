@@ -28,10 +28,11 @@ BASE_KEYS = {
     "equipment",
     "notes",
     "dice",
+    "scene",
 }
 
-# The default arrangement the registry must reproduce. The Dice block is absent on
-# purpose: it starts in the pinned strip, not in a row (see default_pin_lines).
+# The default arrangement the registry must reproduce. Dice and Scene are absent
+# on purpose: both start in the pinned strip, not in a row (see default_pin_lines).
 EXPECTED_DEFAULT_ROWS = [
     ["base_info", "system_info", "character_image"],
     ["abilities", "resistances", "conditions"],
@@ -53,10 +54,12 @@ def test_default_rows_match_the_historical_layout() -> None:
     assert default_rows() == EXPECTED_DEFAULT_ROWS
 
 
-def test_the_dice_block_starts_in_the_pinned_strip() -> None:
-    # A die that scrolls away with the page is no use mid-fight, so the roller is
-    # the one base block whose default home is the strip.
-    assert default_pin_lines() == [["dice"]]
+def test_the_dice_and_scene_blocks_start_in_the_pinned_strip() -> None:
+    # Neither is any use mid-fight once it has scrolled away with the page: the
+    # roller because that is where the die is thrown, the Scene because that is
+    # where the turn order is read. The order matters — the strip is built from
+    # these lines top down, and the roller is the older habit.
+    assert default_pin_lines() == [["dice"], ["scene"]]
 
 
 def test_rows_and_pinned_lines_cover_every_block_exactly_once() -> None:

@@ -51,15 +51,11 @@ from mm_companion.core.rules import (
     modifier_label,
     pl_cap_note,
     power_allocation_violations,
+    power_check_results,
     power_cost_formula,
-    power_imposed_effect_violations,
     power_linked_range_violations,
-    power_modifier_requirement_violations,
     power_pl_violations,
-    power_strength_amount_violations,
-    power_sub_build_violations,
     power_total_cost,
-    power_trait_allocation_violations,
     selection_band,
 )
 from mm_companion.ui import theme
@@ -1441,94 +1437,31 @@ class PowerConstructorWindow(QMainWindow):
         """Tier-4 over-allocation breaches (an effect spending ranks it doesn't have)."""
         return power_allocation_violations(self.power, self._data)
 
-    def _trait_cap_violations(self) -> list[str]:
-        """Allocation rows holding more ranks of a trait than it can be taken at.
-
-        Only advantages have a ceiling of their own — most are not ranked, a few cap at a
-        fixed number — so in practice this is "three ranks put into a one-rank advantage".
-        A warning, not a clamp: the row is the player's and on screen, and quietly
-        charging for fewer ranks than it shows would leave the footer disagreeing with it.
-        """
-
-        return power_trait_allocation_violations(self.power, self._data, self._character)
-
     def _linked_violations(self) -> list[str]:
         """Linked effects that don't share a common Range (a build error)."""
         return power_linked_range_violations(self.power, self._data)
 
-    def _strength_violations(self) -> list[str]:
-        """Strength-Based amounts paying for more of an ability than the wielder has.
-
-        Constructor-only: the character-sheet card never shows this warning.
-        """
-        if self._character is None:
-            return []
-        return power_strength_amount_violations(self.power, self._character, self._data)
-
-    def _requirement_violations(self) -> list[str]:
-        """Modifiers attached without a prerequisite they depend on (Increasing
-        Difficulty without Cumulative/Progressive) — a house-rule warning."""
-        return power_modifier_requirement_violations(self.power, self._data)
-
-    def _imposed_violations(self) -> list[str]:
-        """An Affliction's Transformed condition imposing an effect it cannot afford.
-
-        The imposed effect may cost no more than the Affliction imposing it (p110), and
-        that budget moves every time the Affliction's rank or modifiers do — which is
-        why it is a live warning rather than something the picker could have prevented,
-        the way the picker does prevent a too-slow or non-Personal effect.
-        """
-        return power_imposed_effect_violations(self.power, self._data, self._character)
-
-    def _sub_build_violations(self) -> list[str]:
-        """Nested characters over their budget, past their count, or carrying what they
-        may not — a Summon's minion, a Metamorph's alternate forms (see
-        :mod:`mm_companion.core.rules.subbuilds`)."""
-        return power_sub_build_violations(self.power, self._data, self._character)
-
     def _refresh_pl_warning(self) -> None:
-        """Show or hide the live warning from the current PL, allocation, and link breaches."""
-        pl = self._pl_violations()
-        alloc = self._alloc_violations()
-        caps = self._trait_cap_violations()
-        linked = self._linked_violations()
-        strength = self._strength_violations()
-        requirement = self._requirement_violations()
-        imposed = self._imposed_violations()
-        sub_builds = self._sub_build_violations()
-        headlines = []
-        if pl:
-            headlines.append("over Power Level")
-        if alloc:
-            headlines.append("over-allocated")
-        if caps:
-            headlines.append("trait over its rank cap")
-        if linked:
-            headlines.append("mismatched linked Range")
-        if strength:
-            headlines.append("Strength shortfall")
-        if requirement:
-            headlines.append("missing required modifier")
-        if imposed:
-            headlines.append("imposed effect over budget")
-        if sub_builds:
-            headlines.append("sub-build over budget")
-        headline = ("⚠ " + " & ".join(headlines).capitalize()) if headlines else ""
+        """Show or hide the live warning band, from every check the registry holds.
+
+        One walk over :data:`~mm_companion.core.rules.POWER_CHECKS`, which is what the
+        registry exists for and what the sheet card's ⚠ has always done
+        (:func:`~mm_companion.core.rules.power_violations`). This used to hand-list eight
+        of the ten registered checks, and the two it forgot — a **power stunt over its
+        ceiling** and **paying twice for one choice** — were marked on the saved card and
+        nowhere in the window that had just built them. A mod registering a rule of its
+        own was invisible here for the same reason.
+
+        The headline is the check keys, which is what they are named for; the tooltip is
+        every sentence behind them, in registration order.
+        """
+
+        results = power_check_results(self.power, self._character, self._data)
+        headline = ("⚠ " + " & ".join(key for key, _ in results).capitalize()) if results else ""
         if headline:
             self._warning.setText(headline)
             self._warning.setToolTip(
-                "\n".join(
-                    (
-                        *pl,
-                        *alloc,
-                        *caps,
-                        *linked,
-                        *strength,
-                        *requirement,
-                        *imposed,
-                        *sub_builds,
-                    )
-                )
+                "\n".join(message for _key, messages in results for message in messages)
             )
         self._warning.setVisible(bool(headline))
 

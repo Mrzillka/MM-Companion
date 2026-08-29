@@ -316,3 +316,159 @@ def size_steps(
         return tuple(steps)
     now = effect_current_rank(effect, game_data, char)
     return tuple(replace(s, current=s.rank <= now <= s.last_rank) for s in steps)
+
+
+# -- reach -----------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Reach:
+    """How far a character makes close attacks, in feet and in whole Spaces.
+
+    Feet are the truth and Spaces are read off them, because reach adds several sources
+    that do not land on whole Spaces: a Gargantuan character reaches 3 Spaces (18 ft) and
+    an Elongation 1 stretches 15 ft further, which is 33 ft — five Spaces and a half.
+    Rounding each source to Spaces first would have lost that half at every step, so the
+    readout keeps the feet exact and says :attr:`exact` is ``False``, which is what the
+    ``~`` in ``~5 spaces / 33 ft.`` means.
+    """
+
+    feet: float
+    #: How many feet one Space is (``measurements.json``'s ``reachRules``), carried so a
+    #: ruleset with a different grid does not need this class to know its number.
+    space_feet: float
+
+    @property
+    def spaces(self) -> int:
+        """Whole Spaces the reach covers — rounded **down**, since a half-Space of reach
+        does not let a character strike into the next square."""
+        if self.space_feet <= 0:
+            return 0
+        return int(self.feet // self.space_feet)
+
+    @property
+    def exact(self) -> bool:
+        """Whether the feet are a whole number of Spaces."""
+        if self.space_feet <= 0:
+            return True
+        return abs(self.feet - self.spaces * self.space_feet) < 1e-9
+
+
+def _feet_text(feet: float) -> str:
+    """A distance with no trailing ``.0`` — reach lands on whole feet almost always."""
+    return f"{feet:.1f}".rstrip("0").rstrip(".")
+
+
+def reach_text(reach: Reach) -> str:
+    """``"3 spaces / 18 ft."`` — or ``"~7 spaces / 45 ft."`` when the Spaces are rounded.
+
+    Without the ``Reach:`` caption, so the System block can put it in a form label and
+    the power's game-term line can put it inline.
+
+    **Zero reads as a word, not as two zeroes.** A character shrunk past the size the
+    table gives reach at has lost it entirely, which is one of the two things the
+    readout exists to announce (:func:`reach_is_altered`) — and ``0 spaces / 0 ft.``
+    states a measurement where there is none to state. One word, because this lands in
+    a form row beside a caption; what it *means* belongs in that row's tooltip.
+    """
+
+    if reach.feet <= 0:
+        return "none"
+    spaces = reach.spaces
+    noun = "space" if spaces == 1 else "spaces"
+    tilde = "" if reach.exact else "~"
+    return f"{tilde}{spaces} {noun} / {_feet_text(reach.feet)} ft."
+
+
+def size_reach_feet(size_rank: int, game_data: GameData) -> float:
+    """The reach a size category alone gives, in feet.
+
+    The Size Table's ``reach`` column counted in Spaces, converted at
+    ``reachRules.spaceDistanceRank``. A size at or below ``reachRules.baselineSizeRank``
+    contributes **nothing**: that baseline Space is the character's own body — the reach
+    every character already has and which the readout treats as its zero — so counting it
+    again beside a stretched limb would charge for it twice. Above the baseline the row's
+    whole tabulated reach counts, because those rows are stated as totals.
+    """
+
+    measurements = game_data.measurements
+    row = measurements.size_row(size_rank)
+    baseline = measurements.size_row(measurements.reach_rules.baseline_size_rank)
+    if row is None or baseline is None or row.reach <= baseline.reach:
+        return 0.0
+    return row.reach * measurements.space_feet()
+
+
+def reach_extension_feet(char: Character, game_data: GameData) -> float:
+    """How much further the character's *active* reach-extending effects stretch, in feet.
+
+    Elongation in the base ruleset, but nothing here names it: an effect extends reach
+    because ``effects.json`` gave it a ``reach`` block (:class:`~..data_loader.EffectReach`),
+    and a mod's own one is picked up on the same terms. Each contributes its rank times
+    the real distance at the rank it declares — the distances are summed, never the ranks
+    (``measurements.json``'s ``doNotAddRanksNote``).
+
+    The rank read is the one the effect is currently **dialled** to, the same
+    :func:`~.runtime.effect_current_rank` :func:`size_shift` reads, so an Elongation
+    rationed by a Dynamic array's point pool reaches only as far as its share bought.
+    """
+
+    feet = 0.0
+    for power in live_powers(char.powers):
+        for effect in power.effects:
+            base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+            if base is None or base.reach is None:
+                continue
+            if not effect_is_active(power, effect, base, game_data, char):
+                continue
+            rank = effect_current_rank(effect, game_data, char)
+            feet += rank * game_data.measurements.distance_ft(base.reach.per_rank_distance_rank)
+    return feet
+
+
+def character_reach(char: Character, game_data: GameData) -> Reach:
+    """How far the character can make close attacks right now.
+
+    Their *effective* size's tabulated reach — so a Growth moves it and a Shrinking cuts
+    it — plus whatever their active reach-extending effects stretch on top.
+    """
+
+    return Reach(
+        feet=size_reach_feet(effective_size_rank(char, game_data), game_data)
+        + reach_extension_feet(char, game_data),
+        space_feet=game_data.measurements.space_feet(),
+    )
+
+
+def base_character_reach(char: Character, game_data: GameData) -> Reach:
+    """The reach the character has with nothing switched on — their bought size alone.
+
+    What :func:`character_reach` is compared against to decide whether anything has
+    *changed* it, which is the only condition the System block shows the row under: a
+    Medium character reaching one Space is the baseline everything else is stated
+    against, and saying so on every sheet would be noise.
+    """
+
+    return Reach(
+        feet=size_reach_feet(base_size_rank(char, game_data), game_data),
+        space_feet=game_data.measurements.space_feet(),
+    )
+
+
+def reach_is_altered(char: Character, game_data: GameData) -> bool:
+    """Whether any source has moved the character's reach off what their bought size gives.
+
+    Two questions, because reach can change without the feet moving. The feet are the
+    usual one — a Growth or an Elongation lengthens them. The second catches the other
+    direction: a Shrinking down to a size the table gives *no* reach at all reads as zero
+    feet either way, since a baseline-size character contributes zero too
+    (:func:`size_reach_feet`), and losing your reach entirely is exactly the kind of
+    change the readout exists to announce.
+    """
+
+    if character_reach(char, game_data).feet != base_character_reach(char, game_data).feet:
+        return True
+    measurements = game_data.measurements
+    now = measurements.size_row(effective_size_rank(char, game_data))
+    base = measurements.size_row(base_size_rank(char, game_data))
+    return now is not None and base is not None and now.reach != base.reach

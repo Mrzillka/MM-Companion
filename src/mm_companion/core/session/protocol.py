@@ -16,11 +16,12 @@ Vocabulary (protocol v2):
 
 **Client → server** — :class:`Hello`, :class:`CharacterSnapshot`,
 :class:`RollRequest`, :class:`NoteRequest`, :class:`RollPrompt`,
-:class:`RemoveRollRequest`, :class:`Ping`.
+:class:`RemoveRollRequest`, :class:`SetModState`, :class:`ModNote`,
+:class:`ModRequest`, :class:`Ping`.
 
 **Server → client** — :class:`Welcome`, :class:`Roster`, :class:`RollAdded`,
 :class:`RollRemoved`, :class:`ApplyCondition`, :class:`RemoveCondition`,
-:class:`ErrorMessage`, :class:`Kicked`, :class:`Pong`.
+:class:`ModStateUpdate`, :class:`ErrorMessage`, :class:`Kicked`, :class:`Pong`.
 
 A *hidden* roll is stored on the server with ``hidden: true`` and is never
 broadcast at all, so there is nothing for a player client to peek at — only the
@@ -63,7 +64,22 @@ from typing import ClassVar
 #: one — and the ``kind="request"`` record it becomes. Additive, and bumped for
 #: the v6 reason word for word: an old server rejects the unknown message type
 #: outright, and an old client renders a request as a d20 that rolled zero.
-PROTOCOL_VERSION = 8
+#:
+#: v9 added the **scene**: :class:`SetScene` / :class:`SceneUpdate` and the
+#: portrait pair beside them, plus ``Welcome.scene``. Additive once more, and
+#: bumped for the reason the last three were — a v8 client joins happily, never
+#: learns the message type exists, and shows an empty board through the whole
+#: fight the rest of the table is watching. A silent wrong answer, refused at
+#: the door.
+#:
+#: v10 opened the wire to **mods**: :class:`SetModState` / :class:`ModStateUpdate`,
+#: :class:`ModRequest`, :class:`ModNote`, and ``Welcome.mod_state``. Additive, and
+#: bumped for the v9 reason word for word. :meth:`~.server.SessionServer._handle`
+#: has no ``else`` — a v9 server receiving a ``set_mod_state`` drops it on the
+#: floor without a word, so a GM would run a whole fight believing the table could
+#: see their timers. Silence that reads as success is exactly what these bumps
+#: exist to prevent.
+PROTOCOL_VERSION = 10
 
 #: Hard cap on one encoded message, including its trailing newline. A character
 #: snapshot is the largest thing that legitimately travels (tens of KB); anything
@@ -349,6 +365,156 @@ class SetNpcPaths(Message):
 
 @_register
 @dataclass(frozen=True)
+class SetScene(Message):
+    """The GM's whole scene, replacing whatever the server held. GM only.
+
+    The scene is the shared half of the GM's board: who is in this fight, in what
+    order, and what state they are visibly in. Unlike :class:`SetNpcPaths` — the
+    other thing a GM stores here — it **is** broadcast, which is the whole point
+    of it.
+
+    It is sent whole rather than as add/remove/reorder deltas because it is
+    small, it changes for half a dozen unrelated reasons (a condition applied, an
+    initiative rolled, a card dragged, a player joining), and a delta stream has
+    to be replayed in order to mean anything. One authority, one payload, no
+    reconciliation.
+
+    ``entries`` is a list of scene entries (see :func:`sanitize_scene` for the
+    shape the server keeps). ``sources`` is the GM's private map of an entry's
+    opaque ``ref`` to what it actually is — ``"npc:<file name>"`` or
+    ``"player:<id>"``. It is stored and handed back to the GM alone, never
+    broadcast, for the reason ``SetNpcPaths`` is not broadcast: an NPC's file
+    name is the GM's, and "TheTraitorIsMarcus.json" is not a thing to put on a
+    player's screen. It is what lets a GM pick the session up on another machine
+    and still have a scene that maps onto their own creatures.
+    """
+
+    TYPE: ClassVar[str] = "set_scene"
+
+    entries: list[dict] = field(default_factory=list)
+    sources: dict = field(default_factory=dict)
+
+
+@_register
+@dataclass(frozen=True)
+class SetScenePortrait(Message):
+    """One scene entry's thumbnail, stored and broadcast on its own. GM only.
+
+    Pictures travel apart from :class:`SetScene` for two reasons, and both are
+    load-bearing. A scene is re-sent every time anything on it changes — often,
+    mid-fight — and re-sending a dozen portraits with it is the one thing that
+    could make a relayed table expensive. And a dozen portraits in one message
+    would blow :data:`MAX_MESSAGE_BYTES` outright, whereas a dozen messages of
+    one portrait each cannot.
+
+    So a portrait is sent **once**, when its entry joins the scene, and replayed
+    one message at a time to a client that joins later. ``portrait`` is a base64
+    JPEG capped at :data:`MAX_SCENE_PORTRAIT_CHARS`; an empty one clears it.
+    """
+
+    TYPE: ClassVar[str] = "set_scene_portrait"
+
+    ref: str
+    portrait: str = ""
+
+
+@_register
+@dataclass(frozen=True)
+class SetModState(Message):
+    """One entry of a mod's shared state, stored and rebroadcast. GM only.
+
+    The seam that lets a **mod** say something to the whole table. A mod names
+    itself (``mod_id``), names the thing it is describing (``key`` — one timer,
+    one counter, one whatever), and hands over an opaque ``payload``. The server
+    stores it, hands it to a later joiner in their :class:`Welcome`, and
+    rebroadcasts it as a :class:`ModStateUpdate`; it never looks inside.
+
+    That opacity is not politeness, it is the layering rule: ``core/session/``
+    may not import ``core.rules``, and the standalone server
+    (``python -m mm_companion.server``) loads no game data at all, so it could
+    not interpret a mod's payload even if it wanted to. What it *does* do is
+    check the shape (:func:`sanitize_mod_payload`) and the size, exactly as it
+    does for a :attr:`RollRequest.spec`.
+
+    Keyed rather than sent whole — the opposite of :class:`SetScene`, and worth
+    saying why. A scene changes for half a dozen unrelated reasons at once and is
+    one authority's single picture, so sending it whole avoids reconciliation. A
+    mod's state is a *bag of independent things*: a GM starting one timer should
+    not re-push the other five, and two mods must never be able to overwrite each
+    other. One key, one message, one owner.
+
+    A ``payload`` of ``None`` **deletes** that key, and the deletion is broadcast
+    like any other change. That is what a share toggle turning off looks like on
+    the wire: not a flag saying "ignore this", but the thing ceasing to exist for
+    everyone but its author.
+
+    **Everything here is public.** Unlike ``SetScene.sources``, there is no
+    GM-only half — the state goes to every seat, because being seen by the table
+    is the entire point of sending it. A mod with a secret keeps it off this
+    channel.
+    """
+
+    TYPE: ClassVar[str] = "set_mod_state"
+
+    mod_id: str
+    key: str
+    payload: dict | None = None
+
+
+@_register
+@dataclass(frozen=True)
+class ModNote(Message):
+    """A mod writing one line into the shared history. GM only.
+
+    The same road a :class:`NoteRequest` takes, and for the same reason: what is
+    worth saying is a question the sender answers, and the server has no rules in
+    it. The text is composed by the mod and carried verbatim, length-capped on
+    the way in, and attributed to the seat that sent it — so a mod can no more
+    impersonate someone than a roll label can.
+
+    It becomes a ``kind="mod"`` record carrying the sending mod's id, which is
+    what lets a client that *has* that mod render the line richly while one that
+    does not still reads the plain text. GM only, so a mod's announcement lands
+    in the log once rather than once per client watching the same countdown.
+    """
+
+    TYPE: ClassVar[str] = "mod_note"
+
+    mod_id: str
+    text: str = ""
+
+
+@_register
+@dataclass(frozen=True)
+class ModRequest(Message):
+    """A mod at one seat asking the **GM's** mod to do something. Any seat.
+
+    The other half of the channel, and deliberately unlike :class:`SetModState`
+    in every respect: it is not stored, not broadcast, and not the GM's to send.
+    A player's mod raises it; the server forwards it to the GM seat alone and
+    forgets it. Nothing about a request obliges the GM's mod to act — it is a
+    message, not a command, which is what keeps authorship where
+    :class:`SetModState` puts it.
+
+    ``player_id`` is **stamped by the server** from the sending slot, never read
+    from what the sender wrote, the same way a roll's attribution is. A field on
+    the wire that a client could fill in itself would make the whole channel an
+    impersonation tool.
+
+    One class travelling both directions, like :class:`ApplyCondition` — up with
+    an empty ``player_id``, down with a filled one.
+    """
+
+    TYPE: ClassVar[str] = "mod_request"
+
+    mod_id: str
+    topic: str = ""
+    payload: dict | None = None
+    player_id: str = ""
+
+
+@_register
+@dataclass(frozen=True)
 class Ping(Message):
     """Keepalive; the server answers :class:`Pong` with the same ``nonce``."""
 
@@ -377,6 +543,20 @@ class Welcome(Message):
     **only for the GM** — empty for every player. The cast list names files in
     the GM's own workspace; it is kept on the server so a GM picking the session
     up from another machine still has it, and it means nothing to anyone else.
+
+    ``scene`` is the current scene and goes to **everyone** — it is the one thing
+    here the whole table is meant to see. ``scene_sources`` is its GM-only half
+    (see :class:`SetScene`) and is filled like ``npc_paths``. The scene's
+    *portraits* are deliberately absent: they follow as individual
+    :class:`ScenePortrait` messages, since a welcome already carrying a roster
+    and a slice of history has no room for a dozen pictures.
+
+    ``mod_state`` is every mod's shared state as ``{mod_id: {key: payload}}``, and
+    goes to **everyone** for the reason the scene does — it is meant to be seen.
+    It is here rather than as a stream of :class:`ModStateUpdate` messages because
+    a mod's state is small and bounded (:data:`MAX_MOD_IDS` ×
+    :data:`MAX_MOD_KEYS` × :data:`MAX_MOD_PAYLOAD_CHARS`), unlike the scene's
+    portraits, which are neither.
     """
 
     TYPE: ClassVar[str] = "welcome"
@@ -390,6 +570,9 @@ class Welcome(Message):
     history: list[dict] = field(default_factory=list)
     is_gm: bool = False
     npc_paths: list[str] = field(default_factory=list)
+    scene: list[dict] = field(default_factory=list)
+    scene_sources: dict = field(default_factory=dict)
+    mod_state: dict = field(default_factory=dict)
 
 
 @_register
@@ -439,6 +622,60 @@ class RollRemoved(Message):
     TYPE: ClassVar[str] = "roll_removed"
 
     seq: int
+
+
+@_register
+@dataclass(frozen=True)
+class SceneUpdate(Message):
+    """The scene, as everyone at the table sees it. Broadcast on every change.
+
+    The GM's :class:`SetScene` reaching everyone else, minus its GM-only
+    ``sources`` half. A client renders this and nothing else — there is no
+    merging to do, because the GM sends the whole board every time.
+    """
+
+    TYPE: ClassVar[str] = "scene_update"
+
+    entries: list[dict] = field(default_factory=list)
+
+
+@_register
+@dataclass(frozen=True)
+class ScenePortrait(Message):
+    """One scene entry's thumbnail reaching the table (see :class:`SetScenePortrait`).
+
+    Broadcast when the GM sends one, and replayed to a joining client one message
+    per portrait just after its :class:`Welcome`. A ``ref`` the receiver has no
+    entry for is kept anyway: the picture may simply have arrived before the
+    scene that names it.
+    """
+
+    TYPE: ClassVar[str] = "scene_portrait"
+
+    ref: str
+    portrait: str = ""
+
+
+@_register
+@dataclass(frozen=True)
+class ModStateUpdate(Message):
+    """One entry of a mod's shared state reaching the table.
+
+    The GM's :class:`SetModState` rebroadcast verbatim. A ``payload`` of ``None``
+    means the entry is **gone**, not empty — a receiver drops it rather than
+    drawing a blank one.
+
+    A ``mod_id`` the receiver has no mod for is not an error and is worth keeping
+    rather than discarding: mods load at startup and the two ends of a table can
+    legitimately differ (that is what :data:`ERROR_MOD_SKEW` warns about). A
+    client stores what arrives and lets whichever mod cares come and read it.
+    """
+
+    TYPE: ClassVar[str] = "mod_state_update"
+
+    mod_id: str
+    key: str
+    payload: dict | None = None
 
 
 @_register
@@ -611,6 +848,373 @@ def sanitize_spec(raw: object, _depth: int = 0) -> dict | None:
     if follow_up is not None:
         spec["follow_up"] = follow_up
     return spec
+
+
+# Bounds on a scene. Same reasoning as the spec bounds above and the same shape of
+# answer — the scene is GM-supplied, is broadcast to every seat and is rendered as
+# text and pictures on their screens, so it is checked into a known shape rather
+# than trusted. Generous next to any real fight; they exist to stop a hostile
+# client, not a legitimate one.
+MAX_SCENE_ENTRIES = 24
+MAX_SCENE_CONDITIONS = 12
+MAX_SCENE_TEXT = 80
+#: Hard cap on one entry's base64 thumbnail. Far smaller than a *sheet* portrait
+#: (:data:`~mm_companion.ui.session_portrait.PORTRAIT_MAX_CHARS`) because a scene
+#: card shows a thumbnail rather than a picture, and because a whole scene's worth
+#: of them is stored per session and replayed to every joiner.
+MAX_SCENE_PORTRAIT_CHARS = 8 * 1024
+
+#: What a creature on the board is *to the table*. The one field on a scene entry
+#: that is the GM's judgement rather than a reading off a model, and the only
+#: reason it is public: telling friend from foe at a glance is most of what a
+#: player needs the board for, and it is a thing only the GM knows.
+#:
+#: ``player`` is not a fourth choice a GM makes — it is what a player's own entry
+#: always is, set where the entry is built and never offered in the menu.
+DISPOSITION_ENEMY = "enemy"
+DISPOSITION_FRIENDLY = "friendly"
+DISPOSITION_NEUTRAL = "neutral"
+DISPOSITION_PLAYER = "player"
+#: Every value the wire will carry. An entry naming anything else is not dropped —
+#: it simply arrives without a disposition and is drawn as the default, which is
+#: the same thing a pre-disposition sender produces.
+SCENE_DISPOSITIONS = frozenset(
+    {DISPOSITION_ENEMY, DISPOSITION_FRIENDLY, DISPOSITION_NEUTRAL, DISPOSITION_PLAYER}
+)
+
+
+def sanitize_scene(raw: object) -> list[dict]:
+    """Check a GM-supplied scene into a known shape, dropping what does not fit.
+
+    Structural like :func:`sanitize_spec`, and for the same reason: the standalone
+    server loads no game data, so a condition id here is an opaque string and this
+    file has no opinion about whether it names anything.
+
+    One entry is
+    ``{"ref", "name", "player_id", "initiative", "disposition", "conditions"}``:
+
+    - ``ref`` is the GM's opaque handle for this entry and is the only required
+      field — an entry without one cannot be addressed by a
+      :class:`ScenePortrait`, so it is dropped whole rather than kept unusable.
+    - ``initiative`` is an ``int`` or absent. Absent means *not rolled yet*, which
+      is a different thing from nought and sorts differently.
+    - ``conditions`` are ``{"id", "parameter", "count"}`` dicts — the shape
+      :meth:`~mm_companion.core.character.AppliedCondition.to_dict` writes, minus
+      ``provenance``, which is a bookkeeping detail of the sender's own tracker.
+    - ``disposition`` is one of :data:`SCENE_DISPOSITIONS` or absent. Absent is a
+      legitimate answer rather than an error: it is what every sender older than
+      the field produces, and what an entry the GM has not judged produces too.
+
+    This field is **additive without a protocol bump**, unlike the four bumps
+    before it. Each of those prevented an old peer answering *wrongly* — an empty
+    board, a request rendered as a d20 that rolled nought, a client reaped for
+    never pinging. An old peer here draws exactly what it draws today: the same
+    board, correctly, without the colour. That is a smaller readout, not a wrong
+    one, and it is not worth refusing a table at the door for.
+    """
+
+    if not isinstance(raw, list):
+        return []
+    entries: list[dict] = []
+    seen: set[str] = set()
+    for item in raw[:MAX_SCENE_ENTRIES]:
+        if not isinstance(item, dict):
+            continue
+        ref = item.get("ref")
+        if not isinstance(ref, str) or not ref.strip() or ref in seen:
+            continue
+        seen.add(ref)
+        entry: dict = {"ref": ref[:MAX_SCENE_TEXT]}
+        for key in ("name", "player_id"):
+            value = item.get(key)
+            if isinstance(value, str) and value:
+                entry[key] = value[:MAX_SCENE_TEXT]
+        initiative = item.get("initiative")
+        if isinstance(initiative, int) and not isinstance(initiative, bool):
+            entry["initiative"] = initiative
+        disposition = item.get("disposition")
+        if isinstance(disposition, str) and disposition in SCENE_DISPOSITIONS:
+            entry["disposition"] = disposition
+        conditions = _sanitize_scene_conditions(item.get("conditions"))
+        if conditions:
+            entry["conditions"] = conditions
+        entries.append(entry)
+    return entries
+
+
+def _sanitize_scene_conditions(raw: object) -> list[dict]:
+    """The ``conditions`` half of one scene entry, whitelisted key by key."""
+
+    if not isinstance(raw, list):
+        return []
+    conditions: list[dict] = []
+    for item in raw[:MAX_SCENE_CONDITIONS]:
+        if not isinstance(item, dict):
+            continue
+        condition_id = item.get("id")
+        if not isinstance(condition_id, str) or not condition_id:
+            continue
+        applied: dict = {"id": condition_id[:MAX_SCENE_TEXT]}
+        parameter = item.get("parameter")
+        if isinstance(parameter, str) and parameter:
+            applied["parameter"] = parameter[:MAX_SCENE_TEXT]
+        count = item.get("count")
+        if isinstance(count, int) and not isinstance(count, bool) and count > 1:
+            applied["count"] = count
+        conditions.append(applied)
+    return conditions
+
+
+def sanitize_scene_portrait(raw: object) -> str:
+    """A scene entry's thumbnail, or ``""`` for anything that is not one.
+
+    Over-long is dropped rather than truncated: half a JPEG is not a smaller
+    JPEG, and a card showing its placeholder is a better answer than one showing
+    a broken image.
+    """
+
+    if not isinstance(raw, str) or len(raw) > MAX_SCENE_PORTRAIT_CHARS:
+        return ""
+    return raw
+
+
+def sanitize_scene_portraits(raw: object) -> dict:
+    """A whole ``ref`` → thumbnail map, each value checked by
+    :func:`sanitize_scene_portrait`. An entry that fails simply loses its picture."""
+
+    if not isinstance(raw, dict):
+        return {}
+    portraits: dict = {}
+    for key, value in list(raw.items())[:MAX_SCENE_ENTRIES]:
+        if not isinstance(key, str) or not key:
+            continue
+        portrait = sanitize_scene_portrait(value)
+        if portrait:
+            portraits[key[:MAX_SCENE_TEXT]] = portrait
+    return portraits
+
+
+def sanitize_scene_sources(raw: object) -> dict:
+    """The GM's private ``ref`` → source map, capped and stringified.
+
+    Never broadcast (see :class:`SetScene`), but stored on the server and handed
+    back on a later welcome, so it is bounded like everything else that persists.
+    """
+
+    if not isinstance(raw, dict):
+        return {}
+    sources: dict = {}
+    for key, value in list(raw.items())[:MAX_SCENE_ENTRIES]:
+        if isinstance(key, str) and isinstance(value, str) and key and value:
+            sources[key[:MAX_SCENE_TEXT]] = value[:MAX_SCENE_TEXT]
+    return sources
+
+
+# Bounds on a mod's shared state. Same reasoning as the spec and scene bounds
+# above and the same shape of answer: this is client-supplied, it is broadcast to
+# every seat, and it is stored per session — so it is checked into a known shape
+# rather than trusted. The difference is that a spec and a scene have *known
+# fields* this file can whitelist, and a mod payload by definition does not. So
+# what is bounded here is the payload's **shape** — how deep, how wide, how big,
+# and which JSON types may appear — rather than its meaning.
+MAX_MOD_ID = 64
+MAX_MOD_KEY = 64
+MAX_MOD_TEXT = 200
+#: Keys one mod may hold in one session — one timer, one counter, one of whatever.
+MAX_MOD_KEYS = 32
+#: Mods that may hold state in one session at all.
+MAX_MOD_IDS = 16
+#: Entries in one payload dict or list.
+MAX_MOD_ITEMS = 64
+#: How deeply a payload may nest. Four is what the spec chain gets, and a mod
+#: needing more than four levels is describing something this channel is the
+#: wrong shape for.
+MAX_MOD_DEPTH = 4
+#: One payload, as :func:`json.dumps` renders it. Deliberately far below
+#: :data:`MAX_MESSAGE_BYTES`: the whole of :attr:`Welcome.mod_state` has to fit in
+#: one welcome alongside a roster and a slice of history, and
+#: :data:`MAX_MOD_IDS` × :data:`MAX_MOD_KEYS` × this is the bound that guarantees
+#: it.
+MAX_MOD_PAYLOAD_CHARS = 4 * 1024
+#: Every mod's state put together, as :func:`json.dumps` renders it — the bound
+#: that actually makes :attr:`Welcome.mod_state` safe to send whole.
+#:
+#: The per-entry caps alone do **not** give that guarantee, and assuming they did
+#: was a real bug: :data:`MAX_MOD_IDS` x :data:`MAX_MOD_KEYS` x
+#: :data:`MAX_MOD_PAYLOAD_CHARS` is 2 MiB, eight times :data:`MAX_MESSAGE_BYTES`,
+#: so a welcome carrying a full pile of state would have been refused by its own
+#: encoder. An aggregate cap is also the kinder shape for a mod: one large entry
+#: and many small ones are both allowed, rather than every mod being squeezed to
+#: the worst case of the others.
+#:
+#: Sized to leave a welcome's roster and history slice ample room beside it.
+MAX_MOD_STATE_CHARS = 64 * 1024
+
+#: What a mod id may look like before it is used as a dict key here, a filename in
+#: :mod:`mm_companion.core.storage`, or a lookup anywhere else. Matches the
+#: manifest ids the loader accepts, and nothing that could be read as a path.
+_MOD_ID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.")
+
+
+def sanitize_mod_id(raw: object) -> str:
+    """A mod id, or ``""`` for anything that is not one.
+
+    Deliberately stricter than "a short string". This value arrives over the wire
+    and ends up as a key in stored session state — and in
+    :func:`~mm_companion.core.storage.local_mod_state` it becomes a *filename*.
+    Refusing anything outside :data:`_MOD_ID_CHARS` here means no later caller has
+    to remember that, and a ``"../.."`` never gets far enough to be interesting.
+
+    The charset alone is not enough, which a test caught: ``.`` is legal *inside*
+    an id (``my.mod``), so ``".."`` passed it and became a file called
+    ``"...json"``. Contained rather than dangerous, but nonsense — so an id must
+    also **begin with a letter or a digit**. That rules out ``..`` and ``.`` along
+    with hidden-file names and leading dashes, none of which any real mod wants.
+    """
+
+    if not isinstance(raw, str):
+        return ""
+    text = raw.strip()
+    if not text or len(text) > MAX_MOD_ID:
+        return ""
+    if not set(text) <= _MOD_ID_CHARS:
+        return ""
+    if not text[0].isascii() or not text[0].isalnum():
+        return ""
+    return text
+
+
+def sanitize_mod_payload(raw: object, _depth: int = 0) -> dict | None:
+    """Check a mod-supplied payload into a known *shape*, or drop it.
+
+    Structural like :func:`sanitize_spec`, and more so — this file has no idea
+    what a mod means by anything, and must not. What it enforces is that the
+    value is plain JSON of a bounded size: only ``str``, ``int``, ``float``,
+    ``bool``, ``None``, ``dict`` and ``list``, nested no deeper than
+    :data:`MAX_MOD_DEPTH`, no wider than :data:`MAX_MOD_ITEMS`, with string keys
+    and values clipped to :data:`MAX_MOD_TEXT`.
+
+    ``float`` is admitted here and nowhere else in this file. Every other
+    sanitizer describes ranks and modifiers, where a float is a bug; a mod state
+    routinely carries a wall-clock stamp, and forcing that through an ``int``
+    would cost the sub-second precision that keeps two screens' countdowns
+    agreeing.
+
+    Over-cap is **dropped, not truncated**, following
+    :func:`sanitize_scene_portrait`: half a payload is not a smaller payload, and
+    a mod showing nothing is a better answer than one showing a mangled half of
+    something. Returns ``None`` for anything it cannot make a payload of — which
+    the callers read as "delete this key", so a *rejected* payload and a
+    *deliberate* deletion look identical on the wire. That is the safe way round:
+    the entry vanishes rather than lingering at a stale value nobody can correct.
+    """
+
+    value = _sanitize_mod_value(raw, _depth)
+    if not isinstance(value, dict):
+        return None
+    try:
+        encoded = json.dumps(value, separators=(",", ":"))
+    except (TypeError, ValueError):  # pragma: no cover - _sanitize_mod_value bars these
+        return None
+    if len(encoded) > MAX_MOD_PAYLOAD_CHARS:
+        return None
+    return value
+
+
+#: Sentinel for "this value has no place in a payload", so a legitimate ``None``
+#: inside one survives while an unrepresentable value is dropped. ``None`` itself
+#: cannot do that job, since ``null`` is a value a mod may perfectly well store.
+_DROP = object()
+
+
+def _sanitize_mod_value(raw: object, depth: int) -> object:
+    """One value inside a payload, recursively. :data:`_DROP` for anything barred."""
+
+    if depth > MAX_MOD_DEPTH:
+        return _DROP
+    if raw is None or isinstance(raw, bool):
+        # Before ``int``: ``bool`` is an ``int`` subclass, and unlike everywhere
+        # else in this file it is a legitimate value here rather than a rank
+        # somebody is trying to smuggle a ``true`` into.
+        return raw
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, float):
+        # NaN and the infinities survive ``json.dumps`` as bare words no other
+        # JSON parser accepts, so a payload carrying one would encode here and
+        # fail to decode at the far end.
+        return raw if raw == raw and raw not in (float("inf"), float("-inf")) else _DROP
+    if isinstance(raw, str):
+        return raw[:MAX_MOD_TEXT]
+    if isinstance(raw, dict):
+        out: dict = {}
+        for key, value in list(raw.items())[:MAX_MOD_ITEMS]:
+            if not isinstance(key, str) or not key:
+                continue
+            item = _sanitize_mod_value(value, depth + 1)
+            if item is not _DROP:
+                out[key[:MAX_MOD_TEXT]] = item
+        return out
+    if isinstance(raw, (list, tuple)):
+        items = [_sanitize_mod_value(v, depth + 1) for v in list(raw)[:MAX_MOD_ITEMS]]
+        return [v for v in items if v is not _DROP]
+    return _DROP
+
+
+def mod_state_chars(state: object) -> int:
+    """How much of :data:`MAX_MOD_STATE_CHARS` a whole mod-state map takes.
+
+    One place for the measurement, because two callers have to agree on it: this
+    module clamps what arrives, and :meth:`~.model.SessionState.set_mod_state`
+    refuses what would overflow. If they measured differently, a session could
+    hold state its own welcome could not send.
+    """
+
+    try:
+        return len(json.dumps(state, separators=(",", ":")))
+    except (TypeError, ValueError):  # pragma: no cover - callers pass sanitized data
+        return MAX_MOD_STATE_CHARS + 1
+
+
+def sanitize_mod_state(raw: object) -> dict:
+    """A whole ``{mod_id: {key: payload}}`` map, checked entry by entry.
+
+    Applied on the way in from a client, and again on the way back off disk
+    (:meth:`~.model.SessionState.from_dict`) for the reason the scene is: a
+    session file written by a newer build, or edited by hand, must degrade rather
+    than carry a surprise into a broadcast.
+
+    A mod whose entries all fail is dropped rather than kept empty, so the caps
+    count mods that actually hold something.
+
+    :data:`MAX_MOD_STATE_CHARS` is checked last and entry by entry, so what falls
+    off is the tail rather than the whole map — a session file that has grown past
+    the cap comes back mostly intact instead of empty.
+    """
+
+    if not isinstance(raw, dict):
+        return {}
+    state: dict = {}
+    for mod_id, entries in raw.items():
+        if len(state) >= MAX_MOD_IDS:
+            break
+        checked_id = sanitize_mod_id(mod_id)
+        if not checked_id or not isinstance(entries, dict):
+            continue
+        kept: dict = {}
+        for key, payload in list(entries.items())[:MAX_MOD_KEYS]:
+            if not isinstance(key, str) or not key.strip():
+                continue
+            checked = sanitize_mod_payload(payload)
+            if checked is None:
+                continue
+            kept[key[:MAX_MOD_KEY]] = checked
+            if mod_state_chars({**state, checked_id: kept}) > MAX_MOD_STATE_CHARS:
+                del kept[key[:MAX_MOD_KEY]]
+                break
+        if kept:
+            state[checked_id] = kept
+    return state
 
 
 # --------------------------------------------------------------------------

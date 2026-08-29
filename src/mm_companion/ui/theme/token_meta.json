@@ -5,7 +5,7 @@
   "groups": {
     "colors": {
       "label": "Colours",
-      "order": ["surface", "text", "accent", "tint", "border", "badge", "drop", "focus", "splash", "dice"]
+      "order": ["surface", "text", "accent", "tint", "scene", "border", "badge", "drop", "focus", "splash", "dice"]
     },
     "metrics": {
       "label": "Sizes",
@@ -58,6 +58,10 @@
       "washed": true,
       "text_on": true
     },
+    "scene.enemy": {"label": "Enemy", "hint": "The edge of a Scene card for something the table is fighting.", "washed": true},
+    "scene.friendly": {"label": "Friendly", "hint": "The edge of a Scene card for an NPC on the players' side.", "washed": true},
+    "scene.neutral": {"label": "Neutral", "hint": "The edge of a Scene card for someone who has not picked a side.", "washed": true},
+    "scene.player": {"label": "Player", "hint": "The edge of a Scene card for one of the players. Not a choice a GM makes — a seat is always this.", "washed": true},
     "tint.better": {
       "label": "Better",
       "hint": "A number improved by an extra or a boost.",
@@ -172,7 +176,10 @@
     },
     "compact.min-height": {"label": "Minimum height", "hint": "In pixels."},
     "compact.button": {"label": "Shrink button", "hint": "The diameter of the round button floating over the roller's bottom-right corner, in pixels."},
+    "gm.card.min": {"label": "Card minimum width", "hint": "The narrowest a GM card's own column may get, in pixels. Cards measure what they need and the widest in a block sets them all."},
     "gm.damage-button": {"label": "Damage button", "hint": "The diameter of one round degree-of-failure button on a GM card, in pixels."},
+    "gm.pin-strip.min": {"label": "Pinned strip minimum", "hint": "The narrowest the strip of pinned numbers beside a GM card may get, in pixels."},
+    "gm.pin-strip.max": {"label": "Pinned strip maximum", "hint": "The widest the strip of pinned numbers beside a GM card may get, in pixels. A longer caption elides."},
     "gm.thumb": {"label": "Collapsed portrait", "hint": "The portrait on a collapsed GM card, in pixels. It is still what opens the sheet."},
     "column.stat.spin": {"label": "Ability / resistance spin box"},
     "column.skill.name": {"label": "Skill name"},

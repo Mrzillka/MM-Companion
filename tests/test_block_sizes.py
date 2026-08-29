@@ -31,10 +31,11 @@ SHEET_BLOCKS = {
     "equipment",
     "notes",
     "dice",
+    "scene",
 }
 # The GM window's blocks live in the same file under a gm_ prefix, so a theme can
 # retune them the same way; they are not part of the character sheet.
-GM_BLOCKS = {"gm_players", "gm_npcs", "gm_rolls"}
+GM_BLOCKS = {"gm_players", "gm_npcs", "gm_rolls", "gm_scene"}
 
 
 def test_block_sizes_load_for_every_block() -> None:

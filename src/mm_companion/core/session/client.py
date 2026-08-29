@@ -74,8 +74,12 @@ from .protocol import (
     RollRemoved,
     RollRequest,
     Roster,
+    ScenePortrait,
+    SceneUpdate,
     SetHeroPoints,
     SetNpcPaths,
+    SetScene,
+    SetScenePortrait,
     SetSessionName,
     Welcome,
     sanitize_snapshot,
@@ -87,6 +91,8 @@ EVENT_DISCONNECTED = "disconnected"  # {"reason"}
 EVENT_ROSTER = "roster"  # {"players": [public slot dicts]}
 EVENT_ROLL = "roll"  # one roll dict
 EVENT_ROLL_REMOVED = "roll_removed"  # {"seq"}
+EVENT_SCENE = "scene"  # {"entries": [scene entry dicts]}
+EVENT_SCENE_PORTRAIT = "scene_portrait"  # {"ref", "portrait"}
 # Reaches a GM client only. Named to match the hosting side's EVENT_SNAPSHOT so
 # the Qt bridge can raise one signal from either half.
 EVENT_SNAPSHOT = "snapshot"  # {"player_id", "character"}
@@ -190,6 +196,15 @@ class SessionClient:
         #: accepted; ``npc_paths`` arrives only for the GM.
         self.is_gm = False
         self.npc_paths: list[str] = []
+        #: The shared scene, seeded from the Welcome and replaced whole by every
+        #: :class:`~.protocol.SceneUpdate` — the GM sends the board, not a delta.
+        self.scene: list[dict] = []
+        #: The GM's private ``ref`` → source map; empty for a player.
+        self.scene_sources: dict[str, str] = {}
+        #: One thumbnail per scene entry. Kept separately from :attr:`scene`
+        #: because that is how they arrive, and because a picture outliving its
+        #: entry by a moment is harmless while a missing one is a placeholder.
+        self.scene_portraits: dict[str, str] = {}
 
         #: Where the connection stands right now — one of the ``STATE_*`` values.
         #: Unlike :attr:`connected` this stays truthful across a blip, which is
@@ -295,6 +310,11 @@ class SessionClient:
         self.history = list(message.history)
         self.is_gm = bool(message.is_gm)
         self.npc_paths = list(message.npc_paths)
+        self.scene = [dict(entry) for entry in message.scene]
+        self.scene_sources = dict(message.scene_sources)
+        # Not cleared: the portraits for this scene follow the welcome as their
+        # own messages, and a redial into the same seat would otherwise blank
+        # every card between the welcome and their arrival.
 
         connection.set_timeout(IO_TIMEOUT)
         self._connection = connection
@@ -448,6 +468,19 @@ class SessionClient:
         """Store the NPC cast list on the server so it follows the session."""
         return self.send(SetNpcPaths(paths=list(paths)))
 
+    def set_scene(self, entries: list[dict], sources: dict | None = None) -> bool:
+        """Publish the whole scene to the table (honored only for the GM).
+
+        It comes back as :data:`EVENT_SCENE` when the server has stored it, the
+        same as it reaches everyone else — so a hosting GM and a remote one see
+        the board through the identical path.
+        """
+        return self.send(SetScene(entries=[dict(e) for e in entries], sources=dict(sources or {})))
+
+    def set_scene_portrait(self, ref: str, portrait: str) -> bool:
+        """Publish one scene entry's thumbnail (honored only for the GM)."""
+        return self.send(SetScenePortrait(ref=str(ref), portrait=str(portrait)))
+
     # -- reading -----------------------------------------------------------
 
     def _run(self) -> None:
@@ -591,6 +624,15 @@ class SessionClient:
         elif isinstance(message, RollRemoved):
             self.history = [r for r in self.history if r.get("seq") != message.seq]
             self._emit(EVENT_ROLL_REMOVED, {"seq": message.seq})
+        elif isinstance(message, SceneUpdate):
+            self.scene = [dict(entry) for entry in message.entries]
+            self._emit(EVENT_SCENE, {"entries": [dict(e) for e in self.scene]})
+        elif isinstance(message, ScenePortrait):
+            if message.portrait:
+                self.scene_portraits[message.ref] = message.portrait
+            else:
+                self.scene_portraits.pop(message.ref, None)
+            self._emit(EVENT_SCENE_PORTRAIT, {"ref": message.ref, "portrait": message.portrait})
         elif isinstance(message, PlayerSnapshot):
             self._emit(
                 EVENT_SNAPSHOT,

@@ -251,9 +251,10 @@ def test_sheet_exposes_all_blocks(qapp: QApplication) -> None:
         "equipment",
         "notes",
         "dice",
+        "scene",
     }
     # Every block is placed exactly once across the arrangement — the rows on the
-    # page plus the pinned strip, which the Dice block starts in.
+    # page plus the pinned strip, which the Dice and Scene blocks start in.
     arrangement = sheet.arrangement()
     placed = [key for row in arrangement["rows"] for key in row]
     placed += [key for line in arrangement["pinned"]["lines"] for key in line]

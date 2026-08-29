@@ -15,6 +15,7 @@ from mm_companion.core.session import protocol
 from mm_companion.core.session.protocol import (
     MAX_MESSAGE_BYTES,
     PROTOCOL_VERSION,
+    SCENE_DISPOSITIONS,
     ApplyCondition,
     CharacterSnapshot,
     ControlHello,
@@ -39,15 +40,22 @@ from mm_companion.core.session.protocol import (
     RollRemoved,
     RollRequest,
     Roster,
+    ScenePortrait,
+    SceneUpdate,
     SessionCatalog,
     SessionInfo,
     SessionStatusRequest,
     SetHeroPoints,
     SetNpcPaths,
+    SetScene,
+    SetScenePortrait,
     SetSessionName,
     Welcome,
     decode,
     encode,
+    sanitize_scene,
+    sanitize_scene_portrait,
+    sanitize_scene_sources,
     sanitize_snapshot,
     sanitize_spec,
 )
@@ -66,6 +74,12 @@ ROUND_TRIP_CASES = [
     KickRequest(player_id="p1", reason="afk"),
     SetSessionName(name="Friday Game"),
     SetNpcPaths(paths=["thug.json", "boss.json"]),
+    SetScene(
+        entries=[{"ref": "e1", "name": "Thug", "initiative": 14}],
+        sources={"e1": "npc:thug.json"},
+    ),
+    SetScene(),  # a scene the GM has just emptied
+    SetScenePortrait(ref="e1", portrait="AAAA"),
     Ping(nonce=7),
     Welcome(
         session_id="s1",
@@ -81,11 +95,15 @@ ROUND_TRIP_CASES = [
         player_id="gm",
         is_gm=True,
         npc_paths=["thug.json"],
+        scene=[{"ref": "e1", "name": "Thug"}],
+        scene_sources={"e1": "npc:thug.json"},
     ),
     Roster(players=[{"player_id": "p1"}, {"player_id": "p2"}]),
     PlayerSnapshot(player_id="p1", character={"power_level": 10}),
     RollAdded(roll={"seq": 3, "die": 20, "degree": 2}),
     RollRemoved(seq=3),
+    SceneUpdate(entries=[{"ref": "e1", "name": "Thug", "initiative": 14}]),
+    ScenePortrait(ref="e1", portrait="AAAA"),
     ApplyCondition(player_id="p1", condition_id="dazed", parameter="Strength"),
     RemoveCondition(player_id="p1", condition_id="dazed"),
     SetHeroPoints(player_id="p1", value=3),
@@ -131,11 +149,13 @@ def test_the_protocol_version_is_the_one_the_keepalive_needs() -> None:
     v7 was what stopped a mixed table over the keepalive: a v6 client never sends
     one, so a v7 server would reap it every ninety seconds. v8 adds
     :class:`RollPrompt`, which a v7 server rejects as an unknown type and a v7
-    client would render as a d20 that rolled zero. Either way changing this number
-    is a decision about who can still join, so it should not be possible to do by
-    accident.
+    client would render as a d20 that rolled zero. v9 adds the scene, whose
+    failure is quieter and worse: a v8 client joins, never learns the message
+    type exists, and shows an empty board for the whole fight. Either way
+    changing this number is a decision about who can still join, so it should not
+    be possible to do by accident.
     """
-    assert PROTOCOL_VERSION == 8
+    assert PROTOCOL_VERSION == 9
 
 
 def test_every_registered_type_is_reachable_by_tag() -> None:
@@ -306,3 +326,109 @@ def test_values_of_the_wrong_shape_are_dropped_not_coerced() -> None:
     )
 
     assert spec == {"label": "x"}
+
+
+# -- the scene -------------------------------------------------------------
+#
+# The scene is GM-supplied, is broadcast to every seat and is rendered as text
+# and pictures on their screens, so it gets the same paranoia the spec does.
+
+
+def test_a_scene_entry_keeps_only_the_fields_the_wire_knows() -> None:
+    scene = sanitize_scene(
+        [
+            {
+                "ref": "e1",
+                "name": "Thug",
+                "player_id": "p1",
+                "initiative": 14,
+                "conditions": [{"id": "hit", "count": 3, "provenance": "incapacitated"}],
+                "toughness": 8,  # not a thing a player is allowed to read off a card
+            }
+        ]
+    )
+
+    assert scene == [
+        {
+            "ref": "e1",
+            "name": "Thug",
+            "player_id": "p1",
+            "initiative": 14,
+            "conditions": [{"id": "hit", "count": 3}],
+        }
+    ]
+
+
+def test_an_entry_without_a_ref_is_dropped_whole() -> None:
+    """A ref is how a portrait finds its entry, so an entry without one is unusable."""
+    assert sanitize_scene([{"name": "Nobody"}, {"ref": "e1"}]) == [{"ref": "e1"}]
+
+
+def test_a_repeated_ref_is_dropped() -> None:
+    """Two entries answering to one ref would share a portrait and a place in the order."""
+    scene = sanitize_scene([{"ref": "e1", "name": "First"}, {"ref": "e1", "name": "Second"}])
+
+    assert scene == [{"ref": "e1", "name": "First"}]
+
+
+def test_an_unrolled_initiative_is_absent_rather_than_zero() -> None:
+    """Not rolled yet and rolled a nought sort differently, so they must not collapse."""
+    assert sanitize_scene([{"ref": "e1", "initiative": None}]) == [{"ref": "e1"}]
+    assert sanitize_scene([{"ref": "e1", "initiative": 0}]) == [{"ref": "e1", "initiative": 0}]
+    # A bool is an int, and is not an initiative.
+    assert sanitize_scene([{"ref": "e1", "initiative": True}]) == [{"ref": "e1"}]
+
+
+def test_a_scene_is_capped_at_a_sensible_number_of_entries() -> None:
+    huge = [{"ref": f"e{n}"} for n in range(protocol.MAX_SCENE_ENTRIES * 3)]
+
+    assert len(sanitize_scene(huge)) == protocol.MAX_SCENE_ENTRIES
+
+
+def test_anything_that_is_not_a_list_of_dicts_is_simply_no_scene() -> None:
+    assert sanitize_scene("a fight") == []
+    assert sanitize_scene(None) == []
+    assert sanitize_scene(["Thug", 3]) == []
+
+
+def test_an_oversized_portrait_is_dropped_rather_than_truncated() -> None:
+    """Half a JPEG is not a smaller JPEG — a placeholder beats a broken image."""
+    assert sanitize_scene_portrait("A" * (protocol.MAX_SCENE_PORTRAIT_CHARS + 1)) == ""
+    assert sanitize_scene_portrait("A" * 16) == "A" * 16
+    assert sanitize_scene_portrait(None) == ""
+
+
+def test_a_scene_entry_carries_a_known_disposition_and_no_other() -> None:
+    """Public on purpose — telling friend from foe is most of what a player needs
+    the board for, and it is a thing only the GM knows."""
+    entries = sanitize_scene(
+        [
+            {"ref": "a", "disposition": "friendly"},
+            {"ref": "b", "disposition": "warlord"},
+            {"ref": "c", "disposition": 7},
+            {"ref": "d"},
+        ]
+    )
+
+    assert entries[0]["disposition"] == "friendly"
+    # Not an error, and not dropped: an unknown or absent value is exactly what a
+    # sender older than the field produces, and it renders as the default.
+    assert [e for e in entries if "disposition" not in e] == [
+        {"ref": "b"},
+        {"ref": "c"},
+        {"ref": "d"},
+    ]
+
+
+def test_every_disposition_the_ui_offers_survives_the_wire() -> None:
+    entries = sanitize_scene(
+        [{"ref": value, "disposition": value} for value in sorted(SCENE_DISPOSITIONS)]
+    )
+
+    assert {e["disposition"] for e in entries} == set(SCENE_DISPOSITIONS)
+
+
+def test_scene_sources_keep_only_string_pairs() -> None:
+    sources = sanitize_scene_sources({"e1": "npc:thug.json", 2: "npc:x", "e3": None, "": "npc:y"})
+
+    assert sources == {"e1": "npc:thug.json"}

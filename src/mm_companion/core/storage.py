@@ -184,6 +184,16 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # the shrunk ones are stored, so a fresh workspace and a fresh NPC both start
     # expanded.
     "gm_collapsed": {},
+    # Whether every player at the table is on the Scene automatically. On by
+    # default because that is what a fight looks like: the players are in it, and
+    # a GM who has to add five of them before every scene is doing bookkeeping the
+    # app already knows the answer to.
+    #
+    # Off is for the GM who runs the Scene as a deliberate spotlight — the two
+    # heroes in this room and not the three upstairs. With it off, players are put
+    # on by the eye or by a drag exactly as NPCs are, and their cards grow the eye
+    # to do it with. Read through :func:`gm_scene_auto_players`.
+    "gm_scene_auto_players": True,
     # Compact mode — the mini dice roller a window collapses to (see
     # :mod:`mm_companion.ui.compact`). Read through :func:`compact_settings`.
     #
@@ -418,6 +428,25 @@ def set_gm_collapsed_cards(collapsed: dict[str, bool]) -> None:
     nothing — absent means expanded, which is where a card starts.
     """
     update_settings(gm_collapsed={key: True for key, value in collapsed.items() if value})
+
+
+def gm_scene_auto_players() -> bool:
+    """Whether joining a session puts a player on the Scene by itself.
+
+    Read through here rather than off :func:`load_settings`, for the reason spelled
+    out on :func:`gm_default_pins`: the file comes back verbatim, so a workspace
+    older than this key answers ``None`` — which is falsy, and would have silently
+    turned the *default* off for every existing GM.
+    """
+    stored = load_settings().get("gm_scene_auto_players")
+    if stored is None:
+        return bool(DEFAULT_SETTINGS["gm_scene_auto_players"])
+    return bool(stored)
+
+
+def set_gm_scene_auto_players(enabled: bool) -> None:
+    """Record whether players join the Scene by themselves."""
+    update_settings(gm_scene_auto_players=bool(enabled))
 
 
 def clear_gm_card_pins() -> None:

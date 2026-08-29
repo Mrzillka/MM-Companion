@@ -10,7 +10,7 @@ the page and the pinned strip respectively.
 
 The registry reuses the generic :class:`~mm_companion.core.registry.Registry`, so
 it keeps insertion order and rejects a duplicate key unless ``replace=True`` — a
-mod overriding a base block is explicit. The thirteen base blocks register at import;
+mod overriding a base block is explicit. The fourteen base blocks register at import;
 a mod's Python module can :func:`register_block` a new one (its size table entry
 travels on the descriptor, so no separate JSON edit is needed).
 """
@@ -54,6 +54,7 @@ from mm_companion.ui.sections import (
     NotesSection,
     PowersSection,
     ResistancesSection,
+    SceneSection,
     SkillsSection,
     SystemInfoSection,
 )
@@ -376,6 +377,24 @@ _BASE_BLOCKS = [
         {},
     ),
     (
+        "scene",
+        "Scene",
+        SceneSection,
+        # After the roller in row order, which is what puts it *under* the Dice
+        # block in the pinned strip: ``default_pin_lines`` sorts the pinned blocks
+        # by (row, col) and gives each one a line of its own.
+        7,
+        0,
+        # Publishes and subscribes nothing, for the Dice block's reason: the scene
+        # is the GM's, not this character's, and an update landing mid-edit must
+        # never mark the sheet dirty. It serves nothing either — there is no
+        # request a block could send it.
+        {},
+        {},
+        {},
+        {},
+    ),
+    (
         "dice",
         "Dice Roller",
         DiceSection,
@@ -401,7 +420,7 @@ _BASE_BLOCKS = [
 # ``BlockDescriptor.default_pinned``). The strip is the one region that does not
 # scroll with the page, which is exactly where a die belongs: it stays in view
 # through a fight rather than scrolling away under the sheet.
-_PINNED_BY_DEFAULT = frozenset({"dice"})
+_PINNED_BY_DEFAULT = frozenset({"dice", "scene"})
 
 # How a block the sheet may build more than one of makes its extra instances
 # (see BlockDescriptor.instance_factory): the builder is handed the new block's
@@ -412,7 +431,7 @@ _INSTANCE_FACTORIES = {"notes": _notes_factory}
 
 
 def register_base_blocks(*, replace: bool = False) -> None:
-    """Register the thirteen base M&M blocks (called once at import)."""
+    """Register the fourteen base M&M blocks (called once at import)."""
     sizes = load_block_sizes()
     for key, title, factory, row, col, publishes, subscribes, requests, serves in _BASE_BLOCKS:
         register_block(

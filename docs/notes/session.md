@@ -419,6 +419,61 @@ The shape:
   **before** the handshake, not after: the `Welcome` carries the history, and
   sequence numbers come from the tail of that list, so reloading late would
   restart the numbering and corrupt the log.
+- **A mod can talk to the table, and the relay needed nothing for it.** Protocol
+  **v10** adds three messages and one `Welcome` field. `SetModState` /
+  `ModStateUpdate` carry one **keyed, opaque payload** the GM authors and everyone
+  sees; `ModRequest` is the other half — any seat may send it, only the GM
+  receives it, and it is neither stored nor broadcast; `ModNote` writes a mod's
+  line into the one shared history as a `kind="mod"` record. The server stores and
+  rebroadcasts and **never looks inside**, exactly as it treats a `RollSpec`: this
+  layer may not import `core.rules`, and the standalone server loads no game data,
+  so it could not interpret a payload if it wanted to. The **relay** required no
+  change at all — it reads one envelope per connection and forwards every byte
+  after that unread — which is its design guarantee holding, not luck.
+- **Keyed, where the scene is sent whole**, and the asymmetry is the point. A
+  scene is one authority's single picture that changes for half a dozen unrelated
+  reasons at once, so sending it whole avoids reconciliation. Mod state is a *bag
+  of independent things*: a GM starting one timer must not re-push the other five,
+  and two mods must never be able to overwrite each other. A `payload` of `None`
+  **deletes** the key and the deletion is broadcast — that is what a share toggle
+  turning off looks like on the wire, not a flag saying "ignore this".
+- **The caps are an aggregate, and that was a bug first.** The per-entry bounds
+  (`MAX_MOD_IDS` × `MAX_MOD_KEYS` × `MAX_MOD_PAYLOAD_CHARS`) multiply out to 2 MiB
+  — eight times `MAX_MESSAGE_BYTES` — so a session could accumulate state its own
+  `Welcome` could not encode, and the failure would have landed on the *next
+  player to join* rather than on whoever filled it. `MAX_MOD_STATE_CHARS` is the
+  bound that actually makes the welcome sendable, and it is what a mod is refused
+  against; a test asserts it against the message cap so retuning either stays
+  honest. Refusing rather than evicting is deliberate: eviction would make a mod's
+  state silently lossy, and the mod that lost an entry would not be the one that
+  overran the cap.
+- **Mod state is entirely public**, unlike `scene_sources` and `npc_paths`. There
+  is no GM-only half, because being seen by the table is the whole reason to send
+  it — a mod with a secret keeps it off this channel and in
+  `storage.local_mod_state` instead. A `mod_id` the receiver has no mod for is
+  **kept**, not dropped: the two ends of a table can legitimately load different
+  mods (that is what `ERROR_MOD_SKEW` warns about), and a client does not get to
+  decide whose state matters.
+- **A request is attributed by the server, never by the sender.** `ModRequest`
+  carries a `player_id` that the server stamps from the slot, the way a roll's
+  attribution works. A field a client could fill in itself would make the whole
+  channel an impersonation tool.
+- A **mod line in the history is drawn as a note** (`roll_history.py`), and that
+  is the design rather than a shortcut: the card has to read sensibly for a mod
+  *this* app has never heard of, and a plain sentence attributed to a seat is
+  exactly what a note already is. `record_mod_note` is GM-only so a countdown a
+  dozen screens are watching says so once.
+- **The GM window builds from a registry now** (`ui/blocks/gm_registry.py`). Its
+  four panels were a literal list, so a mod could add a block to the character
+  sheet and nothing to the board a GM actually runs a fight on. A *second*
+  registry rather than a `surfaces` flag on `BlockDescriptor`: a sheet block is
+  built from `(GameData, Character)` and joins the sheet's signal bus, while a GM
+  panel is built from the **window**, has no character, and has no bus — one
+  descriptor would have left half its fields meaningless whichever surface a block
+  chose. Sizes still come from `block_sizes.json` under `gm_`-prefixed keys.
+  Adding or removing a block invalidates a stored arrangement, so enabling a mod
+  that registers one resets `gm_layout` once; the canvas already falls back to
+  defaults rather than breaking.
 - Deployment lives in `deploy/` (systemd units, `deploy.sh`, runbook) — tracked
   and secret-free. The operator's addresses and key paths are in a gitignored
   `SERVER.md`.

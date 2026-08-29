@@ -23,7 +23,16 @@ from pathlib import Path
 import pytest
 from PySide6.QtCore import QEvent, QMimeData, QPointF, Qt
 from PySide6.QtGui import QContextMenuEvent, QDragEnterEvent, QDropEvent, QMouseEvent
-from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMenu, QMessageBox, QPushButton
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QGroupBox,
+    QLabel,
+    QMenu,
+    QMessageBox,
+    QPushButton,
+    QWidget,
+)
 
 from mm_companion.core import library, storage
 from mm_companion.core.character import Character
@@ -43,6 +52,8 @@ from mm_companion.core.session.model import new_session
 from mm_companion.core.session.protocol import sanitize_snapshot
 from mm_companion.ui import card_chips, dice_roller, player_card, theme
 from mm_companion.ui import gm_window as gm_window_module
+from mm_companion.ui.block_sizes import load_block_sizes
+from mm_companion.ui.blocks import gm_registry
 from mm_companion.ui.drop_feedback import DropFeedback
 from mm_companion.ui.gm_window import SCENE_NPC, SCENE_PLAYER, GMWindow
 from mm_companion.ui.npc_card import NPCCard
@@ -3510,3 +3521,100 @@ def test_an_unchanged_preference_leaves_the_board_alone(window: GMWindow) -> Non
     window._reload_scene_preference()
 
     assert window._npc_state[goon].initiative == before
+
+
+# --------------------------------------------------------------------------
+# The GM block registry
+#
+# The window's panels used to be a literal list, so a mod could add a block to
+# the character sheet and nothing to the board the GM actually runs a fight on.
+# These are about the seam, not about any one block.
+# --------------------------------------------------------------------------
+
+
+def test_the_registry_reproduces_the_board_the_window_shipped_with(window: GMWindow) -> None:
+    """The refactor's whole obligation: same blocks, same order, same places.
+
+    Building from the registry instead of a literal list is only worth doing if a
+    GM cannot tell it happened.
+    """
+    assert [d.key for d in gm_registry.gm_block_descriptors()] == [
+        "scene",
+        "players",
+        "npcs",
+        "rolls",
+    ]
+    assert gm_registry.gm_default_rows() == [["scene"], ["players"], ["npcs"]]
+    # The Rolls block starts in the strip, for the reason the sheet's Dice block
+    # does: a roller that scrolls away with the board is no use mid-fight.
+    assert gm_registry.gm_default_pin_lines() == [["rolls"]]
+    assert window._canvas.block_keys() == ["scene", "players", "npcs", "rolls"]
+
+
+def test_the_base_gm_blocks_keep_their_tuned_sizes(window: GMWindow) -> None:
+    """Sizes still come from ``block_sizes.json`` under ``gm_``-prefixed keys, so
+    a theme retunes the board exactly as it did before."""
+    shipped = load_block_sizes()
+    scene = gm_registry.GM_BLOCKS.get("scene")
+
+    assert scene.size == shipped["gm_scene"]
+
+
+def test_a_mod_can_put_a_block_on_the_gm_board(qapp: QApplication) -> None:
+    """The point of the whole exercise."""
+    built: list[QWidget] = []
+
+    def factory(host: QWidget) -> QWidget:
+        box = QGroupBox("Timers")
+        built.append(box)
+        return box
+
+    gm_registry.register_gm_block(
+        gm_registry.GMBlockDescriptor("timers", "Timers", factory, default_row=4)
+    )
+    try:
+        made = GMWindow(bind="127.0.0.1")
+        try:
+            assert built, "the mod's factory was never called"
+            assert "timers" in made._canvas.block_keys()
+            assert ["timers"] in gm_registry.gm_default_rows()
+        finally:
+            made.bridge.stop()
+    finally:
+        gm_registry.unregister_gm_block("timers")
+
+
+def test_a_mod_block_is_handed_the_window_it_will_live_in(qapp: QApplication) -> None:
+    """A GM panel has no character, so it is built from the *window* — which is
+    how a mod reaches the session bridge and the cast."""
+    hosts: list[object] = []
+
+    gm_registry.register_gm_block(
+        gm_registry.GMBlockDescriptor(
+            "timers", "Timers", lambda host: hosts.append(host) or QGroupBox(), default_row=4
+        )
+    )
+    try:
+        made = GMWindow(bind="127.0.0.1")
+        try:
+            assert hosts and hosts[0] is made
+            assert hosts[0].bridge is made.bridge
+        finally:
+            made.bridge.stop()
+    finally:
+        gm_registry.unregister_gm_block("timers")
+
+
+def test_registering_the_same_gm_block_twice_is_refused(qapp: QApplication) -> None:
+    """A mod overriding a base block should have to say so, the way the sheet's
+    registry makes it say so."""
+    descriptor = gm_registry.GMBlockDescriptor("timers", "Timers", lambda host: QGroupBox())
+    gm_registry.register_gm_block(descriptor)
+    try:
+        with pytest.raises(KeyError):
+            gm_registry.register_gm_block(descriptor)
+
+        # ...and explicitly is fine.
+        gm_registry.register_gm_block(descriptor, replace=True)
+    finally:
+        gm_registry.unregister_gm_block("timers")

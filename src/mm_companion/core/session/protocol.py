@@ -1064,6 +1064,12 @@ def sanitize_mod_id(raw: object) -> str:
     :func:`~mm_companion.core.storage.local_mod_state` it becomes a *filename*.
     Refusing anything outside :data:`_MOD_ID_CHARS` here means no later caller has
     to remember that, and a ``"../.."`` never gets far enough to be interesting.
+
+    The charset alone is not enough, which a test caught: ``.`` is legal *inside*
+    an id (``my.mod``), so ``".."`` passed it and became a file called
+    ``"...json"``. Contained rather than dangerous, but nonsense — so an id must
+    also **begin with a letter or a digit**. That rules out ``..`` and ``.`` along
+    with hidden-file names and leading dashes, none of which any real mod wants.
     """
 
     if not isinstance(raw, str):
@@ -1072,6 +1078,8 @@ def sanitize_mod_id(raw: object) -> str:
     if not text or len(text) > MAX_MOD_ID:
         return ""
     if not set(text) <= _MOD_ID_CHARS:
+        return ""
+    if not text[0].isascii() or not text[0].isalnum():
         return ""
     return text
 

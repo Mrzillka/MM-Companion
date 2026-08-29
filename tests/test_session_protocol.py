@@ -479,6 +479,15 @@ def test_a_mod_id_may_not_be_a_path() -> None:
     assert sanitize_mod_id("x" * (protocol.MAX_MOD_ID + 1)) == ""
     assert sanitize_mod_id(7) == ""
 
+    # A dot is legal *inside* an id, which is why the charset alone was not
+    # enough: ".." passed it and became a file called "...json". Contained rather
+    # than dangerous, but nonsense — so an id must start with a letter or digit,
+    # which also rules out hidden-file names and leading dashes.
+    assert sanitize_mod_id("..") == ""
+    assert sanitize_mod_id(".") == ""
+    assert sanitize_mod_id(".hidden") == ""
+    assert sanitize_mod_id("-dash") == ""
+
 
 def test_a_mod_payload_keeps_plain_json_and_drops_everything_else() -> None:
     payload = sanitize_mod_payload(

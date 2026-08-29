@@ -49,6 +49,7 @@ from mm_companion.core.session.protocol import (
     CharacterSnapshot,
     ErrorMessage,
     Hello,
+    ModRequest,
     Ping,
     ProtocolError,
     Welcome,
@@ -1554,3 +1555,165 @@ def test_a_closed_listener_wakes_its_waiter_on_every_platform() -> None:
 
     assert not thread.is_alive(), "accept never noticed the listener close"
     assert result == [None]
+
+
+# --------------------------------------------------------------------------
+# The mod channel
+#
+# Everything here turns on one asymmetry: shared *state* is the GM's to author
+# and reaches everyone, while a *request* is anyone's to send and reaches the GM
+# alone. The tests are mostly about the boundary between those two.
+# --------------------------------------------------------------------------
+
+
+def test_the_gm_publishes_mod_state_and_the_table_sees_it(running_server, connect) -> None:
+    srv = running_server()
+    _, events = connect(srv)
+
+    srv.set_mod_state("timers", "t1", {"kind": "timer", "remaining": 90})
+
+    payload = events.next_of(client_mod.EVENT_MOD_STATE)
+    assert payload["mod_id"] == "timers"
+    assert payload["key"] == "t1"
+    assert payload["payload"] == {"kind": "timer", "remaining": 90}
+
+
+def test_a_player_cannot_author_mod_state(running_server, connect) -> None:
+    """The rule that makes the whole channel trustworthy.
+
+    A player's ``SetModState`` is dropped the way their ``SetScene`` is — silently,
+    by falling off the end of the dispatch chain. If it were honoured, any seat
+    could rewrite what the table believes the GM put there.
+    """
+    srv = running_server()
+    client, _ = connect(srv)
+
+    client.set_mod_state("timers", "t1", {"kind": "timer", "remaining": 1})
+
+    # Give it every chance to have been wrongly applied before concluding it was not.
+    time.sleep(0.2)
+    assert srv.mod_state() == {}
+
+
+def test_a_late_joiner_gets_the_mod_state_in_their_welcome(running_server, connect) -> None:
+    """The reason state is stored rather than merely broadcast.
+
+    A player who joins mid-fight has missed every ``ModStateUpdate`` there has
+    ever been, and a timer they cannot see is worse than no timer.
+    """
+    srv = running_server()
+    srv.set_mod_state("timers", "t1", {"kind": "timer", "remaining": 42})
+
+    client, _ = connect(srv)
+
+    assert client.mod_state == {"timers": {"t1": {"kind": "timer", "remaining": 42}}}
+
+
+def test_a_none_payload_deletes_the_entry_and_says_so(running_server, connect) -> None:
+    """What a share toggle turning off looks like on the wire.
+
+    Not a flag saying "ignore this" — the entry ceases to exist for everyone but
+    its author, and the deletion is as much news as the change was.
+    """
+    srv = running_server()
+    client, events = connect(srv)
+    srv.set_mod_state("timers", "t1", {"kind": "timer"})
+    events.next_of(client_mod.EVENT_MOD_STATE)
+
+    srv.set_mod_state("timers", "t1", None)
+
+    assert events.next_of(client_mod.EVENT_MOD_STATE)["payload"] is None
+    wait_for(lambda: not client.mod_state, message="the client dropped the entry")
+    assert srv.mod_state() == {}
+
+
+def test_mod_state_survives_a_restart_of_the_session(running_server, connect) -> None:
+    """Persisted like the scene, and for the same reason: a table hosted on a
+    server has to outlive the process holding it."""
+    srv = running_server()
+    srv.set_mod_state("timers", "t1", {"kind": "timer", "remaining": 12})
+    session_id = srv.state.id
+    srv.stop()
+
+    reloaded = store.load_session(session_id)
+
+    assert reloaded.mod_state == {"timers": {"t1": {"kind": "timer", "remaining": 12}}}
+
+
+def test_a_mod_request_reaches_the_gm_and_nobody_else(running_server, connect) -> None:
+    srv = running_server(gm_in_process=False)
+    gm, gm_events = gm_connect(srv)
+    asker, _ = connect(srv, "Asker")
+    bystander, bystander_events = connect(srv, "Bystander")
+    try:
+        asker.send_mod_request("timers", "nudge", {"id": "t1"})
+
+        received = gm_events.next_of(client_mod.EVENT_MOD_REQUEST)
+        assert received["topic"] == "nudge"
+        assert received["payload"] == {"id": "t1"}
+        assert received["player_id"] == asker.player_id
+
+        # Give the bystander every chance to have been wrongly told.
+        time.sleep(0.2)
+        assert client_mod.EVENT_MOD_REQUEST not in bystander_events.kinds()
+        assert bystander is not None
+    finally:
+        gm.close()
+
+
+def test_a_mod_request_is_attributed_by_the_server_not_by_the_sender(running_server, connect):
+    """A field a client could fill in itself would make the channel an
+    impersonation tool, so the server stamps it from the slot."""
+    srv = running_server(gm_in_process=False)
+    gm, gm_events = gm_connect(srv)
+    asker, _ = connect(srv, "Asker")
+    try:
+        asker.send(ModRequest(mod_id="timers", topic="nudge", player_id="somebody-else"))
+
+        received = gm_events.next_of(client_mod.EVENT_MOD_REQUEST)
+        assert received["player_id"] == asker.player_id
+    finally:
+        gm.close()
+
+
+def test_a_mod_note_lands_in_the_one_shared_history(running_server, connect) -> None:
+    srv = running_server()
+    _, events = connect(srv)
+
+    srv.record_mod_note("timers", "Timer Bomb finished")
+
+    roll = events.next_of(client_mod.EVENT_ROLL)
+    assert roll["kind"] == "mod"
+    assert roll["mod_id"] == "timers"
+    assert roll["text"] == "Timer Bomb finished"
+    # Seq-numbered off the same counter as everything else, so the GM can strike
+    # it like any other line.
+    assert roll["seq"] >= 1
+
+
+def test_a_mod_note_with_nothing_to_say_is_not_recorded(running_server) -> None:
+    """Unlike a roll there is nothing else on the record to read, so a blank
+    line in the history is worse than no line."""
+    srv = running_server()
+
+    assert srv.record_mod_note("timers", "   ") is None
+    assert srv.record_mod_note("../evil", "hello") is None
+    assert srv.state.rolls == []
+
+
+def test_mod_state_broadcasts_the_key_it_actually_stored(running_server, connect) -> None:
+    """The broadcast has to name the entry as *stored*, not as it arrived.
+
+    Otherwise a client keys its copy differently from the server and can never
+    overwrite it — a timer that could be started and never stopped.
+    """
+    srv = running_server()
+    client, events = connect(srv)
+    long_key = "k" * 500
+
+    srv.set_mod_state("timers", long_key, {"kind": "timer"})
+
+    broadcast = events.next_of(client_mod.EVENT_MOD_STATE)
+    stored_key = next(iter(srv.mod_state()["timers"]))
+    assert broadcast["key"] == stored_key
+    assert client.mod_state["timers"].keys() == {stored_key}

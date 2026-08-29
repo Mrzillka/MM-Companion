@@ -96,6 +96,15 @@ class SessionBridge(QObject):
     #: Arrives apart from :attr:`sceneChanged`; see
     #: :class:`~mm_companion.core.session.protocol.SetScenePortrait`.
     scenePortrait = Signal(str, str)
+    #: One of a mod's shared entries changed: ``(mod_id, key, payload)``, where a
+    #: ``payload`` of ``None`` means the entry is **gone** rather than empty.
+    #: ``object`` rather than a typed payload for the reason every other one here
+    #: is: ``dict`` maps to ``QVariantMap``, which would flatten the nested values
+    #: and the ``None`` that carries the whole meaning.
+    modStateChanged = Signal(str, str, object)
+    #: A mod at another seat asking this one's mod for something:
+    #: ``(mod_id, topic, player_id, payload)``. Reaches the GM and nobody else.
+    modRequest = Signal(str, str, str, object)
 
     #: A player took a seat (``{"player": ..., "new": bool}``), host side only.
     playerJoined = Signal(object)
@@ -438,6 +447,75 @@ class SessionBridge(QObject):
             return self._client.set_scene_portrait(ref, portrait)
         return False
 
+    # -- the mod channel ---------------------------------------------------
+
+    def set_mod_state(self, mod_id: str, key: str, payload: dict | None) -> bool:
+        """Publish one of a mod's entries to the table (a GM action).
+
+        A ``payload`` of ``None`` deletes the entry — which is what a share toggle
+        turning off looks like from here.
+
+        The host's answer is passed on rather than assumed, exactly as
+        :meth:`set_scene` does it: sanitizing can drop a payload outright, and a
+        mod that drew its own idea of the state instead would be showing the GM
+        something nobody else got. Note the asymmetry a deletion forces — a
+        successful delete also answers ``None``, so this reports success for it
+        rather than treating "nothing stored" as failure.
+        """
+        if self._server is not None:
+            stored = self._server.set_mod_state(mod_id, key, payload)
+            return payload is None or stored is not None
+        if self._client is not None:
+            return self._client.set_mod_state(mod_id, key, payload)
+        return False
+
+    def mod_state(self, mod_id: str = "") -> dict:
+        """One mod's shared entries, or every mod's when *mod_id* is empty.
+
+        Read rather than remembered: a mod asks this when it is built or rebuilt,
+        instead of keeping a copy that a missed signal could leave stale.
+        """
+        if self._server is not None:
+            state = self._server.mod_state()
+        elif self._client is not None:
+            state = {
+                mod: {key: dict(payload) for key, payload in entries.items()}
+                for mod, entries in self._client.mod_state.items()
+            }
+        else:
+            return {}
+        return state.get(mod_id, {}) if mod_id else state
+
+    def send_mod_request(self, mod_id: str, topic: str, payload: dict | None = None) -> bool:
+        """Ask the GM's copy of a mod for something. Any seat may.
+
+        A GM hosting in this process has nobody to ask, so this answers ``False``
+        there rather than looping the request back to itself — the caller's own
+        mod is already the one that would have handled it.
+        """
+        if self._client is not None:
+            return self._client.send_mod_request(mod_id, topic, payload)
+        return False
+
+    def post_mod_note(self, mod_id: str, text: str) -> bool:
+        """Write one of a mod's lines into the shared history (a GM action)."""
+        if self._server is not None:
+            return self._server_mod_note(mod_id, text)
+        if self._client is not None:
+            return self._client.post_mod_note(mod_id, text)
+        return False
+
+    def _server_mod_note(self, mod_id: str, text: str) -> bool:
+        """The hosting half of :meth:`post_mod_note`.
+
+        The server's own ``_record_mod_note`` takes a slot, and a GM hosting in
+        this process has one — :meth:`~.session.server.SessionServer.gm_slot`.
+        """
+        server = self._server
+        if server is None:  # pragma: no cover - guarded by the caller
+            return False
+        return server.record_mod_note(mod_id, text) is not None
+
     # -- hosting -----------------------------------------------------------
 
     def host(
@@ -628,6 +706,17 @@ class SessionBridge(QObject):
             self.sceneChanged.emit(payload.get("entries", []))
         elif kind == session_server.EVENT_SCENE_PORTRAIT:
             self.scenePortrait.emit(str(payload.get("ref", "")), str(payload.get("portrait", "")))
+        elif kind == session_server.EVENT_MOD_STATE:
+            self.modStateChanged.emit(
+                str(payload.get("mod_id", "")), str(payload.get("key", "")), payload.get("payload")
+            )
+        elif kind == session_server.EVENT_MOD_REQUEST:
+            self.modRequest.emit(
+                str(payload.get("mod_id", "")),
+                str(payload.get("topic", "")),
+                str(payload.get("player_id", "")),
+                payload.get("payload"),
+            )
         elif kind == session_server.EVENT_REFUSED:
             self.refused.emit(payload)
         elif kind == session_server.EVENT_LISTENER_LOST:
@@ -657,6 +746,19 @@ class SessionBridge(QObject):
             self.sceneChanged.emit(payload.get("entries", []))
         elif kind == session_client.EVENT_SCENE_PORTRAIT:
             self.scenePortrait.emit(str(payload.get("ref", "")), str(payload.get("portrait", "")))
+        elif kind == session_client.EVENT_MOD_STATE:
+            self.modStateChanged.emit(
+                str(payload.get("mod_id", "")), str(payload.get("key", "")), payload.get("payload")
+            )
+        elif kind == session_client.EVENT_MOD_REQUEST:
+            # Reaches a GM client only, and raises the same signal the hosting
+            # half does so a mod is written once.
+            self.modRequest.emit(
+                str(payload.get("mod_id", "")),
+                str(payload.get("topic", "")),
+                str(payload.get("player_id", "")),
+                payload.get("payload"),
+            )
         elif kind == session_client.EVENT_SNAPSHOT:
             # Reaches a GM client only, and deliberately raises the same signal
             # the hosting half does, so the player cards are written once.

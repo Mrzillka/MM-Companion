@@ -45,6 +45,8 @@ import importlib
 import json
 import shutil
 import sys
+import tempfile
+import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from importlib import resources
@@ -397,6 +399,92 @@ def import_mod_folder(source: Path, workspace: storage.Workspace | None = None) 
 
     shutil.copytree(source, destination)
     return _mod_from_manifest(manifest, is_base=False, root=destination)
+
+
+#: Members of a mod archive that are never extracted. ``__pycache__`` because a
+#: ``.pyc`` compiled against another Python would shadow the ``.py`` beside it and
+#: fail obscurely; the editor leftovers because they are noise in a mod folder the
+#: user may go on to read.
+_ARCHIVE_SKIP_PARTS = frozenset({"__pycache__", ".git", ".DS_Store"})
+
+
+def _is_safe_archive_member(name: str) -> bool:
+    """Whether one zip entry may be written to disk at all.
+
+    A mod archive is downloaded from the internet and opened *before* the user has
+    decided whether to trust the mod's Python, so this runs at the least trusted
+    moment there is. A zip entry's name is attacker-controlled and
+    :meth:`zipfile.ZipFile.extractall` will happily follow it out of the directory
+    you gave it (``../../.ssh/authorized_keys``) or onto an absolute path.
+
+    Rejected: absolute paths, drive letters, anything with a ``..`` component, and
+    anything under one of :data:`_ARCHIVE_SKIP_PARTS`. Everything else is a plain
+    relative path and is written under the temp dir.
+    """
+
+    if not name or name.startswith(("/", "\\")):
+        return False
+    # Zip names are always forward-slashed by spec, but a Windows-made archive can
+    # carry backslashes, and ntpath would then read them as separators.
+    parts = name.replace("\\", "/").split("/")
+    # A trailing empty part is just a directory entry's "/"; an empty part
+    # anywhere else means a doubled separator, which is not a name we wrote.
+    if any(part == ".." for part in parts) or any(part == "" for part in parts[:-1]):
+        return False
+    if any(part in _ARCHIVE_SKIP_PARTS for part in parts):
+        return False
+    return not Path(name).is_absolute() and ":" not in parts[0]
+
+
+def import_mod_archive(source: Path, workspace: storage.Workspace | None = None) -> Mod:
+    """Install a mod from a ``.zip``; return the mod.
+
+    The distribution counterpart of :func:`import_mod_folder`, which it hands off
+    to once the archive is safely on disk — so an archived mod and a copied folder
+    are validated by exactly one piece of code and cannot come to disagree about
+    what a valid mod is.
+
+    The archive may hold the mod at its root (``mod.json`` alongside the content)
+    or inside a single wrapping folder, which is what every zip tool produces when
+    you compress a directory. Both are accepted, because telling a user their mod
+    is "wrongly zipped" is a worse answer than looking one level down.
+
+    Every member is checked by :func:`_is_safe_archive_member` before extraction.
+    """
+    source = Path(source)
+    if not zipfile.is_zipfile(source):
+        raise ModImportError(f"{source} is not a zip archive")
+
+    with tempfile.TemporaryDirectory(prefix="mm-mod-") as tmp:
+        root = Path(tmp)
+        try:
+            with zipfile.ZipFile(source) as archive:
+                members = [m for m in archive.namelist() if _is_safe_archive_member(m)]
+                if not members:
+                    raise ModImportError(f"{source} holds nothing that can be installed")
+                archive.extractall(root, members=members)
+        except (OSError, zipfile.BadZipFile) as exc:
+            raise ModImportError(f"Could not read {source}: {exc}") from exc
+
+        folder = _archive_mod_root(root)
+        if folder is None:
+            raise ModImportError(f"No {MANIFEST_FILENAME} found in {source}")
+        return import_mod_folder(folder, workspace)
+
+
+def _archive_mod_root(root: Path) -> Path | None:
+    """Where the mod actually is inside an extracted archive, or ``None``.
+
+    The root itself when it holds the manifest, otherwise the single subdirectory
+    that does. Deliberately only one level: a zip holding two mods is ambiguous
+    about which one was meant, and guessing is worse than refusing.
+    """
+    if (root / MANIFEST_FILENAME).exists():
+        return root
+    children = [child for child in sorted(root.iterdir()) if child.is_dir()]
+    if len(children) == 1 and (children[0] / MANIFEST_FILENAME).exists():
+        return children[0]
+    return None
 
 
 def remove_mod(mod_id: str, workspace: storage.Workspace | None = None) -> Path | None:

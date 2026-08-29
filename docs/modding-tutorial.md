@@ -80,9 +80,11 @@ mods/
 ```
 
 - **`id`** — must be unique. This is what you put in `enabled_mods` / `trusted_mods`.
-- **`priority`** — load order. Base ruleset is `0` and always first; higher numbers
-  apply *later* and therefore *win* on conflicts. Pick a number above any mod you
-  want to override.
+- **`priority`** — where this mod first lands in the load order. Base ruleset is
+  `0` and always first; higher numbers apply *later* and therefore *win* on
+  conflicts, so pick a number above any mod you want to override. It is a seed
+  rather than a rule: once a mod is in the list the user's own drag order (the
+  `mod_order` setting, set in the Mod Manager) is what decides.
 - **`files`** — the *only* JSON files that get read. A file present in the folder
   but not listed here is ignored. Reuse a base filename (`effects.json`,
   `advantages.json`, …) to override/extend that content; use `blocks.json` for a

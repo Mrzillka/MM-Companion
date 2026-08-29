@@ -55,7 +55,11 @@ User data (settings, saved characters, installed mods) always lives in the
 per-user workspace — `%APPDATA%\MM-Companion` for a normal install, or a `data\`
 folder beside the exe for a Portable install — so it is never overwritten by an
 upgrade. Mods are installed at runtime through the in-app Mod Manager into that
-workspace's `mods\` folder.
+workspace's `mods\` folder — either from a folder, or from a `.zip`, which is how
+a mod normally ships. **The installer bundles no mods**, deliberately: a mod
+versions on its own cadence, and one that arrived with an upgrade would be one the
+user never chose. A mod's own saved state lives beside them in `mod_state\`, and
+survives the mod being removed and reinstalled.
 
 ## Cutting a release
 

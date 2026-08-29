@@ -9,6 +9,7 @@ on close only when something actually changed.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
@@ -183,6 +184,13 @@ class ModsWindow(QMainWindow):
         add_button = QPushButton("Add Mod…")
         add_button.clicked.connect(self._add_mod)
         bar.addWidget(add_button)
+        # A second button rather than one dialog offering both, because Qt has no
+        # picker that takes a folder *or* a file — and because a zip is how a mod
+        # actually arrives (a release asset), so the route needs to be visible
+        # rather than something a user has to know to unpack for first.
+        add_zip_button = QPushButton("Add from Zip…")
+        add_zip_button.clicked.connect(self._add_mod_archive)
+        bar.addWidget(add_zip_button)
         self._remove_button = QPushButton("Remove Mod")
         self._remove_button.clicked.connect(self._remove_current)
         bar.addWidget(self._remove_button)
@@ -314,8 +322,25 @@ class ModsWindow(QMainWindow):
         directory = QFileDialog.getExistingDirectory(self, "Choose a mod folder")
         if not directory:
             return
+        self._install(lambda: mods.import_mod_folder(Path(directory)))
+
+    def _add_mod_archive(self) -> None:
+        path, _filter = QFileDialog.getOpenFileName(
+            self, "Choose a mod archive", "", "Mod archives (*.zip)"
+        )
+        if not path:
+            return
+        self._install(lambda: mods.import_mod_archive(Path(path)))
+
+    def _install(self, install: Callable[[], mods.Mod]) -> None:
+        """Run one of the two import routes and settle the new mod in.
+
+        Shared so a mod that arrived as a zip and one that was copied from a
+        folder land in exactly the same state — the same refusal dialog, the same
+        place in the load order, the same refresh.
+        """
         try:
-            mod = mods.import_mod_folder(Path(directory))
+            mod = install()
         except mods.ModImportError as exc:
             QMessageBox.warning(self, "Could not add mod", str(exc))
             return

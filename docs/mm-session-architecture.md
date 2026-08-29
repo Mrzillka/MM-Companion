@@ -28,7 +28,7 @@ server/           python -m mm_companion.server — a headless host for 24/7 upt
 
 | Module | What it holds |
 | --- | --- |
-| `protocol.py` | The message vocabulary. `PROTOCOL_VERSION`, frozen message dataclasses (`Hello`, `CharacterSnapshot`, `RollRequest`, `Welcome`, `Roster`, `RollAdded`, `ApplyCondition`/`RemoveCondition`, `SetScene`/`SceneUpdate`, `SetScenePortrait`/`ScenePortrait`, `ErrorMessage`, `Kicked`, `Ping`/`Pong`) with generic, annotation-driven validation, and `encode`/`decode` (newline-delimited UTF-8 JSON, capped at `MAX_MESSAGE_BYTES` = 256 KiB). `sanitize_snapshot()` strips a character's `image_path` — a portrait path is meaningless on another machine; `sanitize_scene()` does the same job for the GM-supplied board. |
+| `protocol.py` | The message vocabulary. `PROTOCOL_VERSION`, frozen message dataclasses (`Hello`, `CharacterSnapshot`, `RollRequest`, `Welcome`, `Roster`, `RollAdded`, `ApplyCondition`/`RemoveCondition`, `SetScene`/`SceneUpdate`, `SetScenePortrait`/`ScenePortrait`, `SetModState`/`ModStateUpdate`, `ModRequest`, `ModNote`, `ErrorMessage`, `Kicked`, `Ping`/`Pong`) with generic, annotation-driven validation, and `encode`/`decode` (newline-delimited UTF-8 JSON, capped at `MAX_MESSAGE_BYTES` = 256 KiB). `sanitize_snapshot()` strips a character's `image_path` — a portrait path is meaningless on another machine; `sanitize_scene()` does the same job for the GM-supplied board, and `sanitize_mod_payload()`/`sanitize_mod_state()` for a mod's opaque one. |
 | `model.py` | `SessionState` (id, name, timestamps, `players`, `npc_paths`, `rolls`, `host_token`, and the three `scene*` fields below), `PlayerSlot`, and `RollRecord` — a roll, a note *or* a request, per its `kind` (see "Notes" and "Requests" below). Two token layers: the session's **`host_token`** (the join secret carried in the code) and a per-slot **`token`** a returning client presents to reclaim its seat. `visible_rolls()` filters out hidden GM rolls; `new_session(name)` mints one. |
 | `store.py` | Workspace persistence, modelled on `core/library.py`: `sessions/<id>/session.json` plus an **appended** `rolls.jsonl`, so a roll never rewrites the whole history. `save_session`, `append_roll`, `load_session` (stitches the two back and clears stale `connected` flags), `list_sessions`, `delete_session`. Session ids are validated against `^[A-Za-z0-9_-]{1,64}$` before they touch a path — an id can arrive over the wire. |
 | `net.py` | `Connection` (framed, buffered, lock-guarded writes), the `Transport`/`Listener` ABCs, and the loopback/LAN `TcpTransport`. `DEFAULT_PORT = 47331`. |
@@ -279,6 +279,63 @@ are back" path.
 Stopping a server **says so** (`Kicked` with `REASON_SESSION_CLOSED`), because a
 deliberate end and a sleeping laptop are otherwise indistinguishable and players
 would spend the whole retry window redialling a table that had closed.
+
+## The mod channel (v10)
+
+Everything above is the app's own vocabulary. **v10** adds one a *mod* speaks,
+without letting a mod add message types — the registry in `protocol.py` is filled
+by import-time side effects and has no plugin path, deliberately. Instead there is
+one generic carrier the server refuses to interpret.
+
+| Message | Direction | Who may | Stored |
+| --- | --- | --- | --- |
+| `SetModState` | up | the GM alone | yes, and replayed in `Welcome.mod_state` |
+| `ModStateUpdate` | down | — | broadcast to everyone |
+| `ModRequest` | both | any seat up; forwarded to the **GM alone** | no |
+| `ModNote` | up | the GM alone | yes, as a `kind="mod"` history record |
+
+State is **keyed** (`mod_id`, `key`, `payload`), which is the opposite of the
+scene and the interesting decision here. A scene is one authority's single picture
+that changes for half a dozen unrelated reasons at once, so sending it whole
+avoids reconciliation entirely. A mod's state is a *bag of independent things*: a
+GM starting one timer must not re-push the other five, and two mods must never be
+able to overwrite each other. A `payload` of `None` deletes the key, and that
+deletion is broadcast — it is what a share toggle turning off looks like on the
+wire.
+
+The payload is checked **structurally, never semantically** — plain JSON, bounded
+in depth, width, string length and size — for the same reason `RollSpec` is: this
+layer may not import `core.rules`, and the standalone server loads no game data,
+so it could not read a mod's payload if it wanted to. `float` is admitted here and
+in no other sanitizer, because mod state routinely carries a wall-clock stamp and
+rounding that to a whole second would cost the precision that keeps two screens'
+countdowns agreeing.
+
+**The bound that matters is the aggregate one.** `MAX_MOD_IDS` × `MAX_MOD_KEYS` ×
+`MAX_MOD_PAYLOAD_CHARS` is 2 MiB, eight times `MAX_MESSAGE_BYTES` — so with only
+the per-entry caps a session could accumulate state its own `Welcome` could not
+encode, and the failure would land on the *next player to join* rather than on
+whoever filled it. `MAX_MOD_STATE_CHARS` (64 KiB) is what a write is actually
+refused against, and refusing beats evicting: eviction makes a mod's state
+silently lossy, and the mod that loses an entry is not the one that overran.
+
+Two asymmetries with the scene, both deliberate. Mod state has **no GM-only
+half** — being seen by the table is the entire reason to send it, and a mod with a
+secret uses `storage.local_mod_state` instead. And a `mod_id` the receiver has no
+mod for is **kept** rather than dropped, because the two ends of a table can
+legitimately load different mods (`ERROR_MOD_SKEW` already warns about exactly
+that) and a client does not get to decide whose state matters.
+
+`ModRequest` is the only half a player may send, and it is neither stored nor
+broadcast — one mod talking to one other mod. Its `player_id` is stamped by the
+server from the sending slot, never read from the payload; a field a client could
+fill in itself would make the channel an impersonation tool.
+
+**The relay needed no change**, which is its design guarantee holding rather than
+luck: it reads one envelope per connection and forwards every byte after that
+unread, so it has never known what a session message is. What the relay *does*
+constrain is behaviour — 256 KiB/s per session — which is why mod state is pushed
+on change and never on a tick.
 
 ## The connection ladder
 

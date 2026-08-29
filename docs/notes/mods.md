@@ -44,6 +44,32 @@ authoring guide is `docs/modding.md`; the shape:
   `ensure_workspace()`, before the first `load_game_data()`) imports the
   enabled+trusted mods' Python modules so their `register_*` hooks fire first; the
   base ruleset is implicitly trusted and an import that raises is swallowed.
+- **A mod can reach the table, and keep its own memory.** Three seams added with
+  protocol v10 (the full story is in [the session notes](session.md)):
+  `SessionBridge.set_mod_state` / `mod_state` publish and read a keyed, opaque
+  payload the GM authors and every seat sees; `send_mod_request` is the player's
+  half, reaching the GM alone; `post_mod_note` writes a line into the shared
+  history. All three answer `False` with no session rather than raising, because a
+  mod runs whether or not there is a table. Beside them,
+  `storage.local_mod_state` / `set_local_mod_state` is a mod's **private** memory —
+  one JSON file per mod id under the workspace `mod_state/` dir. Three things that
+  are easy to confuse and are not the same: `mod_options` is *configuration the
+  user set*, `local_mod_state` is *what the mod itself wrote*, and the session's
+  `mod_state` is *the shared copy the table sees*.
+- **A mod can add a block to the GM window**, not just the sheet:
+  `ui/blocks/gm_registry.register_gm_block`. Deliberately a second registry rather
+  than a flag on `BlockDescriptor` — a GM panel is built from the *window* and has
+  no character and no signal bus, so half of a sheet descriptor's fields would
+  have been dead weight. See [the session notes](session.md) for the layout reset
+  that adding one costs.
+- **A mod installs from a `.zip`**, not only from a folder:
+  `mods.import_mod_archive`, wired to the Mod Manager's "Add from Zip…". It hands
+  off to `import_mod_folder` once the archive is safely unpacked, so both routes
+  are validated by one piece of code. Every member is checked against zip slip
+  first — an archive is downloaded from the internet and opened *before* the user
+  has decided whether to trust the mod's Python, which is the least trusted moment
+  there is. A wrapping folder is tolerated (it is what every zip tool produces),
+  but an archive holding two mods is refused rather than guessed at.
 - Four living examples ship under `docs/sample-mods/`: `campaign-notes` (data-only),
   `flat-bonus-readouts` (data+Python — a new readout kind) and `field-kit`
   (data+Python — a piece of gear and the stat-applier seam), all three exercised

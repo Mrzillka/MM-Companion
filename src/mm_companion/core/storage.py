@@ -28,6 +28,11 @@ CHARACTERS_DIRNAME = "characters"
 GM_CHARACTERS_DIRNAME = "gm_characters"
 IMAGES_DIRNAME = "images"
 MODS_DIRNAME = "mods"
+#: Where a mod keeps its own runtime state, one JSON file per mod id. Beside
+#: ``mods/`` rather than inside it, because what a mod *is* and what a mod has
+#: *done* have different lifetimes: removing a mod deletes the first, and a mod
+#: reinstalled later should still find the second.
+MOD_STATE_DIRNAME = "mod_state"
 NOTES_DIRNAME = "notes"
 SESSIONS_DIRNAME = "sessions"
 THEMES_DIRNAME = "themes"
@@ -246,6 +251,10 @@ class Workspace:
         return self.root / MODS_DIRNAME
 
     @property
+    def mod_state_dir(self) -> Path:
+        return self.root / MOD_STATE_DIRNAME
+
+    @property
     def notes_dir(self) -> Path:
         return self.root / NOTES_DIRNAME
 
@@ -291,6 +300,7 @@ def ensure_workspace() -> Workspace:
     workspace.gm_characters_dir.mkdir(parents=True, exist_ok=True)
     workspace.images_dir.mkdir(parents=True, exist_ok=True)
     workspace.mods_dir.mkdir(parents=True, exist_ok=True)
+    workspace.mod_state_dir.mkdir(parents=True, exist_ok=True)
     workspace.notes_dir.mkdir(parents=True, exist_ok=True)
     workspace.sessions_dir.mkdir(parents=True, exist_ok=True)
     workspace.themes_dir.mkdir(parents=True, exist_ok=True)
@@ -507,6 +517,77 @@ def set_compact_settings(**changes: object) -> None:
     merged = compact_settings()
     merged.update({key: value for key, value in changes.items() if key in merged})
     update_settings(compact=merged)
+
+
+def local_mod_state(mod_id: str) -> dict:
+    """One mod's own runtime state, read from ``mod_state/<mod_id>.json``.
+
+    The seam a mod uses to remember what it was doing between launches — a GM's
+    timers, say, set up before anyone arrived. Distinct from two things it is easy
+    to confuse it with:
+
+    - :func:`~mm_companion.core.mods.mod_option_values` is *configuration* the
+      user set in the Mod Manager. This is state the mod itself wrote.
+    - :attr:`~mm_companion.core.session.model.SessionState.mod_state` is the
+      **shared** copy, authored by the GM and seen by the table. This one is
+      local, private, and survives having no session at all.
+
+    A file, not a settings key, so a mod cannot grow ``settings.json`` without
+    bound or collide with an app setting — and so the
+    :func:`load_settings` hazard (a key added after a workspace was created reads
+    back as ``None``) simply does not arise.
+
+    Answers ``{}`` for a missing, unreadable, malformed or non-object file rather
+    than raising. A mod's own saved state must never be able to stop the app
+    starting, and there is nothing useful a caller could do with the exception
+    anyway.
+    """
+    path = _mod_state_file(mod_id)
+    if path is None:
+        return {}
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def set_local_mod_state(mod_id: str, state: dict) -> None:
+    """Write one mod's runtime state, replacing whatever was there.
+
+    A no-op for a *mod_id* that is not a plausible one — see
+    :func:`_mod_state_file`. Silent rather than raising, to match the reader:
+    between them, a mod that misbehaves here loses its own memory and breaks
+    nothing else.
+    """
+    path = _mod_state_file(mod_id)
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+    except (OSError, TypeError, ValueError):
+        # TypeError/ValueError: a mod handed us something json cannot render.
+        # Losing the write is the right failure — the alternative is a half-written
+        # file that reads back as {} next launch anyway.
+        return
+
+
+def _mod_state_file(mod_id: str) -> Path | None:
+    """The path one mod's state lives at, or ``None`` if the id is not one.
+
+    The id becomes a **filename**, and it can have come from a mod manifest a user
+    downloaded. :func:`~mm_companion.core.session.protocol.sanitize_mod_id` is the
+    one definition of what a mod id may look like — reused here rather than
+    restated, so a ``"../settings"`` cannot reach the filesystem from either
+    direction and the two checks cannot drift apart.
+    """
+    from mm_companion.core.session.protocol import sanitize_mod_id
+
+    checked = sanitize_mod_id(mod_id)
+    if not checked:
+        return None
+    return get_workspace().mod_state_dir / f"{checked}.json"
 
 
 def relay_url() -> str:

@@ -27,6 +27,18 @@ All paths are relative to the repo root. Two drivers live in
 `.claude/skills/make-release/`: `release_notes.py` (material, scaffold, check)
 and `make_release.py` (tag + push).
 
+## Mods are released separately
+
+**The installer ships no mods, and this skill publishes none.** Mods live in the
+sibling repo (`mm-companion-mods`) and version on their own cadence; that repo has
+its own `make-mods-release` skill, which attaches one `.zip` per mod to its own
+GitHub Release. A user installs one with **Manage Mods ▸ Add from Zip…**.
+
+The two releases only touch when an app change is what a mod needs: the mods repo
+pins the engine in `requirements-app.txt`, so a mod depending on something shipped
+here waits for that pin to move. Say so in a mod's release notes, not in this
+one's.
+
 ## Prerequisites
 
 - The `gh` CLI installed and authenticated (`gh auth status` → logged in). The

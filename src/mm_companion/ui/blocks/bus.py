@@ -295,23 +295,57 @@ class SignalBus:
         self._timer.start()
 
     def flush(self) -> None:
-        """Run every armed coalescing handler now, in subscription order.
+        """Run every handler armed **when the flush began**, in subscription order.
 
         Called by the bus's own timer when the turn settles, and directly by anything
-        that is about to *read* a block whose redraw may still be pending — a save, a
-        snapshot, a test. Safe to call at any time and cheap when nothing is armed.
+        that is about to *read* a block whose redraw may still be pending. Safe to
+        call at any time and cheap when nothing is armed.
+
+        The armed set is taken once, up front, rather than drained as it goes. A
+        handler is free to publish while it runs, and a handler that (directly or
+        around a loop) re-raises a topic it is subscribed to would otherwise re-arm
+        itself into the very loop that is running it — a flush that never returns,
+        which on the Qt thread is a frozen window with nothing on screen to say why.
+        Nothing in the base set does that (a card tree's ``refresh`` only reads the
+        model, which is the same promise that makes coalescing legal at all), but a
+        mod block subscribing and publishing the same topic is one line of plausible
+        code. Deferring it to the next turn keeps the app answering.
         """
         if self._timer is not None:
             self._timer.stop()
-        while self._armed:
-            handler = next(iter(self._armed))
-            del self._armed[handler]
+        armed, self._armed = self._armed, {}
+        for handler in armed:
             _refresh(handler)
 
     @property
     def pending(self) -> bool:
         """Whether any coalescing handler is armed and waiting."""
         return bool(self._armed)
+
+    def forget(self, owner: object) -> None:
+        """Drop every subscription, server and armed redraw belonging to *owner*.
+
+        For a block the sheet has **destroyed** — a Notes instance closed from the
+        View menu, or any multi-instance block a mod registers. A handler is a bound
+        method, so it keeps its section alive on the Python side while the widget's
+        C++ half has already gone; calling it then raises from inside whatever
+        happened to publish next. Coalescing widened that from "the next publish" to
+        "some later turn, with nothing on the stack to say who armed it", which is
+        what makes it worth closing rather than noting.
+
+        Matched by identity of the bound method's ``__self__``, so a block's handlers
+        go and nobody else's do.
+        """
+        gone = [h for h in self._armed if getattr(h, "__self__", None) is owner]
+        for handler in gone:
+            del self._armed[handler]
+        for handlers in self._subscribers.values():
+            handlers[:] = [h for h in handlers if getattr(h, "__self__", None) is not owner]
+        for servers in self._servers.values():
+            servers[:] = [h for h in servers if getattr(h, "__self__", None) is not owner]
+        self._coalescing = {
+            h for h in self._coalescing if getattr(h, "__self__", None) is not owner
+        }
 
     def make_publisher(self, topic: str) -> Callable[..., None]:
         """A callable that publishes *topic*, swallowing any arguments.

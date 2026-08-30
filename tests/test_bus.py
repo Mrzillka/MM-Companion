@@ -186,6 +186,29 @@ def test_a_blanket_republish_runs_everything_and_leaves_nothing_armed(
     assert not bus.pending
 
 
+def test_a_handler_that_re_arms_itself_does_not_spin(qobject_owner) -> None:
+    """A flush runs what was armed when it began, never what it arms while running.
+
+    A block subscribing and publishing the same topic is one line of plausible mod
+    code, and draining a live set would run it forever — on the Qt thread that is a
+    frozen window with nothing on screen to explain it.
+    """
+    bus = SignalBus(qobject_owner)
+    runs: list[int] = []
+
+    def handler() -> None:
+        runs.append(1)
+        bus.publish("t")  # re-arms itself
+
+    bus.subscribe("t", handler, coalesce=True)
+    bus.publish("t")
+
+    bus.flush()
+
+    assert runs == [1]
+    assert bus.pending  # left for the next turn, where the loop stays interruptible
+
+
 def test_a_bus_with_no_owner_never_coalesces() -> None:
     """No owner means no widget lifetime to tie a pending redraw to, so run it now.
 
@@ -199,6 +222,64 @@ def test_a_bus_with_no_owner_never_coalesces() -> None:
     bus.publish("t")
 
     assert runs == [1]
+    assert not bus.pending
+
+
+# -- forgetting a destroyed block --------------------------------------------
+
+
+class _Block:
+    """Stands in for a section: what matters is that its handlers are bound."""
+
+    def __init__(self, log: list[str], name: str) -> None:
+        self._log = log
+        self._name = name
+
+    def refresh(self) -> None:
+        self._log.append(self._name)
+
+    def serve(self, payload) -> None:
+        self._log.append(f"{self._name}:{payload}")
+
+
+def test_forget_drops_a_destroyed_blocks_subscriptions() -> None:
+    log: list[str] = []
+    kept, gone = _Block(log, "kept"), _Block(log, "gone")
+    bus = SignalBus()
+    bus.subscribe("t", kept.refresh)
+    bus.subscribe("t", gone.refresh)
+
+    bus.forget(gone)
+    bus.publish("t")
+
+    assert log == ["kept"]
+
+
+def test_forget_drops_the_payload_channel_too() -> None:
+    log: list[str] = []
+    gone = _Block(log, "gone")
+    bus = SignalBus()
+    bus.serve("r", gone.serve)
+
+    bus.forget(gone)
+    bus.publish_request("r", 1)
+
+    assert log == []
+
+
+def test_forget_disarms_a_pending_redraw(qobject_owner) -> None:
+    """The half coalescing added: the call would otherwise land a turn later."""
+    log: list[str] = []
+    gone = _Block(log, "gone")
+    bus = SignalBus(qobject_owner)
+    bus.subscribe("t", gone.refresh, coalesce=True)
+    bus.publish("t")
+    assert bus.pending
+
+    bus.forget(gone)
+    bus.flush()
+
+    assert log == []
     assert not bus.pending
 
 

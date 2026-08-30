@@ -2137,6 +2137,11 @@ class GameData:
 
         The returned mapping is now **shared**, so treat it as read-only — no caller
         writes to one today, and one that wants to should copy first.
+
+        Unlocked on purpose. The session layer asks these from its reader threads, and
+        two threads racing here both build the same answer from the same frozen
+        tuples: the loser's work is thrown away and rebuilt on some later call, which
+        is cheaper than a lock on the hottest read in the app.
         """
 
         cache = self.__dict__.get("_catalogs")

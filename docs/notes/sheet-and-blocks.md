@@ -314,6 +314,15 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   one tick of an arrow key. `publish` does not dedup (only `publish_all` does), so
   the descriptor tables are where this has to be got right.
 
+- **A destroyed block comes off the bus.** `remove_block_instance` calls
+  `SignalBus.forget(section)`, which drops every subscription, server and armed redraw
+  whose handler is a bound method of that section. Without it the handlers stayed on
+  the bus holding a section whose C++ half had gone, and the next publish raised from
+  inside whoever happened to trigger it — a shape coalescing made worse, since the
+  call could then land a turn later with nothing on the stack to say who armed it.
+  Notes is the only base block there can be two of and it subscribes nothing, so this
+  is for the mod blocks that will.
+
 ## Blocks there can be two of (matters when touching the canvas or the View menu)
 
 - A `BlockDescriptor` carrying an **`instance_factory`** is a *template*: further

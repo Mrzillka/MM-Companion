@@ -280,6 +280,10 @@ class CharacterSheet(QWidget):
         # would be an empty NotesState the next instance to reuse this key would
         # inherit — and `notes#2` is reused as soon as the middle of three closes.
         self.character.notes.pop(key, None)
+        # Off the bus before it is destroyed, or its handlers stay subscribed as bound
+        # methods of a section whose widget has gone — and a coalescing one could be
+        # armed, so the call would land on a later turn with nothing to trace it to.
+        self._bus.forget(section)
         discard_widget(section)
         attribute = key.replace(INSTANCE_SEPARATOR, "_")
         if hasattr(self, attribute):

@@ -1848,26 +1848,34 @@ class GMWindow(QMainWindow):
         turn. None of that is wrong; almost all of it is about a number the board
         never showed.
 
-        The signature is everything downstream reads: the payload, the GM's own
-        arrangement, whether there is a table to send to (so a scene built *before*
-        hosting starts is still broadcast when it does), and the auto-players
-        preference (which nothing in the payload carries, but the 👁 on every player
-        card follows — see :meth:`_sync_scene_players`).
+        The signature is everything the guarded half reads: the payload, the GM's own
+        arrangement, and whether there is a table to send to — so a scene built
+        *before* hosting starts is still broadcast when it does. What the cards are
+        told, and what pictures are sent, is settled outside it.
         """
         entries = self._scene_payload()
         order = [e.ref for e in self._scene]
-        signature = (entries, order, self._bridge.in_session, self._scene_auto_players)
+        signature = (entries, order, self._bridge.in_session)
         if signature != self._pushed_scene:
             self._pushed_scene = deepcopy(signature)
             self._scene_board.set_manual_order(order)
             self._scene_board.set_scene(entries)
-            self._refresh_scene_state()
             if self._bridge.in_session:
                 self._bridge.set_scene(entries, {e.ref: e.wire_source() for e in self._scene})
             self._warn_if_scene_is_truncated(entries)
-        # Outside the guard: a picture travels on its own message and appears in no
-        # payload, so a player who changed only their portrait moves nothing above.
-        # This carries its own change check.
+        # Both of these live outside the guard, because neither is about the payload.
+        #
+        # A card is told where it stands every time, because the *cards* can be new
+        # when the scene is not: ``_refresh_npcs`` destroys and rebuilds every NPC
+        # card, a fresh one starts off the board, and a roster brings new player
+        # cards whose 👁 has never been shown or hidden. Behind the guard, a cast
+        # reloaded mid-fight came back with every card claiming its creature was not
+        # in the scene. It is a loop over the cards setting two flags, so it is not
+        # what a push costs.
+        self._refresh_scene_state()
+        # A picture travels on its own message and appears in no payload, so a player
+        # who changed only their portrait moves nothing above. This carries its own
+        # change check.
         self._push_scene_portraits()
 
     def _push_scene_portraits(self) -> None:

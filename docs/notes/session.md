@@ -290,11 +290,14 @@ The shape:
   move. One player editing a stat arrived there *twice* — once from their snapshot
   and once from the roster broadcast the same snapshot triggered — and each time
   redrew the GM's whole board and sent the whole scene to every client, whose board
-  redrew in turn. It compares the payload, the GM's arrangement, whether there is a
-  table to send to (so a board built before hosting is still broadcast when hosting
-  starts) and the auto-players preference (which no payload carries, but every
-  player card's 👁 follows). Portraits are pushed *outside* the guard: a picture
-  travels on its own message and appears in no payload, and it carries its own
+  redrew in turn. It compares the payload, the GM's arrangement, and whether there is
+  a table to send to (so a board built before hosting is still broadcast when hosting
+  starts). Two things stay *outside* it. **What the cards are told** — the 👁 on a
+  player card and whether an NPC's menu offers to add or remove it — because the
+  *cards* can be new when the scene is not: `_refresh_npcs` rebuilds every NPC card
+  and a fresh one starts off the board, so behind the guard a cast reloaded mid-fight
+  came back claiming nothing was in the scene. And **the portraits**, because a
+  picture travels on its own message, appears in no payload, and carries its own
   check. `_scene_portrait_for` caches the encoded thumbnail against the input it was
   made from — the encode is a file read or a base64 decode plus a scale and a JPEG
   re-encode, and it ran for every entry of every push, `_scene_portraits` having

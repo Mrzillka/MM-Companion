@@ -84,8 +84,11 @@ class SnapshotPusher(QObject):
         self._timer.setInterval(int(debounce_ms))
         self._timer.timeout.connect(self.push_now)
 
-        # The bus has no unsubscribe, so :meth:`detach` gates the handler instead
-        # of removing it; a detached pusher is inert but still subscribed.
+        # :meth:`detach` gates the handler rather than removing it, even though
+        # ``SignalBus.forget`` exists now: the sheet outlives the pusher and drops it
+        # on the way out, so what matters here is that a detached pusher sends
+        # nothing, not that the bus has forgotten it. A detached pusher is inert but
+        # still subscribed.
         for topic in SNAPSHOT_TOPICS:
             sheet.bus.subscribe(topic, self.schedule)
 

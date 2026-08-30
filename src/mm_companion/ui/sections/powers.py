@@ -1073,9 +1073,16 @@ class PowersSection(TitledSection):
         with rebuilding(self):
             self._normalize_arrays()  # a valid active member per array before drawing
             # The one refresh handler that *writes* the model, so it is also the one
-            # that has to drop what the surrounding build scope has memoized — see
-            # :mod:`mm_companion.core.rules.build_cache`. Before a single card is
-            # drawn, so nothing below reads a number worked out from the old arrays.
+            # that owes the surrounding build scope a fresh gather — an array's active
+            # member is the branch whose boosts stand, so the write moves real numbers
+            # (see :mod:`mm_companion.core.rules.build_cache`).
+            #
+            # Insurance rather than a fix for anything today: the scope is opened per
+            # subscriber and this is the first thing the subscriber does, so nothing
+            # has been memoized yet when the write lands. Kept because that is a fact
+            # about *two* other files — how the bus scopes a handler, and that the
+            # normalize stays at the top of this one — and a line here is cheaper than
+            # both of them having to stay true.
             invalidate_build_cache()
             # Hand the on-screen progress over to the cards about to be built, and start
             # a fresh map — so a power that was removed or ungrouped leaves nothing

@@ -125,10 +125,14 @@ class BlockDescriptor:
     default_pinned: bool = False
     publishes: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     subscribes: Mapping[str, str] = field(default_factory=dict)
-    coalesces: frozenset[str] = frozenset()
     requests: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     serves: Mapping[str, str] = field(default_factory=dict)
     instance_factory: Callable[[str], BlockFactory] | None = None
+    # Belongs beside ``subscribes``, and is last anyway: a dataclass's field order is
+    # a public signature, and a mod that passes the bus tables positionally would have
+    # had ``requests`` silently land in a field added between them. New fields go on
+    # the end.
+    coalesces: frozenset[str] = frozenset()
 
     @property
     def multi(self) -> bool:

@@ -122,7 +122,17 @@ class SceneBoard(QWidget):
         (:meth:`~mm_companion.ui.gm_window.GMWindow._push_scene`); this guards the
         *receiving*, so a chatty GM — or a mod — still costs a player nothing.
         """
-        wanted = [dict(entry) for entry in entries if entry_ref(entry)]
+        # One card per ref, and the first wins. Refs are unique where they are made,
+        # but they arrive over the wire, and a repeated one would now mean the same
+        # *card* twice in the flow — a layout Qt refuses to build and does not say so.
+        wanted: list[dict] = []
+        seen: set[str] = set()
+        for entry in entries:
+            ref = entry_ref(entry)
+            if not ref or ref in seen:
+                continue
+            seen.add(ref)
+            wanted.append(dict(entry))
         if wanted == self._entries:
             return
         self._entries = wanted
@@ -147,8 +157,16 @@ class SceneBoard(QWidget):
         self._rebuild()
 
     def set_manual_order(self, refs: list[str]) -> None:
-        """Tell the board the GM's arrangement of the un-rolled entries."""
-        self._manual = list(refs)
+        """Tell the board the GM's arrangement of the un-rolled entries.
+
+        Guarded like :meth:`set_scene`, and for a plainer reason: the GM's push sets
+        the order and then the scene, so an unguarded one redrew the board twice for
+        every change and twice more for every change that turned out not to be one.
+        """
+        wanted = list(refs)
+        if wanted == self._manual:
+            return
+        self._manual = wanted
         self._rebuild()
 
     def set_portrait(self, ref: str, portrait: str) -> None:

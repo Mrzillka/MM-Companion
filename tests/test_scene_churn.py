@@ -137,6 +137,23 @@ def test_a_real_change_still_reaches_the_board(window: GMWindow) -> None:
     assert window._scene_board.card(ref).condition_names() == ["Dazed"]
 
 
+def test_a_rebuilt_npc_card_still_knows_it_is_on_the_board(window: GMWindow) -> None:
+    """The push guard must not skip what tells the *cards* where they stand.
+
+    ``_refresh_npcs`` destroys and rebuilds every NPC card, and a fresh card starts
+    off the board — only ``_refresh_scene_state`` puts that right. It runs from
+    ``_push_scene``, which by then may have nothing new to say about the scene
+    itself, so it cannot live behind the guard.
+    """
+    goon = _npc_file(window, "Goon")
+    window._set_in_scene(SCENE_NPC, goon, True)
+    assert window._npc_state[goon].card.in_scene
+
+    window._refresh_npcs()  # every card made again; the scene has not moved
+
+    assert window._npc_state[goon].card.in_scene
+
+
 # -- the player's side: what a board does with an update -----------------------
 
 
@@ -180,6 +197,34 @@ def test_an_entry_that_leaves_takes_its_card_with_it(qapp: QApplication) -> None
 
     assert board.card("n1") is None
     assert board.ordered_refs() == ["n2"]
+
+
+def test_the_gms_own_board_is_redrawn_once_per_change(window: GMWindow) -> None:
+    """The push sets the order and then the scene; only one of them may redraw."""
+    goon = _npc_file(window, "Goon")
+    window._set_in_scene(SCENE_NPC, goon, True)
+
+    rebuilds: list[int] = []
+    original = window._scene_board._rebuild
+    window._scene_board._rebuild = lambda: (rebuilds.append(1), original())[1]
+
+    window._apply_npc_condition(goon, "dazed", None)
+
+    assert rebuilds == [1]
+
+
+def test_a_repeated_ref_gets_one_card(qapp: QApplication) -> None:
+    """Refs are unique where they are made, but the board reads them off the wire.
+
+    Two entries under one ref would mean the same *card* twice in the flow now that
+    cards are reused — which Qt refuses to lay out, quietly.
+    """
+    board = SceneBoard(load_game_data())
+
+    board.set_scene([GOON, {**GOON, "name": "Impostor"}])
+
+    assert board.ordered_refs() == ["n1"]
+    assert board._flow_host.flow.count() == 1
 
 
 def test_reordering_keeps_the_cards_and_moves_them(qapp: QApplication) -> None:

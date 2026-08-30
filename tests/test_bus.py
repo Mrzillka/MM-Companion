@@ -1,7 +1,8 @@
 """The topic signal bus and the block descriptors' publish/subscribe tables.
 
 The bus carries the sheet's cross-block reactivity. These tests cover the bus
-mechanics (headless, no Qt) and check that every base descriptor's ``publishes``/
+mechanics (headless but for the coalescing ones, which need an owner to tie a
+pending redraw to) and check that every base descriptor's ``publishes``/
 ``subscribes`` tables are internally consistent — each named signal and method
 actually exists on the block it names, and the whole web reproduces the old
 hand-wired fan-out. The end-to-end behaviour (moving an ability updates skills,
@@ -9,6 +10,10 @@ powers, the system readouts, …) is exercised by ``test_ui_wiring.py``.
 """
 
 from __future__ import annotations
+
+import pytest
+from PySide6.QtCore import QObject
+from PySide6.QtWidgets import QApplication
 
 from mm_companion.ui.blocks import block_descriptors
 from mm_companion.ui.blocks.bus import (
@@ -54,6 +59,20 @@ REQUEST_TOPICS = {
 }
 
 
+@pytest.fixture
+def qobject_owner():
+    """Something for a coalescing bus to tie its timer to, and its Qt application.
+
+    A ``QTimer`` needs an application to exist even to be constructed, and the owner
+    is what stops a pending redraw outliving what it would redraw. The rest of this
+    file is deliberately Qt-free; only the coalescing tests take this.
+    """
+    QApplication.instance() or QApplication([])
+    owner = QObject()
+    yield owner
+    owner.deleteLater()
+
+
 # -- bus mechanics -----------------------------------------------------------
 
 
@@ -93,6 +112,94 @@ def test_topics_lists_only_subscribed_topics() -> None:
     bus = SignalBus()
     bus.subscribe("live", lambda: None)
     assert bus.topics() == ["live"]
+
+
+# -- coalescing subscribers --------------------------------------------------
+#
+# The two card trees rebuild themselves wholesale on ``facts-changed``, which every
+# spin box raises on every step, so a rank dragged from 0 to 10 rebuilt them ten
+# times and showed the tenth. A coalescing subscriber is armed by a publish and run
+# once when the turn settles.
+
+
+def test_a_coalescing_subscriber_is_not_run_by_the_publish(qobject_owner) -> None:
+    bus = SignalBus(qobject_owner)
+    runs: list[int] = []
+    bus.subscribe("t", lambda: runs.append(1), coalesce=True)
+
+    bus.publish("t")
+
+    assert runs == []
+    assert bus.pending
+
+
+def test_a_burst_of_publishes_becomes_one_run(qobject_owner) -> None:
+    bus = SignalBus(qobject_owner)
+    runs: list[int] = []
+    bus.subscribe("t", lambda: runs.append(1), coalesce=True)
+
+    for _ in range(10):
+        bus.publish("t")
+    bus.flush()
+
+    assert runs == [1]
+
+
+def test_flushing_with_nothing_armed_does_nothing(qobject_owner) -> None:
+    bus = SignalBus(qobject_owner)
+    runs: list[int] = []
+    bus.subscribe("t", lambda: runs.append(1), coalesce=True)
+
+    bus.flush()
+
+    assert runs == []
+    assert not bus.pending
+
+
+def test_an_ordinary_subscriber_beside_a_coalescing_one_still_runs_at_once(
+    qobject_owner,
+) -> None:
+    bus = SignalBus(qobject_owner)
+    order: list[str] = []
+    bus.subscribe("t", lambda: order.append("now"))
+    bus.subscribe("t", lambda: order.append("later"), coalesce=True)
+
+    bus.publish("t")
+    assert order == ["now"]
+
+    bus.flush()
+    assert order == ["now", "later"]
+
+
+def test_a_blanket_republish_runs_everything_and_leaves_nothing_armed(
+    qobject_owner,
+) -> None:
+    """A restore has to land whole and at once — see ``CharacterSheet.reseed``."""
+    bus = SignalBus(qobject_owner)
+    runs: list[int] = []
+    bus.subscribe("a", lambda: runs.append(1), coalesce=True)
+
+    bus.publish("a")  # armed by an earlier edit...
+    bus.publish_all(["a"])  # ...and superseded by the restore
+
+    assert runs == [1]
+    assert not bus.pending
+
+
+def test_a_bus_with_no_owner_never_coalesces() -> None:
+    """No owner means no widget lifetime to tie a pending redraw to, so run it now.
+
+    The headless bus tests hold one of these, and so would a mod that built a bus of
+    its own; answering "immediately" is the safe reading of a missing owner.
+    """
+    bus = SignalBus()
+    runs: list[int] = []
+    bus.subscribe("t", lambda: runs.append(1), coalesce=True)
+
+    bus.publish("t")
+
+    assert runs == [1]
+    assert not bus.pending
 
 
 # -- the request (payload) channel -------------------------------------------

@@ -292,6 +292,20 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   The scope is per *handler*, not per fan-out, precisely because one handler does
   write: `PowersSection._rebuild_list` normalizes its arrays before drawing, and
   calls `invalidate_build_cache()` the moment it has.
+- **The two card trees redraw once a turn, not once a publish.** `PowersSection.refresh`
+  and `EquipmentSection.refresh` rebuild their whole card tree — every card destroyed
+  and made again — and both answer to `facts-changed`, which every spin box on the
+  sheet raises on every step. A rank dragged from 0 to 10 rebuilt them ten times and
+  showed the tenth; a drag of twenty-five steps took the best part of a second.
+  `BlockDescriptor.coalesces` names them (`registry.py::_COALESCED`), and
+  `SignalBus.subscribe(..., coalesce=True)` arms such a handler instead of running it,
+  flushing when the turn settles. It is legal only because every subscriber is already
+  an idempotent redraw from the model. The price: **anything reading a coalescing
+  block's widgets in the same breath as the edit must `sheet.bus.flush()` first** —
+  which is only ever a test, since the app's own event loop does it a moment later.
+  The timer is parented to the sheet, so a sheet closed with a redraw pending cannot
+  fire it into its own torn-down sections; a bus built with no owner (the headless bus
+  tests) never coalesces at all.
 - **A block signal that publishes a topic another of its signals already publishes
   is a doubled refresh.** `AbilitiesSection` emits `abilityChanged` *and* `changed`
   for one edit; both named `derived-changed` in the descriptor, so the System block

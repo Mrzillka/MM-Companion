@@ -90,6 +90,12 @@ class BlockDescriptor:
     ``subscribes`` maps a topic to the name of the block method that recomputes
     when it fires. Both default empty (a purely presentational block).
 
+    ``coalesces`` names the subscriber methods that may be run **once at the end of
+    the turn** rather than once per publish — for a handler expensive enough that
+    running it per spin-box step is what makes an edit feel slow. See
+    :meth:`~mm_companion.ui.blocks.bus.SignalBus.subscribe` for what a block owes in
+    exchange.
+
     ``instance_factory`` is what makes a block one the sheet may build *more than
     one of* — today only Notes. Supplying it makes the registered descriptor a
     **template**: further instances take a key of ``"<key>#<n>"``, are built by
@@ -119,6 +125,7 @@ class BlockDescriptor:
     default_pinned: bool = False
     publishes: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     subscribes: Mapping[str, str] = field(default_factory=dict)
+    coalesces: frozenset[str] = frozenset()
     requests: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     serves: Mapping[str, str] = field(default_factory=dict)
     instance_factory: Callable[[str], BlockFactory] | None = None

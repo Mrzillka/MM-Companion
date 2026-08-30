@@ -408,7 +408,7 @@ class CharacterSheet(QWidget):
         its own two build-wide concerns. See :mod:`mm_companion.ui.blocks.bus` for
         the topic table and the exact fan-out it reproduces.
         """
-        self._bus = SignalBus()
+        self._bus = SignalBus(self)
         # Sheet-level subscribers: recompute spent power points on any build change,
         # and surface any user edit for unsaved-change tracking. (Toggling a power
         # on/off publishes BUILD_CHANGED but not EDITED, so a runtime toggle
@@ -451,7 +451,11 @@ class CharacterSheet(QWidget):
             for topic in topics:
                 signal.connect(self._bus.make_publisher(topic))
         for topic, method_name in descriptor.subscribes.items():
-            self._bus.subscribe(topic, getattr(section, method_name))
+            self._bus.subscribe(
+                topic,
+                getattr(section, method_name),
+                coalesce=method_name in descriptor.coalesces,
+            )
         # The payload channel: the same two tables, one topic further out.
         for signal_name, topics in descriptor.requests.items():
             signal = getattr(section, signal_name)

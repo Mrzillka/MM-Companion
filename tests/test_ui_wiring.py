@@ -145,9 +145,18 @@ def test_power_active_toggle_drops_the_bonus_live(qapp: QApplication) -> None:
 
 
 def _pl_warning_shown(sheet: CharacterSheet) -> bool:
-    """Whether any power card is showing the ⚠ Power-Level-breach marker."""
+    """Whether any power card is showing the ⚠ Power-Level-breach marker.
+
+    Flushes the bus first, because the power cards' ``refresh`` is a **coalescing**
+    subscriber: an edit arms it and the redraw happens once when the turn settles,
+    so a spin box dragged through ten ranks rebuilds the card tree once instead of
+    ten times (see ``ui/blocks/registry.py::_COALESCED``). ``flush`` is what the
+    running app's event loop does a moment later; a test that reads the widgets in
+    the same breath as the edit has to say so.
+    """
     from PySide6.QtWidgets import QLabel
 
+    sheet.bus.flush()
     return any(label.text() == "⚠" for label in sheet.powers.findChildren(QLabel))
 
 
@@ -174,6 +183,33 @@ def test_raising_an_ability_re_derives_the_power_cards(qapp: QApplication) -> No
 
     sheet.abilities._abilities["STR"].setValue(4)
     assert not _pl_warning_shown(sheet)  # back under the cap, marker clears
+
+
+def test_a_burst_of_ability_steps_rebuilds_the_card_trees_once(qapp: QApplication) -> None:
+    """Dragging a spin box must not rebuild the two card trees once per step.
+
+    Both are `facts-changed` subscribers that rebuild wholesale, and every spin box
+    on the sheet raises that topic on every step — so a rank dragged from 0 to 10
+    rebuilt them ten times over and showed the tenth. They coalesce now; this is the
+    assertion that says so, from the outside.
+    """
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.powers.append(Power(name="Blast", effects=[PowerEffectInstance("damage", rank=6)]))
+    sheet = CharacterSheet(data, char)
+    sheet.bus.flush()
+
+    rebuilds: list[int] = []
+    original = sheet.powers._rebuild_list
+    sheet.powers._rebuild_list = lambda: (rebuilds.append(1), original())[1]
+
+    spin = sheet.abilities._abilities["STR"]
+    for value in range(1, 11):
+        spin.setValue(value)
+    assert rebuilds == []  # nothing redrawn yet — the turn has not settled
+
+    sheet.bus.flush()
+    assert rebuilds == [1]
 
 
 def test_raising_power_level_clears_a_power_cards_warning(qapp: QApplication) -> None:

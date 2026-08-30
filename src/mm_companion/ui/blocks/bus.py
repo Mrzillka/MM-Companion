@@ -12,6 +12,15 @@ web just by declaring which topics it publishes/subscribes on its
 :class:`~mm_companion.ui.blocks.base.BlockDescriptor` — no
 :class:`~mm_companion.ui.character_sheet.CharacterSheet` edit needed.
 
+**A subscriber may be coalescing.** Most run the moment their topic is published.
+The two card trees do not: they rebuild themselves wholesale, and every spin box on
+the sheet publishes ``facts-changed`` on every step, so a rank dragged through ten
+values rebuilt them ten times over and showed the tenth. Those are subscribed with
+``coalesce=True`` (see :meth:`SignalBus.subscribe`), which arms the handler and runs
+it once when the turn settles. It is legal only because of the rule below — every
+handler is an idempotent redraw from the shared model — and it means a caller that
+reads such a block's widgets synchronously must :meth:`SignalBus.flush` first.
+
 **All topics are argless.** Every base subscriber recomputes its view from the
 shared :class:`~mm_companion.core.character.Character` model rather than from a
 signal payload (e.g. the skills block's ``refresh_totals`` takes no arguments and
@@ -91,6 +100,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Callable
+
+from PySide6.QtCore import QObject, QTimer
 
 from mm_companion.core.rules import stable_build
 
@@ -199,19 +210,54 @@ class SignalBus:
     result — the bus makes no ordering guarantee beyond "subscription order".
     """
 
-    def __init__(self) -> None:
+    def __init__(self, owner: QObject | None = None) -> None:
+        #: What the coalescing timer is parented to, so a pending redraw cannot
+        #: outlive the thing it would redraw. A sheet closed with one armed used to
+        #: leave a zero-delay timer holding bound methods of its torn-down sections,
+        #: which fires into deleted C++ objects on somebody else's next event loop
+        #: turn. ``None`` is legal and means the bus never coalesces — which is how
+        #: the headless bus tests use it.
+        self._owner = owner
         self._subscribers: dict[str, list[Handler]] = defaultdict(list)
         self._servers: dict[str, list[RequestHandler]] = defaultdict(list)
+        #: Coalescing subscribers, and the ones currently armed. A ``dict`` for the
+        #: armed set because it keeps subscription order, which is the only order
+        #: this bus has ever promised.
+        self._coalescing: set[Handler] = set()
+        self._armed: dict[Handler, None] = {}
+        self._timer: QTimer | None = None
 
-    def subscribe(self, topic: str, handler: Handler) -> None:
-        """Call *handler* (with no arguments) whenever *topic* is published."""
+    def subscribe(self, topic: str, handler: Handler, *, coalesce: bool = False) -> None:
+        """Call *handler* (with no arguments) whenever *topic* is published.
+
+        With *coalesce*, a publish only **arms** the handler and it runs once when the
+        turn settles (or at the next :meth:`flush`). For a handler expensive enough
+        that running it per publish is what makes an edit feel slow: the two card
+        trees rebuild themselves wholesale, and a spin box dragged through ten ranks
+        raised ten of those, of which only the last was ever seen.
+
+        What a coalescing block owes in exchange: its handler must be an **idempotent
+        redraw from the model** — which every subscriber already promises (see the
+        module docstring) — and anything reading the block's *widgets* in the same
+        breath as the edit has to :meth:`flush` first. Nothing in the app does: what
+        is saved, pushed to a session and recorded for undo is the model, not the
+        widgets, and the event loop flushes a moment later either way. Tests do.
+        """
         self._subscribers[topic].append(handler)
+        if coalesce and self._owner is not None:
+            self._coalescing.add(handler)
 
     def publish(self, topic: str) -> None:
-        """Fire every handler subscribed to *topic*, in subscription order."""
+        """Fire every handler subscribed to *topic*, in subscription order.
+
+        A coalescing subscriber is armed instead (see :meth:`subscribe`).
+        """
         # Iterate a copy so a handler that (re)subscribes can't disturb the loop.
         for handler in list(self._subscribers.get(topic, ())):
-            _refresh(handler)
+            if handler in self._coalescing:
+                self._arm(handler)
+            else:
+                _refresh(handler)
 
     def publish_all(self, topics) -> None:
         """Fire every handler subscribed to any of *topics*, each **at most once**.
@@ -226,6 +272,46 @@ class SignalBus:
         handlers = [h for topic in topics for h in self._subscribers.get(topic, ())]
         for handler in dict.fromkeys(handlers):
             _refresh(handler)
+        # Nothing is left armed by a blanket republish: it is the one publish that
+        # already runs every handler exactly once, so deferring any of them would
+        # only be a second run of what just happened. (``_refresh`` above ran the
+        # coalescing ones directly; this clears anything an earlier edit had armed,
+        # since it has just been superseded.)
+        self._armed.clear()
+
+    def _arm(self, handler: Handler) -> None:
+        """Note that *handler* has work to do, and make sure the turn will end in one.
+
+        A single shared timer rather than one per handler: the armed handlers run in
+        subscription order, which is the only order this bus promises, and one timer
+        cannot fire them in another.
+        """
+        self._armed[handler] = None
+        if self._timer is None:
+            self._timer = QTimer(self._owner)
+            self._timer.setSingleShot(True)
+            self._timer.setInterval(0)
+            self._timer.timeout.connect(self.flush)
+        self._timer.start()
+
+    def flush(self) -> None:
+        """Run every armed coalescing handler now, in subscription order.
+
+        Called by the bus's own timer when the turn settles, and directly by anything
+        that is about to *read* a block whose redraw may still be pending — a save, a
+        snapshot, a test. Safe to call at any time and cheap when nothing is armed.
+        """
+        if self._timer is not None:
+            self._timer.stop()
+        while self._armed:
+            handler = next(iter(self._armed))
+            del self._armed[handler]
+            _refresh(handler)
+
+    @property
+    def pending(self) -> bool:
+        """Whether any coalescing handler is armed and waiting."""
+        return bool(self._armed)
 
     def make_publisher(self, topic: str) -> Callable[..., None]:
         """A callable that publishes *topic*, swallowing any arguments.

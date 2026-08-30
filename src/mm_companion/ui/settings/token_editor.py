@@ -57,7 +57,13 @@ from mm_companion.ui.theme.tokens import (
     measurement_backdrops,
 )
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import BOLD_STYLE, make_double_spin_box, make_spin_box, muted_style
+from mm_companion.ui.widgets import (
+    BOLD_STYLE,
+    discard_widget,
+    make_double_spin_box,
+    make_spin_box,
+    muted_style,
+)
 
 #: The token groups the form walks, in order.
 TOKEN_GROUPS = ("colors", "metrics", "typography")
@@ -734,8 +740,7 @@ def _clear(layout: QVBoxLayout) -> None:
         item = layout.takeAt(0)
         widget = item.widget()
         if widget is not None:
-            widget.setParent(None)
-            widget.deleteLater()
+            discard_widget(widget)
 
 
 __all__ = [

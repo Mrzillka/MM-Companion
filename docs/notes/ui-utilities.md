@@ -41,6 +41,33 @@ through rather than reinvent. When building new sheet widgets, use it:
   to ask, and `QFormLayout` does not reliably ask. Pin the column to a width token
   and set the label's minimum height from `label.heightForWidth(width)` — see
   `ui/settings/token_editor.py::_field_label`.
+- **`discard_widget(w)` is how a rebuilt block sheds a child** — never a bare
+  `setParent(None)` + `deleteLater()`, which is what all thirty-five sites used to
+  be. It hides first, and that order is the whole point. `setParent(None)` makes a
+  widget a *top-level window*, and a child that was visible at the time does not
+  reliably stay hidden through the transition: Qt realizes it and posts it a show,
+  so a real window appears — on Windows a small grey rectangle flashing on screen,
+  gone again once the deferred delete is serviced. That is the same failure
+  `2536db9` fixed for `setVisible(True)` on a *parentless* widget, arriving by the
+  other road, and it fired on **every spin-box step of an ability**: the System
+  block redraws its speed rows, and each discarded row flashed. Unparenting before
+  the delete still matters for the reason it always did — a widget still parented
+  to a container keeps painting until the delete is serviced, leaving a ghost.
+- **Never `setVisible(True)` on a widget that has no parent yet**, for the mirror
+  of that reason. Build the host first and add the child to a layout *before*
+  settling its visibility; in a constructor that may run before the widget is
+  parented, only ever `hide()` — a fresh widget is made visible by the parent it is
+  added to, so showing it is not yours to do (`ui/damage_row.py`). Both roads to
+  the flash are watched by `tests/test_window_flash.py`, which drives the refresh
+  paths behind an application-wide event filter and fails on any `Show` delivered
+  to a parentless widget — the symptom, not either cause, so a third road fails
+  there too.
+- **`rebuilding(widget)` wraps a redraw that destroys and remakes children.** It
+  freezes painting for the duration (`setUpdatesEnabled`), so the block does not
+  visibly empty and refill on every redraw, and it puts the page's scroll position
+  back — twice, because Qt clamps the bar to the shrunken block's maximum while it
+  is short and only recomputes the range on the layout pass that follows. It was
+  `preserved_scroll` when it only did the second half.
 - Tests build real windows, and `conftest.py` tears them down after each one.
   `processEvents()` alone does **not** run deferred deletions, so the teardown also
   sends `QEvent.Type.DeferredDelete` explicitly — without it every window built all

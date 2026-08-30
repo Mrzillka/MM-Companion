@@ -58,7 +58,7 @@ from mm_companion.ui.power_constructor.common import (
 from mm_companion.ui.power_constructor.modifier_chip import ModifierChip, ModifierGroup
 from mm_companion.ui.power_constructor.sub_build import SubBuildPanel
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import make_spin_box
+from mm_companion.ui.widgets import discard_widget, make_spin_box
 
 
 def _fraction_text(value: Fraction) -> str:
@@ -407,8 +407,7 @@ class EffectCard(QFrame):
         while self._config_layout.count():  # clear any previous form
             widget = self._config_layout.takeAt(0).widget()
             if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
+                discard_widget(widget)
         self._alloc_updaters = []  # rebuilt below alongside the fresh widgets
         self._gated_rows = []
         self._config_seeders = {}
@@ -773,8 +772,7 @@ class EffectCard(QFrame):
             def do_remove(_checked: bool = False) -> None:
                 if entry in row_widgets:
                     row_widgets.remove(entry)
-                row.setParent(None)
-                row.deleteLater()
+                discard_widget(row)
                 commit()
 
             remove.clicked.connect(do_remove)

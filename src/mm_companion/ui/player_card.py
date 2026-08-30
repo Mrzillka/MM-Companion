@@ -56,6 +56,7 @@ from mm_companion.ui.sections.conditions import (
 )
 from mm_companion.ui.sections.system_info import HeroPointsWidget
 from mm_companion.ui.session_portrait import decode_portrait
+from mm_companion.ui.widgets import discard_widget
 
 #: How far the pointer must move with the button down to count as a drag. The
 #: same number the NPC card uses, so one gesture feels like one gesture.
@@ -304,8 +305,7 @@ class PlayerCard(QFrame):
             item = self._chip_flow.takeAt(0)
             widget = item.widget() if item is not None else None
             if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
+                discard_widget(widget)
         conditions = self._character.conditions if self._character is not None else []
         for applied in conditions:
             record = self._conditions_by_id.get(applied.condition_id)

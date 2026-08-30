@@ -35,7 +35,7 @@ from mm_companion.ui import theme
 from mm_companion.ui.card_chips import SCENE_MIME
 from mm_companion.ui.drop_feedback import DropFeedback, DropIndicator
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
-from mm_companion.ui.widgets import muted_style
+from mm_companion.ui.widgets import discard_widget, muted_style
 
 #: How wide the bar between two cards is drawn.
 INDICATOR_WIDTH = 3
@@ -74,15 +74,33 @@ class CardDropFlow(FlowContainer):
         self.flow.addWidget(widget)
         self._sync_placeholder()
 
-    def clear(self) -> None:
-        """Take every card out and destroy it — what a rebuilt board starts with."""
+    def set_cards(self, widgets) -> None:
+        """Show exactly *widgets*, in that order, keeping the ones already here.
+
+        The reordering counterpart of :meth:`clear` + :meth:`add_card`, and what a
+        board that *reuses* its cards rebuilds through. Every card is taken out of the
+        flow first and then put back in the wanted order, so a card that survives the
+        rebuild is only moved — never destroyed and made again, which is the whole
+        saving. Anything no longer wanted is discarded on the way past.
+
+        Taking them all out first rather than shuffling in place is deliberate: the
+        flow is an index-ordered list, so working out the minimal set of moves would be
+        more code than it saves for a board of a dozen cards.
+        """
+        wanted = list(widgets)
+        keep = set(map(id, wanted))
         while self.flow.count():
             item = self.flow.takeAt(0)
             widget = item.widget() if item is not None else None
-            if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
+            if widget is not None and id(widget) not in keep:
+                discard_widget(widget)
+        for widget in wanted:
+            self.flow.addWidget(widget)
         self._sync_placeholder()
+
+    def clear(self) -> None:
+        """Take every card out and destroy it — what a rebuilt board starts with."""
+        self.set_cards(())
 
     def count(self) -> int:
         """How many cards are in the flow."""

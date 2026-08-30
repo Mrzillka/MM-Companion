@@ -379,6 +379,34 @@ def tinted_style(token: str, *, bold: bool = True) -> str:
 BOLD_STYLE = "font-weight: bold;"
 
 
+def discard_widget(widget: QWidget) -> None:
+    """Take *widget* off screen and destroy it — how a rebuilt block sheds a child.
+
+    Every block that redraws by throwing its children away goes through here, and
+    the order of the three calls is the whole point.
+
+    **Hidden before it is unparented, always.** ``setParent(None)`` makes a widget a
+    *top-level window*, and a child that was visible at the time does not reliably
+    stay hidden through that transition: Qt realizes it and posts it a show, so a
+    real window appears — on Windows a small grey rectangle flashing on screen, gone
+    again the moment the deferred delete is serviced. That is the same failure
+    ``2536db9`` fixed for ``setVisible(True)`` on a parentless widget, arriving by
+    the other road, and it fired on *every* spin-box step of an ability: the System
+    block redraws its speed rows, and each discarded row flashed. ``hide()`` first
+    settles the widget as hidden while it still has a parent, and nothing shows it
+    afterwards.
+
+    **Unparented before it is deleted**, which is why ``deleteLater`` alone will not
+    do: a widget still parented to a container keeps painting until the deferred
+    delete is serviced, leaving a ghost panel on screen for the rest of the event
+    loop turn.
+    """
+
+    widget.hide()
+    widget.setParent(None)
+    widget.deleteLater()
+
+
 def enclosing_scroll_area(widget: QWidget) -> QAbstractScrollArea | None:
     """The scroll area *widget* is scrolled by, or ``None``.
 
@@ -398,15 +426,23 @@ def enclosing_scroll_area(widget: QWidget) -> QAbstractScrollArea | None:
 
 
 @contextmanager
-def preserved_scroll(widget: QWidget) -> Iterator[None]:
-    """Keep the page where it was across a rebuild of *widget*'s contents.
+def rebuilding(widget: QWidget) -> Iterator[None]:
+    """Redraw *widget*'s contents without the page moving or the block flickering.
 
-    A block that rebuilds by deleting every child and making new ones is briefly a
-    fraction of its own height, and Qt clamps the enclosing scroll bar to the smaller
-    maximum *while it is short*. The cards coming back widen the range again but not
-    the value, which Qt has already thrown away — so flipping a switch on a card near
-    the bottom of a long sheet jumped the page somewhere else entirely.
+    Two guards, both about the same moment: a block that rebuilds by deleting every
+    child and making new ones is, briefly, a fraction of its own height and empty.
 
+    **Painting is frozen for the duration.** Qt would otherwise repaint each
+    intermediate state, so the block visibly empties and refills — which on a card
+    tree of any size is a flicker on every redraw, and a redraw happens on every step
+    of a spin box. ``setUpdatesEnabled(False)`` collapses the whole rebuild into the
+    single repaint that follows it. Restored in a ``finally`` so an exception mid-way
+    cannot leave a block that never paints again.
+
+    **The scroll position is put back.** Qt clamps the enclosing scroll bar to the
+    smaller maximum *while the block is short*. The cards coming back widen the range
+    again but not the value, which Qt has already thrown away — so flipping a switch
+    on a card near the bottom of a long sheet jumped the page somewhere else entirely.
     Restored **twice**: once now, and once on the next turn of the event loop, because
     the range is only recomputed on the layout pass that follows and an immediate
     ``setValue`` is clamped by the stale one. The deferred call is tied to the scroll
@@ -415,14 +451,15 @@ def preserved_scroll(widget: QWidget) -> Iterator[None]:
     """
 
     area = enclosing_scroll_area(widget)
-    if area is None:
-        yield
-        return
-    bars = [area.verticalScrollBar(), area.horizontalScrollBar()]
+    bars = [] if area is None else [area.verticalScrollBar(), area.horizontalScrollBar()]
     values = [(bar, bar.value()) for bar in bars if bar is not None]
+    painted = widget.updatesEnabled()
+    widget.setUpdatesEnabled(False)
     try:
         yield
     finally:
+        widget.setUpdatesEnabled(painted)
         for bar, value in values:
             bar.setValue(value)
-        QTimer.singleShot(0, area, lambda: [bar.setValue(value) for bar, value in values])
+        if area is not None:
+            QTimer.singleShot(0, area, lambda: [bar.setValue(value) for bar, value in values])

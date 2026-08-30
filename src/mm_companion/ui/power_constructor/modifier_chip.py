@@ -39,7 +39,7 @@ from mm_companion.ui.power_constructor.common import (
     repeatable_cell_kind,
 )
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import make_spin_box
+from mm_companion.ui.widgets import discard_widget, make_spin_box
 
 
 class ModifierChip(QFrame):
@@ -224,8 +224,7 @@ class ModifierChip(QFrame):
             def do_remove(_checked: bool = False) -> None:
                 if entry in row_widgets:
                     row_widgets.remove(entry)
-                row_widget.setParent(None)
-                row_widget.deleteLater()
+                discard_widget(row_widget)
                 commit()
 
             remove.clicked.connect(do_remove)
@@ -427,8 +426,7 @@ class ModifierGroup(QWidget):
         if chip in self._chips:
             self._chips.remove(chip)
         self._chip_layout.removeWidget(chip)
-        chip.setParent(None)
-        chip.deleteLater()
+        discard_widget(chip)
         self.setVisible(bool(self._chips))
 
     # -- reordering (drop handlers delegate to move_chip, the test seam) ---

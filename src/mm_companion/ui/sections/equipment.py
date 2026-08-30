@@ -129,10 +129,11 @@ from mm_companion.ui.sections.stat_table import PinMenuState
 from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.widgets import (
     BOLD_STYLE,
+    discard_widget,
     hline_separator,
     make_spin_box,
     muted_style,
-    preserved_scroll,
+    rebuilding,
     tinted_style,
 )
 
@@ -674,7 +675,7 @@ class EquipmentSection(TitledSection):
     def _rebuild_list(self) -> None:
         # Wearing an item rebuilds every card, and the block is momentarily empty while
         # it does — see PowersSection._rebuild_list for what that costs the page.
-        with preserved_scroll(self):
+        with rebuilding(self):
             self._rebuild_cards()
 
     def _rebuild_cards(self) -> None:
@@ -874,8 +875,7 @@ class EquipmentSection(TitledSection):
         while layout.count():
             taken = layout.takeAt(0).widget()
             if taken is not None:
-                taken.setParent(None)
-                taken.deleteLater()
+                discard_widget(taken)
         layout.addWidget(self._traits_widget(item))
 
     def _throttle_row(self, item: EquipmentItem) -> QWidget | None:

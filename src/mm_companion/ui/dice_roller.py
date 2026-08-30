@@ -92,7 +92,7 @@ from mm_companion.ui.roll_history import (
 from mm_companion.ui.session_bridge import SessionBridge, live_session
 from mm_companion.ui.svg_assets import die_resource, svg_pixmap
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import make_spin_box, tinted_style
+from mm_companion.ui.widgets import discard_widget, make_spin_box, tinted_style
 
 # The quick-roll list is stored under this settings key as a list of plain dicts
 # ``{"bonus": int, "penalty": int, "dc": int | None, "name"?: str}`` so no Qt
@@ -1606,8 +1606,7 @@ class LocalRollHistory(QWidget):
     def _remove_card(self, card: QWidget) -> None:
         """Drop one card from the list — a roll's ``−`` or a request's ``✕``."""
         self._layout.removeWidget(card)
-        card.setParent(None)
-        card.deleteLater()
+        discard_widget(card)
 
 
 class DiceRollerView(ReflowBox, QWidget):

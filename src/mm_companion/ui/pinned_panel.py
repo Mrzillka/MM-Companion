@@ -74,6 +74,7 @@ from mm_companion.ui.pinned import (
     PinSlot,
     is_vertical_strip,
 )
+from mm_companion.ui.widgets import discard_widget
 
 #: Floor for the strip's thickness while nothing is pinned. The handle's own size
 #: hint wins when it is bigger, so a preset with larger type can't clip its icon.
@@ -443,10 +444,8 @@ class PinnedPanel(QFrame):
                     frame = slot.release_frame()
                     frame.setParent(self)
                     frame.hide()
-                slot.setParent(None)
-                slot.deleteLater()
-            line.setParent(None)
-            line.deleteLater()
+                discard_widget(slot)
+            discard_widget(line)
         self._lines = []
 
     def _apply_edge(self) -> None:

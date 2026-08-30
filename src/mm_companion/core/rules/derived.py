@@ -24,6 +24,7 @@ from .appliers import (
     skill_for_row,
     split_trait_key,
 )
+from .build_cache import build_scoped
 from .conditions import ConditionEffect, condition_scope_penalty
 from .runtime import equipment_contributions, power_contributions
 from .size import size_contributions
@@ -268,6 +269,7 @@ def effort_contributions(char: Character, game_data: GameData) -> tuple[TraitCon
     )
 
 
+@build_scoped
 def trait_contributions(char: Character, game_data: GameData) -> tuple[TraitContribution, ...]:
     """Every stat contribution standing on the sheet, in the order the sheet grants them.
 
@@ -287,6 +289,12 @@ def trait_contributions(char: Character, game_data: GameData) -> tuple[TraitCont
     exactly what it always did; the gear arrives last in its own group, where the
     resolver takes the better of the two rather than adding them, and a tie goes to
     whichever group was seen first — the powers.
+
+    Gathers the whole build every call, and sits under every derived number the sheet
+    prints — which is why it is :func:`~.build_cache.build_scoped`: inside a
+    :func:`~.build_cache.stable_build` the answer is worked out once and handed to the
+    rest of the pass, and outside one it recomputes exactly as it always did. The
+    returned tuple is shared within a scope, so treat it as read-only.
     """
 
     size = size_contributions(char, game_data)
@@ -309,6 +317,7 @@ def trait_contributions(char: Character, game_data: GameData) -> tuple[TraitCont
     )
 
 
+@build_scoped
 def trait_bonuses(char: Character, game_data: GameData) -> dict[str, dict[str, TraitBonus]]:
     """The net bonus on every trait, grouped ``category -> {key: TraitBonus}``.
 
@@ -316,6 +325,10 @@ def trait_bonuses(char: Character, game_data: GameData) -> dict[str, dict[str, T
     :func:`~.runtime.power_trait_bonuses` (the powers-only view the enhancement columns
     show) this is the sheet-wide number, and it is what every derived total below
     reads.
+
+    Scoped like the gather beneath it, and worth scoping separately: the resolver is
+    not free either, and this is what every ability, resistance and skill lookup goes
+    through. The returned mapping is shared within a scope — read it, don't write it.
     """
 
     return resolve_bonuses(trait_contributions(char, game_data))

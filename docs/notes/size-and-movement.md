@@ -129,7 +129,7 @@ data-first; nothing below names a trait, an effect or a column in Python.
   every blast card at Off. Those read whether the card is simply switched on. Screenshot
   it with `driver.py size-ladder`, and the notch coming back off disk with `driver.py
   size-ladder-reload`.
-- **The slider is `NoFocus`, and `_rebuild_list` runs inside `preserved_scroll`.** Two
+- **The slider is `NoFocus`, and `_rebuild_list` runs inside `rebuilding`.** Two
   halves of one bug: every runtime setter rebuilds the whole card tree, so the block is
   briefly empty *and* whatever held focus inside it is destroyed — Qt hands focus to the
   next widget in the tab order, which is a table in some other block, and a `QScrollArea`
@@ -137,9 +137,11 @@ data-first; nothing below names a trait, an effect or a column in Python.
   under the cursor. `NoFocus` closes the cause (the slider is destroyed by its own
   commit, so focus could never usefully rest there, and the card body it sits on is not
   focusable either) — and it must be set **after** `guard_wheel`, which asks for
-  `StrongFocus` so a focused widget keeps its own wheel; `widgets.preserved_scroll` closes the rest — it restores the bar **twice**,
-  now and on the next turn of the event loop, because the range is only recomputed on the
-  following layout pass and an immediate `setValue` is clamped by the stale one.
+  `StrongFocus` so a focused widget keeps its own wheel; `widgets.rebuilding` closes the
+  rest — it restores the bar **twice**, now and on the next turn of the event loop,
+  because the range is only recomputed on the following layout pass and an immediate
+  `setValue` is clamped by the stale one. (It also freezes painting across the rebuild,
+  which is the other half of "briefly empty" — see [Shared UI utilities](ui-utilities.md).)
   `EquipmentSection._rebuild_list` takes it too: wearing an item is the same rebuild.
 - **The card's size readout is relative to the character** (`_readout_size_table`). It
   used to compute an absolute row from `sign × rank` and never look at the wielder, so a

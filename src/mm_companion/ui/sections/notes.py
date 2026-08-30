@@ -46,7 +46,7 @@ from mm_companion.ui.notes.editor import NoteEditor
 from mm_companion.ui.notes.events import note_events
 from mm_companion.ui.notes.picker import NotePickerDialog
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
-from mm_companion.ui.widgets import muted_style
+from mm_companion.ui.widgets import discard_widget, muted_style
 
 #: How far a tab must be dragged *off* its bar before the drag becomes a split.
 #: Generous on purpose: a bar's own left/right reorder is the common gesture and
@@ -263,8 +263,7 @@ class NotesSection(QGroupBox):
             rebuilt.append(item)
             self._tabs.addTab(item.editor, "")
         for orphan in keep.values():
-            orphan.editor.setParent(None)
-            orphan.editor.deleteLater()
+            discard_widget(orphan.editor)
         self._open = rebuilt
         self._refresh_tab_captions()
 

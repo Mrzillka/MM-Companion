@@ -211,7 +211,14 @@ _BASE_BLOCKS = [
         1,
         0,
         {
-            "abilityChanged": (ABILITY_CHANGED, DERIVED_CHANGED),
+            # Only ABILITY_CHANGED, though a rank edit does move the derived readouts:
+            # the block emits ``abilityChanged`` and ``changed`` for the same edit (see
+            # AbilitiesSection._on_ability_changed), and ``changed`` already carries
+            # DERIVED_CHANGED. Naming it here too published the topic twice per spin
+            # step, so the System block re-derived twice — and since refresh_derived
+            # calls refresh_limits, which FACTS_CHANGED also calls, the Power Level
+            # caps were computed three times for one tick of an arrow key.
+            "abilityChanged": (ABILITY_CHANGED,),
             "changed": (BUILD_CHANGED, FACTS_CHANGED, DERIVED_CHANGED, EDITED),
         },
         {ENHANCEMENTS_CHANGED: "refresh_enhancements", COST_RATES_CHANGED: "refresh_cost"},
@@ -430,6 +437,21 @@ _PINNED_BY_DEFAULT = frozenset({"dice", "scene"})
 _INSTANCE_FACTORIES = {"notes": _notes_factory}
 
 
+#: Subscriber methods that may be run once at the end of the turn rather than once
+#: per publish, by block key (see ``BlockDescriptor.coalesces``).
+#:
+#: Only the two card trees. Both rebuild themselves **wholesale** — every card
+#: destroyed and made again — and both answer to ``facts-changed``, which every spin
+#: box on the sheet raises on every step. A rank dragged from 0 to 10 raised ten of
+#: those rebuilds and showed the tenth; now it does one. Nothing else here is
+#: expensive enough to be worth the deferral, and a topic answered immediately is
+#: easier to reason about, so the list stays short on purpose.
+_COALESCED: dict[str, frozenset[str]] = {
+    "powers": frozenset({"refresh"}),
+    "equipment": frozenset({"refresh"}),
+}
+
+
 def register_base_blocks(*, replace: bool = False) -> None:
     """Register the fourteen base M&M blocks (called once at import)."""
     sizes = load_block_sizes()
@@ -443,11 +465,15 @@ def register_base_blocks(*, replace: bool = False) -> None:
                 row,
                 col,
                 key in _PINNED_BY_DEFAULT,
-                publishes,
-                subscribes,
-                requests,
-                serves,
-                _INSTANCE_FACTORIES.get(key),
+                # Named from here on: the four bus tables and the instance factory are
+                # interchangeable in shape, so a field added between them would
+                # silently shift every later one along by one.
+                publishes=publishes,
+                subscribes=subscribes,
+                coalesces=_COALESCED.get(key, frozenset()),
+                requests=requests,
+                serves=serves,
+                instance_factory=_INSTANCE_FACTORIES.get(key),
             ),
             replace=replace,
         )

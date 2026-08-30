@@ -110,6 +110,7 @@ from mm_companion.core.rules import (
     effect_is_selected,
     effect_stands,
     group_scope_note,
+    invalidate_build_cache,
     leaf_powers,
     live_array_children,
     live_array_effects,
@@ -154,7 +155,7 @@ from mm_companion.ui.widgets import (
     BOLD_STYLE,
     hline_separator,
     muted_style,
-    preserved_scroll,
+    rebuilding,
     tinted_style,
 )
 
@@ -1066,11 +1067,23 @@ class PowersSection(TitledSection):
 
         Every runtime setter ends here — flipping one power can restate another card's
         numbers — so this runs on a plain mid-play click, and the block is momentarily
-        empty while it does. :func:`~mm_companion.ui.widgets.preserved_scroll` is what
+        empty while it does. :func:`~mm_companion.ui.widgets.rebuilding` is what
         stops that shrinking the page out from under the card just clicked.
         """
-        with preserved_scroll(self):
+        with rebuilding(self):
             self._normalize_arrays()  # a valid active member per array before drawing
+            # The one refresh handler that *writes* the model, so it is also the one
+            # that owes the surrounding build scope a fresh gather — an array's active
+            # member is the branch whose boosts stand, so the write moves real numbers
+            # (see :mod:`mm_companion.core.rules.build_cache`).
+            #
+            # Insurance rather than a fix for anything today: the scope is opened per
+            # subscriber and this is the first thing the subscriber does, so nothing
+            # has been memoized yet when the write lands. Kept because that is a fact
+            # about *two* other files — how the bus scopes a handler, and that the
+            # normalize stays at the top of this one — and a line here is cheaper than
+            # both of them having to stay true.
+            invalidate_build_cache()
             # Hand the on-screen progress over to the cards about to be built, and start
             # a fresh map — so a power that was removed or ungrouped leaves nothing
             # behind for a later node to inherit.

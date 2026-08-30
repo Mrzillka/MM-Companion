@@ -16,7 +16,14 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   pools into one `id -> Modifier` lookup for cost math and summaries;
   `GameData.condition_catalog()` is the `id -> Condition` lookup the condition
   resolver walks.
-  `load_game_data()` is `lru_cache`d — one parse per process.
+  `load_game_data()` is `lru_cache`d — one parse per process, and **every
+  `*_catalog()` is memoized on the `GameData` it belongs to** (`_catalog`). They are
+  flat merges over tuples that never change — the record is frozen and a mod reload
+  builds a *new* one — so rebuilding one per call was pure waste, and not a small
+  one: `modifier_catalog()` was rebuilt three hundred times for one step of an
+  ability spin box, since every power and equipment card re-derives its terms on a
+  redraw and every term looks its modifiers up. That was a third of the cost of the
+  whole edit. The returned mappings are now shared, so treat them as read-only.
 - Content is aggregated from several files, loaded via `importlib.resources`
   (not filesystem paths) so it works when installed as a package: core traits
   from `profile.json`, `characteristics.json`, `abilities.json`,

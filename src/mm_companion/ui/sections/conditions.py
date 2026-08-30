@@ -41,7 +41,7 @@ from mm_companion.core.rules import (
 from mm_companion.ui import theme
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
-from mm_companion.ui.widgets import attach_context_removal, hline_separator
+from mm_companion.ui.widgets import attach_context_removal, discard_widget, hline_separator
 
 CONDITIONS_ROW_HEIGHT = 44
 # Reserve enough height for the "+" header plus one category section (title, rule,
@@ -319,14 +319,17 @@ class ConditionsSection(QGroupBox):
 
     @staticmethod
     def _clear_flow(flow: FlowLayout) -> None:
-        """Empty a flow layout, reparenting each chip out immediately so no ghost
-        frames linger until ``deleteLater`` is serviced."""
+        """Empty a flow layout, discarding each chip properly on the way out.
+
+        Through :func:`~mm_companion.ui.widgets.discard_widget`, which is what keeps a
+        dropped chip from ghosting until ``deleteLater`` is serviced — or flashing up
+        as a window of its own on the way there.
+        """
         while flow.count():
             item = flow.takeAt(0)
             widget = item.widget()
             if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
+                discard_widget(widget)
 
     def reseed(self) -> None:
         """Restate the chips from the model — the sheet put an earlier state back."""

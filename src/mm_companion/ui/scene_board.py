@@ -35,7 +35,7 @@ from mm_companion.ui import theme
 from mm_companion.ui.card_drop import CardDropFlow
 from mm_companion.ui.scene_card import SceneCard, entry_ref, order_scene
 from mm_companion.ui.session_portrait import decode_portrait
-from mm_companion.ui.widgets import preserved_scroll
+from mm_companion.ui.widgets import rebuilding
 
 #: What an empty board says. Different on the two screens, because "nothing is
 #: happening" and "you have not put anything here" are different facts and only
@@ -112,8 +112,20 @@ class SceneBoard(QWidget):
     # -- what the board is showing -----------------------------------------
 
     def set_scene(self, entries: list[dict]) -> None:
-        """Show *entries*, rebuilt in the order :func:`order_scene` gives them."""
-        self._entries = [dict(entry) for entry in entries if entry_ref(entry)]
+        """Show *entries*, in the order :func:`order_scene` gives them.
+
+        **A scene identical to the one on screen is not redrawn.** The GM re-sends the
+        whole board whenever anything on it could have moved, which includes every
+        snapshot every player pushes — so a board that redrew unconditionally cost
+        every player at the table a full re-render each time one of them touched a
+        spin box. The GM's own side guards its *sending*
+        (:meth:`~mm_companion.ui.gm_window.GMWindow._push_scene`); this guards the
+        *receiving*, so a chatty GM — or a mod — still costs a player nothing.
+        """
+        wanted = [dict(entry) for entry in entries if entry_ref(entry)]
+        if wanted == self._entries:
+            return
+        self._entries = wanted
         live = {entry_ref(entry) for entry in self._entries}
         self._manual = [ref for ref in self._manual if ref in live]
         self._manual += [ref for ref in live if ref not in self._manual]
@@ -121,10 +133,17 @@ class SceneBoard(QWidget):
         self._rebuild()
 
     def set_own_player_id(self, player_id: str) -> None:
-        """Tell the board whose screen it is, so one card can say "(you)"."""
+        """Tell the board whose screen it is, so one card can say "(you)".
+
+        Which seat is the reader's own is fixed when a card is built, so the cards
+        cannot be reused across this one — they are dropped and the board drawn again
+        from nothing. It costs nothing worth saving: this is answered once, at the join.
+        """
         if player_id == self._own_id:
             return
         self._own_id = player_id
+        self._cards = {}
+        self._flow_host.clear()
         self._rebuild()
 
     def set_manual_order(self, refs: list[str]) -> None:
@@ -170,25 +189,53 @@ class SceneBoard(QWidget):
         return self._cards.get(ref)
 
     def _rebuild(self) -> None:
-        with preserved_scroll(self):
-            self._flow_host.clear()
-            self._cards = {}
-            for entry in order_scene(self._entries, self._manual):
+        """Redraw the board, **keeping the card that is already showing each ref**.
+
+        A card is only built for a creature the board has not seen; one that is still
+        there is restated in place through :meth:`~mm_companion.ui.scene_card.SceneCard.
+        set_entry`, which is what that method was always for. It matters because the
+        board is redrawn whenever *anything* on it moves — one condition ticked on one
+        mook used to destroy and rebuild every card on every screen at the table,
+        each with its own stylesheet, chip flow and initiative badge.
+
+        Reuse also keeps a card's signal connections, so they are made exactly once,
+        where a rebuilt card had to be re-wired every time.
+
+        The portrait is deliberately not re-applied to a reused card: it already has
+        it, pictures arrive on their own messages, and re-setting it would undo the
+        one thing :meth:`set_portrait` is careful about.
+        """
+        with rebuilding(self):
+            ordered = order_scene(self._entries, self._manual)
+            kept: dict[str, SceneCard] = {}
+            for entry in ordered:
                 ref = entry_ref(entry)
-                card = SceneCard(
-                    entry,
-                    self._data,
-                    gm=self._gm,
-                    own=bool(self._own_id) and entry.get("player_id") == self._own_id,
-                    portrait=self._portraits.get(ref),  # type: ignore[arg-type]
-                )
-                if self._gm:
-                    card.removeRequested.connect(self.removeRequested)
-                    card.initiativeCleared.connect(self.initiativeCleared)
-                    card.initiativeRollRequested.connect(self.initiativeRollRequested)
-                    card.dispositionChanged.connect(self.dispositionChanged)
-                self._cards[ref] = card
-                self._flow_host.add_card(card)
+                card = self._cards.pop(ref, None)
+                if card is None:
+                    card = self._make_card(entry, ref)
+                else:
+                    card.set_entry(entry)
+                kept[ref] = card
+            # Whatever is left in ``self._cards`` has gone from the scene; handing the
+            # flow only the kept ones is what discards them.
+            self._cards = kept
+            self._flow_host.set_cards([kept[entry_ref(entry)] for entry in ordered])
+
+    def _make_card(self, entry: dict, ref: str) -> SceneCard:
+        """One card for a ref the board has not shown before, wired to its signals."""
+        card = SceneCard(
+            entry,
+            self._data,
+            gm=self._gm,
+            own=bool(self._own_id) and entry.get("player_id") == self._own_id,
+            portrait=self._portraits.get(ref),  # type: ignore[arg-type]
+        )
+        if self._gm:
+            card.removeRequested.connect(self.removeRequested)
+            card.initiativeCleared.connect(self.initiativeCleared)
+            card.initiativeRollRequested.connect(self.initiativeRollRequested)
+            card.dispositionChanged.connect(self.dispositionChanged)
+        return card
 
     def set_locked(self, locked: bool) -> None:  # noqa: ARG002 - part of the Block protocol
         """A no-op: the board is a readout, so there is nothing to lock.

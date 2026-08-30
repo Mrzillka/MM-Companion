@@ -37,7 +37,13 @@ from mm_companion.core.rules import (
 )
 from mm_companion.ui.power_constructor.terms_grid import build_terms_grid
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import BOLD_STYLE, hline_separator, make_spin_box, muted_style
+from mm_companion.ui.widgets import (
+    BOLD_STYLE,
+    discard_widget,
+    hline_separator,
+    make_spin_box,
+    muted_style,
+)
 
 # The six standard game-term fields the Dev-mode override table edits directly, with
 # their labels and the matching :class:`~mm_companion.core.data_loader.Effect`
@@ -504,8 +510,7 @@ class PowerTermsView(QWidget):
 
         def do_remove(*_args) -> None:
             effect.overrides.pop(key, None)
-            row.setParent(None)
-            row.deleteLater()
+            discard_widget(row)
             self.edited.emit()
 
         label_edit.textChanged.connect(commit)
@@ -546,8 +551,7 @@ class PowerTermsView(QWidget):
             item = layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
+                discard_widget(widget)
             elif item.layout() is not None:
                 self._take_all(item.layout())
                 item.layout().deleteLater()

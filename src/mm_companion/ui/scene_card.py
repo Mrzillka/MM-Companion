@@ -43,7 +43,7 @@ from mm_companion.ui.card_chips import (
 )
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.sections.conditions import condition_display_name, condition_tooltip
-from mm_companion.ui.widgets import ElidingLabel
+from mm_companion.ui.widgets import ElidingLabel, discard_widget
 
 #: How wide one card's column is, so a row of them lines up in the flow. Stated
 #: rather than measured, unlike a GM card (whose ``body_width_hint`` is), and
@@ -320,8 +320,7 @@ class SceneCard(QFrame):
             item = self._chip_flow.takeAt(0)
             widget = item.widget() if item is not None else None
             if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
+                discard_widget(widget)
         shown = 0
         for item in raw:
             if not isinstance(item, dict):

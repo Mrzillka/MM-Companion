@@ -92,6 +92,8 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Callable
 
+from mm_companion.core.rules import stable_build
+
 # Base topic names. Blocks reference these strings in their descriptors; the
 # constants exist so a typo is a NameError rather than a silently-dead topic.
 ABILITY_CHANGED = "ability-changed"
@@ -167,6 +169,27 @@ Handler = Callable[[], None]
 RequestHandler = Callable[[object], None]
 
 
+def _refresh(handler: Handler) -> None:
+    """Run one subscriber inside a :func:`~mm_companion.core.rules.stable_build` scope.
+
+    A subscriber is a view refresh — it reads the shared character and redraws — and a
+    single one can ask the rules layer for the same derived numbers dozens of times
+    over (the Skills block asks three questions per row, each of which gathers the
+    whole build). Inside the scope that gather happens once. See
+    :mod:`mm_companion.core.rules.build_cache` for why the scope, rather than a plain
+    cache, is what makes this safe.
+
+    **Per handler, not per fan-out.** Wrapping the whole loop would be cheaper still,
+    but a scope is a promise that the model does not change inside it, and a handler
+    is allowed to write the model — ``PowersSection`` normalizes its arrays before
+    drawing. One scope each means such a handler can only ever mislead itself, and it
+    has :func:`~mm_companion.core.rules.invalidate_build_cache` for that.
+    """
+
+    with stable_build():
+        handler()
+
+
 class SignalBus:
     """An argless publish/subscribe bus keyed by topic string.
 
@@ -188,7 +211,7 @@ class SignalBus:
         """Fire every handler subscribed to *topic*, in subscription order."""
         # Iterate a copy so a handler that (re)subscribes can't disturb the loop.
         for handler in list(self._subscribers.get(topic, ())):
-            handler()
+            _refresh(handler)
 
     def publish_all(self, topics) -> None:
         """Fire every handler subscribed to any of *topics*, each **at most once**.
@@ -202,7 +225,7 @@ class SignalBus:
         """
         handlers = [h for topic in topics for h in self._subscribers.get(topic, ())]
         for handler in dict.fromkeys(handlers):
-            handler()
+            _refresh(handler)
 
     def make_publisher(self, topic: str) -> Callable[..., None]:
         """A callable that publishes *topic*, swallowing any arguments.

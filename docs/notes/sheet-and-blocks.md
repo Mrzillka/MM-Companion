@@ -277,6 +277,28 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   `PowersSection.refresh` to re-derive the power cards' numbers (a Strength-Based
   Damage folds in Strength; every attack cap tracks the character's PL/Attack).
   `refresh` only reads the model, so it never emits `changed` — no signal loop.
+- **Every subscriber runs inside a `core.rules.stable_build()` scope**, opened by
+  `SignalBus.publish`/`publish_all` (`ui/blocks/bus.py::_refresh`). A refresh is a
+  *read* — the block redraws from a model nobody is touching — so within one the
+  derived answers cannot change, and the rules layer is allowed to work the build
+  out once instead of once per number printed. It mattered a great deal:
+  `rules.trait_contributions` gathers the whole character (size, every power,
+  advantages, gear, Extra Effort) and sits under every readout, so `skill_total` was
+  two full gathers, `skill_modifiers` a third, `resistance_total` two (four for
+  Dodge, which derives from Defence) — and the Skills block asks three questions per
+  row. One step of an ability spin box cost well over a hundred gathers of the whole
+  build. See `core/rules/build_cache.py` for the contract; the short version is
+  **do not write the model inside a scope**.
+  The scope is per *handler*, not per fan-out, precisely because one handler does
+  write: `PowersSection._rebuild_list` normalizes its arrays before drawing, and
+  calls `invalidate_build_cache()` the moment it has.
+- **A block signal that publishes a topic another of its signals already publishes
+  is a doubled refresh.** `AbilitiesSection` emits `abilityChanged` *and* `changed`
+  for one edit; both named `derived-changed` in the descriptor, so the System block
+  re-derived twice per spin step — and since `refresh_derived` calls `refresh_limits`,
+  which `facts-changed` calls too, the Power Level caps were computed three times for
+  one tick of an arrow key. `publish` does not dedup (only `publish_all` does), so
+  the descriptor tables are where this has to be got right.
 
 ## Blocks there can be two of (matters when touching the canvas or the View menu)
 

@@ -54,7 +54,7 @@ from mm_companion.core.data_loader import GameData
 from mm_companion.core.rules import PinnedValue, PinRef, resolve_pins
 from mm_companion.ui import theme
 from mm_companion.ui.drop_feedback import DropIndicator
-from mm_companion.ui.widgets import ElidingLabel, muted_style
+from mm_companion.ui.widgets import ElidingLabel, discard_widget, muted_style
 
 #: What a chip's own layout costs it beside its text: the margin at each end, and
 #: the gap between the caption and the reading. Named rather than written inline
@@ -454,8 +454,7 @@ class PinPanel(QWidget):
             item = self._chip_layout.takeAt(0)
             widget = item.widget() if item is not None else None
             if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
+                discard_widget(widget)
         self._chips = []
 
         for index, value in enumerate(self.values()):

@@ -35,6 +35,7 @@ from mm_companion.ui.power_constructor.common import (
     _mime_id,
 )
 from mm_companion.ui.power_constructor.effect_card import EffectCard
+from mm_companion.ui.widgets import discard_widget
 
 
 def _idle_canvas_rules(filled: bool) -> str:
@@ -295,8 +296,7 @@ class PowerCanvas(QFrame):
         if index is not None:
             del self._power.effects[index]
         self._cards.remove(card)
-        card.setParent(None)
-        card.deleteLater()
+        discard_widget(card)
         self._hint.setVisible(not self._cards)
         self._update_canvas_style()
         self._sync_structure_ui()

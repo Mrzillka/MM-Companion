@@ -54,6 +54,7 @@ from mm_companion.ui.pinned import (
     PIN_EDGES,
     PinSlot,
 )
+from mm_companion.ui.widgets import discard_widget
 
 if TYPE_CHECKING:  # the board is the canvas's *view* for pinned blocks, not a dependency
     from mm_companion.ui.pinned_panel import PinnedBoard
@@ -405,8 +406,7 @@ class BlockCanvas(QWidget):
             self._end_drag()
         self._detach(key)
         frame = self._frames.pop(key)
-        frame.setParent(None)
-        frame.deleteLater()
+        discard_widget(frame)
         self._sizes.pop(key, None)
         self._hidden.discard(key)
         self._anchors.pop(key, None)
@@ -508,8 +508,7 @@ class BlockCanvas(QWidget):
                 if frame.parentWidget() is row:
                     frame.setParent(self)
                     frame.hide()
-            row.setParent(None)
-            row.deleteLater()
+            discard_widget(row)
 
         self._indicator.raise_()
 

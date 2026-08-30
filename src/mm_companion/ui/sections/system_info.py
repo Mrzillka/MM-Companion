@@ -73,7 +73,7 @@ from mm_companion.ui.sections.stat_table import PinMenuState
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.svg_assets import hero_point_pixmap
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import make_spin_box, muted_style, tinted_style
+from mm_companion.ui.widgets import discard_widget, make_spin_box, muted_style, tinted_style
 
 HERO_POINT_PIPS = 5
 INITIATIVE_TIP = f"Agility (or an Alternate Initiative ability) plus advantages\n{ROLL_TOOLTIP}"
@@ -162,8 +162,7 @@ class HeroPointsWidget(QWidget):
             button = self._buttons.pop()
             self._lit.discard(len(self._buttons))
             self._row.removeWidget(button)
-            button.setParent(None)
-            button.deleteLater()
+            discard_widget(button)
 
     def value(self) -> int:
         return len(self._lit)
@@ -274,8 +273,7 @@ class SpeedWidget(QWidget):
         while layout.count():  # rebuilt wholesale — a speed list is a handful of rows
             widget = layout.takeAt(0).widget()
             if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
+                discard_widget(widget)
         for index, line in enumerate(self._lines):
             # The first line is the ground one, and the only mode with a run column —
             # see :func:`~mm_companion.core.rules.speed_columns`.
@@ -375,8 +373,7 @@ class MovementModesWidget(QWidget):
         while layout.count():  # rebuilt wholesale — a mode list is a handful of rows
             widget = layout.takeAt(0).widget()
             if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
+                discard_widget(widget)
         for line in lines:
             # Read like a SpeedLine — move / dash, no run column — since a specialised
             # mode is a way of moving too, and one row saying "30 ft/round" beside
@@ -432,8 +429,7 @@ class PowerLevelCapsWidget(QWidget):
         while layout.count():  # a handful of rows; rebuilt wholesale like the mode list
             widget = layout.takeAt(0).widget()
             if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
+                discard_widget(widget)
         self._lines = []
         for cap in caps:
             name = f"{cap.short} ({cap.detail})" if cap.detail else cap.short

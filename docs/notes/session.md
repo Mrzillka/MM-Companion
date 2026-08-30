@@ -285,6 +285,29 @@ The shape:
   somewhere else and is live there — an NPC's conditions on its model, a player's
   in their last snapshot — so a copy would be right exactly once. What *is* kept is
   only what cannot be derived: which creature a place on the board belongs to.
+- **A push that would say nothing does nothing**, and that guard is what makes it
+  affordable to call `_push_scene` from everywhere a creature's visible state can
+  move. One player editing a stat arrived there *twice* — once from their snapshot
+  and once from the roster broadcast the same snapshot triggered — and each time
+  redrew the GM's whole board and sent the whole scene to every client, whose board
+  redrew in turn. It compares the payload, the GM's arrangement, whether there is a
+  table to send to (so a board built before hosting is still broadcast when hosting
+  starts) and the auto-players preference (which no payload carries, but every
+  player card's 👁 follows). Portraits are pushed *outside* the guard: a picture
+  travels on its own message and appears in no payload, and it carries its own
+  check. `_scene_portrait_for` caches the encoded thumbnail against the input it was
+  made from — the encode is a file read or a base64 decode plus a scale and a JPEG
+  re-encode, and it ran for every entry of every push, `_scene_portraits` having
+  only ever suppressed the *send*.
+- **A board keeps the card already showing a ref.** `SceneBoard._rebuild` restates a
+  surviving entry through `SceneCard.set_entry` — which is what that method was
+  always for, and which nothing called — and builds only for refs it has not seen;
+  `SceneBoard.set_scene` ignores a scene identical to the one on screen outright.
+  Two guards rather than one, at the two ends: the GM's guards the *sending*, this
+  guards the *receiving*, so a chatty GM (or a mod) still costs a player nothing.
+  Reuse also means a card's signals are connected exactly once. Which seat is the
+  reader's own is fixed when a card is built, so `set_own_player_id` is the one
+  update that drops them all — it is answered once, at the join.
 - **Initiative is one number with one owner.** An NPC's stays on its `_NpcEntry`,
   where the card badge already reads it, and the board reads the same field — the
   two cannot come to disagree. A player's arrives on the shared roll log rather

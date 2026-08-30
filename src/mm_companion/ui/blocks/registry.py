@@ -211,7 +211,14 @@ _BASE_BLOCKS = [
         1,
         0,
         {
-            "abilityChanged": (ABILITY_CHANGED, DERIVED_CHANGED),
+            # Only ABILITY_CHANGED, though a rank edit does move the derived readouts:
+            # the block emits ``abilityChanged`` and ``changed`` for the same edit (see
+            # AbilitiesSection._on_ability_changed), and ``changed`` already carries
+            # DERIVED_CHANGED. Naming it here too published the topic twice per spin
+            # step, so the System block re-derived twice — and since refresh_derived
+            # calls refresh_limits, which FACTS_CHANGED also calls, the Power Level
+            # caps were computed three times for one tick of an arrow key.
+            "abilityChanged": (ABILITY_CHANGED,),
             "changed": (BUILD_CHANGED, FACTS_CHANGED, DERIVED_CHANGED, EDITED),
         },
         {ENHANCEMENTS_CHANGED: "refresh_enhancements", COST_RATES_CHANGED: "refresh_cost"},

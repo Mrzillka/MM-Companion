@@ -121,9 +121,16 @@ notes file that owns it.
   another.
 - **Go through the shared UI layer** rather than reinventing it: the `ui/widgets.py`
   factories, `guard_wheel`, `set_widget_locked` (locking is *not*
-  `setEnabled(False)`), a `FlowLayout` hosted in a `FlowContainer`, and
-  `DropFeedback`/`DropIndicator` for drag targets. Any section with editable
+  `setEnabled(False)`), a `FlowLayout` hosted in a `FlowContainer`,
+  `DropFeedback`/`DropIndicator` for drag targets, `discard_widget` to shed a child
+  and `rebuilding` around a redraw that sheds several. Any section with editable
   widgets exposes `set_locked` and is wired into `CharacterSheet.set_locked`.
+- **A widget must never be visible while it has no parent.** A parentless widget *is*
+  a top-level window, so showing one flashes a real window on screen and is slow to
+  realize. Add it to a layout before setting its visibility, only ever `hide()` in a
+  constructor that may run before parenting, and shed it with `discard_widget`, which
+  hides before it unparents. This has bitten twice; `tests/test_window_flash.py`
+  watches for it.
 - **A block shows all of its content and never scrolls on its own** — the page
   scrolls instead. The only deliberate exceptions are the roll histories and the
   Notes block.

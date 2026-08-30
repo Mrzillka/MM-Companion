@@ -22,6 +22,8 @@ from __future__ import annotations
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import QBoxLayout, QHBoxLayout, QWidget
 
+from mm_companion.ui.widgets import discard_widget
+
 
 def column_count(
     available_width: int,
@@ -177,11 +179,10 @@ class ColumnFlowPanels:
         while len(self._tables) > count:
             table = self._tables.pop()
             self._tables_layout.removeWidget(table)
-            # Unparent before scheduling the delete: a widget still parented to the
-            # container keeps painting until the deferred delete is serviced, which
-            # leaves a ghost panel on screen for the rest of the event loop turn.
-            table.setParent(None)
-            table.deleteLater()
+            # Hidden and unparented before the delete is scheduled, or the dropped
+            # panel both ghosts and flashes — see :func:`~mm_companion.ui.widgets.
+            # discard_widget`.
+            discard_widget(table)
 
     # -- responsive count --------------------------------------------------------
 

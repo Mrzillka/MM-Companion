@@ -70,7 +70,13 @@ from mm_companion.ui.power_constructor.common import (
 )
 from mm_companion.ui.power_constructor.terms_view import CostOverrideTarget, PowerTermsView
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import BOLD_STYLE, make_spin_box, muted_style, tinted_style
+from mm_companion.ui.widgets import (
+    BOLD_STYLE,
+    discard_widget,
+    make_spin_box,
+    muted_style,
+    tinted_style,
+)
 
 
 class PowerConstructorWindow(QMainWindow):
@@ -677,8 +683,7 @@ class PowerConstructorWindow(QMainWindow):
         while layout.count():
             widget = layout.takeAt(0).widget()
             if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
+                discard_widget(widget)
         skills = improvised_skills(self._character, self._data) if self._character else ()
         if not skills:
             note = QLabel(
@@ -859,8 +864,7 @@ class PowerConstructorWindow(QMainWindow):
             item = self._rank_bands_host.takeAt(0)
             widget = item.widget()
             if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
+                discard_widget(widget)
         carriers: dict[str, set[int]] = {}
         for effect, selection, _modifier in entries:
             carriers.setdefault(selection.modifier_id, set()).add(id(effect))

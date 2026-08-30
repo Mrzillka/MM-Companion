@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import re
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -120,7 +121,7 @@ from mm_companion.ui.session_bridge import SessionBridge, last_session, set_acti
 from mm_companion.ui.session_dialogs import HostOptions
 from mm_companion.ui.session_portrait import encode_scene_portrait, shrink_portrait
 from mm_companion.ui.undo import absorbing
-from mm_companion.ui.widgets import ConfirmButton
+from mm_companion.ui.widgets import ConfirmButton, discard_widget
 
 #: What the listening socket binds to. Every interface, so a player on the LAN
 #: reaches it whichever adapter they come in on; a test overrides it to loopback.
@@ -344,6 +345,12 @@ class GMWindow(QMainWindow):
         # knows which ones are new — and it is keyed by the encoded payload rather
         # than by a flag so a player changing their portrait mid-session is caught.
         self._scene_portraits: dict[str, str] = {}
+        # Each entry's *encoded* picture and the input it was made from, by ref — so
+        # an unchanged picture is never re-encoded. See :meth:`_scene_portrait_for`.
+        self._portrait_encodings: dict[str, tuple[str, str]] = {}
+        # Everything the last push said, so a push that would say the same thing again
+        # can do nothing at all. See :meth:`_push_scene` for what is in it and why.
+        self._pushed_scene: object = None
         # Whether joining puts a player on the board by itself. Read once here
         # through its accessor; the Settings page's change reaches an open window
         # on the next roster.
@@ -1380,8 +1387,7 @@ class GMWindow(QMainWindow):
             if item is not None and item.widget() is card:
                 self._cards_flow.takeAt(index)
                 break
-        card.setParent(None)
-        card.deleteLater()
+        discard_widget(card)
         self._forget_pins(_player_key(player_id))
 
     def _clear_cards(self) -> None:
@@ -1833,15 +1839,36 @@ class GMWindow(QMainWindow):
         Called from every mutation *and* from everywhere a creature's visible state
         can change under it — a condition, a damage step, a snapshot — since those
         are the changes a player is watching the board for.
+
+        **A push that would say nothing does nothing**, and that guard is what makes
+        it affordable to call from all of those places. One player editing a stat
+        arrived here twice — once from their snapshot and once from the roster
+        broadcast the same snapshot triggered — and each time redrew the GM's whole
+        board and sent the whole scene to every client, whose own board redrew in
+        turn. None of that is wrong; almost all of it is about a number the board
+        never showed.
+
+        The signature is everything downstream reads: the payload, the GM's own
+        arrangement, whether there is a table to send to (so a scene built *before*
+        hosting starts is still broadcast when it does), and the auto-players
+        preference (which nothing in the payload carries, but the 👁 on every player
+        card follows — see :meth:`_sync_scene_players`).
         """
         entries = self._scene_payload()
-        self._scene_board.set_manual_order([e.ref for e in self._scene])
-        self._scene_board.set_scene(entries)
-        self._refresh_scene_state()
-        if self._bridge.in_session:
-            self._bridge.set_scene(entries, {e.ref: e.wire_source() for e in self._scene})
+        order = [e.ref for e in self._scene]
+        signature = (entries, order, self._bridge.in_session, self._scene_auto_players)
+        if signature != self._pushed_scene:
+            self._pushed_scene = deepcopy(signature)
+            self._scene_board.set_manual_order(order)
+            self._scene_board.set_scene(entries)
+            self._refresh_scene_state()
+            if self._bridge.in_session:
+                self._bridge.set_scene(entries, {e.ref: e.wire_source() for e in self._scene})
+            self._warn_if_scene_is_truncated(entries)
+        # Outside the guard: a picture travels on its own message and appears in no
+        # payload, so a player who changed only their portrait moves nothing above.
+        # This carries its own change check.
         self._push_scene_portraits()
-        self._warn_if_scene_is_truncated(entries)
 
     def _push_scene_portraits(self) -> None:
         """Send a thumbnail for anything on the board that has not had one sent.
@@ -1853,6 +1880,8 @@ class GMWindow(QMainWindow):
         live = {entry.ref for entry in self._scene}
         for ref in [r for r in self._scene_portraits if r not in live]:
             del self._scene_portraits[ref]
+        for ref in [r for r in self._portrait_encodings if r not in live]:
+            del self._portrait_encodings[ref]
         for entry in self._scene:
             portrait = self._scene_portrait_for(entry)
             if self._scene_portraits.get(entry.ref) == portrait:
@@ -1870,11 +1899,31 @@ class GMWindow(QMainWindow):
         on: an NPC's picture is a file this app can read, and a player's has already
         been shrunk once for their *sheet* portrait — still big enough that a
         board's worth would be stored per session and replayed to every joiner.
+
+        Encoded at most once per picture. Both roads through here are expensive — a
+        file read or a base64 decode, then a scale and a JPEG re-encode — and this
+        runs for **every** entry on **every** push. ``_scene_portraits`` below only
+        suppresses the *send*, so before this cache a board of a dozen creatures was
+        re-encoded a dozen pictures' worth every time a player touched a spin box.
+        Keyed by the ref and holding the input it was made from, like
+        :meth:`~mm_companion.ui.session_player.SnapshotPusher._portrait_payload`: a
+        player who changes their picture mid-session still gets a new one.
         """
         if entry.kind == SCENE_NPC:
             npc = self._npc_state.get(entry.source)
-            return "" if npc is None else encode_scene_portrait(npc.summary.image_path)
-        return shrink_portrait((self._snapshots.get(entry.source) or {}).get("portrait"))
+            source = "" if npc is None else (npc.summary.image_path or "")
+            encode = encode_scene_portrait
+        else:
+            source = (self._snapshots.get(entry.source) or {}).get("portrait") or ""
+            encode = shrink_portrait
+        cached = self._portrait_encodings.get(entry.ref)
+        if cached is not None and cached[0] == source:
+            return cached[1]
+        # Both encoders answer "" for a falsy input, so the short-circuit changes
+        # nothing but the work not done.
+        encoded = encode(source) if source else ""
+        self._portrait_encodings[entry.ref] = (source, encoded)
+        return encoded
 
     def _refresh_scene_state(self) -> None:
         """Tell every roster card whether its creature is on the board.
@@ -2055,8 +2104,7 @@ class GMWindow(QMainWindow):
             item = self._npc_flow.takeAt(0)
             widget = item.widget() if item is not None else None
             if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
+                discard_widget(widget)
 
         summaries = self._npc_summaries()
         previous = self._npc_state

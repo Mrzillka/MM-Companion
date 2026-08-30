@@ -110,6 +110,7 @@ from mm_companion.core.rules import (
     effect_is_selected,
     effect_stands,
     group_scope_note,
+    invalidate_build_cache,
     leaf_powers,
     live_array_children,
     live_array_effects,
@@ -154,7 +155,7 @@ from mm_companion.ui.widgets import (
     BOLD_STYLE,
     hline_separator,
     muted_style,
-    preserved_scroll,
+    rebuilding,
     tinted_style,
 )
 
@@ -1066,11 +1067,16 @@ class PowersSection(TitledSection):
 
         Every runtime setter ends here — flipping one power can restate another card's
         numbers — so this runs on a plain mid-play click, and the block is momentarily
-        empty while it does. :func:`~mm_companion.ui.widgets.preserved_scroll` is what
+        empty while it does. :func:`~mm_companion.ui.widgets.rebuilding` is what
         stops that shrinking the page out from under the card just clicked.
         """
-        with preserved_scroll(self):
+        with rebuilding(self):
             self._normalize_arrays()  # a valid active member per array before drawing
+            # The one refresh handler that *writes* the model, so it is also the one
+            # that has to drop what the surrounding build scope has memoized — see
+            # :mod:`mm_companion.core.rules.build_cache`. Before a single card is
+            # drawn, so nothing below reads a number worked out from the old arrays.
+            invalidate_build_cache()
             # Hand the on-screen progress over to the cards about to be built, and start
             # a fresh map — so a power that was removed or ungrouped leaves nothing
             # behind for a later node to inherit.

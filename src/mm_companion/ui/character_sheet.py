@@ -30,7 +30,7 @@ from PySide6.QtWidgets import QScrollArea, QVBoxLayout, QWidget
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData, load_game_data
-from mm_companion.core.rules import power_points_spent
+from mm_companion.core.rules import power_points_spent, stable_build
 from mm_companion.ui.block_canvas import BlockCanvas
 from mm_companion.ui.block_frame import BlockFrame
 from mm_companion.ui.blocks import (
@@ -52,6 +52,7 @@ from mm_companion.ui.blocks.bus import (
     UNPIN_REQUESTED,
 )
 from mm_companion.ui.pinned_panel import PinnedBoard
+from mm_companion.ui.widgets import discard_widget
 
 
 class CharacterSheet(QWidget):
@@ -279,8 +280,7 @@ class CharacterSheet(QWidget):
         # would be an empty NotesState the next instance to reuse this key would
         # inherit — and `notes#2` is reused as soon as the middle of three closes.
         self.character.notes.pop(key, None)
-        section.setParent(None)
-        section.deleteLater()
+        discard_widget(section)
         attribute = key.replace(INSTANCE_SEPARATOR, "_")
         if hasattr(self, attribute):
             delattr(self, attribute)
@@ -487,12 +487,16 @@ class CharacterSheet(QWidget):
 
         NPCs carry no point budget, so the sheet skips the spent-PP total for them
         and refreshes the System block's estimated Power Level (from traits) instead.
+
+        Scoped like a bus subscriber (:func:`~mm_companion.ui.blocks.bus._refresh`) —
+        it is one, in all but the wiring, and both branches price the whole build.
         """
-        if self._npc:
-            self.system_info.refresh_estimated_pl()
-        else:
-            spent = power_points_spent(self.character, self._data)
-            self.system_info.set_pool_current("power_points", spent)
+        with stable_build():
+            if self._npc:
+                self.system_info.refresh_estimated_pl()
+            else:
+                spent = power_points_spent(self.character, self._data)
+                self.system_info.set_pool_current("power_points", spent)
 
     @property
     def locked(self) -> bool:

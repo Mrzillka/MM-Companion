@@ -16,6 +16,7 @@ files (``profile.json``, ``characteristics.json``, ``abilities.json``,
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field, fields, replace
 
 from . import mods as mods_module
@@ -2120,6 +2121,32 @@ class GameData:
     #: The installation size table, its free starting points, and its own PL cap pair.
     installation_rules: InstallationRules = field(default_factory=InstallationRules)
 
+    def _catalog(self, key: str, build: Callable[[], dict]) -> dict:
+        """Memoize one of the merged ``id ->`` lookups below, per :class:`GameData`.
+
+        Each is a flat merge over tuples that never change — :class:`GameData` is
+        frozen and a mod reload builds a *new* one (see :func:`clear_game_data_cache`)
+        — so the answer is fixed for the life of the instance, and rebuilding it per
+        call is pure waste. It was not idle waste either: ``modifier_catalog`` alone
+        was rebuilt three hundred times for **one step of an ability spin box**, since
+        every power and equipment card re-derives its terms on a redraw and every term
+        looks its modifiers up. That was a third of the cost of the whole edit.
+
+        Written through ``object.__setattr__`` because the dataclass is frozen; the
+        cache is not a field, takes no part in equality, and is never serialized.
+
+        The returned mapping is now **shared**, so treat it as read-only — no caller
+        writes to one today, and one that wants to should copy first.
+        """
+
+        cache = self.__dict__.get("_catalogs")
+        if cache is None:
+            cache = {}
+            object.__setattr__(self, "_catalogs", cache)
+        if key not in cache:
+            cache[key] = build()
+        return cache[key]
+
     def modifier_catalog(self) -> dict[str, Modifier]:
         """A single ``id -> Modifier`` lookup over the general and effect-specific pools.
 
@@ -2127,16 +2154,19 @@ class GameData:
         pool, so a flat merge is unambiguous.
         """
 
-        catalog: dict[str, Modifier] = {m.id: m for m in self.modifiers}
-        for mods in self.effect_modifiers.values():
-            for modifier in mods:
-                catalog.setdefault(modifier.id, modifier)
-        return catalog
+        def build() -> dict[str, Modifier]:
+            catalog: dict[str, Modifier] = {m.id: m for m in self.modifiers}
+            for mods in self.effect_modifiers.values():
+                for modifier in mods:
+                    catalog.setdefault(modifier.id, modifier)
+            return catalog
+
+        return self._catalog("modifiers", build)
 
     def condition_catalog(self) -> dict[str, Condition]:
         """A single ``id -> Condition`` lookup, for the condition resolver in ``rules``."""
 
-        return {c.id: c for c in self.conditions}
+        return self._catalog("conditions", lambda: {c.id: c for c in self.conditions})
 
     def equipment_catalog(self) -> dict[str, EquipmentEntry]:
         """A single ``id -> EquipmentEntry`` lookup, for the equipment rules layer.
@@ -2156,30 +2186,35 @@ class GameData:
         id has a bug, and the item is the older, larger catalog.
         """
 
-        catalog: dict[str, EquipmentEntry] = {e.id: e for e in self.vehicle_entries}
-        catalog.update({e.id: e for e in self.installation_entries})
-        catalog.update({e.id: e for e in self.equipment})
-        return catalog
+        def build() -> dict[str, EquipmentEntry]:
+            catalog: dict[str, EquipmentEntry] = {e.id: e for e in self.vehicle_entries}
+            catalog.update({e.id: e for e in self.installation_entries})
+            catalog.update({e.id: e for e in self.equipment})
+            return catalog
+
+        return self._catalog("equipment", build)
 
     def vehicle_catalog(self) -> dict[str, StockVehicle]:
         """A single ``id -> StockVehicle`` lookup, for the platform traits a card shows."""
 
-        return {v.id: v for v in self.vehicles}
+        return self._catalog("vehicles", lambda: {v.id: v for v in self.vehicles})
 
     def vehicle_feature_catalog(self) -> dict[str, PlatformFeature]:
         """A single ``id -> PlatformFeature`` lookup over the vehicle Features."""
 
-        return {f.id: f for f in self.vehicle_features}
+        return self._catalog("vehicle_features", lambda: {f.id: f for f in self.vehicle_features})
 
     def installation_catalog(self) -> dict[str, StockInstallation]:
         """A single ``id -> StockInstallation`` lookup, for the traits a card shows."""
 
-        return {i.id: i for i in self.installations}
+        return self._catalog("installations", lambda: {i.id: i for i in self.installations})
 
     def installation_feature_catalog(self) -> dict[str, PlatformFeature]:
         """A single ``id -> PlatformFeature`` lookup over the installation Features."""
 
-        return {f.id: f for f in self.installation_features}
+        return self._catalog(
+            "installation_features", lambda: {f.id: f for f in self.installation_features}
+        )
 
 
 # ===========================================================================

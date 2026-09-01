@@ -113,6 +113,38 @@ def test_the_advantage_names_the_skill_it_was_taken_for() -> None:
     assert prepared_effect_ranks(char, data) == 2
 
 
+def test_a_power_granted_improvised_effect_names_its_skill_too() -> None:
+    """The same gap the initiative readout had: granted advantages are never written
+    back to ``Character.advantages``, so these read the bought list and found nothing."""
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.powers.append(
+        Power(
+            name="Utility Belt",
+            effects=[
+                PowerEffectInstance(
+                    "enhanced_trait",
+                    rank=3,
+                    config={
+                        "traits": [
+                            {"trait": "Improvised Effect::Technology", "ranks": 1},
+                            {"trait": "Prepared Effect", "ranks": 2},
+                        ]
+                    },
+                )
+            ],
+        )
+    )
+
+    assert improvised_skills(char, data) == ("Technology",)
+    assert prepared_effect_ranks(char, data) == 2
+
+    # ...and it stops with the power, like every other granted trait.
+    char.powers[0].activated = False
+    assert improvised_skills(char, data) == ()
+    assert prepared_effect_ranks(char, data) == 0
+
+
 def test_the_two_checks_carry_their_own_numbers() -> None:
     data = load_game_data()
     char = _improviser()

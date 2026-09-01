@@ -46,7 +46,7 @@ from mm_companion.core.data_loader import GameData, load_game_data
 from mm_companion.core.rules import PinRef, default_pins, pin_label
 from mm_companion.ui.pin_picker import PinPickerDialog
 from mm_companion.ui.settings.page import SettingsPage
-from mm_companion.ui.widgets import BOLD_STYLE, muted_style, tinted_style
+from mm_companion.ui.widgets import BOLD_STYLE, muted_style, resurface, tinted_style
 
 #: Where a row keeps the :class:`PinRef` it stands for.
 PIN_ROLE = Qt.ItemDataRole.UserRole
@@ -295,9 +295,7 @@ class GMPage(SettingsPage):
         """
         existing = self._pickers.get(kind)
         if existing is not None:
-            existing.show()
-            existing.raise_()
-            existing.activateWindow()
+            resurface(existing)
             return
         heading = next(title for k, title in KINDS if k == kind)
         picker = PinPickerDialog(None, self._data, self.pins(kind), self, title=heading)

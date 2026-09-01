@@ -1383,6 +1383,27 @@ def test_opening_the_same_npc_twice_raises_the_one_window(window: GMWindow) -> N
     assert list(window._npc_windows.values()) == [first]
 
 
+def test_reopening_a_minimized_npc_sheet_brings_it_back(window: GMWindow) -> None:
+    """The one case the old show/raise/activate trio could not answer.
+
+    A minimized window is already "shown", so ``show()`` is a no-op and
+    ``activateWindow()`` will not restore it — clicking the card appeared to do
+    nothing, and the GM had to find the sheet on the taskbar.
+    """
+    path = write_npc("Ogre")
+    window._register_npc(path)
+    window._open_npc(path.name)
+    sheet = next(iter(window._npc_windows.values()))
+
+    sheet.showMinimized()
+    assert sheet.windowState() & Qt.WindowState.WindowMinimized
+
+    window._open_npc(path.name)
+
+    assert not sheet.windowState() & Qt.WindowState.WindowMinimized
+    assert list(window._npc_windows.values()) == [sheet]
+
+
 def test_an_npc_added_while_hosting_goes_through_the_server(
     qapp: QApplication, window: GMWindow
 ) -> None:

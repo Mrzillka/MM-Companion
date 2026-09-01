@@ -30,6 +30,7 @@ from .runtime import equipment_contributions, power_contributions
 from .size import size_contributions
 
 
+@build_scoped
 def granted_advantages(
     char: Character,
     game_data: GameData,
@@ -55,6 +56,13 @@ def granted_advantages(
     in hand — :func:`trait_contributions` does, since every derived total on the sheet
     goes through it and walking the powers twice per lookup would be paid for on every
     skill row.
+
+    :func:`~.build_cache.build_scoped` for callers that have *no* gather in hand and so
+    ask the bare two-argument question — :func:`all_advantage_selections` is one, and it
+    sits under the initiative readout. Without the memo that readout walked the whole
+    build twice per call (once for the ability, once for the bonus), inside a scope
+    where every other derived number costs nothing. The three-argument call passes
+    straight through, as ``build_scoped`` does for any narrower question.
     """
 
     if contributions is None:
@@ -173,6 +181,26 @@ def granted_advantage_selections(
         for name, parameter, bonus in (
             (*split_trait_key(key), bonus) for key, bonus in granted.items()
         )
+    )
+
+
+def all_advantage_selections(
+    char: Character,
+    game_data: GameData,
+    granted: dict[str, TraitBonus] | None = None,
+) -> tuple[AdvantageSelection, ...]:
+    """Every advantage standing on the sheet — the bought ones and the granted ones.
+
+    An advantage's *mechanics* do not care which currency paid for it: an Enhanced
+    Advantage: Improved Initiative 2 moves the initiative modifier exactly as two
+    bought ranks would. So the resolvers that read an advantage's data fields read
+    this rather than :attr:`Character.advantages`, which holds only what the player
+    bought. Cost and budget math is the deliberate exception — it reads the bought
+    list alone, because the power already paid (see :func:`granted_advantages`).
+    """
+
+    return tuple(char.advantages) + tuple(
+        selection for selection, _source in granted_advantage_selections(char, game_data, granted)
     )
 
 
@@ -572,9 +600,12 @@ def initiative_ability(char: Character, game_data: GameData) -> str:
     and whose selection stored a valid choice in its ``parameter`` replaces the
     default with that mental ability. The first such advantage wins; without one,
     initiative uses ``system.json``'s ``default_initiative_ability`` (Agility).
+
+    Reads :func:`all_advantage_selections`, so an Enhanced Advantage granting
+    Alternate Initiative swaps the ability just as a bought one would.
     """
 
-    for selection in char.advantages:
+    for selection in all_advantage_selections(char, game_data):
         advantage = advantage_by_name(game_data, selection.name)
         if (
             advantage
@@ -591,10 +622,15 @@ def initiative_advantage_bonus(char: Character, game_data: GameData) -> int:
     Data-driven: each advantage carrying an ``initiative_bonus_per_rank`` contributes
     that many points times its chosen rank, so the +4/rank number lives in
     ``advantages.json`` rather than here.
+
+    Bought *and* power-granted alike (:func:`all_advantage_selections`): an Enhanced
+    Advantage: Improved Initiative used to be a name on the sheet that moved no
+    number, because this walked ``char.advantages`` and a granted advantage is
+    deliberately never written back to it.
     """
 
     total = 0
-    for selection in char.advantages:
+    for selection in all_advantage_selections(char, game_data):
         advantage = advantage_by_name(game_data, selection.name)
         if advantage and advantage.initiative_bonus_per_rank:
             total += advantage.initiative_bonus_per_rank * selection.rank

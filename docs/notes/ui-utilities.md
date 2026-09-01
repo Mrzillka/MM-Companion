@@ -62,6 +62,16 @@ through rather than reinvent. When building new sheet widgets, use it:
   paths behind an application-wide event filter and fails on any `Show` delivered
   to a parentless widget — the symptom, not either cause, so a third road fails
   there too.
+- **`resurface(window)` is how an already-open window is brought back**, wherever the
+  user left it — the GM window's NPC sheets and pin pickers, the constructor's sub-build
+  windows, the Settings page's default-pin pickers. The obvious `show()` / `raise_()` /
+  `activateWindow()` trio those four all spelled out by hand cannot answer the one case
+  that actually sends someone back to the gesture that opened the window: a **minimized**
+  one. It is already "shown", so `show()` is a no-op; `raise_()` reorders it inside a
+  z-order it is not part of; and `activateWindow()` will not restore it. So clicking an
+  NPC's card while its sheet sat minimized appeared to do nothing at all, and the only
+  cure was the taskbar. The helper clears the minimized bit and *keeps the rest of the
+  state*, so a maximized sheet comes back maximized — a plain `showNormal()` would not.
 - **`rebuilding(widget)` wraps a redraw that destroys and remakes children.** It
   freezes painting for the duration (`setUpdatesEnabled`), so the block does not
   visibly empty and refill on every redraw, and it puts the page's scroll position

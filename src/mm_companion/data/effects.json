@@ -1,7 +1,7 @@
 {
   "_meta": {
     "description": "Base power effects for Mutants & Masterminds 4e. All 'description' fields are original, short paraphrases written for this project, not taken from the rulebook. Mechanical fields (effectType, action, range, duration, check, resistance, baseCost, statIntegration, config) reflect game rules/facts, not copyrighted prose. Companion to docs/mm-powers-architecture.md (read first) and modifiers.json.",
-    "configNote": "config is the effect's list of configurable qualities (the per-effect choices docs/mm-powers-architecture.md §9 defers). Each entry is { key, label, type ('select'|'multiselect'|'text'|'checkbox'|'allocation'|'repeatable'|'points'), overrides?, multiselectWith?, options? }. The player's choice is stored under 'key' in the power effect instance's config: a single value for select/text, a list of values for multiselect. 'overrides' names a base game-term field (e.g. 'resistance') the chosen value replaces in the generated summary; without it the choice is appended. 'multiselectWith' names an extra modifier whose presence upgrades a select field to multiselect (e.g. Affliction's degrees become multiselect only once the 'extra_condition' extra is attached). For select/multiselect fields, options are { value, label } pairs (condition options use the condition id as value). A 'repeatable' field's rows are shaped by its 'columns', each { key, label, type } with type 'text', 'int' or 'trait'; a 'trait' column is a trait picker whose 'source' names which list it offers (see traitSourceKey); its stored value is a trait key, optionally QUALIFIED with '::' to narrow it to one row - 'Expertise::Law' is a skill focus, 'Stealth::spec::Urban' a specialized pool, 'Improved Critical::Sword' an advantage bought for a subject. Those are the character sheet's own row ids, so a granted row lands exactly where the bought one would. A field carrying both a 'trait' column and an 'int' column is a TRAIT ALLOCATION: each row names a trait and the ranks put into it, and those ranks are spent out of the effect's own rank. Enhanced Trait is the one base effect built that way.",
+    "configNote": "config is the effect's list of configurable qualities (the per-effect choices docs/mm-powers-architecture.md §9 defers). Each entry is { key, label, type ('select'|'multiselect'|'text'|'checkbox'|'allocation'|'repeatable'|'points'), overrides?, multiselectWith?, options? }. The player's choice is stored under 'key' in the power effect instance's config: a single value for select/text, a list of values for multiselect. 'overrides' names a base game-term field (e.g. 'resistance') the chosen value replaces in the generated summary; without it the choice is appended. 'multiselectWith' names an extra modifier whose presence upgrades a select field to multiselect (e.g. Affliction's degrees become multiselect only once the 'extra_condition' extra is attached). 'shownWith' is the mirror of 'hiddenWith': the field is on the card only WHILE the named extra is attached. 'widenWith' names an extra whose presence ADDS options to a select - the ones named by 'widenSource'. Affliction is resisted by one of four defenses until Alternate Resistance is bought, which opens the field to every resistance, ability and skill, plus Damage; offering those without the extra would price the extra at nothing. A value already stored still renders by its label once the extra comes off - only what is OFFERED narrows. For select/multiselect fields, options are { value, label } pairs (condition options use the condition id as value). A 'repeatable' field's rows are shaped by its 'columns', each { key, label, type } with type 'text', 'int' or 'trait'; a 'trait' column is a trait picker whose 'source' names which list it offers (see traitSourceKey); its stored value is a trait key, optionally QUALIFIED with '::' to narrow it to one row - 'Expertise::Law' is a skill focus, 'Stealth::spec::Urban' a specialized pool, 'Improved Critical::Sword' an advantage bought for a subject. Those are the character sheet's own row ids, so a granted row lands exactly where the bought one would. A field carrying both a 'trait' column and an 'int' column is a TRAIT ALLOCATION: each row names a trait and the ranks put into it, and those ranks are spent out of the effect's own rank. Enhanced Trait is the one base effect built that way.",
     "baseCostModeNote": "baseCostMode names HOW an effect's base cost is charged; core.rules.powers_cost holds one registered handler per mode and a mod's python_module can register another. Omitting the key means 'flat'.",
     "baseCostModeKey": {
       "flat": "baseCostValue points per rank - the ordinary rule, and the default when the key is absent",
@@ -75,22 +75,44 @@
           "label": "Resisted by",
           "type": "select",
           "overrides": "resistance",
+          "widenWith": "alternate_resistance",
+          "widenSource": "resistance_targets",
           "options": [
             { "value": "Dodge", "label": "Dodge" },
             { "value": "Fortitude", "label": "Fortitude" },
+            { "value": "Toughness", "label": "Toughness" },
             { "value": "Will", "label": "Will" }
           ]
+        },
+        {
+          "key": "resistanceSecond",
+          "label": "Or (best/worst of two)",
+          "type": "select",
+          "shownWith": "alternate_resistance",
+          "source": "resistance_targets",
+          "hint": "The second resistance, for an Alternate Resistance bought as the worst of two (+1) or settled for as the best of two (-1). Leave unset for a plain swap to one other resistance."
         },
         {
           "key": "overcomeBy",
           "label": "Overcome by",
           "type": "select",
           "hint": "Defaults to the resisting defense; may differ (e.g. resisted by Dodge, overcome by Will).",
+          "widenWith": "alternate_resistance",
+          "widenSource": "resistance_targets",
           "options": [
             { "value": "Dodge", "label": "Dodge" },
             { "value": "Fortitude", "label": "Fortitude" },
+            { "value": "Toughness", "label": "Toughness" },
             { "value": "Will", "label": "Will" }
           ]
+        },
+        {
+          "key": "overcomeBySecond",
+          "label": "Or, to overcome",
+          "type": "select",
+          "shownWith": "alternate_resistance",
+          "source": "resistance_targets",
+          "hint": "The second resistance the Affliction may be shaken off with, when the same best-of / worst-of choice applies to overcoming it."
         },
         {
           "key": "degree1",

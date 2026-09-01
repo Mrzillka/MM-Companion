@@ -56,6 +56,12 @@ class MainWindow(QMainWindow):
     #: What the window title is prefixed with.
     TITLE = "MM-Companion"
 
+    #: The settings key this window's geometry and block arrangement are remembered
+    #: under. A subclass whose sheet is arranged differently overrides it rather than
+    #: sharing — and overwriting — every character sheet's layout (see
+    #: :meth:`_restore_layout`).
+    LAYOUT_KEY = "layout"
+
     closed = Signal()
     saved = Signal()
     #: A row of this sheet was right-clicked and pinned. Carries a
@@ -470,19 +476,27 @@ class MainWindow(QMainWindow):
 
     # -- layout persistence --------------------------------------------------
 
-    def _restore_layout(self) -> None:
+    def _restore_layout(self) -> bool:
         """Restore the remembered window geometry and block arrangement.
 
         The layout is a global UI preference stored in settings.json; a missing or
         incompatible entry simply leaves the default arrangement in place. The
         ``dock_state`` value is now the sheet's JSON arrangement (see
         ``CharacterSheet.save_layout``); the key name is kept for continuity.
+
+        Under :attr:`LAYOUT_KEY`, so a window kind with a different block set — or a
+        different idea of which blocks start open — keeps its own arrangement
+        instead of overwriting every sheet's. Returns whether a saved arrangement
+        actually applied, which is what lets a subclass seed its own defaults only
+        when there is nothing remembered to honour.
         """
-        layout = storage.load_settings().get("layout") or {}
+        layout = storage.load_settings().get(self.LAYOUT_KEY) or {}
+        if not isinstance(layout, dict):
+            layout = {}
         geometry = layout.get("window_geometry")
         if isinstance(geometry, str) and geometry:
             self.restoreGeometry(QByteArray.fromBase64(geometry.encode("ascii")))
-        self._sheet.restore_layout(layout.get("dock_state"))
+        return self._sheet.restore_layout(layout.get("dock_state"))
 
     def _persist_layout(self) -> None:
         """Save the window geometry and block arrangement as a global preference.
@@ -496,7 +510,12 @@ class MainWindow(QMainWindow):
         state = self._compact.saved_geometry() or self.saveGeometry()
         geometry = bytes(state.toBase64()).decode("ascii")
         storage.update_settings(
-            layout={"window_geometry": geometry, "dock_state": self._sheet.save_layout()}
+            **{
+                self.LAYOUT_KEY: {
+                    "window_geometry": geometry,
+                    "dock_state": self._sheet.save_layout(),
+                }
+            }
         )
 
     def _add_block_action(self, key: str) -> None:

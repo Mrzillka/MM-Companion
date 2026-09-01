@@ -19,6 +19,7 @@ from PySide6.QtWidgets import QApplication, QLabel, QMessageBox
 from mm_companion.core import library, storage
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.rules import estimated_power_level
+from mm_companion.ui.blocks import npc_hidden_keys
 from mm_companion.ui.main_window import MainWindow
 from mm_companion.ui.npc_window import NPCWindow
 
@@ -162,3 +163,62 @@ def test_a_saved_npc_remembers_its_file(npc: NPCWindow) -> None:
     npc.sheet.character.profile["hero_name"] = "Minion"
     npc._write(npc.storage_dir() / "minion.json")
     assert npc.path is not None and npc.path.name == "minion.json"
+
+
+# -- the arrangement an NPC opens with, and where it is remembered ---------------
+
+
+def test_an_npc_opens_with_the_blocks_that_hold_no_trait_closed(npc: NPCWindow) -> None:
+    """A GM opening a thug wants its numbers, not a second roller and the Scene board.
+
+    Each is one click away on the View menu; what changed is only which ones a fresh
+    NPC starts with.
+    """
+    closed = npc_hidden_keys()
+    assert "dice" in closed and "scene" in closed
+    for key in closed:
+        assert npc.sheet.is_block_hidden(key), key
+    # ...and every block that *does* hold a trait is still open.
+    assert not npc.sheet.is_block_hidden("abilities")
+    assert not npc.sheet.is_block_hidden("powers")
+
+
+def test_a_player_sheet_is_untouched_by_that(qapp: QApplication) -> None:
+    window = MainWindow()
+    try:
+        assert not window.sheet.is_block_hidden("dice")
+    finally:
+        window.close()
+
+
+def test_an_npc_arrangement_is_remembered_apart_from_the_character_sheets(
+    npc: NPCWindow, qapp: QApplication
+) -> None:
+    """Sharing ``layout`` would mean closing the roller on a mook closed it on a hero."""
+    assert NPCWindow.LAYOUT_KEY != MainWindow.LAYOUT_KEY
+    npc.sheet.show_block("dice")
+    npc.close()
+
+    assert storage.load_settings().get(NPCWindow.LAYOUT_KEY, {}).get("dock_state")
+    assert not storage.load_settings().get(MainWindow.LAYOUT_KEY, {}).get("dock_state")
+
+    reopened = NPCWindow()
+    try:
+        # Reopened it is the GM's own arrangement, not the default one, that comes back.
+        assert not reopened.sheet.is_block_hidden("dice")
+    finally:
+        reopened.close()
+
+
+def test_rolling_from_a_closed_roller_brings_it_back(npc: NPCWindow) -> None:
+    """Closing the roller by default must not roll into a void.
+
+    ``CharacterSheet._reveal_servers`` already reopens a hidden block that serves the
+    topic — this pins that the NPC default rides on it rather than around it.
+    """
+    from mm_companion.core.rules import ability_roll
+
+    assert npc.sheet.is_block_hidden("dice")
+    spec = ability_roll(npc.sheet.character, load_game_data(), "AGL")
+    npc.sheet.bus.publish_request("roll-requested", spec)
+    assert not npc.sheet.is_block_hidden("dice")

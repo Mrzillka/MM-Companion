@@ -7,7 +7,9 @@
       "measure_offsets": "One row per entry, showing the measurement (measurements.json column) at rank + offset; perRound appends '/round'.",
       "thresholds": "One row per entry whose minRank <= the effect's rank (rank-gated flavour readouts).",
       "config_flag": "A row whose value is trueText or falseText depending on whether config[key] is set (a player choice about content, not a rank).",
-      "points_per_rank": "A computed row of rank * perRank points (Variable's sub-budget pool)."
+      "points_per_rank": "A computed row of rank * perRank points (Variable's sub-budget pool).",
+      "rank_scaled": "A row whose value is rank * perRank + offset, rendered through 'format' ({value} is substituted). For a rules limit that IS the rank rather than a measurement of one — Create's object Toughness, the volume it holds at once, Quickness's time-rank cut.",
+      "reach_extension": "One row per band of a reach-extending effect (effects.json's 'reach'): what one rank buys, times the band's 'multiple', with the check penalty reaching that far carries in its 'note'. The EXTENSION, not the wielder's total reach — the System block's row already counts this effect, so a card restating it would double it."
     }
   },
   "effectReadouts": {
@@ -83,6 +85,110 @@
     ],
     "summon": [
       { "kind": "points_per_rank", "label": "Minion built on", "perRank": 15 }
+    ],
+    "regeneration": [
+      {
+        "kind": "state",
+        "label": "Recovery",
+        "byRank": {
+          "1": "Least severe damage condition every 10 rounds",
+          "2": "Least severe damage condition every 9 rounds",
+          "3": "Least severe damage condition every 8 rounds",
+          "4": "Least severe damage condition every 7 rounds",
+          "5": "Least severe damage condition every 6 rounds",
+          "6": "Least severe damage condition every 5 rounds",
+          "7": "Least severe damage condition every 4 rounds",
+          "8": "Least severe damage condition every 3 rounds",
+          "9": "Least severe damage condition every 2 rounds",
+          "10": "Least severe damage condition every round",
+          "11": "Two least severe damage conditions every round",
+          "12": "Three least severe damage conditions every round",
+          "13": "Four least severe damage conditions every round",
+          "14": "Five least severe damage conditions every round",
+          "15": "Six least severe damage conditions every round",
+          "16": "Seven least severe damage conditions every round",
+          "17": "Eight least severe damage conditions every round",
+          "18": "Nine least severe damage conditions every round",
+          "19": "Ten least severe damage conditions every round",
+          "20": "Every damage condition, Dead included, at the start of each turn"
+        }
+      },
+      {
+        "kind": "state",
+        "label": "Resurrection",
+        "byRank": {
+          "1": "Not possible below rank 15",
+          "15": "Recover from Dead in 4 minutes (time rank 5)",
+          "16": "Recover from Dead in 2 minutes (time rank 4)",
+          "17": "Recover from Dead in 1 minute / 10 rounds (time rank 3)",
+          "18": "Recover from Dead in 30 seconds / 5 rounds (time rank 2)",
+          "19": "Recover from Dead in 2 rounds (time rank 1)",
+          "20": "Recover from Dead in 1 round (time rank 0)"
+        }
+      }
+    ],
+    "create": [
+      {
+        "kind": "measure_offsets",
+        "column": "volume",
+        "rows": [
+          { "label": "Object volume", "offset": 0 },
+          { "label": "Hollow object volume", "offset": 2 }
+        ]
+      },
+      { "kind": "rank_scaled", "label": "Object Toughness", "format": "up to {value}" },
+      { "kind": "rank_scaled", "label": "Maintained at once", "format": "{value} total volume ranks (double while concentrating)" }
+    ],
+    "morph": [
+      {
+        "kind": "state",
+        "label": "Forms",
+        "byRank": {
+          "1": "One other appearance, switched as a free action",
+          "2": "A narrow group of forms (people of your size, one type of animal)",
+          "3": "Any of a broad group of forms (humanoids, animals, machines)",
+          "4": "Any form of roughly your own mass"
+        }
+      },
+      {
+        "kind": "state",
+        "label": "Disguise",
+        "byRank": { "1": "+20 Deception to pass as the form assumed" }
+      }
+    ],
+    "quickness": [
+      { "kind": "rank_scaled", "label": "Routine tasks", "format": "time rank -{value} (rank 0 finishes within your turn)" }
+    ],
+    "lifting": [
+      { "kind": "rank_scaled", "label": "Lifting Strength", "format": "+{value} ranks for lifting, carrying and throwing" }
+    ],
+    "move_object": [
+      { "kind": "rank_scaled", "label": "Effective Strength", "format": "rank {value} for lifting and moving (+1 for a round on a Concentrate)" },
+      {
+        "kind": "measure_offsets",
+        "column": "mass",
+        "rows": [
+          { "label": "Lifts", "offset": 0 }
+        ]
+      }
+    ],
+    "elongation": [
+      {
+        "kind": "reach_extension",
+        "label": "Reach",
+        "bands": [
+          { "label": "Reach", "multiple": 1, "note": "no check penalty" },
+          { "label": "Stretched", "multiple": 2, "note": "-2 to checks" },
+          { "label": "Full extension", "multiple": 3, "note": "-5 to checks" }
+        ]
+      }
+    ],
+    "teleport": [
+      {
+        "kind": "state",
+        "label": "Carries",
+        "byRank": { "1": "Yourself plus mass rank 0 (25 lbs.) worn or carried, raised by Increased Mass" }
+      }
     ],
     "variable": [
       { "kind": "points_per_rank", "label": "Power pool", "perRank": 5 }

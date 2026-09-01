@@ -429,6 +429,25 @@ _BASE_BLOCKS = [
 # through a fight rather than scrolling away under the sheet.
 _PINNED_BY_DEFAULT = frozenset({"dice", "scene"})
 
+# Blocks that start *closed* on a GM's NPC sheet (see ``BlockDescriptor.npc_default``).
+# The four that hold no trait: the GM already rolls from the card and the GM
+# window's own roller, the Scene is the GM window's board rather than this
+# creature's, and Notes and Complications are a hero's prose. What is left is the
+# numbers a mook is written for, on one screen instead of three. Each is one
+# click away on the View menu, and the NPC layout remembers that click.
+_CLOSED_FOR_NPCS = frozenset({"dice", "scene", "notes", "complications"})
+
+
+def npc_hidden_keys() -> list[str]:
+    """Every registered block that starts closed on an NPC sheet.
+
+    Read off the descriptors rather than off the constant above, so a mod block
+    declaring ``npc_default=False`` is closed there too.
+    """
+
+    return [d.key for d in block_descriptors() if not d.npc_default]
+
+
 # How a block the sheet may build more than one of makes its extra instances
 # (see BlockDescriptor.instance_factory): the builder is handed the new block's
 # key and returns a factory closed over it. The View menu offers "New <title>
@@ -474,6 +493,7 @@ def register_base_blocks(*, replace: bool = False) -> None:
                 requests=requests,
                 serves=serves,
                 instance_factory=_INSTANCE_FACTORIES.get(key),
+                npc_default=key not in _CLOSED_FOR_NPCS,
             ),
             replace=replace,
         )

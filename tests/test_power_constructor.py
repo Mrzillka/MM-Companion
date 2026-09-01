@@ -72,20 +72,36 @@ def test_attack_skill_combo_links_a_combat_focus_to_the_effect(qapp: QApplicatio
     assert rows["check"].value == "3 vs. Defense"
 
 
-def test_attack_skill_combo_absent_without_combat_focuses(qapp: QApplication) -> None:
-    # A character with no Close/Ranged Combat focuses has nothing to link, so the
-    # per-effect picker isn't built.
-    window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
-    card = window.canvas.add_effect("damage")
-    assert card._attack_skill is None
-    assert card._attack_skill_check is None
-
-
 def _char_with_focus() -> Character:
     char = _pl10_character()
     char.focuses["Close Combat"] = ["Blades"]
     char.skill_ranks["Close Combat::Blades"] = 4
     return char
+
+
+def test_attack_skill_option_is_offered_even_with_no_combat_focus(qapp: QApplication) -> None:
+    """Every attack effect shows the option; without a focus it is disabled, not absent.
+
+    It used to be built only for a wielder who already had a Close/Ranged Combat focus,
+    which made the option read as something certain attacks have rather than something
+    this character has not bought yet — and left nowhere to say so.
+    """
+    window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
+    card = window.canvas.add_effect("damage")
+
+    assert card._attack_skill_row is not None and not card._attack_skill_row.isHidden()
+    assert not card._attack_skill_check.isEnabled()
+    assert "Skills block" in card._attack_skill_check.toolTip()
+    assert card._attack_skill.count() == 0
+    assert card.instance.attack_skill == ""
+
+
+def test_the_attack_skill_option_goes_live_once_there_is_a_focus(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data(), character=_char_with_focus())
+    card = window.canvas.add_effect("damage")
+
+    assert card._attack_skill_check.isEnabled()
+    assert card._attack_skill.count() == 1
 
 
 def test_attack_skill_row_hidden_for_a_non_attack_effect(qapp: QApplication) -> None:
@@ -435,7 +451,10 @@ def test_effect_without_config_has_no_combos(qapp: QApplication) -> None:
 
     window = PowerConstructorWindow(load_game_data())
     card = window.canvas.add_effect("damage")  # Damage's only config is a checkbox
-    assert card.findChildren(QComboBox) == []
+    # Scoped to the config form: every attacking effect also carries the attack-skill
+    # picker, which is not config and is beside the point here.
+    config_host = card._config_layout.itemAt(0)
+    assert config_host is None or config_host.widget().findChildren(QComboBox) == []
 
 
 def test_effect_specific_menu_lists_only_this_effects_modifiers(qapp: QApplication) -> None:
@@ -2515,3 +2534,31 @@ def test_an_ordinary_effects_cost_line_hides_nothing(qapp: QApplication) -> None
     window = PowerConstructorWindow(load_game_data())
     card = window.canvas.add_effect("damage")
     assert card._cost.toolTip() == ""
+
+
+def test_a_narrowed_picker_still_shows_the_value_it_holds(qapp: QApplication) -> None:
+    """Taking Alternate Resistance off must not leave the picker denying the card.
+
+    Only what is *offered* narrows. The stored value survives — the game-terms row goes
+    on printing it — so the combo has to keep showing it, and say what it is waiting on,
+    rather than falling back to "—" and contradicting the row beside it.
+    """
+    from PySide6.QtWidgets import QComboBox
+
+    window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
+    card = window.canvas.add_effect("affliction")
+    card.attach_modifier("alternate_resistance")
+
+    def resistance_combo() -> QComboBox:
+        return card._config_layout.itemAt(0).widget().findChildren(QComboBox)[0]
+
+    combo = resistance_combo()
+    combo.setCurrentIndex(combo.findData("Athletics"))
+    assert card.instance.config["resistance"] == "Athletics"
+
+    card._remove_chip(card._chips[0])
+
+    assert card.instance.config["resistance"] == "Athletics"
+    combo = resistance_combo()
+    assert combo.currentData() == "Athletics"
+    assert combo.currentText() == "Athletics (needs Alternate Resistance)"

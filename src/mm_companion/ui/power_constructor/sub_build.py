@@ -37,6 +37,7 @@ from mm_companion.core.rules import (
     sub_build_characters,
 )
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
+from mm_companion.ui.widgets import resurface
 
 
 class SubBuildPanel(QWidget):
@@ -180,8 +181,7 @@ class SubBuildPanel(QWidget):
 
         existing = self._windows.get((slot.key, index))
         if existing is not None and existing.isVisible():
-            existing.raise_()
-            existing.activateWindow()
+            resurface(existing)
             return
         builds = sub_build_characters(slot)
         if not 0 <= index < len(builds):

@@ -137,6 +137,13 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # key because the GM window has a different block set. See
     # :mod:`mm_companion.ui.gm_window`.
     "gm_layout": {},
+    # The same pair again for a GM's NPC sheet. The blocks are the character
+    # sheet's, but the ones that hold no trait start closed there (see
+    # :mod:`mm_companion.ui.npc_window`) — so an NPC arrangement written under
+    # ``layout`` would close the roller on every hero too. Both are read with an
+    # inline ``or {}`` fallback rather than off a bare ``load_settings``, since a
+    # workspace created before this key has neither.
+    "npc_layout": {},
     # What a GM card's pinned-parameter strip starts with, per card kind. Each
     # entry is a ``PinRef.to_dict()`` (see :mod:`mm_companion.core.rules.pins`).
     # Read through :func:`gm_default_pins`, never straight off ``load_settings``:

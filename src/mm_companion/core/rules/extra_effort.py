@@ -39,7 +39,7 @@ from ..data_loader import ExtraEffortRules, ExtraEffortUse, GameData
 from ..powers import Power, PowerEffectInstance, PowerGroup, PowerNode, power_is_stunt
 from .appliers import CATEGORY_ABILITY, CATEGORY_MOVEMENT
 from .conditions import apply_condition
-from .derived import EFFORT_KEY_SEP, effective_ability, effort_key
+from .derived import EFFORT_KEY_SEP, all_advantage_selections, effective_ability, effort_key
 from .movement import speed_lines
 from .powers_terms import effective_effect_stats
 from .runtime import effect_current_rank
@@ -120,10 +120,19 @@ def character_pushable_powers(char: Character, game_data: GameData) -> list[Powe
     return [power for power in leaf_powers(char.powers) if pushable_effects(power, game_data)]
 
 
-def _advantage_ranks(char: Character, name: str) -> int:
-    """Total ranks of one advantage by name, 0 when it is not on the sheet."""
+def _advantage_ranks(char: Character, game_data: GameData, name: str) -> int:
+    """Total ranks of one advantage by name, 0 when it is not on the sheet.
 
-    return sum(max(1, sel.rank) for sel in char.advantages if sel.name == name)
+    Bought *and* power-granted (:func:`~.derived.all_advantage_selections`): an
+    Enhanced Advantage: Determination is a Determination, and straining is a thing the
+    character can do because of it. This walked the bought list alone, which is the same
+    gap the initiative readout had — a granted advantage is never written back to
+    ``Character.advantages``, so it showed on the sheet and moved nothing here.
+    """
+
+    return sum(
+        max(1, sel.rank) for sel in all_advantage_selections(char, game_data) if sel.name == name
+    )
 
 
 def extra_effort_rank_increase(char: Character | None, game_data: GameData) -> int:
@@ -139,7 +148,9 @@ def extra_effort_rank_increase(char: Character | None, game_data: GameData) -> i
     rules = extra_effort_rules(game_data)
     if char is None:
         return rules.rank_increase
-    return rules.rank_increase + _advantage_ranks(char, rules.untapped_potential_advantage)
+    return rules.rank_increase + _advantage_ranks(
+        char, game_data, rules.untapped_potential_advantage
+    )
 
 
 def determination_ranks(char: Character, game_data: GameData) -> int:
@@ -151,14 +162,14 @@ def determination_ranks(char: Character, game_data: GameData) -> int:
     it) would lie more confidently.
     """
 
-    return _advantage_ranks(char, extra_effort_rules(game_data).determination_advantage)
+    return _advantage_ranks(char, game_data, extra_effort_rules(game_data).determination_advantage)
 
 
 def has_extraordinary_effort(char: Character, game_data: GameData) -> bool:
     """Whether this character may take **two** benefits for two rungs of fatigue (p86)."""
 
     rules = extra_effort_rules(game_data)
-    return bool(_advantage_ranks(char, rules.extraordinary_effort_advantage))
+    return bool(_advantage_ranks(char, game_data, rules.extraordinary_effort_advantage))
 
 
 def current_fatigue(char: Character, game_data: GameData) -> str:

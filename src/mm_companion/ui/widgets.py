@@ -407,6 +407,30 @@ def discard_widget(widget: QWidget) -> None:
     widget.deleteLater()
 
 
+def resurface(window: QWidget) -> None:
+    """Bring an already-open window back to the front, wherever the user left it.
+
+    The obvious ``show()`` / ``raise_()`` / ``activateWindow()`` trio is not enough
+    for the one case that actually sends a user back to the gesture that opened the
+    window: a **minimized** one. It is already "shown", so ``show()`` is a no-op;
+    ``raise_()`` reorders it inside the z-order it is not currently part of; and
+    ``activateWindow()`` will not restore it. So clicking an NPC's card while its
+    sheet sat minimized appeared to do nothing at all, and the only cure was to find
+    the thing on the taskbar — which is the work the click was meant to save.
+
+    Clearing the minimized bit while **keeping** the rest of the state is what puts
+    it back the size the user left it: a plain ``showNormal()`` would also un-maximize
+    a maximized sheet.
+    """
+
+    window.setWindowState(
+        (window.windowState() & ~Qt.WindowState.WindowMinimized) | Qt.WindowState.WindowActive
+    )
+    window.show()
+    window.raise_()
+    window.activateWindow()
+
+
 def enclosing_scroll_area(widget: QWidget) -> QAbstractScrollArea | None:
     """The scroll area *widget* is scrolled by, or ``None``.
 

@@ -11,7 +11,13 @@ from PySide6.QtWidgets import QLineEdit, QWidget
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.registry import Registry
-from mm_companion.core.rules import TRAIT_COLUMN_TYPE, config_source_options, trait_rank_cap
+from mm_companion.core.rules import (
+    TRAIT_COLUMN_TYPE,
+    config_field_options,
+    config_field_shown,
+    config_source_options,
+    trait_rank_cap,
+)
 from mm_companion.ui.power_constructor.trait_picker import (
     TRAIT_SOURCE_ALL,
     TRAIT_SOURCE_BOOSTABLE,
@@ -38,6 +44,8 @@ __all__ = [
     "RepeatableCellKind",
     "TraitPicker",
     "brick_tooltip",
+    "config_field_options",
+    "config_field_shown",
     "config_source_options",
     "combat_focus_options",
     "fill_trait_combo",

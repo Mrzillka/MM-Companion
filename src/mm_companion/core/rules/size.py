@@ -354,7 +354,7 @@ class Reach:
         return abs(self.feet - self.spaces * self.space_feet) < 1e-9
 
 
-def _feet_text(feet: float) -> str:
+def feet_text(feet: float) -> str:
     """A distance with no trailing ``.0`` — reach lands on whole feet almost always."""
     return f"{feet:.1f}".rstrip("0").rstrip(".")
 
@@ -377,7 +377,7 @@ def reach_text(reach: Reach) -> str:
     spaces = reach.spaces
     noun = "space" if spaces == 1 else "spaces"
     tilde = "" if reach.exact else "~"
-    return f"{tilde}{spaces} {noun} / {_feet_text(reach.feet)} ft."
+    return f"{tilde}{spaces} {noun} / {feet_text(reach.feet)} ft."
 
 
 def size_reach_feet(size_rank: int, game_data: GameData) -> float:

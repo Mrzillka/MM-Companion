@@ -53,7 +53,8 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   (see "Blocks there can be two of" below). The block set is **not** hardcoded in the sheet:
   it comes from the **block registry** (`ui/blocks/`) — one `BlockDescriptor` per
   block (key, dock title, widget factory, `BlockSize`, default row/col, and
-  `default_pinned` for a block that starts in the strip instead of a row), held in an
+  `default_pinned` for a block that starts in the strip instead of a row, and
+  `npc_default` for whether it is *open* on a GM's NPC sheet), held in an
   ordered `Registry` (`ui/blocks/registry.py`, reusing `core/registry.py`). The fourteen
   base descriptors register at import; `CharacterSheet` iterates `block_descriptors()`
   to build each section (exposing it as an attribute under its key so the name-based
@@ -217,15 +218,28 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
 - Layout persists globally as **JSON** (not Qt `saveState`): `MainWindow` saves its
   geometry and `CharacterSheet.save_layout()` (`json.dumps` of `arrangement()` —
   `{version, rows, floating, hidden, hidden_anchors, pinned{edge, lines, align,
-  sizes, line_sizes, extent}}`) to the `layout` key
+  sizes, line_sizes, extent}}`) to the key named by `MainWindow.LAYOUT_KEY`
   in `settings.json` on close, and restores on open (`_restore_layout`).
+  **The key is a class attribute, not a constant**, because two windows share this
+  sheet and do not want the same arrangement: an `NPCWindow` writes `npc_layout`, and
+  the GM window has always had its own `gm_layout` for its own block set. An NPC's
+  arrangement written under `layout` would have closed the roller on every hero.
   `restore_layout` validates (schema `SCHEMA_VERSION`; every block placed exactly
   once across rows/floating/hidden/pinned) and returns False to fall back to the
   default. Where a block *lives* is validated strictly (an unknown key or edge
   rejects the whole layout); the cosmetic numbers — the strip's sizes and
   thickness, a hidden block's anchor — degrade to defaults instead. A **View** menu has a checkable show/hide toggle per
   block (kept in sync via `BlockCanvas.block_visibility_changed`) and a **Reset
-  Layout** action (`CharacterSheet.reset_layout()`). Cross-block wiring is
+  Layout** action (`CharacterSheet.reset_layout()`).
+- **A GM's NPC opens with the blocks that hold no trait closed** — the roller, the
+  Scene, Notes, Complications (`npc_hidden_keys()`, read off `BlockDescriptor.npc_default`
+  so a mod block declares its own answer). A GM already rolls from the card and from the
+  GM window's own roller, and the Scene on an NPC's sheet is the GM's board rather than
+  this creature's, so those four were four closes on every mook before the numbers fit on
+  one screen. It is a **default, not a mode**: `NPCWindow._restore_layout` seeds it only
+  when nothing was remembered, so a roller reopened once stays open — which is the whole
+  reason the NPC layout needed a key of its own (above), since remembering that under
+  `layout` would have taught every character sheet the same lesson. Cross-block wiring is
   object-to-object Qt signals, so it keeps working when a block is floated out.
 - Each block's min/max size lives in `ui/block_sizes.json` (loaded by
   `ui/block_sizes.py::load_block_sizes`, keyed by block: `abilities`,

@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from ..character import Character
 from ..data_loader import GameData
 from ..powers import Power
+from .derived import all_advantage_selections
 from .powers_cost import power_gross_cost
 
 #: The advantage that lets a character improvise at all. Its per-selection ``parameter``
@@ -125,11 +126,15 @@ def improvised_skills(char: Character, game_data: GameData) -> tuple[str, ...]:
     several and improvises with whichever fits. Empty when they lack the advantage — which
     is the honest answer, not a reason to hide the arithmetic: a player may well be working
     out whether the advantage is worth taking.
+
+    Bought *and* power-granted (:func:`~.derived.all_advantage_selections`), and a granted
+    one carries its skill on its own trait key, so ``Improvised Effect::Technology``
+    arrives here as the same name-plus-parameter pair a bought one does.
     """
 
     return tuple(
         selection.parameter
-        for selection in char.advantages
+        for selection in all_advantage_selections(char, game_data)
         if selection.name == IMPROVISED_EFFECT_ADVANTAGE and selection.parameter
     )
 
@@ -140,10 +145,12 @@ def prepared_effect_ranks(char: Character, game_data: GameData) -> int:
     Prepared Effect is ranked and each rank is one stashed effect (p102's "have a
     previously prepared effect conveniently on-hand"). Zero without it, in which case an
     improvised effect has to be prepared during play or bought back with a Hero Point.
+
+    Bought *and* power-granted, for the reason :func:`improvised_skills` gives.
     """
 
     return sum(
         max(1, selection.rank)
-        for selection in char.advantages
+        for selection in all_advantage_selections(char, game_data)
         if selection.name == PREPARED_EFFECT_ADVANTAGE
     )

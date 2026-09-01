@@ -121,7 +121,7 @@ from mm_companion.ui.session_bridge import SessionBridge, last_session, set_acti
 from mm_companion.ui.session_dialogs import HostOptions
 from mm_companion.ui.session_portrait import encode_scene_portrait, shrink_portrait
 from mm_companion.ui.undo import absorbing
-from mm_companion.ui.widgets import ConfirmButton, discard_widget
+from mm_companion.ui.widgets import ConfirmButton, discard_widget, resurface
 
 #: What the listening socket binds to. Every interface, so a player on the LAN
 #: reaches it whichever adapter they come in on; a test overrides it to loopback.
@@ -1488,9 +1488,7 @@ class GMWindow(QMainWindow):
         """
         existing = self._pin_pickers.get(card_key)
         if existing is not None:
-            existing.show()
-            existing.raise_()
-            existing.activateWindow()
+            resurface(existing)
             return
         picker = PinPickerDialog(character, self._data, card.pins.pins, self, title=title)
         picker.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
@@ -2316,9 +2314,7 @@ class GMWindow(QMainWindow):
         path = entry.path
         existing = self._window_for(path)
         if existing is not None:
-            existing.show()
-            existing.raise_()
-            existing.activateWindow()
+            resurface(existing)
             return
         window = NPCWindow(character=library.load_character(path), path=path, pin_target=True)
         if entry.card is not None:

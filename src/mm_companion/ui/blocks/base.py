@@ -114,6 +114,13 @@ class BlockDescriptor:
     (``rollRequested(object)``) to the request topics it raises, and ``serves`` maps
     a request topic to the block method that answers it, which takes the payload as
     its one argument.
+
+    ``npc_default`` is whether the block is *open* on a GM's NPC sheet the first
+    time one is shown. An NPC sheet is the same sheet with the accounting taken out
+    (:class:`~mm_companion.ui.npc_window.NPCWindow`), and the blocks that carry no
+    trait — the roller, the Scene, the prose — are the ones a GM has to close by
+    hand on every mook before the numbers fit on screen. It is a *default*, not a
+    mode: the View menu reopens any of them and the NPC layout remembers it.
     """
 
     key: str
@@ -133,6 +140,9 @@ class BlockDescriptor:
     # had ``requests`` silently land in a field added between them. New fields go on
     # the end.
     coalesces: frozenset[str] = frozenset()
+    #: Whether this block starts open on an NPC sheet (see the class docstring).
+    #: On the end with ``coalesces``, and for the same reason.
+    npc_default: bool = True
 
     @property
     def multi(self) -> bool:

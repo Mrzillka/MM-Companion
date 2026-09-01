@@ -738,6 +738,136 @@ def test_illusion_maintenance_readout_flips_on_the_moving_checkbox() -> None:
     assert "Concentrate" in moving.value
 
 
+# -- Affliction's resistance, and what Alternate Resistance opens up --------------
+
+
+def _affliction_field(data, key: str):
+    effect = next(e for e in data.effects if e.id == "affliction")
+    return next(f for f in effect.config_fields if f.key == key)
+
+
+def _resisted_affliction(*modifier_ids: str) -> PowerEffectInstance:
+    effect = PowerEffectInstance("affliction", rank=5)
+    effect.extras.extend(ModifierSelection(mid) for mid in modifier_ids)
+    return effect
+
+
+def test_affliction_offers_the_four_resistances_before_any_extra() -> None:
+    """Toughness is a resistance too — the field used to omit it."""
+    from mm_companion.core.rules import config_field_options
+
+    data = load_game_data()
+    field = _affliction_field(data, "resistance")
+    offered = [value for _label, value in config_field_options(field, _resisted_affliction(), data)]
+    assert offered == ["Dodge", "Fortitude", "Toughness", "Will"]
+
+
+def test_alternate_resistance_widens_the_field_to_every_trait_a_check_uses() -> None:
+    from mm_companion.core.rules import config_field_options
+
+    data = load_game_data()
+    field = _affliction_field(data, "resistance")
+    effect = _resisted_affliction("alternate_resistance")
+    offered = [value for _label, value in config_field_options(field, effect, data)]
+
+    assert offered[:4] == ["Dodge", "Fortitude", "Toughness", "Will"]
+    assert all(ability.name in offered for ability in data.abilities)
+    assert "Damage" in offered
+    assert all(skill.name in offered for skill in data.skills)
+    # Every option exactly once, so the widened list never doubles the base four.
+    assert len(offered) == len(set(offered))
+
+
+def test_the_second_resistance_is_only_there_with_the_extra() -> None:
+    from mm_companion.core.rules import config_field_shown
+
+    data = load_game_data()
+    field = _affliction_field(data, "resistanceSecond")
+    assert not config_field_shown(field, _resisted_affliction())
+    assert config_field_shown(field, _resisted_affliction("alternate_resistance"))
+
+
+def test_a_widened_resistance_still_reads_by_name_once_the_extra_comes_off() -> None:
+    """Only what is *offered* narrows: a stored value keeps its label, not its raw id."""
+    data = load_game_data()
+    effect = _resisted_affliction()
+    effect.config["resistance"] = "Athletics"
+    line = effect_game_terms(effect, data)
+    assert "Athletics" in line
+    # ...but the second-resistance row goes with the extra that made it meaningful.
+    effect.config["resistanceSecond"] = "Will"
+    assert not [r for r in effect_stat_rows(effect, data) if r.key == "resistanceSecond"]
+    effect.extras.append(ModifierSelection("alternate_resistance"))
+    assert [r for r in effect_stat_rows(effect, data) if r.key == "resistanceSecond"]
+
+
+def test_regeneration_reads_its_recovery_interval_and_resurrection_off_its_rank() -> None:
+    """The book's Regeneration table (p139), which the card used to say nothing about."""
+    data = load_game_data()
+
+    def rows(rank: int) -> dict[str, str]:
+        return {
+            r.label: r.value
+            for r in effect_readout_rows(PowerEffectInstance("regeneration", rank=rank), data)
+        }
+
+    assert rows(1)["Recovery"] == "Least severe damage condition every 10 rounds"
+    assert rows(10)["Recovery"] == "Least severe damage condition every round"
+    assert rows(12)["Recovery"].startswith("Three least severe")
+    assert "Not possible" in rows(12)["Resurrection"]
+    assert "4 minutes" in rows(15)["Resurrection"]
+    assert "1 round" in rows(20)["Resurrection"]
+    # Rank 20 already recovers everything, so nothing above it says anything new.
+    assert rows(25) == rows(20)
+
+
+def test_create_states_the_object_it_makes() -> None:
+    data = load_game_data()
+    rows = {
+        r.label: r.value for r in effect_readout_rows(PowerEffectInstance("create", rank=10), data)
+    }
+    # Volume rank up to the effect rank, two ranks more if the object is hollow (p114).
+    assert rows["Object volume"] == data.measurements.label("volume", 10)
+    assert rows["Hollow object volume"] == data.measurements.label("volume", 12)
+    assert rows["Object Toughness"] == "up to 10"
+    assert rows["Maintained at once"].startswith("10 total volume ranks")
+
+
+def test_elongation_states_its_reach_bands_not_the_wielders_total() -> None:
+    """The extension, at each of the three penalties — the total is the System block's.
+
+    Adding this effect's own stretch to the character's reach would double it: the
+    sheet's reach already walks the live powers for exactly this effect.
+    """
+    data = load_game_data()
+    rows = [r.value for r in effect_readout_rows(PowerEffectInstance("elongation", rank=3), data)]
+    # 15 feet a rank, then the same distance twice and three times over.
+    assert rows == [
+        "+45 ft. (no check penalty)",
+        "+90 ft. (-2 to checks)",
+        "+135 ft. (-5 to checks)",
+    ]
+
+
+def test_elongation_reach_follows_the_dial_the_way_the_sheet_does() -> None:
+    """The block's reach reads the dialled rank, so the card's bands must too."""
+    data = load_game_data()
+    effect = PowerEffectInstance("elongation", rank=3)
+    effect.current_rank = 1
+    rows = [r.value for r in effect_readout_rows(effect, data)]
+    assert rows[0] == "+15 ft. (no check penalty)"
+
+
+def test_move_object_states_the_strength_it_lifts_with() -> None:
+    data = load_game_data()
+    rows = {
+        r.label: r.value
+        for r in effect_readout_rows(PowerEffectInstance("move_object", rank=6), data)
+    }
+    assert rows["Effective Strength"].startswith("rank 6")
+    assert rows["Lifts"] == data.measurements.label("mass", 6)
+
+
 def test_checkbox_config_does_not_crash_game_terms() -> None:
     data = load_game_data()
     # Illusion's 'moving' is a bare boolean config — it must not reach _config_display.
@@ -1984,7 +2114,11 @@ def test_affliction_exposes_config_fields() -> None:
     affliction = next(e for e in data.effects if e.id == "affliction")
     assert [f.key for f in affliction.config_fields] == [
         "resistance",
+        # Each resistance picker is followed by its second, which is only on the card
+        # once Alternate Resistance is attached (see the widening tests above).
+        "resistanceSecond",
         "overcomeBy",
+        "overcomeBySecond",
         "degree1",
         "degree2",
         "degree3",

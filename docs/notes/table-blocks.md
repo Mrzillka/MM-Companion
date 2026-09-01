@@ -126,6 +126,27 @@ Three things the blocks add on top:
 
 - **Advantages** dropped its ▲/▼ and "Remove" buttons for those gestures. Its picker
   keeps "Add"; removal is a thing done *to a row*, so it is on the row.
+- **A granted advantage is an advantage everywhere except the budget.** An advantage's
+  *mechanics* do not care which currency paid for it, so every resolver that reads an
+  advantage's data fields reads `all_advantage_selections` — the bought list plus
+  `granted_advantage_selections` — rather than `Character.advantages`, which holds only
+  what the player bought. Cost and the Heroic budget are the deliberate exception, since
+  the power already paid (`granted_advantages`). Initiative was the one place that had
+  not been converted: it walked the bought list, so **Enhanced Trait: Improved
+  Initiative** showed on this block, changed no number, and gave the player nothing to
+  tell them why. The skill side (`skill_bonus_per_rank`) had always been folded in, which
+  is exactly why the gap was invisible — those were the only two mechanics an advantage
+  record carries. The same conversion reaches the three subsystems that look an advantage
+  up **by name** rather than by a record field: Extra Effort's Determination, Untapped
+  Potential and Extraordinary Effort (`extra_effort._advantage_ranks`), and Improvised
+  Effect / Prepared Effect (`improvised.py`). **Equipment is deliberately left out** —
+  `equipment_advantage_rank` still reads the bought list alone, because a Sustained or
+  heavily-flawed power granting a *permanent point budget* is a cost loophole the others
+  do not have. `granted_advantages` is `build_scoped` for this: initiative asks the
+  bare two-argument question twice per readout (once for the ability, once for the
+  bonus), and without the memo each of those walked the whole build — inside a scope
+  where every other derived number costs nothing. Measured at 0.34 ms a call before the
+  memo and 0.008 ms after, against a 0.002 ms baseline.
 - **Skills** owns which rows are shown at all. `Character.skill_order` and
   `Character.hidden_skills` are the player's, resolved against `GameData.skills` by
   `_visible_skills()` with the same three-part rule `EquipmentSection._ordered_categories`

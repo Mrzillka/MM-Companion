@@ -131,14 +131,18 @@ notes file that owns it.
   constructor that may run before parenting, and shed it with `discard_widget`, which
   hides before it unparents. This has bitten twice; `tests/test_window_flash.py`
   watches for it.
-- **A block adapts to the size it is given, and scrolls only as a last resort.**
-  The page is a user-resizable grid: any block can be dragged to any size, past the
-  point where its content fits. So a block reflows first (fewer columns, stacked
-  instead of side by side, tighter chrome) and only scrolls inside its own frame
-  once reflow has run out. Nothing is ever clipped. Every adaptive decision needs a
-  hysteresis dead-band, or a reflow changes a block's height, which toggles a
-  scrollbar, which changes the width back over the boundary, forever — reuse
-  `ReflowBox`, `ColumnFlowPanels` or `FlowLayout` rather than inventing a fourth.
+- **Width adapts; height scrolls.** The page is a user-resizable grid: any block
+  can be dragged to any size, past the point where its content fits. Across, a
+  block reflows — fewer columns, stacked instead of side by side, tighter chrome —
+  because that is a mechanism we have; down, it scrolls inside its own frame,
+  because that is a mechanism we do not. A block never grows a *horizontal*
+  scrollbar, and one dragged narrower than everything it can shed clips.
+- **Every adaptive decision needs two guards, and both are about the same danger.**
+  A hysteresis dead-band, or a reflow changes a block's height, which toggles a
+  scrollbar, which changes the width back over the boundary, forever; and
+  `@no_reentry`, because these all run from `resizeEvent` and Qt may lay out again
+  *inside* one — which is not a flicker but a stack overflow. Reuse `ReflowBox`,
+  `ColumnFlowPanels` or `FlowLayout` rather than inventing a fourth.
 - **Nothing may report a minimum size that its content decides.** A minimum is a
   refusal, and on a page the user drags, whether a block is too small to read is the
   user's call — this is what stops the app resizing its own window. A block's

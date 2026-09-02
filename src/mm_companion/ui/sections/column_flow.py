@@ -22,7 +22,7 @@ from __future__ import annotations
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import QBoxLayout, QHBoxLayout, QWidget
 
-from mm_companion.ui.widgets import discard_widget
+from mm_companion.ui.widgets import discard_widget, no_reentry
 
 
 def column_count(
@@ -204,11 +204,17 @@ class ColumnFlowPanels:
             self.FLOW_HYSTERESIS,
         )
 
+    @no_reentry
     def _sync_column_count(self) -> bool:
         """Rebuild if the width now fits a different number of panels.
 
         Returns whether a rebuild happened. Call from ``resizeEvent``; ``_rebuild``
         settles ``_column_count`` itself, so this only decides *whether* to run.
+
+        Guarded against re-entry, and it is the one here that most needs it: this
+        does not merely change a property, it *destroys and rebuilds* the panel
+        widgets. Qt laying out again inside that would re-enter with the widgets
+        whose event is on the stack already gone.
         """
 
         if self._flow_column_count() == self._column_count:

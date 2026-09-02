@@ -191,10 +191,21 @@ class _InnerScroll(QScrollArea):
 
     Two properties matter, and neither is the default:
 
-    * it scrolls **both** ways and resizes its widget, so a block given more room
-      than its content stretches to fill it and one given less scrolls rather than
-      clipping. This is what lets :meth:`BlockFrame.minimumSizeHint` stop
-      reporting content at all;
+    * it resizes its widget and scrolls **vertically only**, which makes a block's
+      behaviour one sentence: *width adapts, height scrolls*. Width has reflow —
+      columns shed, forms wrap, cards re-deal — so a section is always given
+      exactly the viewport's width and asked to cope; height has no such
+      mechanism, so it scrolls. Every table in the app already refuses a
+      horizontal bar for the same reason.
+
+      It is also the safe arrangement, and that is not a small point. Two
+      ``AsNeeded`` bars around content whose height depends on its width is a loop
+      with a name: the horizontal bar appears, the viewport gets shorter, the
+      content needs more height, the vertical bar appears, the viewport gets
+      narrower, and round again — through nested scroll areas (a block holds
+      sections that hold tables that are scroll areas themselves) that is a
+      recursion Qt resolves down the C stack. Taking one axis away removes the
+      cycle rather than damping it;
     * it **declines a wheel it cannot use**. A `QScrollArea` normally swallows
       every wheel event whether or not it has anywhere to go, so a block one pixel
       too short would eat the gesture and the page under it would stop scrolling.
@@ -208,7 +219,7 @@ class _InnerScroll(QScrollArea):
         self.setObjectName("blockScroll")
         self.setWidgetResizable(True)
         self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 

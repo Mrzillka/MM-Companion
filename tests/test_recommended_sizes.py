@@ -93,7 +93,13 @@ def comfortable_width(sheet: CharacterSheet, key: str, qapp: QApplication) -> in
     def fits(width: int) -> bool:
         window.resize(width, 720)
         _settle(qapp)
-        return not sheet.block_frame(key)._scroll.horizontalScrollBar().isVisible()
+        frame = sheet.block_frame(key)
+        # Whether the section still fits, asked of the section rather than of a
+        # scrollbar. A block scrolls vertically only now (see ``_InnerScroll``), so
+        # there is no horizontal bar left to read; what "no longer fits" means is
+        # that the section's own minimum — everything it can shed already shed —
+        # is wider than the room it has.
+        return frame.section.minimumSizeHint().width() <= frame._scroll.viewport().width()
 
     try:
         low, high = SEARCH_FLOOR, 880

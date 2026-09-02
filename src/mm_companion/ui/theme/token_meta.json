@@ -181,6 +181,15 @@
     "gm.pin-strip.min": {"label": "Pinned strip minimum", "hint": "The narrowest the strip of pinned numbers beside a GM card may get, in pixels."},
     "gm.pin-strip.max": {"label": "Pinned strip maximum", "hint": "The widest the strip of pinned numbers beside a GM card may get, in pixels. A longer caption elides."},
     "gm.thumb": {"label": "Collapsed portrait", "hint": "The portrait on a collapsed GM card, in pixels. It is still what opens the sheet."},
+    "block.min-extent": {
+      "label": "Block minimum",
+      "hint": "How small a block may be dragged before it stops shrinking and scrolls inside itself, in pixels."
+    },
+    "grid.handle": {"label": "Divider thickness", "hint": "The grab target between two blocks, in pixels."},
+    "grid.detent": {
+      "label": "Divider detent",
+      "hint": "How much resistance a divider meets at a block's recommended size, in pixels. Zero turns it off."
+    },
     "column.stat.spin": {"label": "Ability / resistance spin box"},
     "column.skill.name": {"label": "Skill name"},
     "column.skill.name-max": {

@@ -490,13 +490,11 @@ class MainWindow(QMainWindow):
         actually applied, which is what lets a subclass seed its own defaults only
         when there is nothing remembered to honour.
         """
-        layout = storage.load_settings().get(self.LAYOUT_KEY) or {}
-        if not isinstance(layout, dict):
-            layout = {}
-        geometry = layout.get("window_geometry")
-        if isinstance(geometry, str) and geometry:
+        layout = storage.sheet_layout(self.LAYOUT_KEY)
+        geometry = layout["window_geometry"]
+        if geometry:
             self.restoreGeometry(QByteArray.fromBase64(geometry.encode("ascii")))
-        return self._sheet.restore_layout(layout.get("dock_state"))
+        return self._sheet.restore_layout(layout["dock_state"])
 
     def _persist_layout(self) -> None:
         """Save the window geometry and block arrangement as a global preference.
@@ -509,14 +507,7 @@ class MainWindow(QMainWindow):
         self._compact.remember_size()
         state = self._compact.saved_geometry() or self.saveGeometry()
         geometry = bytes(state.toBase64()).decode("ascii")
-        storage.update_settings(
-            **{
-                self.LAYOUT_KEY: {
-                    "window_geometry": geometry,
-                    "dock_state": self._sheet.save_layout(),
-                }
-            }
-        )
+        storage.set_sheet_layout(self.LAYOUT_KEY, geometry, self._sheet.save_layout())
 
     def _add_block_action(self, key: str) -> None:
         """Give block *key* its show/hide toggle, above the menu's own actions.

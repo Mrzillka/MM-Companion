@@ -86,6 +86,12 @@ class Split:
     ``sizes`` is parallel to ``children`` and is *advisory*: an empty tuple (or
     one of the wrong length) means "no remembered proportions", and the renderer
     divides the space from the children's own hints instead.
+
+    **A zero is a real value, not a gap.** It means "this child has no size of its
+    own", which the page's own split reads as *be as tall as your content* — so a
+    row nobody has dragged still grows when a skill is added to it, exactly as it
+    always did, while a row somebody has dragged stays where they put it. A run of
+    nothing but zeros is the same as no sizes at all and is dropped.
     """
 
     orientation: str
@@ -221,7 +227,7 @@ def normalize(node: Node | None) -> Node | None:
         return None
     if len(children) == 1:
         return children[0]
-    if any(size <= 0 for size in kept_sizes):
+    if not any(kept_sizes):
         kept_sizes = []
     return Split(orientation, tuple(children), tuple(kept_sizes))
 
@@ -540,6 +546,24 @@ def lines_to_region(lines: Sequence[Sequence[str]], edge: str) -> Node | None:
     if not children:
         return None
     return normalize(Split(along, tuple(children)))
+
+
+def region_lines(node: Node | None, edge: str) -> list[list[str]]:
+    """A region tree back as the strip's ``lines`` — the inverse of
+    :func:`lines_to_region`.
+
+    The strip's own widgets still speak in lines while the grid grows into it, so
+    this is the bridge: the model is a tree everywhere, and the one view that has
+    not caught up is handed the shape it understands. A tree deeper than the strip
+    can draw is flattened rather than refused — a line is every key under one
+    child, in order — which is the honest lossy answer while the two coexist.
+    """
+    if node is None:
+        return []
+    along = VERTICAL if edge in _VERTICAL_EDGES else HORIZONTAL
+    if isinstance(node, Leaf) or node.orientation != along:
+        return [keys(node)]
+    return [keys(child) for child in node.children]
 
 
 def migrate_v7(model: dict, known: set[str]) -> dict | None:

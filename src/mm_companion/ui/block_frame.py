@@ -1,10 +1,13 @@
 """One character-sheet block: a section wrapped in a draggable frame.
 
 Each block is a :class:`BlockFrame` — a title bar (the drag handle, plus pin,
-float and close buttons) above one of the ``sections`` widgets. The frame never
-wraps its section in a scroll area, so the block is sized to its content and
-never scrolls on its own; the whole sheet scrolls as one page instead (see
-:class:`~mm_companion.ui.block_canvas.BlockCanvas`).
+float and close buttons) above one of the ``sections`` widgets, in a scroll area
+of its own. That scroll area is the whole reason a block can be dragged to any
+size: a :class:`QScrollArea` does not pass its child's minimum on, so the frame
+is free to report a minimum of almost nothing and let the section reflow — and,
+past what reflow can save, scroll. The page still scrolls as one page (see
+:class:`~mm_companion.ui.block_canvas.BlockCanvas`); a block only scrolls inside
+itself once it has been made smaller than it can adapt to.
 
 A frame lives in one of three places: inside the canvas, inside the pinned strip
 that doesn't scroll with the page (see
@@ -14,8 +17,8 @@ the same gesture wherever it is, driven by the canvas's drag controller, so
 float-out, reorder, pin, and drag-back-to-dock are one interaction.
 
 The frame is deliberately dumb: it forwards title-bar mouse events and button
-clicks to a *controller* (the :class:`BlockCanvas`) and applies its size
-constraints. All arrangement logic lives in the canvas.
+clicks to a *controller* (the :class:`BlockCanvas`) and reports the size it would
+like to be. All arrangement logic lives in the canvas.
 """
 
 from __future__ import annotations
@@ -35,7 +38,7 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.ui import theme
-from mm_companion.ui.block_sizes import UNBOUNDED, BlockSize
+from mm_companion.ui.block_sizes import RecommendedSize
 from mm_companion.ui.drop_feedback import DropFeedback
 from mm_companion.ui.frameless import apply_window_flags, describe_on_top, size_grip_row
 from mm_companion.ui.widgets import ElidingLabel
@@ -86,9 +89,8 @@ class TitleBar(QFrame):
 
         # An eliding label, so a block's width comes from its content and not from
         # the length of its caption: a section's live title grows ("Abilities — 24
-        # PP"), and a plain label would make that string a minimum width — pushing
-        # a fixed-width block past its own max_width, or thickening the pinned
-        # strip beyond the min_width that is supposed to set it.
+        # PP"), and a plain label would make that string a minimum width — which
+        # would quietly become the narrowest that block could ever be dragged.
         self._label = ElidingLabel(title)
         self._label.setObjectName("blockTitleLabel")
         layout.addWidget(self._label, stretch=1)
@@ -184,13 +186,64 @@ class TitleBar(QFrame):
         super().mouseReleaseEvent(event)
 
 
-class BlockFrame(QFrame):
-    """One block: a :class:`TitleBar` above a section, sized to its content.
+class _InnerScroll(QScrollArea):
+    """The scroll area a block's section lives in — the frame's release valve.
 
-    Applies the block's :class:`BlockSize` constraints (min size always; a max
-    bound only when the JSON pins that dimension), matching the old dock
-    semantics. Abilities and Resistances are fixed-width (``min_width ==
-    max_width``); the other blocks grow wider than their min.
+    Two properties matter, and neither is the default:
+
+    * it scrolls **both** ways and resizes its widget, so a block given more room
+      than its content stretches to fill it and one given less scrolls rather than
+      clipping. This is what lets :meth:`BlockFrame.minimumSizeHint` stop
+      reporting content at all;
+    * it **declines a wheel it cannot use**. A `QScrollArea` normally swallows
+      every wheel event whether or not it has anywhere to go, so a block one pixel
+      too short would eat the gesture and the page under it would stop scrolling.
+      Passing the event up when this block has no scrollbar on that axis (or is
+      already at the end of it) keeps the page's own scroll working everywhere it
+      used to, which is the behaviour the wheel guard has always promised.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("blockScroll")
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+    def wheelEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        bar = self.verticalScrollBar()
+        spent = bar.minimum() == bar.maximum()
+        if not spent:
+            delta = event.angleDelta().y()
+            at_top = delta > 0 and bar.value() == bar.minimum()
+            at_bottom = delta < 0 and bar.value() == bar.maximum()
+            spent = at_top or at_bottom
+        if spent:
+            event.ignore()  # let the page have it
+            return
+        super().wheelEvent(event)
+
+
+class BlockFrame(QFrame):
+    """One block: a :class:`TitleBar` above a section, sized by the user.
+
+    A frame used to report its whole content as its minimum, in both dimensions,
+    and that minimum climbed all the way out through the row, the page and the
+    pinned strip to hold the *window* open. It was the right answer while the page
+    arranged itself: nothing could squash a block, because nothing was allowed to
+    try. On a page the user drags, it is a refusal.
+
+    So the section lives in a :class:`_InnerScroll` and the frame's minimum is a
+    title bar plus ``block.min-extent``. Past that a block reflows as far as its
+    section knows how, and then **scrolls inside itself** — the same trade a
+    popped-out :class:`BlockWindow` and the mini roller have always made, and for
+    the same reason: clipping is not the alternative to being small, scrolling is.
+
+    The block's :class:`~mm_companion.ui.block_sizes.RecommendedSize` survives as
+    exactly that — the size it opens at, and the size the divider's detent sticks
+    at (see :mod:`mm_companion.ui.grid_handle`). It constrains nothing.
     """
 
     #: How many turns the inner layout may spend recovering after a re-homing.
@@ -202,7 +255,7 @@ class BlockFrame(QFrame):
         key: str,
         title: str,
         section: QWidget,
-        size: BlockSize,
+        size: RecommendedSize,
         host: DragHost,
         parent: QWidget | None = None,
     ) -> None:
@@ -217,7 +270,7 @@ class BlockFrame(QFrame):
         self.section = section
         # Built on first use: only a block that can be merged into ever needs one.
         self._merge_feedback: DropFeedback | None = None
-        self._size = BlockSize()
+        self._size = RecommendedSize()
         self.setObjectName("blockFrame")
         self.setFrameShape(QFrame.Shape.StyledPanel)
 
@@ -229,11 +282,17 @@ class BlockFrame(QFrame):
         self._relayout.setSingleShot(True)
         self._relayout.timeout.connect(self._refresh_layout)
 
+        # The release valve for the whole minimum chain: a scroll area does not
+        # pass its child's minimum on, so whatever the section says it needs, the
+        # frame can still be dragged smaller and the content scrolls instead.
+        self._scroll = _InnerScroll(self)
+        self._scroll.setWidget(section)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self.title_bar)
-        layout.addWidget(section, stretch=1)
+        layout.addWidget(self._scroll, stretch=1)
 
         # A section may own a live caption (its running point cost); show it in the
         # title bar rather than duplicating it inside the block. See TitledSection.
@@ -259,27 +318,34 @@ class BlockFrame(QFrame):
         if isinstance(window, BlockWindow):
             window.setWindowTitle(text)
 
-    def _apply_size(self, size: BlockSize) -> None:
-        """Pin the block's size from its :class:`BlockSize` (see class docstring)."""
+    def _apply_size(self, size: RecommendedSize) -> None:
+        """Record what this block would *like* to be. Nothing here constrains it.
+
+        There used to be a maximum here, and a ``Fixed`` horizontal policy for the
+        blocks whose width it pinned — that was how the old page stopped Abilities
+        and Resistances being stretched across a row. A page whose columns the user
+        drags has no use for either: every block expands to fill the cell it was
+        given, and how big that cell is, is the user's business.
+        """
         self._size = size
-        # Deliberately *not* setMinimumWidth: an explicit minimum does not raise a
-        # widget's layout minimum, it replaces it. ``qSmartMinSize`` ends with
-        # ``if (minSize.width() > 0) s.setWidth(minSize.width())`` - so a JSON floor
-        # of 360 told every enclosing layout the block could never need more than
-        # 360, whatever its content said, and the pinned strip squashed an Extended
-        # roller to it. The floor is carried by :meth:`minimumSizeHint` instead,
-        # where it is a floor: ``max(content, min_width)``.
-        if size.max_width < UNBOUNDED:
-            self.setMaximumWidth(size.max_width)
-        if size.max_height < UNBOUNDED:
-            self.setMaximumHeight(size.max_height)
-        # A block whose width is pinned (abilities/resistances) shouldn't stretch;
-        # the others expand to share their row's width. Vertically a block never
-        # shrinks below its own content (see minimumSizeHint), so the page scrolls
-        # when the blocks don't all fit instead of squashing them.
-        fixed_width = size.max_width < UNBOUNDED and size.max_width == size.min_width
-        h_policy = QSizePolicy.Policy.Fixed if fixed_width else QSizePolicy.Policy.Expanding
-        self.setSizePolicy(h_policy, QSizePolicy.Policy.Minimum)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+    def recommended_size(self) -> RecommendedSize:
+        """The size this block reads well at — the divider's detent asks for this."""
+        return self._size
+
+    def content_size_hint(self) -> QSize:
+        """What the section would take if nothing constrained it.
+
+        The honest answer to "how big does this block want to be", used for *Fit to
+        content* and as the opening size of a block that states no recommendation
+        (Abilities and Resistances, whose tables measure their own real columns and
+        rows rather than trusting a number in a config file). Asked of the section
+        directly, since the frame's own hint is now bounded by the scroll area.
+        """
+        hint = self.section.sizeHint()
+        chrome = self.title_bar.sizeHint().height() + 2 * self.frameWidth()
+        return QSize(hint.width() + 2 * self.frameWidth(), hint.height() + chrome)
 
     def changeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
         """Re-run the block's own layout after it is re-homed (see :meth:`_refresh_layout`)."""
@@ -317,41 +383,69 @@ class BlockFrame(QFrame):
         else:
             self._relayout_tries = 0
 
-    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
-        """Never let a block shrink below its full content, in either dimension.
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        """The recommendation across, the content down — and the axes differ for a
+        reason rather than an oversight.
 
-        The JSON bounds are only floors; the block's real minimum is its content,
-        so every block always shows *all* of it and the page scrolls when they
-        don't all fit — rather than the layout squashing a block down to the floor
-        and clipping it (e.g. Base Info's image). Height is capped at
-        ``max_height`` when a block pins that dimension; width is left to
-        ``setMaximumWidth``, which Qt applies for us.
+        A block's **width** is *shared*: it and its neighbours divide one row
+        between them, and what makes that division good is a stable declared
+        preference rather than whatever happens to be typed into the block today.
+        A Powers block with nine powers in it would otherwise take the row.
 
-        This is the *only* place either floor is stated — see :meth:`set_block_size`
-        for why the width one cannot also be an explicit ``setMinimumWidth``.
+        A block's **height** is *taken*: an undragged row is exactly as tall as
+        what is in it, and the page scrolls — which is what the sheet has always
+        done, and what keeps adding a skill making the Skills block taller instead
+        of making it scroll inside a height nobody chose.
+
+        A block that states no recommendation (Abilities, Resistances) is sized
+        across by its content too, because its table measures its own real columns
+        and that beats a number a denser preset would make wrong.
         """
-        hint = super().minimumSizeHint()
-        height = max(self._size.min_height, self.sizeHint().height())
-        if self._size.max_height < UNBOUNDED:
-            height = min(height, self._size.max_height)
-        return QSize(max(hint.width(), self._size.min_width), height)
+        content = self.content_size_hint()
+        return QSize(self._size.width or content.width(), content.height())
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        """A title bar and ``block.min-extent``, and nothing about the content.
+
+        This used to be ``max(content, the JSON floor)`` in both dimensions, which
+        is what climbed out through the row, the page, the pinned strip and the
+        window to hold the whole application open at the sum of every block's
+        content. Reporting the content here is exactly what a user-resizable grid
+        cannot do: a minimum is a refusal, and the answer to "this block is too
+        small to read" has to be the user's to give.
+
+        The section is in a scroll area, so this is safe rather than merely
+        permissive — nothing is clipped, it scrolls. The floor that is left is
+        about being able to *find* a block you squashed: a title bar you can still
+        grab and drag back open.
+        """
+        extent = int(theme.metric("block.min-extent"))
+        chrome = self.title_bar.minimumSizeHint().height() + 2 * self.frameWidth()
+        return QSize(extent, chrome + extent)
 
     def set_vertical_fill(self, fill: bool) -> None:
-        """Let this block grow past its content to fill slack (or stop it).
+        """Kept for callers; there is nothing left for it to do.
 
-        The default vertical policy is ``Minimum`` — a block is exactly as tall as
-        its content and the page scrolls when blocks don't all fit. A canvas that
-        wants its bottom block to soak up leftover height (see
-        :class:`~mm_companion.ui.block_canvas.BlockCanvas` ``fill_last``) flips the
-        fill block to ``Expanding`` instead, so it stretches down to the window's
-        edge rather than leaving dead space below it.
+        A block used to be exactly as tall as its content, so a board with only a
+        few blocks left a dead gap under the last one and the canvas flipped that
+        one block to ``Expanding`` to soak it up. Every block expands now — how
+        tall each row is, is a size in the arrangement and a divider the user can
+        drag — so there is no leftover height for anyone to be given.
         """
-        policy = self.sizePolicy()
-        target = QSizePolicy.Policy.Expanding if fill else QSizePolicy.Policy.Minimum
-        if policy.verticalPolicy() == target:
-            return
-        policy.setVerticalPolicy(target)
-        self.setSizePolicy(policy)
+        return
+
+    def set_tabbed(self, tabbed: bool) -> None:
+        """Lend this block's title bar to a tab group, or take it back.
+
+        A block in a group is drawn under the group's tab bar and the group's
+        buttons act on whichever member is showing, so a second row of chrome
+        would say nothing the first does not. The bar is only *hidden* — the frame
+        keeps it, keeps its live caption, and gets it straight back when the block
+        is dragged out — because a block inside a group and outside one has to be
+        the same widget or none of the rest of this holds.
+        """
+        self.title_bar.setVisible(not tabbed)
+        self.updateGeometry()
 
     def set_merge_target(self, active: bool) -> None:
         """Dress the frame as the block a drop would merge *into*.
@@ -403,16 +497,15 @@ class BlockWindow(QWidget):
     user can drag it back onto the sheet to re-dock. Closing it via the window
     chrome hides the block rather than losing it.
 
-    The frame lives inside a :class:`QScrollArea` so a block that doesn't fit
-    scrolls *within its window* — unlike when it is docked, where the whole sheet
-    scrolls as one page and each block shows all of its content. It scrolls **both
-    ways**, and that is what lets the window go as small as it is dragged: a
-    :class:`QScrollArea` does not pass its child's minimum on, so the only floor is
-    ``float.min-width``/``float.min-height``, exactly as the mini roller's is
-    ``compact.min-*`` (see :mod:`mm_companion.ui.compact`). A block popped out to
-    sit beside somebody else's application is one whose window someone will want to
-    shove into a corner, and clipping it there is not the alternative — scrolling
-    is.
+    This window used to wrap the frame in a scroll area of its own, because that
+    was the only way a floated block could be dragged smaller than its content: a
+    :class:`QScrollArea` does not pass its child's minimum on. The frame carries
+    its own now (see :class:`_InnerScroll`) and every docked block makes the same
+    bargain, so the window hosts the frame directly and a second scroll area would
+    only mean two sets of scrollbars for one block. What is left here is the floor
+    — ``float.min-width``/``float.min-height``, exactly as the mini roller's is
+    ``compact.min-*`` (see :mod:`mm_companion.ui.compact`) — because a window
+    someone shoved into a corner still needs to be findable.
 
     It is **frameless**, and that is a trade rather than a decoration: a popped-out
     block spends its life beside somebody else's application, where the OS title
@@ -434,14 +527,9 @@ class BlockWindow(QWidget):
         layout.setSpacing(0)
         self._layout = layout
 
-        self._scroll = QScrollArea(self)
-        self._scroll.setObjectName("blockWindowScroll")
-        self._scroll.setWidgetResizable(True)
-        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        layout.addWidget(self._scroll)
-        layout.addWidget(size_grip_row(self))
+        self._frame: BlockFrame | None = None
+        self._grip = size_grip_row(self)
+        layout.addWidget(self._grip)
         self.setMinimumSize(
             int(theme.metric("float.min-width")), int(theme.metric("float.min-height"))
         )
@@ -451,9 +539,15 @@ class BlockWindow(QWidget):
         apply_window_flags(self, frameless=True, on_top=bool(on_top))
 
     def set_frame(self, frame: BlockFrame) -> None:
-        """Host *frame*, giving the window the frame's title as its window title."""
+        """Host *frame*, giving the window the frame's title as its window title.
+
+        The frame goes *above* the size grip, which is why the grip is added first
+        and the frame inserted at 0 rather than appended: a grip that drifts into
+        the middle of the window is not a grip.
+        """
         self.setWindowTitle(frame.title)
-        self._scroll.setWidget(frame)
+        self._frame = frame
+        self._layout.insertWidget(0, frame, stretch=1)
 
     def closeEvent(self, event) -> None:  # noqa: ANN001 - Qt signature
         """Closing the window hides the block instead of destroying it."""

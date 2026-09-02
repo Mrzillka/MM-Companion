@@ -1,0 +1,472 @@
+"""Drawing a :mod:`~mm_companion.ui.layout_tree` node as real widgets.
+
+The tree says what the arrangement *is*; this says what it looks like. Two
+containers do all of it, and the difference between them is the whole of the
+"width tiles, height scrolls" bargain:
+
+* :class:`GridSplitter` renders a :class:`~mm_companion.ui.layout_tree.Split`
+  **inside** a row. Its children share a fixed extent, so a divider drag here is
+  zero-sum: give one block width and its neighbour loses exactly that much. This
+  is a plain ``QSplitter`` with our own handle in it, because a splitter is
+  already the right thing and reimplementing one would only be a worse one.
+
+* :class:`RowStack` renders the **page**: the root vertical split, whose children
+  are the rows. Its sizes are *absolute*, not shares — the rows may total more
+  than the viewport, and the page scrolls. A drag here therefore cannot be
+  zero-sum: pulling the divider under row 2 down makes row 2 taller and pushes
+  everything below it down, rather than stealing from row 3. That is why the page
+  is not simply another ``QSplitter``: a splitter divides a fixed total, and the
+  page has no fixed total to divide.
+
+A row nobody has dragged states a height of **zero**, which means "be as tall as
+your content" — so the sheet goes on behaving exactly as it always has until
+somebody actually resizes something, and adding a skill still makes the Skills
+block taller rather than making it scroll inside a height nobody chose.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Sequence
+
+from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, Signal
+from PySide6.QtGui import QPainter
+from PySide6.QtWidgets import QSizePolicy, QSplitter, QVBoxLayout, QWidget
+
+from mm_companion.ui import theme
+from mm_companion.ui.grid_handle import (
+    GridHandle,
+    handle_thickness,
+    paint_divider,
+    snap_to_detent,
+)
+from mm_companion.ui.layout_tree import HORIZONTAL, Leaf, Node
+from mm_companion.ui.widgets import discard_widget
+
+#: Builds the widget for one leaf. The canvas supplies this: a leaf naming one
+#: block is that block's frame, and one naming several is a tab group.
+LeafBuilder = Callable[[Leaf], QWidget]
+
+
+def _recommended_extent(widget: QWidget, horizontal: bool) -> int:
+    """The size *widget* would like along one axis, for the detent to stick at.
+
+    A frame answers with its block's recommendation; anything else (a nested
+    split, a tab group) answers with its own hint, which is the same question one
+    level up. Zero means "no opinion", and a detent with no target does nothing.
+    """
+    recommend = getattr(widget, "recommended_size", None)
+    if callable(recommend):
+        size = recommend()
+        stated = size.width if horizontal else size.height
+        if stated:
+            return int(stated)
+    hint = widget.sizeHint()
+    return hint.width() if horizontal else hint.height()
+
+
+class GridSplitter(QSplitter):
+    """One split inside a row: children sharing a fixed extent, zero-sum.
+
+    Supplies the three things :class:`~mm_companion.ui.grid_handle.GridHandle`
+    asks of the splitter it belongs to — where the recommended sizes are, and how
+    to mark and unmark them — and nothing else. Everything about *what* is in it
+    belongs to the canvas.
+    """
+
+    #: A handle drag settled. The canvas listens so it can record the new sizes.
+    sizesSettled = Signal()
+
+    def __init__(self, orientation: Qt.Orientation, parent: QWidget | None = None) -> None:
+        super().__init__(orientation, parent)
+        self.setObjectName("gridSplitter")
+        self.setHandleWidth(handle_thickness())
+        # The old page forbade this, because a squashed block meant a clipped one.
+        # A block scrolls inside itself now, so collapsing one to nothing is a
+        # thing somebody may legitimately want and nothing is lost by allowing it.
+        self.setChildrenCollapsible(True)
+        self.setOpaqueResize(True)
+        # NOT parented here: a QSplitter adopts every child widget into its own
+        # list of panes, so an overlay made a child of one becomes a pane of it —
+        # which put an invisible strip of nothing at the left of every row. The
+        # mark is built on first use, against the nearest ancestor that is not
+        # itself a splitter. See :meth:`_mark_host`.
+        self._mark: _DetentMark | None = None
+        self.splitterMoved.connect(lambda *_: self.sizesSettled.emit())
+
+    def createHandle(self) -> GridHandle:  # noqa: N802 - Qt override
+        return GridHandle(self.orientation(), self)
+
+    # -- what the handle asks for --------------------------------------------
+
+    def detent_positions(self, index: int) -> list[int]:
+        """Where handle *index* sits when the block on either side is happy.
+
+        Two answers, not one: the block *before* the handle at its recommended
+        size, and the block *after* it at that block's. Both are worth sticking
+        at, and offering both is why dragging a divider between two blocks lets
+        you settle either of them without going round the other side.
+        """
+        sizes = self.sizes()
+        if not 0 < index < len(sizes):
+            return []
+        horizontal = self.orientation() == Qt.Orientation.Horizontal
+        gap = self.handleWidth()
+        before = sum(sizes[: index - 1]) + gap * (index - 1)
+        after = sum(sizes) + gap * (len(sizes) - 1)
+        trailing = sum(sizes[index + 1 :]) + gap * max(0, len(sizes) - index - 1)
+
+        targets: list[int] = []
+        leading_widget = self.widget(index - 1)
+        if leading_widget is not None:
+            wanted = _recommended_extent(leading_widget, horizontal)
+            if wanted > 0:
+                targets.append(before + wanted)
+        trailing_widget = self.widget(index)
+        if trailing_widget is not None:
+            wanted = _recommended_extent(trailing_widget, horizontal)
+            if wanted > 0:
+                targets.append(after - trailing - gap - wanted)
+        return [target for target in targets if target >= 0]
+
+    def mark_detents(self, index: int, targets: Sequence[int], settled: int | None) -> None:
+        """Show where the recommended sizes are while a handle is being dragged."""
+        del index
+        mark = self._ensure_mark()
+        if mark is None:
+            return
+        host = mark.parentWidget()
+        mark.setGeometry(QRect(self.mapTo(host, QPoint(0, 0)), self.size()))
+        mark.show_targets(targets, settled, self.orientation() == Qt.Orientation.Horizontal)
+
+    def clear_detent_marks(self) -> None:
+        if self._mark is not None:
+            self._mark.clear()
+
+    def _mark_host(self) -> QWidget | None:
+        """The nearest ancestor that will not swallow a child widget as a pane."""
+        parent = self.parentWidget()
+        while isinstance(parent, QSplitter):
+            parent = parent.parentWidget()
+        return parent
+
+    def _ensure_mark(self) -> _DetentMark | None:
+        host = self._mark_host()
+        if host is None:
+            return None
+        if self._mark is None or self._mark.parentWidget() is not host:
+            if self._mark is not None:
+                discard_widget(self._mark)
+            self._mark = _DetentMark(host)
+        return self._mark
+
+
+class _DetentMark(QWidget):
+    """The faint lines showing where the recommended sizes are, during a drag.
+
+    An overlay rather than something painted into the splitter, so it costs
+    nothing at all when nobody is dragging and cannot be confused for part of the
+    layout. It is transparent to the mouse, which matters: the whole point is
+    that it appears *under the pointer* mid-drag.
+    """
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self._targets: list[int] = []
+        self._settled: int | None = None
+        self._horizontal = True
+        self.hide()  # never visible before it is parented and placed
+
+    def show_targets(self, targets: Sequence[int], settled: int | None, horizontal: bool) -> None:
+        self._targets = [int(target) for target in targets]
+        self._settled = settled
+        self._horizontal = horizontal
+        if not self._targets:
+            self.clear()
+            return
+        parent = self.parentWidget()
+        if parent is not None:
+            self.setGeometry(parent.rect())
+        self.show()
+        self.raise_()
+        self.update()
+
+    def clear(self) -> None:
+        self._targets = []
+        self._settled = None
+        self.hide()
+
+    def paintEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        del event
+        if not self._targets:
+            return
+        painter = QPainter(self)
+        rect = self.rect()
+        for target in self._targets:
+            lit = self._settled is not None and abs(target - self._settled) <= 1
+            colour = theme.color("drop.indicator" if lit else "text.muted.rich")
+            band = (
+                QRect(target, rect.top(), 1, rect.height())
+                if self._horizontal
+                else QRect(rect.left(), target, rect.width(), 1)
+            )
+            painter.fillRect(band, colour)
+
+
+class RowGrip(QWidget):
+    """The divider under one row of the page. Dragging it makes that row taller.
+
+    Not a ``QSplitterHandle``, because the page is not a splitter: a splitter
+    divides a fixed total between its children, and dragging one of its handles
+    can only ever move space from one side to the other. The page has no fixed
+    total — the rows may add up to more than the window, and it scrolls — so
+    pulling this down has to make the row above it taller and push everything
+    below it down. That is the one behaviour a splitter cannot give.
+    """
+
+    #: Emitted while dragging, with the height the row above should now have.
+    heightDragged = Signal(int)
+    #: Emitted on release, once the drag has settled.
+    dragFinished = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("rowGrip")
+        self.setCursor(Qt.CursorShape.SplitVCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setFixedHeight(handle_thickness())
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._hovered = False
+        self._dragging = False
+        self._press_y = 0
+        self._start_height = 0
+        self._targets: list[int] = []
+
+    def begin_from(self, height: int, targets: Sequence[int]) -> None:
+        """Tell the grip what the row above is now, before a drag starts."""
+        self._start_height = int(height)
+        self._targets = [int(target) for target in targets]
+
+    def mousePressEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mousePressEvent(event)
+            return
+        self._dragging = True
+        self._press_y = event.globalPosition().toPoint().y()
+        self.update()
+        event.accept()
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        if not self._dragging:
+            super().mouseMoveEvent(event)
+            return
+        moved = event.globalPosition().toPoint().y() - self._press_y
+        wanted = max(0, self._start_height + moved)
+        settled = snap_to_detent(wanted, self._targets, int(theme.metric("grid.detent")))
+        self.heightDragged.emit(settled)
+        event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        if self._dragging and event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = False
+            self.update()
+            self.dragFinished.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def event(self, event: QEvent) -> bool:
+        if event.type() in (QEvent.Type.HoverEnter, QEvent.Type.HoverLeave):
+            self._hovered = event.type() == QEvent.Type.HoverEnter
+            self.update()
+        return super().event(event)
+
+    def paintEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        del event
+        paint_divider(self, QPainter(self), self._hovered, self._dragging, horizontal=False)
+
+
+class _RowHolder(QWidget):
+    """A wrapper the stack owns, so a row's own widget is never given a height.
+
+    Exists for one reason, and it is a bug rather than tidiness: a row holding a
+    single block *is* that block's frame, with no container of its own (see
+    :func:`build_node`). Anything the stack set on it — a fixed height, a size
+    policy — was therefore set on the block, and travelled with the block when it
+    was later dragged into the pinned strip or popped out into a window.
+    """
+
+    def __init__(self, row: QWidget, parent: QWidget) -> None:
+        super().__init__(parent)
+        self._row = row
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(row)
+
+    def row(self) -> QWidget:
+        return self._row
+
+    def release(self) -> QWidget:
+        """Hand the row back, so this wrapper can be deleted without it."""
+        self.layout().removeWidget(self._row)
+        return self._row
+
+
+class RowStack(QWidget):
+    """The page: rows with an explicit-or-automatic height, and a grip under each.
+
+    Held in the canvas's own layout rather than being a widget the canvas puts
+    something into, so the drag controller, the drop indicator and the edge
+    auto-scroll all go on working against the canvas exactly as they did.
+    """
+
+    #: A row was dragged to a new height; the canvas records it in the tree.
+    heightsChanged = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(0)
+        self._rows: list[QWidget] = []
+        self._holders: list[_RowHolder] = []
+        self._grips: list[RowGrip] = []
+        self._heights: list[int] = []
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+
+    def set_rows(self, rows: Sequence[QWidget], heights: Sequence[int]) -> None:
+        """Show *rows*, the nth at ``heights[n]`` pixels (or its content at zero)."""
+        self._shed()
+        self._rows = list(rows)
+        self._heights = [int(height) if height and height > 0 else 0 for height in heights]
+        self._heights += [0] * (len(self._rows) - len(self._heights))
+
+        for index, row in enumerate(self._rows):
+            holder = _RowHolder(row, self)
+            self._holders.append(holder)
+            self._apply_height(index)
+            self._layout.addWidget(holder)
+            row.show()
+            grip = RowGrip(self)
+            grip.heightDragged.connect(lambda value, i=index: self._on_dragged(i, value))
+            grip.dragFinished.connect(self.heightsChanged.emit)
+            self._layout.addWidget(grip)
+            self._grips.append(grip)
+        # Slack below the last row stays empty rather than stretching the bottom
+        # block: how tall a row is, is the user's answer now, not a leftover.
+        self._layout.addStretch(1)
+
+    def heights(self) -> list[int]:
+        """The height of each row; zero for one that is still sized by its content."""
+        return list(self._heights)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        """As tall as its rows, and as narrow as anyone likes.
+
+        The asymmetry *is* the "width tiles, height scrolls" bargain, stated in the
+        one place a layout will read it. Reporting the full height as a minimum is
+        what makes the page scroll: the scroll area sizes its widget to the
+        viewport but never below the widget's minimum, so a page of rows taller
+        than the window overflows and grows a scrollbar instead of squashing them.
+        Reporting no width at all is what lets every row be dragged narrow.
+        """
+        return QSize(0, self.sizeHint().height())
+
+    def row_widgets(self) -> list[QWidget]:
+        return list(self._rows)
+
+    # -- dragging -------------------------------------------------------------
+
+    def _on_dragged(self, index: int, height: int) -> None:
+        if not 0 <= index < len(self._rows):
+            return
+        self._heights[index] = max(0, int(height))
+        self._apply_height(index)
+
+    def _apply_height(self, index: int) -> None:
+        """Pin the *holder* to a height, or let it follow its content again.
+
+        Always the holder and never the row itself. A row holding one block *is*
+        that block's frame, so setting a height or a size policy on it would
+        change the block permanently — and it did: a frame that had once been a
+        lone row carried a ``Minimum`` vertical policy with it into the pinned
+        strip, where it then refused to be squashed. The holder is a wrapper
+        nobody else ever sees, so nothing it is told can follow a block around.
+        """
+        holder = self._holders[index]
+        height = self._heights[index]
+        if height > 0:
+            holder.setFixedHeight(height)
+            holder.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            self.updateGeometry()
+            return
+        # Back to "as tall as what is in it": clear the fixed height Qt keeps as a
+        # min *and* a max, or the row would be stuck at whatever it was last given.
+        holder.setMinimumHeight(0)
+        holder.setMaximumHeight(16777215)
+        holder.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        self.updateGeometry()
+
+    def arm_grip(self, index: int) -> None:
+        """Tell the grip under row *index* where that row is, before it is dragged."""
+        if not 0 <= index < len(self._grips):
+            return
+        row = self._rows[index]
+        height = self._heights[index] or self._holders[index].sizeHint().height()
+        self._grips[index].begin_from(height, self._row_detents(row))
+
+    def _row_detents(self, row: QWidget) -> list[int]:
+        """The heights this row reads well at: what its blocks recommend."""
+        wanted = _recommended_extent(row, horizontal=False)
+        return [wanted] if wanted > 0 else []
+
+    def _shed(self) -> None:
+        while self._layout.count():
+            self._layout.takeAt(0)
+        for grip in self._grips:
+            discard_widget(grip)
+        self._grips = []
+        # A holder is ours and goes; the row inside it is the caller's, and is
+        # released first so deleting the wrapper cannot take a live block with it.
+        for holder in self._holders:
+            holder.release()
+            discard_widget(holder)
+        self._holders = []
+        self._rows = []
+
+
+def build_node(node: Node, build_leaf: LeafBuilder, parent: QWidget | None = None) -> QWidget:
+    """Render *node* — a leaf's widget, or a splitter of its children's."""
+    if isinstance(node, Leaf):
+        widget = build_leaf(node)
+        if parent is not None:
+            widget.setParent(parent)
+        return widget
+
+    orientation = (
+        Qt.Orientation.Horizontal if node.orientation == HORIZONTAL else Qt.Orientation.Vertical
+    )
+    splitter = GridSplitter(orientation, parent)
+    for child in node.children:
+        splitter.addWidget(build_node(child, build_leaf, splitter))
+    sizes = node.usable_sizes()
+    # A splitter takes its sizes all together or not at all, so a run with any
+    # child still unsized is laid out from every child's hint instead of slotting
+    # a remembered number in beside a natural one — the mistake that once handed a
+    # moved block a sliver of the pinned strip.
+    if sizes and all(size > 0 for size in sizes):
+        splitter.setSizes(list(sizes))
+    return splitter
+
+
+def split_sizes(widget: QWidget) -> tuple[int, ...]:
+    """The live sizes of *widget* if it is a split, else nothing."""
+    return tuple(widget.sizes()) if isinstance(widget, QSplitter) else ()
+
+
+def frame_at(widget: QWidget, point: QPoint) -> QWidget | None:
+    """The deepest child of *widget* containing *point*, in *widget*'s coordinates."""
+    found = widget.childAt(point)
+    return found if found is not None else None

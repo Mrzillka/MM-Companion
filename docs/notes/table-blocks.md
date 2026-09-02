@@ -5,7 +5,8 @@ Matters when touching Abilities, Resistances, Advantages or Skills.
 Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
 
 Those four blocks are the same thing seen four ways — an ordered list of rows in a
-`QTableWidget` that shows all of its content and never scrolls on its own — and each
+`QTableWidget` that shows all of its content and never scrolls on its own (its
+*block* may, once it has been dragged smaller than the table can reflow to) — and each
 used to answer the three questions a table block asks in its own way. One answer to
 each now lives in **`ui/sections/row_table.py`**, which is the layer *below*
 `stat_table.py` and knows nothing about stats. Build a new table block out of it

@@ -327,10 +327,14 @@ def test_a_second_block_is_added_and_keeps_its_own_notes(make_sheet, two_notes) 
 
 def test_an_instance_inherits_the_templates_size(make_sheet) -> None:
     # block_sizes.json and a preset's `blocks` map are keyed by block, and a
-    # per-instance key could never appear in either.
+    # per-instance key could never appear in either. It is the *recommendation*
+    # that is inherited now — the size the copy opens at — since a block's
+    # minimum no longer has anything to do with what is in it.
     sheet = make_sheet()
     key = sheet.add_block_instance("notes")
-    assert sheet.block_frame(key).minimumSizeHint().width() >= 320
+    template = sheet.block_frame("notes").recommended_size()
+    assert sheet.block_frame(key).recommended_size() == template
+    assert sheet.block_frame(key).sizeHint().width() >= 320
 
 
 def test_a_removed_instance_takes_its_model_entry_with_it(make_sheet, two_notes) -> None:
@@ -387,7 +391,7 @@ def test_a_layout_naming_an_unbuildable_instance_falls_back(make_sheet) -> None:
     sheet = make_sheet()
     model = json.loads(sheet.save_layout())
     model["instances"] = [{"key": "nosuchblock#2", "title": "Nope"}]
-    model["rows"].append(["nosuchblock#2"])
+    model["page"]["children"].append({"type": "leaf", "keys": ["nosuchblock#2"]})
 
     assert sheet.restore_layout(json.dumps(model)) is False
     assert "nosuchblock#2" not in sheet.block_keys()
@@ -406,71 +410,163 @@ def test_restoring_a_layout_without_instances_destroys_the_extra_blocks(make_she
 # -- merging -------------------------------------------------------------------
 
 
-def test_merging_moves_every_tab_and_drops_the_source(make_sheet, two_notes) -> None:
+def test_merging_two_blocks_makes_a_tab_group_of_them(make_sheet, two_notes) -> None:
+    """Merging combines whole *blocks* now, not the notes inside them.
+
+    It used to be Notes-specific: dropping one Notes block on another moved its
+    notes across and destroyed the source. One rule for every block replaced it —
+    any block dropped into any other makes a cell with a tab each — so two Notes
+    blocks now stay two blocks, each keeping its own notes, sharing one cell.
+    That is a real trade: a tab bar of blocks each with a tab bar of notes is more
+    chrome than the old answer, and it is the price of the rule being uniform.
+    """
     origin, log = two_notes
     sheet = make_sheet()
     sheet.notes.open_note(origin)
     key = sheet.add_block_instance("notes")
     sheet._sections_by_key[key].open_note(log)
 
-    sheet._on_merge_requested(key, "notes")
+    sheet.canvas.merge_blocks(key, "notes")
 
-    assert sheet.notes.open_refs() == (origin, log)
-    assert key not in sheet.block_keys()
-    assert sheet.character.notes["notes"].files == [origin, log]
+    group = sheet.canvas.group_for("notes")
+    assert group is not None
+    assert group.keys == ["notes", key]
+    # Both blocks are still blocks, and each still holds its own notes.
+    assert key in sheet.block_keys()
+    assert sheet.notes.open_refs() == (origin,)
+    assert sheet._sections_by_key[key].open_refs() == (log,)
 
 
-def test_merging_into_a_copy_empties_the_first_block_but_keeps_it(make_sheet, two_notes) -> None:
-    origin, log = two_notes
+def test_the_block_that_was_dropped_is_the_tab_showing(make_sheet) -> None:
     sheet = make_sheet()
-    sheet.notes.open_note(origin)
-    key = sheet.add_block_instance("notes")
-    sheet._sections_by_key[key].open_note(log)
 
-    sheet._on_merge_requested("notes", key)
+    sheet.canvas.merge_blocks("skills", "powers")
 
-    assert "notes" in sheet.block_keys()
-    assert sheet.notes.open_refs() == ()
-    assert sheet._sections_by_key[key].open_refs() == (log, origin)
+    group = sheet.canvas.group_for("powers")
+    assert group.active_key() == "skills"
 
 
-def test_only_notes_blocks_accept_a_merge(make_sheet) -> None:
+def test_any_block_merges_with_any_other(make_sheet) -> None:
+    """The rule that replaced ``accepts_merge``. A block used to have to opt in,
+    which is why only Notes ever merged; there is nothing left to opt into."""
     sheet = make_sheet()
-    assert sheet.notes.accepts_merge("notes#2") is True
-    assert sheet.notes.accepts_merge("skills") is False
-    # Every other block simply has no opinion, which is what keeps their drags
-    # exactly as they were.
-    assert not hasattr(sheet.skills, "accepts_merge")
+
+    sheet.canvas.merge_blocks("skills", "abilities")
+
+    assert sheet.canvas.group_for("abilities").keys == ["abilities", "skills"]
+    assert not hasattr(sheet.notes, "accepts_merge")
 
 
-def test_a_drop_onto_an_ordinary_block_is_a_plain_slot(make_sheet) -> None:
+def test_a_block_cannot_be_merged_into_itself(make_sheet) -> None:
     sheet = make_sheet()
-    canvas = sheet.canvas
-    canvas._drag_key = "notes"
-    row = canvas._row_widgets[1]  # abilities | resistances
+    before = sheet.arrangement()["page"]
 
-    slot = canvas._merge_target(row, row.geometry().center())
+    sheet.canvas.merge_blocks("skills", "skills")
 
-    assert slot is None
+    assert sheet.arrangement()["page"] == before
 
 
-def test_a_drop_in_the_middle_of_a_notes_block_is_a_merge(make_sheet) -> None:
+def test_a_third_block_joins_an_existing_group(make_sheet) -> None:
+    sheet = make_sheet()
+    sheet.canvas.merge_blocks("skills", "powers")
+
+    sheet.canvas.merge_blocks("equipment", "skills")
+
+    assert sheet.canvas.group_for("powers").keys == ["powers", "skills", "equipment"]
+
+
+def test_a_group_round_trips_through_a_saved_layout(make_sheet) -> None:
+    sheet = make_sheet()
+    sheet.canvas.merge_blocks("skills", "powers")
+    blob = sheet.save_layout()
+    sheet.reset_layout()
+    assert sheet.canvas.group_for("powers") is None
+
+    assert sheet.restore_layout(blob) is True
+
+    assert sheet.canvas.group_for("powers").keys == ["powers", "skills"]
+
+
+def test_which_tab_is_showing_round_trips_too(make_sheet) -> None:
+    sheet = make_sheet()
+    sheet.canvas.merge_blocks("skills", "powers")
+    blob = sheet.save_layout()
+    sheet.reset_layout()
+
+    assert sheet.restore_layout(blob) is True
+
+    assert sheet.canvas.group_for("powers").active_key() == "skills"
+
+
+def test_a_grouped_block_lends_its_title_bar_to_the_group(make_sheet) -> None:
+    """Two rows of chrome for one cell is one too many, and the group's buttons
+    act on whichever block is showing anyway."""
+    sheet = make_sheet()
+
+    sheet.canvas.merge_blocks("skills", "powers")
+
+    assert sheet.block_frame("skills").title_bar.isVisibleTo(sheet.block_frame("skills")) is False
+
+
+def test_dragging_a_tab_out_leaves_the_group_and_gives_it_a_cell(make_sheet) -> None:
+    sheet = make_sheet()
+    sheet.canvas.merge_blocks("skills", "powers")
+    pump()
+
+    sheet.canvas._set_page(lt_split_out(sheet, "skills"))
+    sheet.canvas._relayout()
+    pump()
+
+    assert sheet.canvas.group_for("powers") is None
+    # And it gets its own title bar back, because it is the same widget it always was.
+    assert sheet.block_frame("skills").title_bar.isVisibleTo(sheet.block_frame("skills")) is True
+
+
+def lt_split_out(sheet, key: str):
+    from mm_companion.ui import layout_tree as lt
+
+    return lt.split_out(sheet.canvas.page_tree(), key)
+
+
+def test_a_group_of_one_collapses_back_into_a_plain_block(make_sheet) -> None:
+    sheet = make_sheet()
+    sheet.canvas.merge_blocks("skills", "powers")
+    pump()
+
+    sheet.canvas._set_page(lt_split_out(sheet, "skills"))
+    sheet.canvas._relayout()
+    pump()
+
+    from mm_companion.ui.block_frame import BlockFrame
+
+    assert isinstance(sheet.canvas._build_leaf(_leaf("powers")), BlockFrame)
+
+
+def _leaf(*keys: str):
+    from mm_companion.ui.layout_tree import Leaf
+
+    return Leaf(tuple(keys))
+
+
+def test_a_drop_in_the_middle_of_a_block_is_a_merge(make_sheet) -> None:
     sheet = make_sheet()
     key = sheet.add_block_instance("notes")
     pump()
     scroll_to(sheet, "notes")
     canvas = sheet.canvas
     canvas._drag_key = key
-    row = next(r for r in canvas._row_widgets if any(f.key == "notes" for f in r.frames()))
-    frame = next(f for f in row.frames() if f.key == "notes")
 
-    centre = row.mapToParent(frame.geometry().center())
+    assert canvas._merge_target("notes") == "notes"
+    # Every block takes every merge now, so the only refusal left is a block
+    # being dropped on itself.
+    assert canvas._merge_target(key) is None
 
-    assert canvas._merge_target(row, centre) == "notes"
-    # …and the outer band is still an ordinary insert, so a block can always be
-    # placed *beside* another rather than into it.
-    edge = row.mapToParent(frame.geometry().topLeft()) + QPoint(2, 2)
-    assert canvas._merge_target(row, edge) is None
+
+def lt_keys(sheet) -> list[str]:
+    """Every block the page places, in reading order."""
+    from mm_companion.ui import layout_tree as lt
+
+    return lt.keys(sheet.canvas.page_tree())
 
 
 def pump(rounds: int = 10) -> None:
@@ -486,11 +582,13 @@ def pump(rounds: int = 10) -> None:
 
 
 def centre_of(sheet, key: str):
-    """Where block *key* is on screen right now, in global coordinates."""
-    canvas = sheet.canvas
+    """Where block *key* is on screen right now, in global coordinates.
+
+    Asked of the frame itself rather than of its row: a block can be several
+    splitters deep in the page now, so there is no one row that owns it.
+    """
     frame = sheet.block_frame(key)
-    row = next(r for r in canvas._row_widgets if frame in r.frames())
-    return canvas.mapToGlobal(row.mapToParent(frame.geometry().center()))
+    return frame.mapToGlobal(frame.rect().center())
 
 
 def scroll_to(sheet, key: str) -> None:
@@ -501,9 +599,9 @@ def scroll_to(sheet, key: str) -> None:
     honest behaviour, and means a test has to scroll first exactly as a hand
     would.
     """
+    canvas = sheet.canvas
     frame = sheet.block_frame(key)
-    row = next(r for r in sheet.canvas._row_widgets if frame in r.frames())
-    centre = row.mapToParent(frame.geometry().center())
+    centre = canvas.mapFromGlobal(frame.mapToGlobal(frame.rect().center()))
     sheet.page_scroll_area().ensureVisible(centre.x(), centre.y(), 0, 200)
     pump()
 
@@ -544,7 +642,13 @@ def drop_onto(sheet, source: str, target: str) -> None:
     pump()
 
 
-def test_dropping_a_notes_block_on_another_merges_them(make_sheet, two_notes) -> None:
+def test_dropping_a_block_on_another_groups_them(make_sheet, two_notes) -> None:
+    """The whole gesture, end to end, rather than the handler underneath it.
+
+    The bug this guards lived *between* the press and the release: the drop used
+    to hit-test after ``_end_drag`` had cleared the drag key, so every drop came
+    out an ordinary dock and the merge never fired at all.
+    """
     origin, log = two_notes
     sheet = make_sheet()
     sheet.notes.open_note(origin)
@@ -554,11 +658,12 @@ def test_dropping_a_notes_block_on_another_merges_them(make_sheet, two_notes) ->
 
     drop_onto(sheet, key, "notes")
 
-    assert key not in sheet.block_keys()
-    assert sheet.notes.open_refs() == (origin, log)
+    group = sheet.canvas.group_for("notes")
+    assert group is not None and group.keys == ["notes", key]
+    assert key in sheet.block_keys()  # both blocks survive; they just share a cell
 
 
-def test_dropping_a_notes_block_on_an_ordinary_one_just_docks(make_sheet, two_notes) -> None:
+def test_dropping_a_block_on_an_ordinary_one_groups_them_too(make_sheet, two_notes) -> None:
     origin, log = two_notes
     sheet = make_sheet()
     sheet.notes.open_note(origin)
@@ -568,8 +673,11 @@ def test_dropping_a_notes_block_on_an_ordinary_one_just_docks(make_sheet, two_no
 
     drop_onto(sheet, key, "skills")
 
-    assert key in sheet.block_keys()  # still its own block
+    # Every block takes a merge now, so a drop into the middle of Skills groups
+    # them — where it used to be refused and fall back to an ordinary dock.
+    assert key in sheet.block_keys()
     assert sheet._sections_by_key[key].open_refs() == (log,)
+    assert sheet.canvas.group_for("skills").keys == ["skills", key]
 
 
 def test_the_merge_highlight_goes_up_during_the_drag_and_comes_down_after(
@@ -623,7 +731,7 @@ def test_releasing_a_split_drag_docks_the_new_block(make_sheet, two_notes) -> No
     sheet.notes.splitReleased.emit(sheet.canvas.mapToGlobal(QPoint(400, 200)))
 
     assert sheet.canvas.block_window(new_key) is None
-    assert any(new_key in row for row in sheet.arrangement()["rows"])
+    assert new_key in lt_keys(sheet)
     assert sheet._split_key is None
 
 

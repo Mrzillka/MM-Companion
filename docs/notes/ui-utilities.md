@@ -100,11 +100,13 @@ part of it. A locked field sheds its border and its padding, and several blocks 
 their editing entry points outright — so the block's own minimum moves. The window does
 *not* resize itself on a toggle, so a block that grew when unlocked simply clipped
 against a window the user had already sized. The rule is therefore: **only the height may
-change**. Most blocks get that free, their `min_width` floor in `block_sizes.json`
-already covering the unlocked content; the Equipment block did not (three "Add…" buttons
-abreast are 360px against a 240px floor) and wraps them in a `FlowContainer` instead.
-`tests/test_lock_geometry.py` asserts the invariance per block, on the *frame* — the
-floors mask the section-level deltas, so a preset that lowers one would unmask it there.
+change**. That used to be free for most blocks, whose `min_width` floor in
+`block_sizes.json` already covered the unlocked content; those floors are only
+recommendations now, so the rule rests entirely on the blocks themselves — the
+Equipment block wraps its three "Add…" buttons in a `FlowContainer` rather than being
+360px wide unlocked against 240 locked, and any block that grows sideways on a toggle
+has to do the same.
+`tests/test_lock_geometry.py` asserts the invariance per block, on the *frame*.
 `BlockFrame.set_locked` raises the geometry invalidation and `CharacterSheet.set_locked`
 recomputes the page's minimum, since a lock toggle is not an `arrangement_changed` and
 the page's minimum is an explicit number behind a `QScrollArea` — the same link

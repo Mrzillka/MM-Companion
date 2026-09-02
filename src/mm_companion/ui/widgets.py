@@ -431,22 +431,32 @@ def resurface(window: QWidget) -> None:
     window.activateWindow()
 
 
-def enclosing_scroll_area(widget: QWidget) -> QAbstractScrollArea | None:
-    """The scroll area *widget* is scrolled by, or ``None``.
+def enclosing_scroll_areas(widget: QWidget) -> list[QAbstractScrollArea]:
+    """Every scroll area *widget* is scrolled by, nearest first.
 
-    The **nearest** one, unlike :meth:`~mm_companion.ui.wheel_guard.WheelGuard.
-    _page_scroll_area`, which walks all the way to the outermost so a wheel over an
-    inner table still reaches the page. Here the nearest is the right answer wherever
-    a block ends up: the page's scroll area on the page, the strip's when it is
-    pinned, its own window's when it is floated out.
+    It used to be enough to find the nearest one, because a block had no scroll
+    area of its own and the nearest was therefore whatever the block was sitting
+    in — the page, the strip, or its own window. Every block carries one now (see
+    :class:`~mm_companion.ui.block_frame._InnerScroll`), so the nearest is always
+    the block's own and the page is always further up. Callers that are restoring a
+    position after a rebuild want **both**: the block should stay where it was
+    scrolled to, and so should the page behind it.
     """
 
+    found: list[QAbstractScrollArea] = []
     parent = widget.parentWidget()
     while parent is not None:
         if isinstance(parent, QAbstractScrollArea):
-            return parent
+            found.append(parent)
         parent = parent.parentWidget()
-    return None
+    return found
+
+
+def enclosing_scroll_area(widget: QWidget) -> QAbstractScrollArea | None:
+    """The nearest scroll area *widget* is scrolled by, or ``None``."""
+
+    areas = enclosing_scroll_areas(widget)
+    return areas[0] if areas else None
 
 
 @contextmanager
@@ -463,8 +473,9 @@ def rebuilding(widget: QWidget) -> Iterator[None]:
     single repaint that follows it. Restored in a ``finally`` so an exception mid-way
     cannot leave a block that never paints again.
 
-    **The scroll position is put back.** Qt clamps the enclosing scroll bar to the
-    smaller maximum *while the block is short*. The cards coming back widen the range
+    **The scroll position is put back — on every bar above the block, not just the
+    nearest.** Qt clamps an enclosing scroll bar to the smaller maximum *while the
+    block is short*. The cards coming back widen the range
     again but not the value, which Qt has already thrown away — so flipping a switch
     on a card near the bottom of a long sheet jumped the page somewhere else entirely.
     Restored **twice**: once now, and once on the next turn of the event loop, because
@@ -474,8 +485,8 @@ def rebuilding(widget: QWidget) -> Iterator[None]:
     widget.
     """
 
-    area = enclosing_scroll_area(widget)
-    bars = [] if area is None else [area.verticalScrollBar(), area.horizontalScrollBar()]
+    areas = enclosing_scroll_areas(widget)
+    bars = [bar for area in areas for bar in (area.verticalScrollBar(), area.horizontalScrollBar())]
     values = [(bar, bar.value()) for bar in bars if bar is not None]
     painted = widget.updatesEnabled()
     widget.setUpdatesEnabled(False)
@@ -485,5 +496,5 @@ def rebuilding(widget: QWidget) -> Iterator[None]:
         widget.setUpdatesEnabled(painted)
         for bar, value in values:
             bar.setValue(value)
-        if area is not None:
-            QTimer.singleShot(0, area, lambda: [bar.setValue(value) for bar, value in values])
+        if areas:
+            QTimer.singleShot(0, areas[0], lambda: [bar.setValue(value) for bar, value in values])

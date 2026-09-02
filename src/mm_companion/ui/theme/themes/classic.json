@@ -101,6 +101,13 @@
     "float.min-width": 200,
     "float.min-height": 150,
 
+    "_block.min-extent": "How small a docked block may be dragged before it stops shrinking. Small on purpose: the grid is the user's, and a block dragged to a sliver reflows as far as it can and then scrolls inside its own frame rather than refusing. This is the floor of the frame itself, so it wants to be about the height of a title bar — enough that a block squashed to nothing can still be found and dragged back open.",
+    "block.min-extent": 24,
+    "_grid.handle": "The thickness of a divider between two blocks, in pixels. It is the grab target for every resize on the page, so it has to be wide enough to hit without being a visible gutter.",
+    "grid.handle": 6,
+    "_grid.detent": "How much resistance a divider meets at a block's recommended size, in pixels. The handle sticks there and needs a deliberate extra pull to go past, so nobody crosses it by accident and everybody can find their way back to it. Zero turns the detent off.",
+    "grid.detent": 12,
+
     "card.margins": [8, 6, 8, 6],
     "card.margins.off": [5, 3, 5, 3],
     "card.spacing": 4,

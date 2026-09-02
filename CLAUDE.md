@@ -131,9 +131,19 @@ notes file that owns it.
   constructor that may run before parenting, and shed it with `discard_widget`, which
   hides before it unparents. This has bitten twice; `tests/test_window_flash.py`
   watches for it.
-- **A block shows all of its content and never scrolls on its own** — the page
-  scrolls instead. The only deliberate exceptions are the roll histories and the
-  Notes block.
+- **A block adapts to the size it is given, and scrolls only as a last resort.**
+  The page is a user-resizable grid: any block can be dragged to any size, past the
+  point where its content fits. So a block reflows first (fewer columns, stacked
+  instead of side by side, tighter chrome) and only scrolls inside its own frame
+  once reflow has run out. Nothing is ever clipped. Every adaptive decision needs a
+  hysteresis dead-band, or a reflow changes a block's height, which toggles a
+  scrollbar, which changes the width back over the boundary, forever — reuse
+  `ReflowBox`, `ColumnFlowPanels` or `FlowLayout` rather than inventing a fourth.
+- **Nothing may report a minimum size that its content decides.** A minimum is a
+  refusal, and on a page the user drags, whether a block is too small to read is the
+  user's call — this is what stops the app resizing its own window. A block's
+  configured size in `ui/block_sizes.json` is a **recommendation**: the size it
+  opens at and the size a divider's detent sticks at, and nothing else.
 - **Read a setting through its accessor in `core.storage`**, never off
   `load_settings()`: that returns the settings file *verbatim* and does not merge
   `DEFAULT_SETTINGS`, so any key added after a workspace was created reads back as

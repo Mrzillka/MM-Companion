@@ -5,13 +5,13 @@ from __future__ import annotations
 import json
 
 import pytest
-from PySide6.QtCore import QPoint, QSize, Qt
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QScrollArea, QSplitter
 
 from mm_companion.core.data_loader import load_game_data
-from mm_companion.ui import pinned_panel
-from mm_companion.ui.block_canvas import SCHEMA_VERSION, RowWidget
+from mm_companion.ui import layout_tree as lt
+from mm_companion.ui.block_canvas import SCHEMA_VERSION
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.pinned import PinSlot
 
@@ -75,7 +75,27 @@ def _drag(canvas, sheet: CharacterSheet, key: str, target: QPoint) -> None:
 
 
 def _pinned(sheet: CharacterSheet) -> dict:
-    return sheet.arrangement()["pinned"]
+    """The strip, in the shape these tests have always read it in.
+
+    The arrangement holds one tree per region now, so the strip's ``lines`` are
+    derived rather than stored (:func:`layout_tree.region_lines`). Reading them
+    back out here keeps every test below saying what it always said about *the
+    strip*, and confines the schema change to one function.
+    """
+    region = sheet.arrangement()["region"]
+    root = lt.from_dict(region["root"], set(sheet.block_keys()))
+    return {
+        "edge": region["edge"],
+        "align": region["align"],
+        "extent": region["extent"],
+        "lines": lt.region_lines(root, region["edge"]),
+    }
+
+
+def _rows(sheet: CharacterSheet) -> list[list[str]]:
+    """The page's top-level rows, each flattened to a list of block keys."""
+    page = lt.from_dict(sheet.arrangement()["page"], set(sheet.block_keys()))
+    return [lt.keys(child) for child in lt.as_page(page).children]
 
 
 # -- what the strip holds ---------------------------------------------------
@@ -89,7 +109,7 @@ def test_a_fresh_sheet_starts_with_the_dice_block_pinned(make_sheet) -> None:
     assert _pinned(sheet)["lines"] == [["dice"], ["scene"]]
     assert sheet.is_block_pinned("dice")
     assert not sheet.board.panel.is_empty()
-    assert all("dice" not in row for row in sheet.arrangement()["rows"])
+    assert all("dice" not in row for row in _rows(sheet))
 
 
 def test_an_emptied_strip_still_shows_its_icon(make_sheet) -> None:
@@ -109,7 +129,7 @@ def test_pinning_moves_a_block_off_the_page_and_out_of_its_row(make_sheet) -> No
 
     assert sheet.is_block_pinned("conditions")
     assert _pinned(sheet)["lines"] == [["conditions"]]
-    assert all("conditions" not in row for row in sheet.arrangement()["rows"])
+    assert all("conditions" not in row for row in _rows(sheet))
     assert not sheet.board.panel.is_empty()
     assert sheet.board.panel._handle.isVisible()  # the handle never goes away
 
@@ -142,7 +162,7 @@ def test_unpinning_docks_the_block_back_onto_the_page(make_sheet) -> None:
     _settle()
 
     assert not sheet.is_block_pinned("conditions")
-    assert any("conditions" in row for row in sheet.arrangement()["rows"])
+    assert any("conditions" in row for row in _rows(sheet))
     assert sheet.board.panel.is_empty()
 
 
@@ -193,7 +213,7 @@ def test_unpin_all_empties_the_strip(make_sheet) -> None:
     _settle()
 
     assert _pinned(sheet)["lines"] == []
-    placed = [key for row in sheet.arrangement()["rows"] for key in row]
+    placed = [key for row in _rows(sheet) for key in row]
     assert {"conditions", "abilities"} <= set(placed)
 
 
@@ -217,7 +237,7 @@ def test_reset_layout_restores_the_default_strip(make_sheet) -> None:
         "fill",
         320,
     )
-    assert any("conditions" in row for row in sheet.arrangement()["rows"])
+    assert any("conditions" in row for row in _rows(sheet))
 
 
 def test_two_blocks_can_share_a_line_across_the_strip(make_sheet) -> None:
@@ -274,30 +294,28 @@ def test_moving_a_pinned_block_into_its_own_line_gives_it_a_fair_share(make_shee
         assert size >= line.minimumSizeHint().height()
 
 
-def test_the_strip_shrinks_back_when_the_block_needing_the_room_moves_away(make_sheet) -> None:
-    # Regression: pinning a wide block pushes the strip open, and the board recorded
-    # that width as if it had been dragged there. Move the block to a line of its
-    # own and the strip stayed wide — until it was resized by hand.
+def test_the_strips_thickness_does_not_follow_what_is_pinned_in_it(make_sheet) -> None:
+    """It used to, and that was the bug this test was written for.
+
+    Pinning a wide block pushed the strip open — its minimum was its content — and
+    the board recorded that width as though the user had dragged it there, so
+    moving the block away left the strip stale and wide. Nothing pushes it open
+    now: the thickness is the one the user chose, and what is pinned inside gets
+    whatever that leaves.
+    """
     sheet = make_sheet()
     sheet.pin_block("conditions")
     _settle()
-    narrow = sheet.board.panel.width()
+    thickness = sheet.board.panel.width()
 
     sheet.pin_block("abilities", line=0, slot=1, new_line=False)
     _settle()
-    assert sheet.board.panel.width() > narrow  # the pair really did force it open
 
-    sheet.pin_block("abilities", line=0, slot=0, new_line=True)  # move it up
-    _settle()
-
-    assert sheet.board.panel.width() == narrow
+    assert sheet.board.panel.width() == thickness
+    # And the arriving block takes the room that is there rather than demanding more.
     frame = sheet.block_frame("abilities")
-    slot = sheet.board.panel._lines[0].slots[0]
-    # And the block occupies that width rather than sitting in a stale, wider one.
-    # Abilities states no bounds of its own any more (its table reports its real
-    # content), so it fills its slot exactly instead of leaving dead space beside it.
-    assert frame.width() == slot.width()
-    assert frame.minimumSizeHint().width() <= narrow
+    assert frame.isVisible()
+    assert frame.width() <= thickness
 
 
 def test_a_thickness_the_user_dragged_to_is_kept(make_sheet) -> None:
@@ -319,18 +337,25 @@ def test_a_thickness_the_user_dragged_to_is_kept(make_sheet) -> None:
     _settle()
 
     assert board.desired_extent() == dragged
-    assert sheet.arrangement()["pinned"]["extent"] == dragged
+    assert _pinned(sheet)["extent"] == dragged
 
 
-def test_a_scrolling_strip_makes_room_for_its_own_scrollbar(
-    make_sheet, monkeypatch: pytest.MonkeyPatch
+def test_a_strip_too_short_for_its_blocks_squashes_them_rather_than_scrolling(
+    make_sheet,
 ) -> None:
-    # Regression: a strip long enough to scroll lost a scrollbar's width out of its
-    # viewport, leaving the blocks a dozen pixels short — so Qt put up a *second*,
-    # crossways bar to cover the difference. A scrollbar caused by a scrollbar.
-    monkeypatch.setattr(pinned_panel, "_usable_screen", lambda _widget: QSize(1920, 320))
+    """The rule that replaced three tests about the strip's scrollbars.
+
+    The strip used to report its whole content as a minimum — capped at the usable
+    screen — so a window too short for the pinned blocks was answered by holding
+    the *window* open, and past the cap by growing a scrollbar and asking for its
+    width back. All of that existed because a block squashed was a block clipped.
+
+    A pinned block reflows and, past that, scrolls inside its own frame, so the
+    honest answer is simply to give it less room. The strip demands nothing, and
+    the blocks in it get thinner.
+    """
     sheet = make_sheet()
-    sheet.resize(1400, 320)  # room to widen, not enough to fit the blocks' length
+    sheet.resize(1400, 320)  # far shorter than two blocks would like
     _settle()
     sheet.pin_block("conditions")
     sheet.pin_block("advantages")
@@ -338,105 +363,53 @@ def test_a_scrolling_strip_makes_room_for_its_own_scrollbar(
     _wait()
     panel = sheet.board.panel
 
-    assert panel._scroll.verticalScrollBar().isVisible()  # it really is scrolling
+    assert not panel._scroll.verticalScrollBar().isVisible()
     assert not panel._scroll.horizontalScrollBar().isVisible()
-    assert panel.width() > panel._splitter.width()  # the bar's width was asked for
+    for key in ("conditions", "advantages"):
+        assert sheet.block_frame(key).isVisible()
 
 
-def test_the_strip_scrolls_sideways_only_when_it_cannot_be_widened(
-    make_sheet, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # The other half: where the room genuinely isn't there, a crossways bar is the
-    # right answer — better than clipping a block.
-    monkeypatch.setattr(pinned_panel, "_usable_screen", lambda _widget: QSize(200, 1080))
+def test_the_strip_demands_no_room_of_the_window(make_sheet) -> None:
+    """The last place in the app where content could push the window around."""
     sheet = make_sheet()
-    sheet.pin_block("conditions")  # needs ~340, and cannot have it
-    _settle()
-    _wait()
-    panel = sheet.board.panel
-
-    assert panel.width() < panel._splitter.minimumSizeHint().width()
-    assert panel._scroll.horizontalScrollBar().isVisible()
-
-
-def test_a_rebuilt_strip_starts_at_the_top(make_sheet, monkeypatch: pytest.MonkeyPatch) -> None:
-    # The strip only scrolls when its blocks don't fit, and a stale offset would
-    # show the new arrangement decapitated. Getting it to scroll at all means
-    # shrinking the screen it caps its demand at — otherwise it just holds the
-    # window open.
-    monkeypatch.setattr(pinned_panel, "_usable_screen", lambda _widget: QSize(1920, 320))
-    sheet = make_sheet()
-    sheet.resize(1100, 320)  # shorter than the two blocks below need
-    _settle()
     sheet.pin_block("conditions")
     sheet.pin_block("advantages")
     _settle()
-    bar = sheet.board.panel._scroll.verticalScrollBar()
-    assert bar.maximum() > 0  # it really is scrollable, so the assertion below bites
-    bar.setValue(bar.maximum())
+    panel = sheet.board.panel
 
-    sheet.pin_block("complications")
-    _settle()
-
-    assert bar.value() == 0
+    content = panel._splitter.sizeHint()
+    assert panel.minimumSizeHint().width() < content.width()
+    assert panel.minimumSizeHint().height() < content.height()
 
 
-def test_emptying_the_strip_collapses_it_at_once(make_sheet) -> None:
-    # Regression: the panel pinned its own thin width but the board's splitter kept
-    # the sizes it already had, so the strip stayed wide until its handle was
-    # nudged.
+def test_the_strip_may_squash_a_block_below_its_content(make_sheet) -> None:
+    """The exact inverse of what this file used to assert.
+
+    ``test_the_strip_never_squashes_a_block_below_its_content`` forced the
+    splitter to a sliver and checked every slot was still at least its frame's
+    minimum. Squashing was the bug then, because it meant clipping; it is the
+    feature now, because the block scrolls inside itself instead.
+    """
     sheet = make_sheet()
     sheet.pin_block("conditions")
+    sheet.pin_block("advantages")
     _settle()
-    assert sheet.board.panel.width() > sheet.board.panel.empty_extent()
+    panel = sheet.board.panel
 
-    sheet.unpin_block("conditions")
-    _settle()
-
-    assert sheet.board.panel.width() == sheet.board.panel.empty_extent()
-    assert sheet.board.extent() == 0
-
-
-def test_reset_layout_puts_a_pinned_block_back_in_one_go(make_sheet) -> None:
-    # Regression: the strip was re-rendered *after* the rows were rebuilt, so it
-    # took the block straight back off the row it had just been placed in — and
-    # only a second Reset made it reappear.
-    sheet = make_sheet()
-    sheet.pin_block("conditions")
+    panel._splitter.setSizes([10_000, 1])
     _settle()
 
-    sheet.reset_layout()
-    _settle()
-
-    frame = sheet.block_frame("conditions")
-    assert isinstance(frame.parentWidget(), RowWidget)
-    assert frame.isVisible()
-    assert any("conditions" in row for row in sheet.arrangement()["rows"])
-
-
-def test_the_strips_thickness_survives_an_unrelated_rearrangement(make_sheet) -> None:
-    # A page-side change must not snap the strip back to the width it had before
-    # the user dragged its handle wider.
-    sheet = make_sheet()
-    sheet.pin_block("conditions")
-    _settle()
-    board = sheet.board
-    # Standing in for a handle drag, which both resizes the splitter *and* emits
-    # splitterMoved — the signal being the whole way the board tells a chosen
-    # thickness from one the pinned blocks merely forced (see
-    # PinnedBoard._remember_dragged_extent). setSizes alone is the latter.
-    board._splitter.setSizes([600, 380])
-    board._splitter.splitterMoved.emit(600, 1)
-    _settle()
-    dragged = board.extent()
-
-    sheet.dock_block("skills", 0, 0, new_row=True)
-    _settle()
-
-    assert board.extent() == dragged
-
-
-# -- where it sits ----------------------------------------------------------
+    thin = min(line.height() for line in panel._lines)
+    squashed = next(
+        f
+        for f in (sheet.block_frame(k) for k in ("conditions", "advantages"))
+        if f.height() == thin
+    )
+    # Down to the block's own floor — a title bar and `block.min-extent` — which is
+    # far under what its content wants, and the content scrolls inside it.
+    assert thin < squashed.content_size_hint().height()
+    assert thin == squashed.minimumSizeHint().height()
+    assert squashed.isVisible()
 
 
 def test_moving_the_strip_to_another_edge_re_lays_the_board_out(make_sheet) -> None:
@@ -458,23 +431,27 @@ def test_moving_the_strip_to_another_edge_re_lays_the_board_out(make_sheet) -> N
     assert _pinned(sheet)["edge"] == "top"
 
 
-def test_moving_the_strip_to_another_edge_drops_the_old_axis_thickness(make_sheet) -> None:
-    # Regression: the strip's thickness is clamped against the panel's minimum *at
-    # the moment it is applied*, and right after an edge change that minimum is
-    # still the old axis's — so a 645px-wide side strip became a 645px-deep floor
-    # and nothing brought it back down.
+def test_moving_the_strip_to_another_edge_keeps_its_own_thickness(make_sheet) -> None:
+    """This used to be about a floor, and there is no floor left.
+
+    The strip's thickness was clamped against the panel's minimum *at the moment
+    it was applied*, and right after an edge change that minimum was still the old
+    axis's — so a 645px-wide side strip became a 645px-deep bottom one. With
+    nothing demanding room, the thickness is simply the number the strip carries,
+    whichever edge it is on.
+    """
     sheet = make_sheet()
     sheet.pin_block("conditions")
     sheet.pin_block("advantages", line=0, slot=1, new_line=False)
     _settle()
     panel = sheet.board.panel
-    side_thickness = panel.width()
+    wanted = sheet.board.desired_extent()
 
     sheet.canvas.set_pin_edge("bottom")
     _wait()  # the thickness converges over a turn or two; see PinnedBoard._ask_again
 
-    assert panel.height() < side_thickness
-    assert panel.height() == panel.minimumSizeHint().height()
+    assert panel.height() == pytest.approx(wanted, abs=4)
+    assert panel.height() >= panel.minimumSizeHint().height()
 
 
 def test_the_strip_stacks_its_blocks_along_its_own_axis(make_sheet) -> None:
@@ -620,7 +597,7 @@ def test_dragging_a_pinned_block_back_onto_the_page_docks_it(make_sheet) -> None
     _settle()
 
     assert not canvas.is_pinned("conditions")
-    assert any("conditions" in row_keys for row_keys in sheet.arrangement()["rows"])
+    assert any("conditions" in row_keys for row_keys in _rows(sheet))
 
 
 def test_a_block_dragged_into_the_strip_keeps_its_content_laid_out(make_sheet) -> None:
@@ -729,25 +706,6 @@ def test_a_pinned_block_holds_the_window_open_rather_than_being_clipped(make_she
     assert hint.height() > empty_hint.height()
 
 
-def test_the_strip_never_squashes_a_block_below_its_content(make_sheet) -> None:
-    sheet = make_sheet()
-    sheet.pin_block("conditions")
-    sheet.pin_block("abilities")
-    _settle()
-    panel = sheet.board.panel
-
-    # Ask the splitter for the impossible: everything to the first block.
-    panel._splitter.setSizes([10_000, 1])
-    _settle()
-
-    for line in panel._lines:
-        for slot in line.slots:
-            assert slot.height() >= slot.frame.minimumSizeHint().height()
-
-
-# -- persistence ------------------------------------------------------------
-
-
 def test_the_strip_survives_a_save_and_restore(make_sheet) -> None:
     sheet = make_sheet()
     sheet.pin_block("conditions")
@@ -770,27 +728,28 @@ def test_the_strip_survives_a_save_and_restore(make_sheet) -> None:
     assert sheet.board.panel._splitter.count() == 2
 
 
-def test_restoring_the_same_blocks_still_restores_their_proportions(make_sheet) -> None:
-    # Regression: the strip skips a rebuild when the blocks look unchanged, and the
-    # sizes are only read on a rebuild — so restoring a layout over an identical
-    # set of pinned blocks silently kept the proportions that were on screen.
+def test_a_restore_puts_the_pinned_blocks_back_in_their_lines(make_sheet) -> None:
+    """What survives a save is *where* the blocks are, not how wide they were.
+
+    The strip used to persist its own pixel proportions, and this test guarded a
+    bug where restoring an identical set of blocks silently kept whatever was on
+    screen. Those numbers described the strip's own layout engine, which the grid
+    replaced; a wrong remembered size is worse than none, so they are dropped and
+    the lines lay themselves out once from their blocks' hints.
+    """
     sheet = make_sheet()
     sheet.pin_block("conditions")
     sheet.pin_block("abilities")
     _settle()
-    panel = sheet.board.panel
-    panel._splitter.setSizes([250, 500])
-    _settle()
     blob = sheet.save_layout()
-    saved = json.loads(blob)["pinned"]["sizes"]
 
-    panel._splitter.setSizes([600, 150])
+    sheet.canvas.unpin_all()
     _settle()
-    assert panel.line_extents() != saved
+    assert _pinned(sheet)["lines"] == []
 
     assert sheet.restore_layout(blob) is True
     _settle()
-    assert panel.line_extents() == saved
+    assert _pinned(sheet)["lines"] == [["conditions"], ["abilities"]]
 
 
 def test_a_pinned_block_moves_between_lines_without_losing_its_place(make_sheet) -> None:
@@ -812,8 +771,8 @@ def test_a_pinned_block_moves_between_lines_without_losing_its_place(make_sheet)
 def test_a_layout_that_puts_one_block_in_two_places_is_rejected(make_sheet) -> None:
     sheet = make_sheet()
     model = sheet.arrangement()
-    # "conditions" is still in its row, and now also pinned.
-    model["pinned"] = dict(model["pinned"], lines=[["conditions"]])
+    # "conditions" is still in its row, and now also in the strip.
+    model["region"] = dict(model["region"], root=lt.to_dict(lt.Leaf(("conditions",))))
 
     assert sheet.restore_layout(json.dumps(model)) is False
     assert _pinned(sheet)["lines"] == []
@@ -823,19 +782,19 @@ def test_a_layout_with_an_unknown_edge_or_block_is_rejected(make_sheet) -> None:
     sheet = make_sheet()
     base = sheet.arrangement()
 
-    sideways = dict(base, pinned=dict(base["pinned"], edge="diagonal"))
+    sideways = dict(base, region=dict(base["region"], edge="diagonal"))
     assert sheet.restore_layout(json.dumps(sideways)) is False
 
-    stranger = dict(base, pinned=dict(base["pinned"], lines=[["not_a_block"]]))
+    stranger = dict(base, region=dict(base["region"], root=lt.to_dict(lt.Leaf(("not_a_block",)))))
     assert sheet.restore_layout(json.dumps(stranger)) is False
 
 
 def test_a_layout_written_before_the_strip_existed_still_restores(make_sheet) -> None:
-    # `pinned` is read tolerantly for the same reason `hidden_anchors` is: its
+    # `region` is read tolerantly for the same reason `hidden_anchors` is: its
     # absence costs nothing but an empty strip.
     sheet = make_sheet()
     model = sheet.arrangement()
-    model.pop("pinned")
+    model.pop("region")
 
     assert sheet.restore_layout(json.dumps(model)) is True
     assert _pinned(sheet)["lines"] == []
@@ -844,10 +803,9 @@ def test_a_layout_written_before_the_strip_existed_still_restores(make_sheet) ->
 def test_bad_proportions_degrade_instead_of_rejecting_the_layout(make_sheet) -> None:
     sheet = make_sheet()
     model = sheet.arrangement()
-    model["pinned"] = dict(model["pinned"], sizes=["wide"], extent=-4)
+    model["region"] = dict(model["region"], extent=-4)  # the one number left
 
     assert sheet.restore_layout(json.dumps(model)) is True
-    assert _pinned(sheet)["sizes"] == []
     assert _pinned(sheet)["extent"] == 320
 
 
@@ -898,19 +856,26 @@ def test_a_page_side_change_does_not_re_settle_the_strip(make_sheet) -> None:
     assert board._splitter.sizes() == sizes  # the strip was not touched at all
 
 
-def test_a_change_to_the_strip_itself_still_settles(make_sheet) -> None:
-    # The other half: the retries exist for a *stale* minimum, which is exactly what
-    # a rebuild leaves behind — so a real change to the strip must still converge.
+def test_a_change_to_the_strip_settles_at_the_thickness_it_was_given(make_sheet) -> None:
+    """The retries existed for a *stale minimum*, and there is no minimum now.
+
+    A strip whose thickness was forced by its content had to converge over a turn
+    or two, because the number it was clamped against only became true after the
+    blocks had been laid out. Nothing clamps it any more, so a pin lands at the
+    thickness the strip already had and stays there.
+    """
     sheet = make_sheet(empty_strip=False)
     _settle()
     _wait()
     board = sheet.board
-    board._settle_tries = 0
+    wanted = board.desired_extent()
 
     sheet.pin_block("conditions")
     _settle()
+    _wait()
 
-    assert board._settle_tries > 0 or board._settle.isActive()
+    assert board.desired_extent() == wanted
+    assert not board._settle.isActive()
 
 
 def test_the_strip_reports_whether_it_rebuilt(make_sheet) -> None:
@@ -932,38 +897,24 @@ def test_the_strip_reports_whether_it_rebuilt(make_sheet) -> None:
 
 
 def test_a_restore_rebuilds_the_strip_even_with_the_same_blocks_in_it(make_sheet) -> None:
-    # keys/edge/align are all set_blocks compares, so a layout restoring the same
-    # blocks at different proportions is invisible to it. invalidate() is the only
-    # thing that makes it look again — which is why apply_arrangement calls it, and
-    # this test is the fence on that call.
+    # keys and edge are all set_blocks compares, so a layout restoring the same
+    # blocks is invisible to it. invalidate() is the only thing that makes it look
+    # again — which is why apply_arrangement calls it, and this is the fence on
+    # that call. (It used to be observed through the proportions a restore put
+    # back; those are no longer part of the arrangement, so the rebuild itself is
+    # what gets watched.)
     sheet = make_sheet()
-    sheet.resize(1900, 900)  # slack, or the two minimums fill the line exactly
     sheet.pin_block("conditions")
     sheet.pin_block("advantages", line=0, slot=1, new_line=False)
     _settle()
-    board = sheet.board
-    page, strip = board._splitter.sizes()
-    board._splitter.setSizes([page - 300, strip + 300])
-    board._splitter.splitterMoved.emit(page - 300, 1)  # a handle drag: widen the strip
-    _settle()
-    _wait()
-
     model = sheet.arrangement()
-    within = model["pinned"]["line_sizes"][0]
-    assert len(within) == 2
-    total = sum(within)
-    floors = [sheet.block_frame(k).minimumSizeHint().width() for k in ("conditions", "advantages")]
-    assert total > sum(floors), "no slack to redistribute; widen the strip further"
-    # Give the *first* block everything the second does not need. The other way
-    # round is where a strip settles on its own once it has room, and this test
-    # then passed or failed on how much of that the page happened to leave over.
-    model["pinned"]["line_sizes"][0] = [total - floors[1], floors[1]]
-    before = board.block_sizes()[0]
-    assert before != model["pinned"]["line_sizes"][0], "already there; nothing to restore"
+    rebuilds: list[bool] = []
+    panel = sheet.board.panel
+    original = panel.set_blocks
+    panel.set_blocks = lambda *a, **k: (rebuilds.append(True), original(*a, **k))[1]
 
     sheet.canvas.apply_arrangement(model)
     _settle()
-    _wait()
 
-    after = board.block_sizes()[0]
-    assert after != before  # the restore was not swallowed by the early return
+    assert rebuilds, "the strip was never asked to rebuild"
+    assert _pinned(sheet)["lines"] == [["conditions", "advantages"]]

@@ -1,4 +1,12 @@
-"""Block size constraints load from config and are applied to the docks."""
+"""Recommended block sizes load from config, and constrain nothing.
+
+The whole point of this file inverted with the resizable grid. It used to prove
+that the configured numbers were *floors* that reached every enclosing layout —
+that a block could never be squashed below its content, and that the width floor
+survived the ``qSmartMinSize`` trap. Now it proves the opposite: that a block can
+be given any size at all, and that the numbers are only ever advice about the
+size it opens at and the size its dividers stick at.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +16,8 @@ import pytest
 from PySide6.QtWidgets import QApplication, QSplitter
 
 from mm_companion.core.data_loader import load_game_data
-from mm_companion.ui.block_sizes import UNBOUNDED, BlockSize, load_block_sizes
+from mm_companion.ui import theme
+from mm_companion.ui.block_sizes import BOUNDS, RecommendedSize, load_block_sizes
 from mm_companion.ui.character_sheet import CharacterSheet
 
 
@@ -38,67 +47,154 @@ SHEET_BLOCKS = {
 GM_BLOCKS = {"gm_players", "gm_npcs", "gm_rolls", "gm_scene"}
 
 
-def test_block_sizes_load_for_every_block() -> None:
+def test_recommendations_load_for_every_block() -> None:
     sizes = load_block_sizes()
 
     assert set(sizes) == SHEET_BLOCKS | GM_BLOCKS
-    assert all(isinstance(s, BlockSize) for s in sizes.values())
-    # The inline "_comment" key is not a block.
-    assert "_comment" not in sizes
+    assert all(isinstance(size, RecommendedSize) for size in sizes.values())
 
 
-def test_only_the_image_block_pins_a_dimension() -> None:
-    sizes = load_block_sizes()
-
-    # Base info grows tall on demand — conditions (which can bundle into several
-    # chips) must never be clipped, so its height is unbounded.
-    assert sizes["base_info"].max_height == UNBOUNDED
-    # The content blocks grow freely both ways.
-    assert sizes["skills"].max_width == UNBOUNDED
-    assert sizes["powers"].max_height == UNBOUNDED
-    # The portrait is the one block that would look wrong stretched wide.
-    assert sizes["character_image"].max_width < UNBOUNDED
-
-
-def test_abilities_and_resistances_state_no_bounds_at_all() -> None:
-    """The two stat grids are sized by their own tables, not by this file.
-
-    They used to share a hardcoded 300x340 in both dimensions — a number that
-    compensated for the tables measuring themselves once at build time, and that a
-    denser or roomier preset made wrong in both directions. The tables report their
-    real rows and columns now, so there is nothing left here to state.
-    """
+def test_abilities_and_resistances_state_no_opinion() -> None:
+    """Their tables measure their real columns and rows, so a number would only
+    be a worse answer that a denser or roomier preset would make wrong."""
     sizes = load_block_sizes()
 
     for key in ("abilities", "resistances"):
-        assert sizes[key].min_width == 0
-        assert sizes[key].min_height == 0
-        assert sizes[key].max_width == UNBOUNDED
-        assert sizes[key].max_height == UNBOUNDED
+        assert sizes[key] == RecommendedSize()
+        assert not sizes[key]
 
 
-def test_abilities_and_resistances_frames_ask_for_their_content(qapp: QApplication) -> None:
+def test_every_other_block_recommends_at_least_a_width() -> None:
+    sizes = load_block_sizes()
+    stated = {key for key, size in sizes.items() if size.width}
+
+    assert stated == (SHEET_BLOCKS | GM_BLOCKS) - {"abilities", "resistances"}
+
+
+def test_the_old_min_names_are_still_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A mod's blocks.json is somebody else's file, and the mods repository pins
+    an engine version — so ``min_width`` still means the recommendation."""
+    from mm_companion.ui import block_sizes
+
+    monkeypatch.setattr(
+        block_sizes, "_baseline", lambda: {"legacy": {"min_width": 210, "min_height": 120}}
+    )
+    block_sizes.clear_block_size_cache()
+    try:
+        assert block_sizes.load_block_sizes()["legacy"] == RecommendedSize(210, 120)
+    finally:
+        block_sizes.clear_block_size_cache()
+
+
+def test_a_theme_overrides_one_recommendation_at_a_time() -> None:
+    """Overrides merge per number, so a preset that only wants Skills narrower
+    says exactly that and inherits the rest."""
+    from dataclasses import replace
+
+    before = load_block_sizes()
+    draft = replace(theme.active_theme(), blocks={"skills": {"recommended_width": 220}})
+    theme.set_preview(draft)
+    try:
+        after = load_block_sizes()
+        assert after["skills"].width == 220
+        assert after["skills"].height == before["skills"].height
+        assert after["powers"] == before["powers"]
+    finally:
+        theme.set_preview(None)
+
+
+def test_the_json_is_documented_and_parses() -> None:
+    from importlib.resources import files
+
+    from mm_companion.ui.block_sizes import RESOURCE_NAME, RESOURCE_PACKAGE
+
+    raw = json.loads(files(RESOURCE_PACKAGE).joinpath(RESOURCE_NAME).read_text(encoding="utf-8"))
+
+    assert raw["_comment"], "the file explains itself to whoever retunes it next"
+    for key, spec in raw.items():
+        if key.startswith("_"):
+            continue
+        assert set(spec) <= set(BOUNDS), f"{key} states something that is not a recommendation"
+
+
+# -- what the frames actually do with them -----------------------------------
+
+
+def test_a_block_opens_at_its_recommendation(qapp: QApplication) -> None:
+    sheet = CharacterSheet(load_game_data())
+    sizes = load_block_sizes()
+
+    for key in ("skills", "powers", "notes"):
+        assert sheet.block_frame(key).sizeHint().width() == sizes[key].width
+
+
+def test_a_block_with_no_opinion_opens_at_its_content(qapp: QApplication) -> None:
     sheet = CharacterSheet(load_game_data())
 
     for key in ("abilities", "resistances"):
         frame = sheet.block_frame(key)
-        # Unbounded, so the block shares its row's width rather than being pinned...
-        assert frame.maximumWidth() >= 100_000
-        assert frame.maximumHeight() >= 100_000
-        # ...and its effective minimum is its own content, which is a real size and
-        # exactly what the block wants to be (nothing is capping it any more).
-        assert frame.minimumSizeHint().height() > 0
-        assert frame.minimumSizeHint().height() == frame.sizeHint().height()
+        assert frame.sizeHint().width() == frame.content_size_hint().width()
+        assert frame.sizeHint().width() > 0
+
+
+def test_no_block_holds_a_layout_open_at_its_content(qapp: QApplication) -> None:
+    """The rule this file exists for, and the exact inverse of what it used to be.
+
+    A frame's minimum used to be its whole content, in both dimensions, and that
+    climbed out through the row, the page, the pinned strip and the window — which
+    is what made the application refuse to be made smaller than the blocks inside
+    it. A page the user drags cannot work that way: a minimum is a refusal, and
+    whether a block is too small to read has to be the user's call.
+    """
+    sheet = CharacterSheet(load_game_data())
+    floor = int(theme.metric("block.min-extent"))
+
+    for key in sorted(SHEET_BLOCKS):
+        frame = sheet.block_frame(key)
+        minimum = frame.minimumSizeHint()
+        content = frame.content_size_hint()
+        assert minimum.width() <= floor, key
+        assert minimum.height() < content.height() or content.height() <= floor, key
+
+
+def test_a_block_can_be_squashed_by_the_layout_that_holds_it(qapp: QApplication) -> None:
+    """The same claim from the outside: a splitter really can make one small.
+
+    This is the shape the old test used to *forbid* — it put a frame in a bare
+    ``QSplitter`` and asserted the holder's minimum was at least the block's
+    content. The strip squashing a block was the bug then; it is the feature now.
+    """
+    sheet = CharacterSheet(load_game_data())
+
+    for key in ("skills", "equipment", "dice"):
+        holder = QSplitter()
+        holder.addWidget(sheet.block_frame(key))
+        content = sheet.block_frame(key).content_size_hint().width()
+        assert holder.minimumSizeHint().width() <= content
+
+
+def test_a_squashed_block_keeps_a_title_bar_to_drag_back_open(qapp: QApplication) -> None:
+    """The floor that is left is about being able to find a block you shrank."""
+    sheet = CharacterSheet(load_game_data())
+    frame = sheet.block_frame("skills")
+
+    assert frame.minimumSizeHint().height() >= frame.title_bar.minimumSizeHint().height()
+
+
+def test_no_block_pins_a_dimension_any_more(qapp: QApplication) -> None:
+    """Pinning a width was how the old page stopped Abilities being stretched;
+    a page whose columns the user drags has no use for it."""
+    sheet = CharacterSheet(load_game_data())
+
+    for key in sorted(SHEET_BLOCKS):
+        frame = sheet.block_frame(key)
+        assert frame.maximumWidth() >= 100_000, key
+        assert frame.maximumHeight() >= 100_000, key
 
 
 def test_a_long_title_does_not_widen_its_block(qapp: QApplication) -> None:
-    """A caption describes its block; it does not get to decide how wide it is.
-
-    A section's live title grows with its point cost ("Abilities — 24 PP"), and a
-    plain label would report that string's whole width as a minimum — pushing a
-    fixed-width block past its own ``max_width``, and thickening the pinned strip
-    beyond the ``min_width`` that is meant to set it. The title elides instead.
-    """
+    """A live caption ("Abilities — 24 PP") must not become a width the block can
+    never be dragged under. The eliding label is what keeps that true."""
     sheet = CharacterSheet(load_game_data())
     frame = sheet.block_frame("abilities")
     before = frame.minimumSizeHint().width()
@@ -106,103 +202,4 @@ def test_a_long_title_does_not_widen_its_block(qapp: QApplication) -> None:
     frame.title_bar.set_title("Abilities — 248 PP, and then some more words besides")
 
     assert frame.minimumSizeHint().width() == before
-    # Nothing is lost: the caption still reads in full, just not necessarily on screen.
     assert frame.title_bar.title_text() == "Abilities — 248 PP, and then some more words besides"
-
-
-def test_a_configured_width_never_caps_what_a_block_asks_a_layout_for(
-    qapp: QApplication,
-) -> None:
-    """The JSON width is a floor to the *layout*, not only to ``minimumSizeHint``.
-
-    It used to be both, and the second one silently: ``setMinimumWidth`` does not
-    raise a widget's layout minimum, it replaces it — ``qSmartMinSize`` ends with
-    ``if (minSize.width() > 0) s.setWidth(minSize.width())``. So a block whose
-    content needed more than its JSON number told every enclosing layout it did
-    not, and the pinned strip (whose own minimum is its splitter's) squashed it to
-    the number.
-
-    The subject is whichever block currently outgrows a *stated* floor rather than a
-    named one. It used to be Equipment, until its three "Add…" buttons were made to
-    wrap (they were also what made the block change width with the lock — see
-    ``tests/test_lock_geometry.py``); which block it is depends on the font and the
-    preset, and the rule is about none of them in particular. A floor of zero is not
-    a subject: with no minimum stated there is nothing that could have replaced the
-    content in the first place.
-    """
-    sheet = CharacterSheet(load_game_data())
-    sizes = load_block_sizes()
-    outgrown = {
-        key: (sheet.block_frame(key).minimumSizeHint().width(), spec.min_width)
-        for key, spec in sizes.items()
-        if key in SHEET_BLOCKS
-        and spec.min_width > 0
-        and sheet.block_frame(key).minimumSizeHint().width() > spec.min_width
-    }
-    assert outgrown, f"no block outgrows its floor, so this rule is untested: {sizes}"
-
-    for key, (content, _floor) in outgrown.items():
-        holder = QSplitter()
-        holder.addWidget(sheet.block_frame(key))
-        assert holder.minimumSizeHint().width() >= content, key
-
-
-def test_block_frames_apply_the_configured_constraints(qapp: QApplication) -> None:
-    sheet = CharacterSheet(load_game_data())
-    sizes = load_block_sizes()
-
-    for key, spec in sizes.items():
-        if key not in SHEET_BLOCKS:
-            continue  # a GM-window block: not on this sheet
-        frame = sheet.block_frame(key)
-        # The configured minimum is a floor. The section sits directly in the frame
-        # (no inner scroll area), so a block whose content needs more than the
-        # configured minimum — e.g. Base Information or the Advantages picker —
-        # reports the larger content-driven minimum instead.
-        # Both floors are stated through the effective minimum (minimumSizeHint),
-        # so a block is never squashed below its content in either dimension; an
-        # explicit setMinimumWidth would *replace* the content minimum rather than
-        # raise it (see BlockFrame.set_block_size).
-        assert frame.minimumSizeHint().width() >= spec.min_width
-        assert frame.minimumSizeHint().height() >= spec.min_height
-        # A configured max pins the frame exactly; an unbounded dimension is left
-        # effectively unconstrained (Qt reports its own large max).
-        if spec.max_width < UNBOUNDED:
-            assert frame.maximumWidth() == spec.max_width
-        else:
-            assert frame.maximumWidth() >= 100_000
-        if spec.max_height < UNBOUNDED:
-            assert frame.maximumHeight() == spec.max_height
-        else:
-            assert frame.maximumHeight() >= 100_000
-
-
-def test_a_theme_overrides_block_bounds_one_at_a_time(tmp_path, monkeypatch) -> None:
-    """A preset's ``blocks`` map layers over the shipped file, bound by bound."""
-    from mm_companion.core import storage
-    from mm_companion.ui import theme
-
-    monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path))
-    (tmp_path / "themes").mkdir()
-    (tmp_path / "themes" / "dense.json").write_text(
-        json.dumps(
-            {
-                "id": "dense",
-                "name": "Dense",
-                "extends": "classic",
-                "blocks": {"skills": {"min_width": 220}},
-            }
-        ),
-        encoding="utf-8",
-    )
-    storage.save_settings({"theme": "dense"})
-    theme.reset()
-    try:
-        sizes = load_block_sizes()
-        # The named bound moved...
-        assert sizes["skills"].min_width == 220
-        # ...its siblings on the same block did not, and neither did other blocks.
-        assert sizes["skills"].min_height == load_block_sizes()["skills"].min_height == 180
-        assert sizes["powers"].min_width == 240
-    finally:
-        theme.reset()

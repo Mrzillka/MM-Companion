@@ -20,7 +20,7 @@ indicator, and edge auto-scroll.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import (
@@ -29,6 +29,7 @@ from PySide6.QtCore import (
     QPoint,
     QPropertyAnimation,
     QRect,
+    QSize,
     QTimer,
     Signal,
 )
@@ -36,16 +37,18 @@ from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (
     QAbstractScrollArea,
     QGraphicsOpacityEffect,
-    QHBoxLayout,
-    QSizePolicy,
+    QSplitter,
     QVBoxLayout,
     QWidget,
 )
 
+from mm_companion.ui import layout_tree as lt
+from mm_companion.ui import theme
 from mm_companion.ui.block_frame import BlockFrame, BlockWindow
-from mm_companion.ui.block_sizes import UNBOUNDED, BlockSize
+from mm_companion.ui.block_sizes import UNBOUNDED, RecommendedSize
 from mm_companion.ui.blocks.base import instance_template
 from mm_companion.ui.drop_feedback import DropIndicator
+from mm_companion.ui.grid_view import RowStack, build_node
 from mm_companion.ui.pinned import (
     DEFAULT_ALIGN,
     DEFAULT_EDGE,
@@ -54,14 +57,23 @@ from mm_companion.ui.pinned import (
     PIN_EDGES,
     PinSlot,
 )
+from mm_companion.ui.tab_group import TabGroupFrame
 from mm_companion.ui.widgets import discard_widget
 
 if TYPE_CHECKING:  # the board is the canvas's *view* for pinned blocks, not a dependency
     from mm_companion.ui.pinned_panel import PinnedBoard
 
-# Bumped whenever the persisted arrangement schema changes, so a layout saved by
-# an older version is rejected and the default applies.
-SCHEMA_VERSION = 7
+# Bumped whenever the persisted arrangement schema changes. A layout saved by an
+# older version is normally rejected and the default applies; version 7 is the
+# exception, and is *migrated* — see layout_tree.migrate_v7. Every row and every
+# pinned line of a v7 layout has an exact reading as a tree, so there was no
+# reason to throw away a page somebody had arranged.
+SCHEMA_VERSION = 8
+
+#: How a host builds a block a restored layout names but the registry does not
+#: hold: it answers with ``(title, section, size)``, or None for a key it does
+#: not recognise. Only a host with multi-instance blocks supplies one.
+InstanceFactory = Callable[[str], tuple[str, QWidget, RecommendedSize] | None]
 
 #: Whether a block popped out of the app stays above other applications unless
 #: told otherwise. It does: a floated block's whole purpose is to be read beside
@@ -72,18 +84,25 @@ DEFAULT_ON_TOP = True
 
 @dataclass(frozen=True)
 class DropSlot:
-    """Where a dragged block lands: a new row, a slot in one, or *onto* a block.
+    """Where a dragged block lands.
+
+    Two vocabularies, because two kinds of caller need it. A drag names a
+    ``target`` block and the ``side`` of it to land on, which is the only way to
+    say "underneath that one" — the thing the page could not express while a row
+    was the only container. Everything else (an anchor resolving, a block being
+    reopened or unpinned) still names a ``row`` and a ``slot`` in it, which is all
+    those callers have ever known, and :meth:`BlockCanvas._place` translates.
 
     ``onto`` names a block the dragged one would merge into rather than sit
-    beside. Only ever set when that block said yes (see
-    :meth:`BlockCanvas._merge_target`), so every block with no opinion keeps
-    exactly the drag behaviour it always had.
+    beside, making the two of them a tab group.
     """
 
     new_row: bool
     row: int
     slot: int
     onto: str | None = None
+    target: str | None = None
+    side: str = "right"
 
 
 @dataclass(frozen=True)
@@ -114,120 +133,6 @@ class Anchor:
         return cls(neighbour, bool(value.get("in_row")), bool(value.get("before")))
 
 
-def default_pin_model() -> dict:
-    """An empty pinned strip: the default every fresh layout starts from."""
-    return {
-        "edge": DEFAULT_EDGE,
-        "lines": [],
-        "align": DEFAULT_ALIGN,
-        "sizes": [],
-        "line_sizes": [],
-        "extent": DEFAULT_EXTENT,
-    }
-
-
-def _int_list(value: object) -> list[int]:
-    """A list of positive ints, or [] for anything else (a cosmetic field)."""
-    if not isinstance(value, list):
-        return []
-    if not all(isinstance(item, int) and not isinstance(item, bool) for item in value):
-        return []
-    return [int(item) for item in value]
-
-
-@dataclass(frozen=True)
-class _PinModel:
-    """The parsed ``pinned`` section of a persisted arrangement."""
-
-    edge: str
-    lines: list[list[str]]
-    align: str
-    sizes: list[int]
-    line_sizes: list[list[int]]
-    extent: int
-
-    @property
-    def keys(self) -> list[str]:
-        return [key for line in self.lines for key in line]
-
-    @classmethod
-    def parse(cls, value: object, known: set[str]) -> _PinModel | None:
-        """Parse the ``pinned`` sub-model, or None when it is unusable.
-
-        Strict about what changes *where a block lives* — an unknown key, edge or
-        alignment rejects the whole layout, the same as a malformed row would,
-        since guessing would silently move a block. Lenient about the cosmetic
-        numbers: bad sizes or extent fall back to the defaults, which only costs
-        the strip its remembered proportions.
-        """
-        if value is None:  # a layout written before the strip existed
-            value = {}
-        if not isinstance(value, dict):
-            return None
-
-        edge = value.get("edge", DEFAULT_EDGE)
-        align = value.get("align", DEFAULT_ALIGN)
-        if edge not in PIN_EDGES or align not in PIN_ALIGNMENTS:
-            return None
-
-        raw_lines = value.get("lines", [])
-        if not isinstance(raw_lines, list):
-            return None
-        lines: list[list[str]] = []
-        for raw_line in raw_lines:
-            if not isinstance(raw_line, list) or any(key not in known for key in raw_line):
-                return None
-            if raw_line:  # an empty line is nothing to render, not a reason to reject
-                lines.append(list(raw_line))
-
-        raw_line_sizes = value.get("line_sizes", [])
-        line_sizes = (
-            [_int_list(entry) for entry in raw_line_sizes]
-            if isinstance(raw_line_sizes, list)
-            else []
-        )
-        raw_extent = value.get("extent", DEFAULT_EXTENT)
-        extent = (
-            int(raw_extent)
-            if isinstance(raw_extent, int) and not isinstance(raw_extent, bool) and raw_extent > 0
-            else DEFAULT_EXTENT
-        )
-        return cls(edge, lines, align, _int_list(value.get("sizes", [])), line_sizes, extent)
-
-
-class RowWidget(QWidget):
-    """One horizontal row of blocks.
-
-    Fixed-width blocks (abilities/resistances) keep their width; growable blocks
-    stretch to share the row. A row with only fixed blocks gets a trailing
-    stretch so its blocks left-align and the leftover width stays empty.
-    """
-
-    SPACING = 6  # px between side-by-side blocks in a row
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._layout = QHBoxLayout(self)
-        self._layout.setContentsMargins(0, 0, 0, 0)
-        self._layout.setSpacing(self.SPACING)
-        self._frames: list[BlockFrame] = []
-        self._has_growable = False
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-
-    def add_frame(self, frame: BlockFrame, growable: bool) -> None:
-        self._layout.addWidget(frame, stretch=1 if growable else 0)
-        self._frames.append(frame)
-        self._has_growable = self._has_growable or growable
-
-    def finalize(self) -> None:
-        """Add a trailing stretch when nothing in the row absorbs slack width."""
-        if not self._has_growable:
-            self._layout.addStretch(1)
-
-    def frames(self) -> list[BlockFrame]:
-        return list(self._frames)
-
-
 class BlockCanvas(QWidget):
     """Free-form, scrollable arrangement of the sheet's blocks (see module doc)."""
 
@@ -244,13 +149,12 @@ class BlockCanvas(QWidget):
     def __init__(
         self,
         panels: list[tuple[str, str, QWidget]],
-        block_sizes: dict[str, BlockSize],
+        block_sizes: dict[str, RecommendedSize],
         default_rows: list[list[str]],
         parent: QWidget | None = None,
         *,
-        fill_last: bool = False,
         default_pinned: list[list[str]] | None = None,
-        instance_factory: Callable[[str], tuple[str, QWidget, BlockSize] | None] | None = None,
+        instance_factory: InstanceFactory | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("blockCanvas")
@@ -260,15 +164,10 @@ class BlockCanvas(QWidget):
         # Blocks the default arrangement parks in the strip rather than on the page
         # (the sheet's Dice block). A host that offers no strip passes none.
         self._default_pinned = default_pinned or []
-        # When set, the bottom row's growable blocks stretch to fill leftover
-        # height instead of a trailing spacer holding empty space beneath them.
-        # Used by boards with only a few blocks (GM Mode) where a top-aligned
-        # stack would leave a large dead gap at the bottom of the page.
-        self._fill_last = fill_last
         # One frame per block, created once and reparented as it moves.
         self._frames: dict[str, BlockFrame] = {}
         for key, title, section in panels:
-            size = block_sizes.get(key, BlockSize())
+            size = block_sizes.get(key, RecommendedSize())
             frame = BlockFrame(key, title, section, size, self, parent=self)
             frame.hide()  # shown once _relayout places it in a row
             self._frames[key] = frame
@@ -291,11 +190,21 @@ class BlockCanvas(QWidget):
         self._on_top: dict[str, bool] = {}
         # Whether the floated windows are currently stood down (compact mode).
         self._windows_suspended = False
-        self._rows: list[list[str]] = []
+        # The page, as a tree of splits and leaves (see ui/layout_tree.py). The
+        # rows are its top-level children; anything nested inside one of those is
+        # a block stacked beside or under another.
+        self._page: lt.Split = lt.Split(lt.VERTICAL, ())
         self._hidden: set[str] = set()
         # Where each hidden block was closed from, so reopening restores it there.
         self._anchors: dict[str, Anchor] = {}
-        self._row_widgets: list[RowWidget] = []
+        self._row_widgets: list[QWidget] = []
+        # The page's view. Rows with a height the user dragged keep it; the rest
+        # are as tall as their content, exactly as every row used to be.
+        self._stack = RowStack(self)
+        # Live tab groups, keyed by exactly the blocks in them. Kept across a
+        # rebuild so a group is not destroyed and remade — it holds its members'
+        # frames, and remaking it would take live blocks with it.
+        self._groups: dict[tuple[str, ...], TabGroupFrame] = {}
 
         # The pinned strip: blocks parked on one edge of the window, outside this
         # scrolling page (see mm_companion.ui.pinned_panel). Modelled the same way
@@ -320,6 +229,7 @@ class BlockCanvas(QWidget):
         self._layout.setSpacing(8)
 
         self._indicator = DropIndicator(self)
+        self._stack.heightsChanged.connect(self._on_sizes_settled)
 
         # Drag state.
         self._scroll_area: QAbstractScrollArea | None = None
@@ -335,6 +245,34 @@ class BlockCanvas(QWidget):
         self._autoscroll_timer.timeout.connect(self._autoscroll_tick)
 
         self.apply_arrangement(self.default_arrangement())
+
+    # -- the page tree, and the flat view of it the older code still speaks ---
+
+    @property
+    def _rows(self) -> list[list[str]]:
+        """The page's top-level rows, each as a flat list of block keys.
+
+        A *view* over :attr:`_page`, not a second model. Most of this class only
+        ever needs to know which blocks share a row and in what order — anchors,
+        reopening a hidden block, the default arrangement — and that question has
+        the same answer whether or not the row has a stack nested inside it. The
+        drag gesture, which does care, works on the tree directly.
+        """
+        return [lt.keys(child) for child in self._page.children]
+
+    def _set_page(self, node: lt.Node | None) -> None:
+        """Replace the page tree, keeping it canonical and always a page."""
+        self._page = lt.as_page(node)
+
+    def page_tree(self) -> lt.Split:
+        """The page as a tree — the seam tests and the layout history read."""
+        return self._page
+
+    def _row_index_of(self, key: str) -> int | None:
+        for index, row in enumerate(self._rows):
+            if key in row:
+                return index
+        return None
 
     # -- wiring from the sheet ----------------------------------------------
 
@@ -365,7 +303,7 @@ class BlockCanvas(QWidget):
         key: str,
         title: str,
         section: QWidget,
-        size: BlockSize,
+        size: RecommendedSize,
         *,
         near: str | None = None,
     ) -> None:
@@ -383,11 +321,11 @@ class BlockCanvas(QWidget):
         frame = BlockFrame(key, title, section, size, self, parent=self)
         frame.hide()
         self._frames[key] = frame
-        row = self._row_of(near) if near else None
-        if row is None:
-            self._rows.append([key])
+        beside = near if near and lt.find(self._page, near) is not None else None
+        if beside is None:
+            self._set_page(lt.append_row(self._page, key))
         else:
-            self._rows[row].append(key)
+            self._set_page(lt.insert_beside(self._page, key, beside, "right"))
         self._relayout()
         self.block_added.emit(key)
         self.arrangement_changed.emit()
@@ -426,91 +364,207 @@ class BlockCanvas(QWidget):
         return self._windows.get(key)
 
     def content_minimum_width(self) -> int:
-        """The widest docked row's minimum width, including the canvas margins.
+        """How narrow the page may be made. A constant, and deliberately so.
 
-        The page must never shrink narrow enough to clip a row's blocks (the
-        fixed-width Abilities/Resistances grids can't compress), so the sheet
-        uses this to pin its own minimum width. Only docked rows constrain it —
-        a floated or hidden block has its own window and doesn't hold the page
-        open. Each block contributes its :meth:`BlockFrame.minimumSizeHint`
-        width (a column-flow block reports a single column), summed with the
-        inter-block spacing :class:`RowWidget` uses.
+        This used to be the widest docked row — every block's whole content added
+        up — and the sheet pinned its own minimum width to it, which is what made
+        the *window* refuse to be made smaller than the blocks inside it. A page
+        the user resizes cannot work that way: a block that is too narrow reflows,
+        and past that it scrolls inside its own frame, so there is no width at
+        which the page is broken and none it has to refuse.
+
+        It stays a method rather than becoming nothing because the sheet, the GM
+        window and their tests all ask the question; the honest answer is now the
+        same one every time.
         """
-        best = 0
-        for row in self._rows:
-            keys = [k for k in row if k in self._frames and k not in self._windows]
-            if not keys:
-                continue
-            total = sum(self._frames[k].minimumSizeHint().width() for k in keys)
-            total += RowWidget.SPACING * (len(keys) - 1)
-            best = max(best, total)
         margins = self._layout.contentsMargins()
-        return best + margins.left() + margins.right()
+        return int(theme.metric("block.min-extent")) + margins.left() + margins.right()
 
     # -- rendering -----------------------------------------------------------
 
-    def _is_growable(self, key: str) -> bool:
-        """A block grows to fill its row unless its width is pinned (abilities/
-        resistances have ``min_width == max_width``)."""
-        size = self._sizes.get(key)
-        if size is None:
-            return True
-        return not (size.max_width < UNBOUNDED and size.max_width == size.min_width)
-
     def _relayout(self) -> None:
-        """Rebuild the strip and the row widgets from the model (empty rows collapse)."""
+        """Rebuild the page from the tree.
+
+        Every frame is reparented on the way, which is why nothing here may leave
+        one visible while it is between homes: a parentless visible widget *is* a
+        top-level window, and a page of a dozen blocks rebuilding would flash a
+        dozen of them (see ``tests/test_window_flash.py``). Frames are hidden
+        before they are let go and shown once they are placed; containers are shed
+        through ``discard_widget``, which hides before it unparents.
+        """
         self._render_pinned()  # first: see _render_pinned for why the order matters
-        old = self._row_widgets
-        self._row_widgets = []
-        # Detach every current layout item; frames are moved into the new rows
-        # below (addWidget reparents them), so the old rows end up empty.
-        while self._layout.count():
-            self._layout.takeAt(0)
+        old_rows = self._row_widgets
 
-        # Every block starts flush to its content; the fill block (if any) is
-        # promoted to Expanding below. Reset first so a block that used to be the
-        # bottom one — before a reorder or a float — doesn't stay stretchy.
-        for frame in self._frames.values():
-            frame.set_vertical_fill(False)
-
-        built: list[list[str]] = []
-        for row_keys in self._rows:
-            keys = [k for k in row_keys if k in self._frames]
-            if not keys:
+        # Anything the tree no longer places — a block now hidden, floating or
+        # pinned — is rescued to the canvas before its old container goes, or
+        # deleting that container would take the frame's C++ half with it.
+        #
+        # Only the ones still inside the page's own stack. _render_pinned has just
+        # run (see below for why it goes first), so a block that has moved to the
+        # strip is already parented there and rescuing it would take it straight
+        # back off — which is exactly the bug the render order exists to prevent,
+        # arrived at from the other direction.
+        placed = set(lt.keys(self._page))
+        for key, frame in self._frames.items():
+            if key in placed or not self._is_at_or_within(frame, self._stack):
                 continue
-            row = RowWidget(self)
-            for key in keys:
-                frame = self._frames[key]
-                row.add_frame(frame, self._is_growable(key))
-                frame.show()
-            row.finalize()
-            self._layout.addWidget(row)
-            self._row_widgets.append(row)
-            built.append(keys)
+            frame.hide()
+            frame.setParent(self)
 
-        if self._fill_last and self._row_widgets:
-            # The bottom row soaks up the slack: its row widget grows, and its
-            # growable blocks grow inside it, so nothing is left empty below.
-            self._row_widgets[-1].setSizePolicy(
-                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
-            )
-            for key in built[-1]:
-                if self._is_growable(key):
-                    self._frames[key].set_vertical_fill(True)
-        else:
-            self._layout.addStretch(1)
+        # Shed any group the tree no longer asks for *before* building, so a
+        # group left over from an arrangement that has been replaced hands its
+        # members back rather than holding frames nothing can reach.
+        wanted = {leaf.keys for _, leaf in lt.iter_leaves(self._page) if leaf.tabbed}
+        for keys in [keys for keys in self._groups if keys not in wanted]:
+            self._release_group(keys)
 
-        # Free the old rows. Any frame not moved into a new row above (a block now
-        # hidden or floating) is still parented to its old row; rescue it to the
-        # canvas first so deleting the row doesn't destroy its C++ object.
-        for row in old:
-            for frame in row.frames():
-                if frame.parentWidget() is row:
-                    frame.setParent(self)
-                    frame.hide()
-            discard_widget(row)
+        rows: list[QWidget] = []
+        for child in self._page.children:
+            rows.append(build_node(child, self._build_leaf, self._stack))
+        self._row_widgets = rows
+        self._stack.set_rows(rows, self._row_heights())
 
+        for key in placed:
+            self._frames[key].show()
+
+        # Only the containers we made are shed. A row holding a single block *is*
+        # that block's frame — build_node returns the frame itself for a lone leaf
+        # — and discarding one would destroy a live block rather than a wrapper.
+        for row in old_rows:
+            if not isinstance(row, BlockFrame):
+                discard_widget(row)
+
+        if self._layout.indexOf(self._stack) < 0:
+            self._layout.addWidget(self._stack)
         self._indicator.raise_()
+
+    def _on_sizes_settled(self) -> None:
+        """A divider drag finished: take the new sizes into the model and say so."""
+        self._remember_sizes()
+        self.arrangement_changed.emit()
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        """The page's own shape rule: as tall as its rows, as narrow as you like.
+
+        This is the whole of "width tiles, height scrolls", and it is the *inverse*
+        of what the canvas used to say. It used to report the widest row's content
+        as a minimum width, which held the window open; it reports almost none now,
+        so every row can be dragged narrow and its blocks reflow. The height goes
+        the other way: stating the rows' full height is what makes the page
+        overflow the viewport and scroll, rather than squashing every row to fit a
+        window nobody sized for them.
+        """
+        return QSize(int(theme.metric("block.min-extent")), self.sizeHint().height())
+
+    def _row_heights(self) -> list[int]:
+        """The height stated for each row; zero where the user has not set one."""
+        sizes = self._page.usable_sizes()
+        return list(sizes) if sizes else [0] * len(self._page.children)
+
+    def _build_leaf(self, leaf: lt.Leaf) -> QWidget:
+        """The widget for one cell: a block's frame, or a group of them in tabs.
+
+        Groups are **kept across a rebuild** when their membership has not
+        changed, keyed by the tuple of blocks in them. Rebuilding one every
+        relayout would reparent every member twice a drag and throw away which tab
+        was showing — and, since the group holds the frames, would be a good way to
+        destroy a live block.
+        """
+        keys = leaf.keys
+        if len(keys) == 1:
+            self._release_group(keys)
+            return self._frames[keys[0]]
+
+        group = self._groups.get(keys)
+        if group is None:
+            self._dissolve_groups(keys)
+            group = TabGroupFrame(
+                [self._frames[key] for key in keys], leaf.active, self, parent=self
+            )
+            group.splitRequested.connect(self._on_tab_split)
+            group.splitMoved.connect(self.update_drag)
+            group.splitReleased.connect(self._on_tab_split_released)
+            group.activeChanged.connect(self._on_tab_activated)
+            self._groups[keys] = group
+        else:
+            group.refresh_titles()
+        return group
+
+    def _release_group(self, keys: tuple[str, ...]) -> None:
+        """Hand a group's members back and shed it.
+
+        A group *owns* its members' frames, so one going away has to give them up
+        before it is deleted or it takes live blocks with it — the same rule the
+        old rows had, and the same way it is broken.
+        """
+        group = self._groups.pop(keys, None)
+        if group is None:
+            return
+        for key in list(group.keys):
+            frame = group.release(key)
+            if frame is not None:
+                frame.hide()
+                frame.setParent(self)
+        discard_widget(group)
+
+    def _dissolve_groups(self, wanted: tuple[str, ...]) -> None:
+        """Shed every group but *wanted*, whose members are about to be reused."""
+        for keys in [keys for keys in self._groups if keys != wanted]:
+            self._release_group(keys)
+
+    def group_for(self, key: str):
+        """The tab group *key* is currently in, if any."""
+        for keys, group in self._groups.items():
+            if key in keys:
+                return group
+        return None
+
+    def _on_tab_activated(self, key: str) -> None:
+        """Remember which tab of a group is showing, so a restore brings it back."""
+        self._set_page(lt.set_active(self._page, key))
+        self.arrangement_changed.emit()
+
+    def _on_tab_split(self, key: str, global_pos: QPoint) -> None:
+        """A tab was dragged clear of its bar: take that block out of the group.
+
+        From here the gesture is indistinguishable from one begun on a title bar —
+        the tab bar still holds the mouse grab, so its moves and its release are
+        forwarded into the same drag controller and the block can dock, stack,
+        pin, merge or stay floating.
+        """
+        self._set_page(lt.split_out(self._page, key))
+        self._relayout()
+        self.adopt_drag(key, global_pos)
+
+    def _on_tab_split_released(self, global_pos: QPoint) -> None:
+        if self._drag_key is not None:
+            self.title_bar_released(self._drag_key, global_pos)
+
+    def _remember_sizes(self) -> None:
+        """Read the live splitter sizes back into the tree.
+
+        The handles are dragged by the user, not by us, so the sizes are only true
+        on the widgets until somebody asks. Pulling them in here is what makes a
+        resize survive a save, an undo step, or the next rebuild.
+        """
+        heights = self._stack.heights()
+        page = self._page
+        if len(heights) == len(page.children):
+            page = replace(page, sizes=tuple(heights))
+        for index, row in enumerate(self._row_widgets):
+            page = self._absorb_sizes(page, (index,), row)
+        self._page = lt.as_page(page)
+
+    def _absorb_sizes(self, page: lt.Node, path: tuple[int, ...], widget: QWidget) -> lt.Node:
+        """Copy *widget*'s splitter sizes (and its children's) into the tree."""
+        if not isinstance(widget, QSplitter):
+            return page
+        node = lt.at(page, path)
+        if isinstance(node, lt.Split) and widget.count() == len(node.children):
+            page = lt.set_sizes(page, path, widget.sizes()) or page
+            for index in range(widget.count()):
+                page = self._absorb_sizes(page, path + (index,), widget.widget(index))
+        return page
 
     def _render_pinned(self) -> None:
         """Push the pinned blocks into the board (a no-op without one).
@@ -583,10 +637,15 @@ class BlockCanvas(QWidget):
         return {
             "version": SCHEMA_VERSION,
             "instances": [],
-            "rows": rows,
+            "page": lt.to_dict(lt.rows_to_page(rows)),
+            "region": {
+                "edge": DEFAULT_EDGE,
+                "align": DEFAULT_ALIGN,
+                "extent": DEFAULT_EXTENT,
+                "root": lt.to_dict(lt.lines_to_region(pinned, DEFAULT_EDGE)),
+            },
             "floating": {},
             "hidden": [],
-            "pinned": default_pin_model() | {"lines": pinned},
         }
 
     def arrangement(self) -> dict:
@@ -597,6 +656,7 @@ class BlockCanvas(QWidget):
         still restores (its blocks just reopen at their default position).
         """
         self._sync_from_board()
+        self._remember_sizes()
         return {
             "version": SCHEMA_VERSION,
             # Which blocks *exist*, before where any of them sits. Only the ones
@@ -608,7 +668,13 @@ class BlockCanvas(QWidget):
                 for key, frame in self._frames.items()
                 if instance_template(key) != key
             ],
-            "rows": [list(row) for row in self._rows],
+            "page": lt.to_dict(self._page),
+            "region": {
+                "edge": self._pin_edge,
+                "align": self._pin_align,
+                "extent": self._pin_extent,
+                "root": lt.to_dict(lt.lines_to_region(self.pinned_lines(), self._pin_edge)),
+            },
             "floating": {key: self._window_geometry(key) for key in self._windows},
             "hidden": sorted(self._hidden),
             # Kept for a block that is *off* the page — hidden or pinned — since
@@ -617,14 +683,6 @@ class BlockCanvas(QWidget):
                 key: anchor.to_dict()
                 for key, anchor in self._anchors.items()
                 if key in self._hidden or self.is_pinned(key)
-            },
-            "pinned": {
-                "edge": self._pin_edge,
-                "lines": self.pinned_lines(),
-                "align": self._pin_align,
-                "sizes": list(self._pin_sizes),
-                "line_sizes": [list(sizes) for sizes in self._pin_line_sizes],
-                "extent": self._pin_extent,
             },
         }
 
@@ -663,7 +721,8 @@ class BlockCanvas(QWidget):
         parsed = self._validate(model)
         if parsed is None:
             return False
-        rows, floating, hidden, anchors, pinned = parsed
+        page, region, floating, hidden, anchors = parsed
+        edge, align, extent, region_root = region
 
         for key in list(self._windows):
             self._destroy_window(key)
@@ -671,15 +730,19 @@ class BlockCanvas(QWidget):
         # *moving* a block keeps that choice across a dock (see set_block_on_top).
         self._on_top.clear()
         was_hidden = self._hidden
-        self._rows = rows
+        self._set_page(page)
         self._hidden = set(hidden)
         self._anchors = anchors
-        self._pinned = pinned.lines
-        self._pin_edge = pinned.edge
-        self._pin_align = pinned.align
-        self._pin_sizes = pinned.sizes
-        self._pin_line_sizes = pinned.line_sizes
-        self._pin_extent = pinned.extent
+        self._pinned = lt.region_lines(region_root, edge)
+        self._pin_edge = edge
+        self._pin_align = align
+        # The strip's own proportions do not survive the move to a tree: they
+        # described a layout engine that no longer exists, and a wrong remembered
+        # size is worse than none. Its blocks lay themselves out once, from their
+        # own hints, and the next drag is remembered properly.
+        self._pin_sizes = []
+        self._pin_line_sizes = []
+        self._pin_extent = extent
         if self._board is not None:
             # The model is authoritative here, not the widgets: force the strip to
             # rebuild so the restored proportions are actually applied.
@@ -730,51 +793,70 @@ class BlockCanvas(QWidget):
                 self.add_block(key, built[0] or title, built[1], built[2])
 
     def _validate(self, model: object):
-        """Parse/validate a persistence model → (rows, floating, hidden, anchors, pinned) or None.
+        """Parse a persistence model → (page, region, floating, hidden, anchors) or None.
 
-        Enforces the invariant that every known block appears exactly once across
-        rows, floating, hidden, and the pinned strip. The optional
-        ``hidden_anchors`` is parsed leniently — anything unusable is dropped
-        rather than rejecting the whole layout, since a missing anchor only costs
-        a reopened block its remembered spot.
+        Enforces the invariant that has held since the arrangement was rows: every
+        known block appears **exactly once** across the page, the region, the
+        floating windows and the hidden set. A layout that half-describes where
+        somebody's blocks are is worse than no layout, so anything short of that
+        falls back to the default.
+
+        Strict about *where a block lives* — an unknown key or edge rejects the
+        whole thing, because guessing would silently move one. Lenient about the
+        cosmetic numbers: the sizes inside the tree, the strip's thickness and the
+        optional ``hidden_anchors`` all degrade to defaults, since a lost
+        proportion only costs a remembered shape.
+
+        A **version-7 layout is migrated rather than rejected** (see
+        :func:`~mm_companion.ui.layout_tree.migrate_v7`). Every row and every
+        pinned line of one has an exact reading as a tree, and discarding a page
+        somebody arranged because the file format moved on would be a poor trade
+        for forty lines.
         """
-        if not isinstance(model, dict) or model.get("version") != SCHEMA_VERSION:
+        if not isinstance(model, dict):
             return None
-        rows = model.get("rows")
+        known = set(self._frames)
+        if model.get("version") == 7:
+            migrated = lt.migrate_v7(model, known)
+            if migrated is None:
+                return None
+            model = migrated | {"version": SCHEMA_VERSION}
+        if model.get("version") != SCHEMA_VERSION:
+            return None
+
         floating = model.get("floating")
         hidden = model.get("hidden")
-        if not (isinstance(rows, list) and isinstance(floating, dict) and isinstance(hidden, list)):
+        if not (isinstance(floating, dict) and isinstance(hidden, list)):
             return None
 
-        known = set(self._frames)
-        pinned = _PinModel.parse(model.get("pinned"), known)
-        if pinned is None:
+        page = lt.from_dict(model.get("page"), known)
+        if page is None and model.get("page") not in (None, {}):
             return None
-        seen: list[str] = list(pinned.keys)
 
-        clean_rows: list[list[str]] = []
-        for row in rows:
-            if not isinstance(row, list):
-                return None
-            keys = []
-            for key in row:
-                if key not in known:
-                    return None
-                keys.append(key)
-                seen.append(key)
-            if keys:
-                clean_rows.append(keys)
+        raw_region = model.get("region")
+        raw_region = raw_region if isinstance(raw_region, dict) else {}
+        edge = raw_region.get("edge", DEFAULT_EDGE)
+        if edge not in PIN_EDGES:
+            return None
+        region = lt.from_dict(raw_region.get("root"), known)
+        if region is None and raw_region.get("root") not in (None, {}):
+            return None
+        extent = raw_region.get("extent")
+        if not (isinstance(extent, int) and not isinstance(extent, bool) and extent > 0):
+            extent = DEFAULT_EXTENT
+        align = raw_region.get("align", DEFAULT_ALIGN)
+        if align not in PIN_ALIGNMENTS:
+            return None
 
+        seen: list[str] = lt.keys(page) + lt.keys(region)
         for key, geom in floating.items():
             if key not in known or not self._valid_geometry(geom):
                 return None
             seen.append(key)
-
         for key in hidden:
             if key not in known:
                 return None
             seen.append(key)
-
         if sorted(seen) != sorted(known):
             return None
 
@@ -786,7 +868,7 @@ class BlockCanvas(QWidget):
                 if key in known and anchor is not None:
                     anchors[key] = anchor
 
-        return clean_rows, floating, list(hidden), anchors, pinned
+        return page, (edge, align, extent, region), floating, list(hidden), anchors
 
     @staticmethod
     def _valid_geometry(geom: object) -> bool:
@@ -824,11 +906,7 @@ class BlockCanvas(QWidget):
                     if index < len(self._pin_line_sizes):
                         self._pin_line_sizes.pop(index)
                 break
-        for row in self._rows:
-            if key in row:
-                row.remove(key)
-                break
-        self._rows = [row for row in self._rows if row]
+        self._set_page(lt.remove(self._page, key))
         frame = self._frames[key]
         frame.setParent(self)
         frame.hide()
@@ -910,16 +988,71 @@ class BlockCanvas(QWidget):
         window.show()
 
     def _place(self, key: str, slot: DropSlot) -> None:
-        """Insert *key* into ``_rows`` at *slot* (indices clamped). Assumes *key*
-        has already been detached."""
-        row = max(0, min(slot.row, len(self._rows)))
-        if slot.new_row or not self._rows:
-            self._rows.insert(row, [key])
+        """Insert *key* into the page at *slot*. Assumes it has been detached.
+
+        A slot names a row and a position in it, which is all the older callers —
+        an anchor resolving, a block being unpinned or reopened — have ever known
+        how to say. It is translated into the tree's own vocabulary here: land
+        *beside* the block currently in that position, on whichever side puts it
+        where the index asked for.
+
+        A drag says more than this (it names a target block and a side, so it can
+        stack one block under another), and takes :meth:`place_beside` instead.
+        """
+        rows = self._rows
+        row = max(0, min(slot.row, len(rows)))
+        if slot.new_row or not rows:
+            self._set_page(lt.append_row(self._page, key, row))
             return
-        row = min(row, len(self._rows) - 1)
-        target = self._rows[row]
-        index = max(0, min(slot.slot, len(target)))
-        target.insert(index, key)
+        target_row = rows[min(row, len(rows) - 1)]
+        index = max(0, min(slot.slot, len(target_row)))
+        if index < len(target_row):
+            self.place_beside(key, target_row[index], "left")
+        else:
+            self.place_beside(key, target_row[-1], "right")
+
+    def place_beside(self, key: str, target: str, side: str) -> None:
+        """Put *key* on the given side of *target*. Assumes it has been detached.
+
+        The one structural move a drag makes, and the only one that can put a
+        block *under* another rather than next to it.
+        """
+        self._set_page(lt.insert_beside(self._page, key, target, side))
+
+    def drop_block(self, key: str, slot: DropSlot) -> None:
+        """Land *key* where *slot* says — beside a block, under one, or in a new row.
+
+        The drag's own move, and the only one that can say "under that block".
+        Falls back to :meth:`dock_block`'s row-and-index vocabulary when the slot
+        names no target, which is what a drop in the gap between two rows does.
+        """
+        if slot.target is None or slot.target not in self._frames or slot.new_row:
+            self.dock_block(key, slot.row, slot.slot, new_row=slot.new_row)
+            return
+        if slot.target == key:
+            return
+        self._hidden.discard(key)
+        self._detach(key)
+        self.place_beside(key, slot.target, slot.side)
+        self._relayout()
+        self.arrangement_changed.emit()
+
+    def merge_blocks(self, key: str, target: str) -> None:
+        """Put *key* into *target*'s cell, so the two of them share a tab bar."""
+        if key == target or key not in self._frames or target not in self._frames:
+            return
+        self._hidden.discard(key)
+        if lt.find(self._page, target) is None:
+            # The target is not on the page (it is pinned, or floating), so there
+            # is no cell to join. Better to place the block than to lose the drop.
+            self.dock_block(key, len(self._rows), 0, new_row=True)
+            return
+        if lt.find(self._page, key) is None:
+            self._detach(key)
+            self.place_beside(key, target, "right")
+        self._set_page(lt.merge_into(self._page, key, target))
+        self._relayout()
+        self.arrangement_changed.emit()
 
     def dock_block(self, key: str, row: int, slot: int, new_row: bool = False) -> None:
         """Dock *key* into the arrangement at (row, slot), creating a new row when
@@ -1228,13 +1361,15 @@ class BlockCanvas(QWidget):
             return
         if slot is None:
             return
-        self.dock_block(key, slot.row, slot.slot, new_row=slot.new_row)
         if onto is not None and onto in self._frames and onto != key:
-            # The host owns what a merge *means*; all this knows is that one was
-            # asked for. Docked first either way, so a host that ignores the
-            # request is left with a placed block rather than a floating one
-            # nobody asked to float.
-            self.merge_requested.emit(key, onto)
+            # Merging is a move in its own right — the block goes *into* a cell
+            # rather than beside one — so it does not dock first. Doing both would
+            # place the block and then immediately take it somewhere else, which
+            # is a visible double move and, when the dock collapsed the target's
+            # row, the wrong somewhere else.
+            self.merge_blocks(key, onto)
+            return
+        self.drop_block(key, slot)
 
     def request_float(self, key: str) -> None:
         self.float_block(key)
@@ -1394,71 +1529,130 @@ class BlockCanvas(QWidget):
 
     # -- hit testing / indicator geometry ------------------------------------
 
-    _GAP = 12  # px band around a row where a drop makes a new row instead
+    #: How far inside a block's edges the pointer has to be for a drop to mean
+    #: "merge into this" rather than "sit beside it". The outer bands keep the
+    #: ordinary placement, so a block can always be put *next* to another.
+    _MERGE_INSET = 28
+
+    #: How wide the band along a block's edge is that means "and above/below it"
+    #: rather than "and beside it". Only the top and bottom bands are needed: a
+    #: drop that is neither a merge nor a stack is a placement to the left or the
+    #: right, which is the answer everywhere else in the block.
+    _STACK_BAND = 24
+
+    #: The band above and below a whole row where a drop makes a *new* row.
+    _GAP = 12
 
     def _hit_test(self, global_pos: QPoint) -> DropSlot | None:
-        """Which slot a drop at *global_pos* targets, or None if off the page."""
+        """What a drop at *global_pos* would do, or None if it is off the page.
+
+        Four answers, from the middle of a block outwards: merge into it, stack
+        above or below it, sit beside it, or — past the row entirely — start a new
+        row. The old page could only say the last two, because a row was the only
+        container there was.
+        """
         if self._scroll_area is not None:
             viewport = self._scroll_area.viewport()
             if not viewport.rect().contains(viewport.mapFromGlobal(global_pos)):
                 return None
 
-        p = self.mapFromGlobal(global_pos)
         rows = self._row_widgets
         if not rows:
             return DropSlot(True, 0, 0)
 
-        geoms = [row.geometry() for row in rows]
-        for i, geo in enumerate(geoms):
-            if geo.top() + self._GAP <= p.y() <= geo.bottom() - self._GAP:
-                onto = self._merge_target(rows[i], p)
-                if onto is not None:
-                    return DropSlot(False, i, 0, onto)
-                return DropSlot(False, i, self._row_slot(rows[i], p.x()))
+        point = self.mapFromGlobal(global_pos)
+        geoms = [self._row_geometry(row) for row in rows]
+        for index, geo in enumerate(geoms):
+            if geo.top() + self._GAP <= point.y() <= geo.bottom() - self._GAP:
+                return self._slot_in_row(index, rows[index], global_pos)
 
         # Not inside any row's core → a new row at the nearest boundary.
         boundaries = [geoms[0].top()]
         boundaries += [(geoms[i - 1].bottom() + geoms[i].top()) / 2 for i in range(1, len(geoms))]
         boundaries.append(geoms[-1].bottom())
-        nearest = min(range(len(boundaries)), key=lambda b: abs(p.y() - boundaries[b]))
+        nearest = min(range(len(boundaries)), key=lambda b: abs(point.y() - boundaries[b]))
         return DropSlot(True, nearest, 0)
 
-    #: How far inside a block's edges the pointer has to be for a drop to mean
-    #: "merge into this" rather than "sit beside it". The outer bands keep the
-    #: ordinary reorder, so a block can still always be placed next to another.
-    _MERGE_INSET = 28
+    def _row_geometry(self, row: QWidget) -> QRect:
+        """*row*'s rectangle in canvas coordinates.
 
-    def _merge_target(self, row: RowWidget, point: QPoint) -> str | None:
-        """The block under *point* that would take the dragged one in, if any.
-
-        Asks the *section* through a duck-typed ``accepts_merge(other_key)``, so
-        this module needs to know nothing about what merging means and a block
-        that does not answer never merges — which is every block but Notes, and
-        is why no existing drag behaves any differently.
+        Mapped through the screen rather than with ``mapTo``: a row is several
+        widgets deep in the stack now, and ``mapTo`` warns and returns nonsense the
+        moment the two are not actually in one hierarchy — which happens for a
+        frame caught mid-rehoming.
         """
-        if self._drag_key is None:
-            return None
-        for frame in row.frames():
-            if frame.key == self._drag_key:
+        return QRect(self.mapFromGlobal(row.mapToGlobal(QPoint(0, 0))), row.size())
+
+    def _slot_in_row(self, index: int, row: QWidget, global_pos: QPoint) -> DropSlot:
+        """What a drop inside *row* means, judged against the block it is over."""
+        frame = self._frame_under(row, global_pos)
+        if frame is None or frame.key == self._drag_key:
+            keys = self._rows[index] if index < len(self._rows) else []
+            return DropSlot(False, index, len(keys))
+
+        local = frame.mapFromGlobal(global_pos)
+        rect = frame.rect()
+        inner = rect.adjusted(
+            self._MERGE_INSET, self._MERGE_INSET, -self._MERGE_INSET, -self._MERGE_INSET
+        )
+        onto = self._merge_target(frame.key)
+        if onto is not None and inner.isValid() and inner.contains(local):
+            return DropSlot(False, index, 0, onto=onto, target=frame.key, side="right")
+
+        # The stack bands sit *inside* the row's core, which is already inset by
+        # _GAP. Measuring them from the frame's own edge would put them under the
+        # band that means "a new row" — the pointer can never be there — and a
+        # block could only ever be stacked by accident.
+        band = min(self._STACK_BAND, max(1, rect.height() // 3))
+        top_band = rect.top() + self._GAP + band
+        bottom_band = rect.bottom() - self._GAP - band
+        if local.y() < top_band:
+            side = "top"
+        elif local.y() > bottom_band:
+            side = "bottom"
+        else:
+            side = "left" if local.x() < rect.center().x() else "right"
+        return DropSlot(False, index, 0, target=frame.key, side=side)
+
+    def _frame_under(self, row: QWidget, global_pos: QPoint) -> BlockFrame | None:
+        """The block frame under the pointer inside *row*, if any.
+
+        ``row`` may *be* the frame: a row holding one block is that block, with no
+        wrapper around it (see :func:`~mm_companion.ui.grid_view.build_node`). That
+        is why the test is "at or under" and not "under" — searching only the
+        descendants found nothing for every single-block row on the page, which is
+        most of them, and quietly made those blocks impossible to drop onto.
+
+        Only visible frames count, which is what keeps a tab group honest: its
+        hidden members are behind a ``QStackedWidget``, so the one the pointer is
+        really over is the only one that can answer.
+        """
+        for frame in self._frames.values():
+            if not frame.isVisible() or not self._is_at_or_within(frame, row):
                 continue
-            geo = frame.geometry()
-            box = QRect(row.mapToParent(geo.topLeft()), geo.size()).adjusted(
-                self._MERGE_INSET, self._MERGE_INSET, -self._MERGE_INSET, -self._MERGE_INSET
-            )
-            if not box.contains(point):
-                continue
-            accepts = getattr(frame.section, "accepts_merge", None)
-            if callable(accepts) and accepts(self._drag_key):
-                return frame.key
+            if frame.rect().contains(frame.mapFromGlobal(global_pos)):
+                return frame
         return None
 
-    def _row_slot(self, row: RowWidget, x: int) -> int:
-        """The insert column within *row* for canvas x-coordinate *x*."""
-        for i, frame in enumerate(row.frames()):
-            mid = row.mapToParent(frame.geometry().center()).x()
-            if x < mid:
-                return i
-        return len(row.frames())
+    @staticmethod
+    def _is_at_or_within(widget: QWidget, ancestor: QWidget) -> bool:
+        parent: QWidget | None = widget
+        while parent is not None:
+            if parent is ancestor:
+                return True
+            parent = parent.parentWidget()
+        return False
+
+    def _merge_target(self, key: str) -> str | None:
+        """Whether a drop onto *key* really is a merge.
+
+        Every block takes every merge now — a tab group holds whole blocks, so
+        there is nothing for a block to have an opinion about. The check that is
+        left is only that a block is not being merged into itself.
+        """
+        if self._drag_key is None or key == self._drag_key:
+            return None
+        return key if key in self._frames else None
 
     def _show_indicator(self, slot: DropSlot | None) -> None:
         if slot is not None and slot.onto is not None:
@@ -1471,34 +1665,40 @@ class BlockCanvas(QWidget):
         if slot is None:
             self._indicator.hide_indicator()
             return
-        if slot.new_row:
-            y = self._row_boundary_y(slot.row)
-            rect = QRect(4, int(y) - 1, self.width() - 8, 3)
-        else:
-            row = self._row_widgets[slot.row]
-            x = self._row_slot_x(row, slot.slot)
-            geo = row.geometry()
-            rect = QRect(int(x) - 1, geo.top(), 3, geo.height())
+        rect = self._indicator_rect(slot)
+        if rect is None:
+            self._indicator.hide_indicator()
+            return
         self._indicator.move_to(rect)
 
-    def _row_boundary_y(self, index: int) -> float:
-        geoms = [row.geometry() for row in self._row_widgets]
-        if not geoms:
-            return 4
-        if index <= 0:
-            return geoms[0].top()
-        if index >= len(geoms):
-            return geoms[-1].bottom()
-        return (geoms[index - 1].bottom() + geoms[index].top()) / 2
+    def _indicator_rect(self, slot: DropSlot) -> QRect | None:
+        """Where the insert line goes for *slot*, in canvas coordinates.
 
-    def _row_slot_x(self, row: RowWidget, slot: int) -> int:
-        frames = row.frames()
-        geo = row.geometry()
-        if not frames or slot <= 0:
-            return geo.left()
-        if slot >= len(frames):
-            return row.mapToParent(frames[-1].geometry().topRight()).x()
-        return row.mapToParent(frames[slot].geometry().topLeft()).x()
+        A line *across* the page for a new row, and one along the edge of the
+        block the drop names for everything else — so the mark is always the seam
+        the block will actually land on.
+        """
+        thickness = max(2, int(theme.metric("grid.handle")))
+        rows = self._row_widgets
+        if slot.new_row or slot.target is None:
+            if not rows:
+                return QRect(0, 0, max(1, self.width()), thickness)
+            index = max(0, min(slot.row, len(rows) - 1))
+            geo = self._row_geometry(rows[index])
+            y = geo.top() if slot.new_row and slot.row <= index else geo.bottom()
+            return QRect(geo.left(), y - thickness // 2, geo.width(), thickness)
+
+        frame = self._frames.get(slot.target)
+        if frame is None or not frame.isVisible():
+            return None
+        geo = self._row_geometry(frame)
+        if slot.side == "left":
+            return QRect(geo.left() - thickness // 2, geo.top(), thickness, geo.height())
+        if slot.side == "right":
+            return QRect(geo.right() - thickness // 2, geo.top(), thickness, geo.height())
+        if slot.side == "top":
+            return QRect(geo.left(), geo.top() - thickness // 2, geo.width(), thickness)
+        return QRect(geo.left(), geo.bottom() - thickness // 2, geo.width(), thickness)
 
     # -- auto-scroll ---------------------------------------------------------
 

@@ -73,13 +73,29 @@ class TestNormalize:
         nested = Split(HORIZONTAL, (Leaf(("a",)), stack))
         assert lt.normalize(nested) == nested
 
-    def test_splicing_drops_the_sizes_it_can_no_longer_describe(self) -> None:
+    def test_splicing_keeps_the_sizes_it_can_still_describe(self) -> None:
+        """The spliced-in children arrive with no size of their own, and the
+        siblings that were already there keep theirs.
+
+        This used to drop the whole run, on the grounds that nothing related the
+        grandchildren to their new siblings. A zero means "no size of its own"
+        rather than a gap, so the honest answer is available: on the page, where a
+        vertical split spliced in *is* more rows, the rows that were already there
+        keep the heights somebody dragged them to and the arrivals follow their
+        content.
+        """
         nested = Split(
             HORIZONTAL,
             (Leaf(("a",)), Split(HORIZONTAL, (Leaf(("b",)), Leaf(("c",))))),
             (100, 200),
         )
-        assert lt.normalize(nested).sizes == ()
+
+        assert lt.normalize(nested).sizes == (100, 0, 0)
+
+    def test_a_run_of_nothing_but_zeros_is_the_same_as_no_sizes(self) -> None:
+        split = Split(HORIZONTAL, (Leaf(("a",)), Leaf(("b",))), (0, 0))
+
+        assert lt.normalize(split).sizes == ()
 
     def test_sizes_survive_when_the_children_do(self) -> None:
         split = Split(HORIZONTAL, (Leaf(("a",)), Leaf(("b",))), (100, 200))

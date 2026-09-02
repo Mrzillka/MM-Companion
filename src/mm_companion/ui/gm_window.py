@@ -95,7 +95,7 @@ from mm_companion.core.session.protocol import (
 )
 from mm_companion.ui import theme
 from mm_companion.ui.block_canvas import BlockCanvas
-from mm_companion.ui.block_sizes import BlockSize, load_block_sizes
+from mm_companion.ui.block_sizes import RecommendedSize, load_block_sizes
 from mm_companion.ui.blocks.gm_registry import (
     GMBlockDescriptor,
     gm_block_descriptors,
@@ -392,7 +392,7 @@ class GMWindow(QMainWindow):
         # under the last one; let the bottom block (the NPC cards) stretch to fill
         # the page instead.
         self._canvas = BlockCanvas(
-            panels, sizes, default_rows, fill_last=True, default_pinned=gm_default_pin_lines()
+            panels, sizes, default_rows, default_pinned=gm_default_pin_lines()
         )
 
         self._scroll = QScrollArea()
@@ -508,12 +508,12 @@ class GMWindow(QMainWindow):
 
     def _restore_layout(self) -> None:
         """Restore the remembered geometry and block arrangement (its own settings key)."""
-        layout = storage.load_settings().get("gm_layout") or {}
-        geometry = layout.get("window_geometry") if isinstance(layout, dict) else None
-        if isinstance(geometry, str) and geometry:
+        layout = storage.sheet_layout("gm_layout")
+        geometry = layout["window_geometry"]
+        if geometry:
             self.restoreGeometry(QByteArray.fromBase64(geometry.encode("ascii")))
-        state = layout.get("dock_state") if isinstance(layout, dict) else None
-        if isinstance(state, str) and state:
+        state = layout["dock_state"]
+        if state:
             try:
                 self._canvas.apply_arrangement(json.loads(state))
             except (ValueError, TypeError):
@@ -530,12 +530,7 @@ class GMWindow(QMainWindow):
         state = self._compact.saved_geometry() or self.saveGeometry()
         geometry = bytes(state.toBase64()).decode("ascii")
         try:
-            storage.update_settings(
-                gm_layout={
-                    "window_geometry": geometry,
-                    "dock_state": json.dumps(self._canvas.arrangement()),
-                }
-            )
+            storage.set_sheet_layout("gm_layout", geometry, json.dumps(self._canvas.arrangement()))
         except OSError:
             pass
 
@@ -2801,7 +2796,7 @@ def register_base_gm_blocks(*, replace: bool = False) -> None:
                 # Bound at build time to the window being constructed, which is
                 # what lets a descriptor name an instance method it cannot hold.
                 (lambda name: lambda window: getattr(window, name)())(builder),
-                shipped.get(f"gm_{key}", BlockSize()),
+                shipped.get(f"gm_{key}", RecommendedSize()),
                 row,
                 col,
                 pinned,

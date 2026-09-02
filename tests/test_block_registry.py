@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from mm_companion.ui.block_sizes import BlockSize
+from mm_companion.ui.block_sizes import RecommendedSize
 from mm_companion.ui.blocks import (
     BlockDescriptor,
     block_descriptors,
@@ -73,7 +73,7 @@ def test_rows_and_pinned_lines_cover_every_block_exactly_once() -> None:
 def test_every_base_descriptor_carries_a_size_and_factory() -> None:
     for descriptor in block_descriptors():
         assert callable(descriptor.factory)
-        assert isinstance(descriptor.size, BlockSize)
+        assert isinstance(descriptor.size, RecommendedSize)
         assert descriptor.title  # a non-empty dock title
 
 
@@ -82,7 +82,7 @@ def test_registering_a_mod_block_extends_the_set_and_layout() -> None:
         key="mod_notes",
         title="Mod Notes",
         factory=lambda data, character: None,  # never built in this pure test
-        size=BlockSize(min_width=200, min_height=100),
+        size=RecommendedSize(width=200, height=100),
         default_row=8,
         default_col=0,
     )

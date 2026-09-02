@@ -18,6 +18,7 @@ from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.rules import RollSpec
 from mm_companion.core.session.model import new_session
 from mm_companion.ui import dice_roller
+from mm_companion.ui import layout_tree as lt
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.sections import DiceSection
 from mm_companion.ui.session_bridge import SessionBridge, set_active_session
@@ -63,7 +64,7 @@ def test_the_dice_block_can_be_unpinned_onto_the_page_and_back(qapp: QApplicatio
 
     sheet.unpin_block("dice")
     assert not sheet.is_block_pinned("dice")
-    assert any("dice" in row for row in sheet.arrangement()["rows"])
+    assert "dice" in lt.keys(sheet.canvas.page_tree())
 
     sheet.pin_block("dice")
     assert sheet.is_block_pinned("dice")

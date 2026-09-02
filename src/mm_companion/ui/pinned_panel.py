@@ -88,7 +88,6 @@ LINE_GAP = 10
 EDGE_BAND = 56
 
 #: Fallback for the usable screen size when no screen resolves (headless tests).
-FALLBACK_SCREEN = QSize(1920, 1080)
 
 EDGE_LABELS = {"left": "Left", "right": "Right", "top": "Top", "bottom": "Bottom"}
 ALIGN_LABELS = {"fill": "Fill", "start": "Start", "center": "Center", "end": "End"}
@@ -129,14 +128,6 @@ def _cell_alignment(vertical_strip: bool, align: str) -> Qt.AlignmentFlag | None
     return flags.get(align)
 
 
-def _usable_screen(widget: QWidget) -> QSize:
-    """The screen area a window can occupy, or a generous fallback when headless."""
-    screen = widget.screen()
-    if screen is None:
-        return FALLBACK_SCREEN
-    return screen.availableGeometry().size()
-
-
 class _PinnedSlot(QWidget):
     """One pinned block, placed within its cell.
 
@@ -158,24 +149,11 @@ class _PinnedSlot(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         flags = _cell_alignment(vertical_strip, align) or Qt.AlignmentFlag(0)
-        # A block that pins its own size (Abilities is fixed both ways) can't take
-        # the cell the splitters give it, and a box layout would centre it there —
-        # a block adrift with a gap on either side. Anchor it to the start of the
-        # cell instead, which is what a docked row does with its fixed-width blocks.
-        # Only where the user hasn't asked for something else: an explicit
-        # alignment across the line is theirs to set, "fill" is not.
-        start = Qt.AlignmentFlag.AlignTop if vertical_strip else Qt.AlignmentFlag.AlignLeft
-        across = Qt.AlignmentFlag.AlignLeft if vertical_strip else Qt.AlignmentFlag.AlignTop
-        capped_along = (
-            frame.maximumHeight() if vertical_strip else frame.maximumWidth()
-        ) < UNBOUNDED
-        capped_across = (
-            frame.maximumWidth() if vertical_strip else frame.maximumHeight()
-        ) < UNBOUNDED
-        if capped_along:
-            flags |= start
-        if capped_across and align == "fill":
-            flags |= across
+        # There used to be more here: a block that pinned its own size could not
+        # take the cell the splitters gave it, so it was anchored to the start
+        # rather than left adrift in the middle of one. No block pins its size any
+        # more — the user does — so every block simply fills its cell unless an
+        # alignment was asked for.
         if flags:
             layout.addWidget(frame, alignment=flags)
         else:
@@ -405,16 +383,10 @@ class PinnedPanel(QFrame):
             # more room than the longest of them; saying so stops the splitter
             # handing it a band it would only leave empty, and gives the space to a
             # line that can grow instead.
-            caps = [
-                (frame.maximumHeight() if vertical else frame.maximumWidth()) for frame in frames
-            ]
             self._splitter.addWidget(line)
-            # A line whose every block pins its own size along the strip can't use
-            # more room than it asks for, so let the slack go to a line that can
-            # grow. (A maximum on the line itself does not survive: a splitter
-            # manages its children's bounds, and clears what we set.)
-            growable = not caps or any(cap >= UNBOUNDED for cap in caps)
-            self._splitter.setStretchFactor(index, 1 if growable else 0)
+            # Every line can use whatever room it is given: a block's size is the
+            # user's answer now, so there is no line that cannot grow.
+            self._splitter.setStretchFactor(index, 1)
             self._lines.append(line)
             within = line_sizes[index] if index < len(line_sizes) else []
             if len(within) == len(frames) and all(size > 0 for size in within):
@@ -494,45 +466,25 @@ class PinnedPanel(QFrame):
         return max(EMPTY_EXTENT, along_thickness + 4)
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
-        """The room the pinned blocks need, so the *window* keeps them whole.
+        """Its handle, and nothing about what is pinned in it.
 
-        A scroll area's own minimum is tiny — left alone it would answer a window
-        too small for the strip by growing a scrollbar, which is the one thing the
-        strip is not for. Reporting the content's minimum instead pushes back on
-        the window. It is capped at the usable screen so that pinning a very tall
-        block can't demand a window bigger than the display; past that cap the
-        scroll area does take over.
+        This used to report the strip's whole content — capped at the usable
+        screen — precisely so that the *window* would be held open rather than the
+        strip growing a scrollbar. That was the right answer while a block's
+        minimum was its content and squashing one meant clipping it. It is the
+        wrong answer now, and the last place in the app where the content could
+        still push the window around: a pinned block reflows and, past that,
+        scrolls inside its own frame, so the strip has no width it has to demand.
+
+        The handle stays, because the strip has to remain findable and droppable
+        however narrow it is dragged.
         """
         base = super().minimumSizeHint()
-        if not self._lines:
-            return base
-        content = self._splitter.minimumSizeHint()
-        handle = self._handle.sizeHint()
-        bars = self._scrollbar_allowance()
+        hint = self._handle.sizeHint()
         vertical = is_vertical_strip(self._edge)
-        width = content.width() + bars.width() + (0 if vertical else handle.width())
-        height = content.height() + bars.height() + (handle.height() if vertical else 0)
-        cap = _usable_screen(self)
         return QSize(
-            max(base.width(), min(width, cap.width())),
-            max(base.height(), min(height, cap.height())),
-        )
-
-    def _scrollbar_allowance(self) -> QSize:
-        """What the strip's own scrollbars take out of its viewport right now.
-
-        A bar along the strip's length eats into its *thickness*, so a strip asked
-        for exactly its content's width comes up a scrollbar short — and Qt covers
-        that by adding a second bar crossways, which is a scrollbar appearing purely
-        because of another scrollbar. Counting the visible bars into the minimum
-        asks for those pixels instead; the crossways bar then only turns up when the
-        window genuinely cannot spare them.
-        """
-        vertical_bar = self._scroll.verticalScrollBar()
-        horizontal_bar = self._scroll.horizontalScrollBar()
-        return QSize(
-            vertical_bar.sizeHint().width() if vertical_bar.isVisible() else 0,
-            horizontal_bar.sizeHint().height() if horizontal_bar.isVisible() else 0,
+            max(base.width(), hint.width() if vertical else 0),
+            max(base.height(), hint.height() if not vertical else 0),
         )
 
     # -- queries the canvas and the board ask ---------------------------------

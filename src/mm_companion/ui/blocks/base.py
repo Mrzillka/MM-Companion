@@ -29,7 +29,7 @@ from PySide6.QtWidgets import QWidget
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
-from mm_companion.ui.block_sizes import BlockSize
+from mm_companion.ui.block_sizes import RecommendedSize
 
 # A block widget is built from the shared game data + character model. Sections
 # accept an optional parent, but the sheet always constructs them parentless (the
@@ -126,7 +126,7 @@ class BlockDescriptor:
     key: str
     title: str
     factory: BlockFactory
-    size: BlockSize = BlockSize()
+    size: RecommendedSize = RecommendedSize()
     default_row: int = 0
     default_col: int = 0
     default_pinned: bool = False

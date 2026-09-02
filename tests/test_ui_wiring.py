@@ -15,6 +15,7 @@ from mm_companion.core.rules import (
     resistance_total,
     skill_total,
 )
+from mm_companion.ui import layout_tree as lt
 from mm_companion.ui import theme
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.roll_history import NoteCard
@@ -291,9 +292,9 @@ def test_sheet_exposes_all_blocks(qapp: QApplication) -> None:
     }
     # Every block is placed exactly once across the arrangement — the rows on the
     # page plus the pinned strip, which the Dice and Scene blocks start in.
-    arrangement = sheet.arrangement()
-    placed = [key for row in arrangement["rows"] for key in row]
-    placed += [key for line in arrangement["pinned"]["lines"] for key in line]
+    region = sheet.arrangement()["region"]
+    placed = lt.keys(sheet.canvas.page_tree())
+    placed += lt.keys(lt.from_dict(region["root"], set(sheet.block_keys())))
     assert sorted(placed) == sorted(sheet.block_keys())
 
 
@@ -307,7 +308,7 @@ def test_reset_layout_redocks_and_reshows_panels(qapp: QApplication) -> None:
     arrangement = sheet.arrangement()
     assert arrangement["floating"] == {}
     assert arrangement["hidden"] == []
-    placed = [key for row in arrangement["rows"] for key in row]
+    placed = lt.keys(sheet.canvas.page_tree())
     assert "skills" in placed and "powers" in placed
 
 

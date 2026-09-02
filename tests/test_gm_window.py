@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QWidget,
 )
 
@@ -181,10 +182,21 @@ def test_hiding_a_block_by_its_x_syncs_the_view_menu(window: GMWindow) -> None:
     assert window._block_actions["rolls"].isChecked() is True
 
 
+def _gm_rows(window: GMWindow) -> list[list[str]]:
+    """The GM board's top-level rows, each flattened to a list of block keys."""
+    from mm_companion.ui import layout_tree as lt
+
+    return [lt.keys(child) for child in window._canvas.page_tree().children]
+
+
 def test_the_player_and_npc_blocks_grow_to_fit_more_cards(window: GMWindow) -> None:
-    # A growable (unpinned) width lets the FlowLayout add columns as the block widens.
-    assert window._canvas._is_growable("players") is True
-    assert window._canvas._is_growable("npcs") is True
+    # Every block fills the cell it is given now — how big that cell is, is the
+    # user's business — so what makes the FlowLayout add columns is simply that
+    # nothing caps the block's width any more.
+    for key in ("players", "npcs"):
+        frame = window._canvas.block_frame(key)
+        assert frame.maximumWidth() >= 100_000
+        assert frame.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Expanding
 
 
 def test_the_block_layout_persists_across_a_reopen(qapp: QApplication, window: GMWindow) -> None:
@@ -223,7 +235,7 @@ def test_the_rolls_block_starts_in_the_pinned_strip(qapp: QApplication, window: 
     """
     assert window._canvas.pinned_keys() == ["rolls"]
     assert window._board.panel.frames() == [[window._canvas.block_frame("rolls")]]
-    assert all("rolls" not in row for row in window._canvas.arrangement()["rows"])
+    assert all("rolls" not in row for row in _gm_rows(window))
 
 
 def test_a_gm_block_can_be_pinned_beside_the_scrolling_board(
@@ -240,7 +252,7 @@ def test_a_gm_block_can_be_pinned_beside_the_scrolling_board(
 
     assert window._canvas.is_pinned("rolls") is True
     assert window._board.panel.frames() == [[window._canvas.block_frame("rolls")]]
-    assert all("rolls" not in row for row in window._canvas.arrangement()["rows"])
+    assert all("rolls" not in row for row in _gm_rows(window))
 
     window._persist_layout()
     reopened = GMWindow(bind="127.0.0.1")

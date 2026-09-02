@@ -140,7 +140,7 @@ _METRIC_DEFAULT_RANGE = (0, 4096)
 _BOX_EDGES = ("left", "top", "right", "bottom")
 
 #: The bounds a block-size override can set.
-_BLOCK_BOUNDS = ("min_width", "min_height", "max_width", "max_height")
+_BLOCK_BOUNDS = block_sizes.BOUNDS
 
 
 def _compact_width() -> int:
@@ -551,9 +551,9 @@ class TokenEditor(QWidget):
 
         Every bundled preset leaves this empty, so iterating it would render an
         empty box and offer no way in. Instead every block the app knows about gets
-        a row, unchecked, showing the bounds it currently has. Checking one writes
-        all four: an omitted bound and a zero mean different things to
-        ``block_sizes`` (inherit vs. unbounded) and a snapshot should not have to
+        a row, unchecked, showing the recommendation it currently has. Checking one
+        writes both numbers: an omitted one and a zero mean different things to
+        ``block_sizes`` (inherit vs. no opinion) and a snapshot should not have to
         rely on the reader knowing which.
         """
         draft = self.draft()
@@ -561,8 +561,9 @@ class TokenEditor(QWidget):
         column = QVBoxLayout(box)
         column.addWidget(
             _note(
-                "Advanced. These override how much room each sheet block takes. "
-                "Setting a maximum equal to a minimum pins that block's size."
+                "Advanced. These override the size each sheet block opens at and "
+                "the size its dividers stick at. Nothing here stops you dragging "
+                "a block smaller."
             )
         )
         section = _Section(box)
@@ -576,7 +577,7 @@ class TokenEditor(QWidget):
 
     def _build_block_row(self, key: str) -> QWidget:
         current = self.draft().blocks.get(key) or {}
-        size = block_sizes.load_block_sizes().get(key, block_sizes.BlockSize())
+        size = block_sizes.load_block_sizes().get(key, block_sizes.RecommendedSize())
         holder = QWidget()
         row = QHBoxLayout(holder)
         row.setContentsMargins(0, 0, 0, 0)
@@ -589,7 +590,7 @@ class TokenEditor(QWidget):
             spin = make_spin_box(
                 0,
                 block_sizes.UNBOUNDED,
-                value=int(getattr(size, bound)),
+                value=int(getattr(size, bound.removeprefix("recommended_"))),
                 max_width=_compact_width(),
             )
             spin.setToolTip(bound.replace("_", " ").title())

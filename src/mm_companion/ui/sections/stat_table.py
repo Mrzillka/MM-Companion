@@ -193,6 +193,12 @@ def build_stat_table(
     header.setSectionResizeMode(COL_NAME, QHeaderView.ResizeMode.Stretch)
     for col in (COL_ABBR, COL_RANK, COL_TOTAL):
         header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+    # What this table gives up as it narrows, and it is only ever the one column:
+    # the ability abbreviation repeats what the name beside it already says, so it
+    # is the one thing here nobody loses anything by. Rank is what you type and
+    # Total is what you read — a table missing either has stopped being the table —
+    # so past this the name elides and then the block scrolls.
+    table.set_shed_order([COL_ABBR])
     # Fits its content and never scrolls, so keep it out of the focus chain; the
     # wheel then always falls through to the page.
     table.setFocusPolicy(Qt.FocusPolicy.NoFocus)

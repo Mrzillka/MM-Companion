@@ -17,6 +17,7 @@ from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QAbstractScrollArea,
     QDoubleSpinBox,
+    QFormLayout,
     QFrame,
     QLabel,
     QPushButton,
@@ -429,6 +430,71 @@ def resurface(window: QWidget) -> None:
     window.show()
     window.raise_()
     window.activateWindow()
+
+
+#: Below this, a form stacks its captions above their fields instead of beside
+#: them, and the dead-band that stops it flipping back and forth on its own.
+FORM_WRAP_WIDTH = 260
+FORM_WRAP_HYSTERESIS = 24
+
+
+def wraps_form_rows(available: int, currently_wrapped: bool = False, *, floor: int = 0) -> bool:
+    """Whether a form should stack its captions above its fields at this width.
+
+    A ``QFormLayout``'s caption column does not shrink: it is as wide as the
+    longest label, whatever room the form has, so a narrow form spends most of
+    itself on the words and leaves a sliver for the thing being edited. Wrapping
+    the rows gives the field the whole width and costs one line of height each.
+
+    Pure arithmetic with the same dead-band every other reflow decision in the app
+    carries (:func:`~mm_companion.ui.reflow.prefers_row`,
+    :func:`~mm_companion.ui.sections.column_flow.column_count`) — wrapping changes
+    the form's height, which can toggle a scrollbar, which changes the width back
+    across the boundary.
+    """
+    floor = floor or FORM_WRAP_WIDTH
+    if available <= 0:
+        return False  # not laid out yet; the unwrapped form is the safe first paint
+    if currently_wrapped:
+        return available < floor + FORM_WRAP_HYSTERESIS
+    return available < floor
+
+
+class ReflowingForm(QFormLayout):
+    """A form whose rows wrap their captions on top when there is no room beside.
+
+    The Qt half of :func:`wraps_form_rows`. Install it as a widget's layout and
+    call :meth:`sync_wrap` from that widget's ``resizeEvent``; it flips between
+    ``DontWrapRows`` and ``WrapAllRows`` and nothing else, so every caller keeps
+    its rows, its ``setRowVisible`` calls and its field widgets exactly as they
+    were.
+
+    ``WrapAllRows`` rather than ``WrapLongRows``: the latter decides row by row,
+    so a narrow form ends up with some captions beside their fields and some above
+    them, which reads as a mistake rather than a layout.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._wrapped = False
+        self.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
+
+    @property
+    def wrapped(self) -> bool:
+        return self._wrapped
+
+    def sync_wrap(self, available: int, *, floor: int = 0) -> bool:
+        """Wrap or unwrap to suit *available* px. Returns whether it changed."""
+        wrapped = wraps_form_rows(available, self._wrapped, floor=floor)
+        if wrapped == self._wrapped:
+            return False
+        self._wrapped = wrapped
+        self.setRowWrapPolicy(
+            QFormLayout.RowWrapPolicy.WrapAllRows
+            if wrapped
+            else QFormLayout.RowWrapPolicy.DontWrapRows
+        )
+        return True
 
 
 def enclosing_scroll_areas(widget: QWidget) -> list[QAbstractScrollArea]:

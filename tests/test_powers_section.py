@@ -558,15 +558,22 @@ def test_an_effects_terms_sit_beside_its_modifiers(qapp: QApplication) -> None:
     # Side by side, not stacked: the modifiers column and the terms grid are two items
     # of one horizontal row, the modifiers first. Asserted structurally rather than by
     # geometry — nothing here is ever shown, so every widget would sit at 0,0.
+    # The terms live in a TermsGridBox now (it re-deals them into one column when the
+    # card narrows), so the grid is a widget in the row rather than a nested layout.
+    from mm_companion.ui.power_constructor.terms_grid import TermsGridBox
+
     column = labels["Flaws"].parentWidget()
     effect_box = column.parentWidget()
-    assert labels["Type"].parentWidget() is effect_box
+    terms = labels["Type"].parentWidget()
+    assert isinstance(terms, TermsGridBox)
+    assert terms.parentWidget() is effect_box
 
     stack = effect_box.layout()
     rows = (stack.itemAt(i).layout() for i in range(stack.count()))
     row = next(r for r in rows if r is not None and r.indexOf(column) >= 0)
     assert row.indexOf(column) == 0
-    assert any(isinstance(row.itemAt(i).layout(), QGridLayout) for i in range(row.count()))
+    assert row.indexOf(terms) > 0
+    assert isinstance(terms.grid, QGridLayout)
 
 
 def test_card_type_sizes_ride_the_transition(qapp: QApplication) -> None:

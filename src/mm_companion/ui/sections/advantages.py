@@ -297,6 +297,11 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        # The Type column goes first — it is a one-word category, and the
+        # advantage's own name carries it well enough when there is no room. The
+        # description goes next, being the only column here that is prose. The name
+        # never goes: a list of advantages with no advantages in it is nothing.
+        table.set_shed_order([1, 2])
         table.setColumnWidth(0, self._name_col_width())
         table.itemSelectionChanged.connect(lambda t=table: self._on_selection_changed(t))
         table.cellDoubleClicked.connect(lambda row, _col, t=table: self._edit_row(t, row))

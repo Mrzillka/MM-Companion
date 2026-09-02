@@ -311,6 +311,11 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         header.setSectionResizeMode(COL_NAME, QHeaderView.ResizeMode.Stretch)
         for col in (COL_ABILITY, COL_ABILITY_RANK, COL_RANKS, COL_MODS, COL_TOTAL):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        # Worst first. The governing ability's *name* goes before its rank, which
+        # goes before the situational modifier; what survives to the end is the
+        # skill, the ranks you bought and the total you roll, which is the least a
+        # skills table can be and still be one.
+        table.set_shed_order([COL_ABILITY, COL_ABILITY_RANK, COL_MODS])
         # The panels fit their content and never scroll, so keep them out of the
         # focus chain; the wheel then always falls through to the page scroll.
         table.setFocusPolicy(Qt.FocusPolicy.NoFocus)

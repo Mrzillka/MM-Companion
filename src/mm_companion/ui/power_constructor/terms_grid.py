@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QGridLayout, QLabel
+from PySide6.QtWidgets import QGridLayout, QLabel, QWidget
 
 from mm_companion.core.rules import HOMERULE_TINT
 from mm_companion.ui import theme
@@ -37,6 +37,30 @@ TINT_TOKENS = {
 #: across the width instead of stacking into a tall column.
 PAIRS_PER_ROW = 2
 
+#: Below this, a card's terms drop to one pair per row. Two pairs in a card
+#: narrower than this is four columns in a couple of hundred pixels — every value
+#: wrapping over three lines, which is taller *and* harder to read than stacking
+#: them honestly. Paired with :data:`PAIRS_HYSTERESIS`, because the flip changes
+#: the card's height and a card tree's height moves the page's scrollbar.
+PAIRS_MIN_WIDTH = 300
+PAIRS_HYSTERESIS = 24
+
+
+def pairs_per_row(available: int, current: int = 0) -> int:
+    """How many label/value pairs fit across *available* px.
+
+    Zero or less — a card that has not been laid out yet — answers with the full
+    :data:`PAIRS_PER_ROW`, so the first paint is the ordinary card and the real
+    answer arrives on the first resize.
+    """
+    if available <= 0:
+        return PAIRS_PER_ROW
+    if current == PAIRS_PER_ROW:
+        return PAIRS_PER_ROW if available >= PAIRS_MIN_WIDTH - PAIRS_HYSTERESIS else 1
+    if current == 1:
+        return PAIRS_PER_ROW if available >= PAIRS_MIN_WIDTH + PAIRS_HYSTERESIS else 1
+    return PAIRS_PER_ROW if available >= PAIRS_MIN_WIDTH else 1
+
 
 @dataclass(frozen=True)
 class TermsGridStyle:
@@ -52,8 +76,83 @@ class TermsGridStyle:
     bold_changed: bool = True
 
 
-def build_terms_grid(rows: list, style: TermsGridStyle | None = None) -> QGridLayout:
-    """Lay *rows* out as ``label: value`` pairs, :data:`PAIRS_PER_ROW` to a grid row.
+def reflow_terms_grid(grid: QGridLayout, pairs: int) -> bool:
+    """Re-deal an existing grid into *pairs* label/value pairs per row.
+
+    The items are **moved, not remade**. A card's terms are a dozen `QLabel`s and
+    rebuilding them on every resize frame would be the one thing this layer cannot
+    afford: `PowersSection` and `EquipmentSection` already destroy and remake their
+    whole card tree on a model change (see `docs/notes/debts.md`), and paying that
+    on a divider drag would make the gesture stutter. Repositioning is a layout
+    pass and nothing more.
+
+    Returns whether anything moved.
+    """
+    pairs = max(1, int(pairs))
+    items = []
+    while grid.count():
+        items.append(grid.takeAt(0))
+    if not items:
+        return False
+    for column in range(grid.columnCount()):
+        grid.setColumnStretch(column, 0)
+    for index in range(0, len(items), 2):
+        label, value = items[index], items[index + 1] if index + 1 < len(items) else None
+        row, pair = divmod(index // 2, pairs)
+        column = pair * 2
+        grid.addItem(label, row, column, 1, 1, Qt.AlignmentFlag.AlignTop)
+        if value is not None:
+            grid.addItem(value, row, column + 1, 1, 1, Qt.AlignmentFlag.AlignTop)
+    for pair in range(pairs):
+        grid.setColumnStretch(pair * 2 + 1, 1)
+    return True
+
+
+class TermsGridBox(QWidget):
+    """A card's terms, re-dealt into fewer columns as the card narrows.
+
+    Two label/value pairs abreast read well in a card of ordinary width and badly
+    in a narrow one, where four columns in two hundred pixels means every value
+    wrapping over three lines — taller *and* harder to read than stacking them
+    honestly. This watches its own width and re-deals.
+    """
+
+    def __init__(self, grid: QGridLayout, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._grid = grid
+        self._pairs = PAIRS_PER_ROW
+        self.setLayout(grid)
+
+    @property
+    def grid(self) -> QGridLayout:
+        return self._grid
+
+    @property
+    def pairs(self) -> int:
+        return self._pairs
+
+    def sync_pairs(self, available: int | None = None) -> bool:
+        """Re-deal if this width now favours a different number of pairs."""
+        margins = self._grid.contentsMargins()
+        width = self.width() if available is None else available
+        wanted = pairs_per_row(width - margins.left() - margins.right(), self._pairs)
+        if wanted == self._pairs:
+            return False
+        self._pairs = wanted
+        reflow_terms_grid(self._grid, wanted)
+        self.updateGeometry()
+        return True
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        super().resizeEvent(event)
+        if event.oldSize().width() != event.size().width():
+            self.sync_pairs()
+
+
+def build_terms_grid(
+    rows: list, style: TermsGridStyle | None = None, *, pairs: int = PAIRS_PER_ROW
+) -> QGridLayout:
+    """Lay *rows* out as ``label: value`` pairs, *pairs* to a grid row.
 
     A value some modifier changed is tinted and carries its pre-modifier value on the
     tooltip — that is the part worth noticing at a glance. The value columns share the
@@ -61,10 +160,11 @@ def build_terms_grid(rows: list, style: TermsGridStyle | None = None) -> QGridLa
     """
 
     style = style or TermsGridStyle()
+    pairs = max(1, int(pairs))
     grid = QGridLayout()
     grid.setHorizontalSpacing(int(theme.metric("space.lg")))
     for index, stat in enumerate(rows):
-        grid_row, pair = divmod(index, PAIRS_PER_ROW)
+        grid_row, pair = divmod(index, pairs)
         column = pair * 2
         label = QLabel(f"{stat.label}:")
         label.setStyleSheet(f"color: {theme.color('text.muted')};")
@@ -82,6 +182,6 @@ def build_terms_grid(rows: list, style: TermsGridStyle | None = None) -> QGridLa
                 widget.setFont(font)
         grid.addWidget(label, grid_row, column, Qt.AlignmentFlag.AlignTop)
         grid.addWidget(value, grid_row, column + 1, Qt.AlignmentFlag.AlignTop)
-    for pair in range(PAIRS_PER_ROW):
+    for pair in range(pairs):
         grid.setColumnStretch(pair * 2 + 1, 1)
     return grid

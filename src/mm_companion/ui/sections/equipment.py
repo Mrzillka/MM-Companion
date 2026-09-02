@@ -123,7 +123,7 @@ from mm_companion.ui.cards import (
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.platform_editor import PlatformEditorDialog, platform_kind_title
 from mm_companion.ui.power_constructor import PowerConstructorWindow
-from mm_companion.ui.power_constructor.terms_grid import build_terms_grid
+from mm_companion.ui.power_constructor.terms_grid import TermsGridBox, build_terms_grid
 from mm_companion.ui.sections.equipment_picker import EquipmentPickerDialog
 from mm_companion.ui.sections.stat_table import PinMenuState
 from mm_companion.ui.sections.titled_section import TitledSection
@@ -862,9 +862,9 @@ class EquipmentSection(TitledSection):
         return host
 
     def _traits_widget(self, item: EquipmentItem) -> QWidget:
-        inner = QWidget()
-        inner.setLayout(self._traits_grid(platform_trait_rows(item, self._data)))
-        return inner
+        # A TermsGridBox rather than a bare host: it re-deals the pairs into one
+        # column when the card narrows, without remaking a single label.
+        return TermsGridBox(self._traits_grid(platform_trait_rows(item, self._data)))
 
     def _refresh_traits(self, item: EquipmentItem) -> None:
         """Redraw one platform's trait grid in place, after a throttle change."""

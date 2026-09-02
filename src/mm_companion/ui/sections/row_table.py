@@ -33,7 +33,7 @@ the layer above this one.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from typing import NamedTuple
 
 from PySide6.QtCore import QMimeData, QPoint, QRect, QSize, Qt, QTimer, Signal
@@ -63,6 +63,61 @@ INDICATOR_HEIGHT = 2
 #: its own preset modes whatever it likes; this one is shared because
 #: :class:`RowReorder` is only enabled in it.
 SORT_MANUAL = "manual"
+
+
+#: How much narrower than a boundary the table has to be before it sheds another
+#: column, and how much wider before it takes one back. The same dead-band, for
+#: the same reason, as :func:`~mm_companion.ui.sections.column_flow.column_count`'s
+#: and :func:`~mm_companion.ui.reflow.prefers_row`'s: shedding a column changes
+#: what wraps, which changes the block's height, which can toggle a scrollbar,
+#: which changes the width back over the boundary — an endless relayout otherwise.
+SHED_HYSTERESIS = 24
+
+
+def columns_to_shed(
+    available: int,
+    widths: Sequence[int],
+    shed_order: Sequence[int],
+    *,
+    current: Sequence[int] = (),
+    hysteresis: int = 0,
+) -> tuple[int, ...]:
+    """Which columns to hide so the rest fit in *available* pixels.
+
+    *shed_order* is the columns a block is willing to give up, **worst first** —
+    the abbreviation before the name, the modifier before the rank. Everything not
+    named in it is load-bearing and is never hidden, so a table can always be
+    dragged narrower than it can honestly show and the columns that remain are the
+    ones worth keeping. Past that the block scrolls; nothing is ever lost.
+
+    A non-positive *available* (a table that has not been laid out yet) sheds
+    nothing, so the first paint is the full table and the real answer arrives on
+    the first ``resizeEvent``.
+    """
+    if available <= 0 or not shed_order:
+        return ()
+    total = sum(widths)
+    shed: list[int] = []
+    for column in shed_order:
+        if total <= available:
+            break
+        if 0 <= column < len(widths):
+            shed.append(column)
+            total -= widths[column]
+
+    if not hysteresis or not current:
+        return tuple(shed)
+    # Only change the answer once the width is past the boundary by a full band in
+    # the direction it is moving, or the count flips back and forth on its own.
+    if len(shed) > len(current):
+        deeper = tuple(shed)
+        kept = sum(w for i, w in enumerate(widths) if i not in set(deeper))
+        return deeper if available <= kept + hysteresis else tuple(current)
+    if len(shed) < len(current):
+        shallower = tuple(shed)
+        kept = sum(w for i, w in enumerate(widths) if i not in set(shallower))
+        return shallower if available >= kept + hysteresis else tuple(current)
+    return tuple(shed)
 
 
 class AutoHeightTable(QTableWidget):
@@ -96,6 +151,9 @@ class AutoHeightTable(QTableWidget):
         super().__init__(rows, columns, parent)
         self._word_wrap = word_wrap
         self._fit_width = fit_width
+        # Columns this table is willing to give up as it narrows, worst first.
+        self._shed_order: tuple[int, ...] = ()
+        self._shed: tuple[int, ...] = ()
         self._reorder: RowReorder | None = None
         self._press_pos: QPoint | None = None
         self._dragged = False
@@ -152,6 +210,61 @@ class AutoHeightTable(QTableWidget):
         width = max(hint.width(), self._content_width()) if self._fit_width else hint.width()
         return QSize(width, self._content_height())
 
+    def set_shed_order(self, columns: Sequence[int]) -> None:
+        """Name the columns this table may hide as it narrows, **worst first**.
+
+        A table that names none never hides anything and simply scrolls when it
+        runs out of room, which is the right answer for one whose every column is
+        load-bearing. Call it once, after the columns exist.
+        """
+        self._shed_order = tuple(columns)
+        self.sync_shed_columns()
+
+    def natural_column_widths(self) -> list[int]:
+        """What each column would take if it were showing, header text included.
+
+        Measured whether or not the column is currently hidden — a hidden one has
+        to be measurable, or the table could never work out that it now fits again
+        and would stay shed forever.
+        """
+        header = self.horizontalHeader()
+        return [
+            max(self.sizeHintForColumn(column), header.sectionSizeHint(column))
+            for column in range(self.columnCount())
+        ]
+
+    def _shed_available_width(self) -> int:
+        width = self.viewport().width() or self.width()
+        vertical = self.verticalHeader()
+        if not vertical.isHidden():
+            width -= vertical.width()
+        return width - 2 * self.frameWidth()
+
+    def sync_shed_columns(self) -> bool:
+        """Hide or restore columns to suit the width. Returns whether it changed."""
+        if not self._shed_order:
+            return False
+        wanted = columns_to_shed(
+            self._shed_available_width(),
+            self.natural_column_widths(),
+            self._shed_order,
+            current=self._shed,
+            hysteresis=SHED_HYSTERESIS,
+        )
+        if wanted == self._shed:
+            return False
+        self._shed = wanted
+        hidden = set(wanted)
+        for column in self._shed_order:
+            if 0 <= column < self.columnCount():
+                self.setColumnHidden(column, column in hidden)
+        self.updateGeometry()
+        return True
+
+    def shed_columns(self) -> tuple[int, ...]:
+        """Which columns are hidden for want of room right now."""
+        return self._shed
+
     def remeasure_wrapped_rows(self) -> None:
         """Re-fit every row to its wrapped text (a no-op unless *word_wrap*).
 
@@ -167,6 +280,10 @@ class AutoHeightTable(QTableWidget):
 
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802 - Qt override
         super().resizeEvent(event)
+        # Before the wrap measurement below: shedding a column changes how much
+        # room the stretching one has, and therefore what wraps in it.
+        if event.oldSize().width() != event.size().width():
+            self.sync_shed_columns()
         # A wider/narrower table re-wraps its text, changing row heights, so
         # re-measure and let the block resize to the new content. Only on a *width*
         # change: wrapping depends on nothing else, and a panel of forty skill rows

@@ -234,7 +234,7 @@ def test_the_rolls_block_starts_in_the_pinned_strip(qapp: QApplication, window: 
     holds only what is read between rolls.
     """
     assert window._canvas.pinned_keys() == ["rolls"]
-    assert window._board.panel.frames() == [[window._canvas.block_frame("rolls")]]
+    assert window._board.panel.frames() == [window._canvas.block_frame("rolls")]
     assert all("rolls" not in row for row in _gm_rows(window))
 
 
@@ -251,7 +251,7 @@ def test_a_gm_block_can_be_pinned_beside_the_scrolling_board(
     QApplication.processEvents()
 
     assert window._canvas.is_pinned("rolls") is True
-    assert window._board.panel.frames() == [[window._canvas.block_frame("rolls")]]
+    assert window._board.panel.frames() == [window._canvas.block_frame("rolls")]
     assert all("rolls" not in row for row in _gm_rows(window))
 
     window._persist_layout()
@@ -2456,10 +2456,49 @@ def test_the_board_is_far_narrower_than_the_constant_it_replaced(
     quick_npc_file(window)
     (card,) = npc_cards(window)
 
-    assert card.width() < 300
-    assert card.width() == card.body_width_hint() + card.pin_width_hint() + (
-        int(theme.metric("space.sm")) * 3
-    )
+    asked = card.body_width_hint() + card.pin_width_hint() + int(theme.metric("space.sm")) * 3
+    assert asked < 300
+    # At most what the card asked for. It may be *less*: the block's own width is
+    # a ceiling now, so a board dragged narrower than one card squeezes the card
+    # rather than growing a scrollbar and showing the GM a letterbox.
+    assert card.width() <= asked
+
+
+def test_a_card_takes_its_full_width_when_the_block_has_the_room(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    quick_npc_file(window)
+    window.resize(1400, 900)
+    window.show()
+    for _ in range(8):
+        qapp.processEvents()
+    (card,) = npc_cards(window)
+
+    asked = card.body_width_hint() + card.pin_width_hint() + int(theme.metric("space.sm")) * 3
+    assert card.width() == asked
+    window.hide()
+
+
+def test_a_narrow_block_squeezes_its_cards_rather_than_clipping_them(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    """The pinned strip gives up its slack first — a narrower strip elides its
+    captions and loses least — and the body follows only after that."""
+    quick_npc_file(window)
+    window.resize(1400, 900)
+    window.show()
+    for _ in range(8):
+        qapp.processEvents()
+    (card,) = npc_cards(window)
+    roomy = card.width()
+
+    window.resize(420, 900)
+    for _ in range(10):
+        qapp.processEvents()
+
+    assert card.width() < roomy
+    assert card.width() >= int(theme.metric("gm.card.min"))
+    window.hide()
 
 
 def test_collapsing_is_remembered_per_card(window: GMWindow) -> None:

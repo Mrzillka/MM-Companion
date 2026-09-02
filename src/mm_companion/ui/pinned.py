@@ -1,10 +1,25 @@
-"""The vocabulary of the pinned strip: its edges, alignments and defaults.
+"""The vocabulary of the pinned strip: its edges, and where a drop on it lands.
 
 Kept in a module of its own, with no Qt in it, because both sides of the feature
 need it and neither should import the other: the arrangement *model* lives in
-:mod:`mm_companion.ui.block_canvas` (which validates an edge/alignment coming
-back out of settings.json) and the *view* in
-:mod:`mm_companion.ui.pinned_panel` (which lays widgets out from it).
+:mod:`mm_companion.ui.block_canvas` (which validates an edge coming back out of
+settings.json) and the *view* in :mod:`mm_companion.ui.pinned_panel` (which lays
+widgets out from it).
+
+The strip's blocks are a :mod:`~mm_companion.ui.layout_tree` node like the page's
+now, rendered by the same splitters with the same dividers and the same detents.
+Two consequences worth stating here, since this is where the vocabulary used to
+live:
+
+* the strip's **lines are gone as a concept**. There is no "line along the strip
+  holding blocks across it" any more, only cells that split however the user
+  dragged them; ``region_lines`` still derives the old shape for anything that
+  wants to read the strip in those terms.
+* **alignment is gone with them.** ``fill``/``start``/``center``/``end`` existed
+  because a block that pinned its own size could not fill the cell it was given
+  and would otherwise sit adrift in the middle of one. No block pins its own size
+  now — the user does — so every block fills its cell and the choice had nothing
+  left to decide.
 """
 
 from __future__ import annotations
@@ -14,20 +29,14 @@ from dataclasses import dataclass
 #: Which side of the page the strip is parked on.
 PIN_EDGES = ("left", "right", "top", "bottom")
 
-#: How a pinned block sits across the strip (the axis the strip is *thin* in).
-#: ``fill`` stretches it to the strip's full thickness; the others leave it at
-#: its natural size and push it to one side.
-PIN_ALIGNMENTS = ("fill", "start", "center", "end")
-
 DEFAULT_EDGE = "right"
-DEFAULT_ALIGN = "fill"
 
 #: The strip's thickness in pixels before the user has dragged it.
 DEFAULT_EXTENT = 320
 
 
 def is_vertical_strip(edge: str) -> bool:
-    """Whether *edge* runs its lines top-to-bottom (a left/right strip)."""
+    """Whether *edge* runs down the side of the page (rather than along it)."""
     return edge in ("left", "right")
 
 
@@ -35,14 +44,12 @@ def is_vertical_strip(edge: str) -> bool:
 class PinSlot:
     """Where a block dropped on the strip lands.
 
-    The strip is a small canvas rather than a single stack: it holds *lines*
-    along its length (top-to-bottom on a side strip, left-to-right along a top or
-    bottom one), and each line holds one or more blocks across it. So a drop
-    names a line and a place within it — the same shape as the page canvas's
-    ``DropSlot``, and for the same reason: blocks go beside each other as readily
-    as under each other.
+    Deliberately the same shape as the page's ``DropSlot``, because the strip is
+    the same kind of thing now: a drop names the block it lands beside and which
+    ``side`` of it to take, which is the only way to say "underneath that one".
+    A ``target`` of ``None`` means the strip is empty and the block is simply the
+    first thing in it.
     """
 
-    new_line: bool
-    line: int
-    slot: int
+    target: str | None = None
+    side: str = "bottom"

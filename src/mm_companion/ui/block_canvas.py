@@ -50,12 +50,11 @@ from mm_companion.ui.blocks.base import instance_template
 from mm_companion.ui.drop_feedback import DropIndicator
 from mm_companion.ui.grid_view import RowStack, build_node
 from mm_companion.ui.pinned import (
-    DEFAULT_ALIGN,
     DEFAULT_EDGE,
     DEFAULT_EXTENT,
-    PIN_ALIGNMENTS,
     PIN_EDGES,
     PinSlot,
+    is_vertical_strip,
 )
 from mm_companion.ui.tab_group import TabGroupFrame
 from mm_companion.ui.widgets import discard_widget
@@ -131,6 +130,31 @@ class Anchor:
         if neighbour is not None and not isinstance(neighbour, str):
             return None
         return cls(neighbour, bool(value.get("in_row")), bool(value.get("before")))
+
+
+def _forget_sizes(node: lt.Node | None) -> lt.Node | None:
+    """*node* with every remembered proportion dropped, keeping its shape."""
+    if node is None or isinstance(node, lt.Leaf):
+        return node
+    children = tuple(_forget_sizes(child) for child in node.children)
+    return lt.Split(node.orientation, tuple(c for c in children if c is not None), ())
+
+
+def _rotate(node: lt.Node | None) -> lt.Node | None:
+    """*node* with every split turned through a right angle, and its sizes dropped.
+
+    What moving the strip from a side to the top or bottom has to do to its
+    contents. A strip is a column of blocks down the right and a row of them along
+    the bottom; carrying the tree across unturned would leave a right-edge strip's
+    column *still* a column, stacked inside a band a few hundred pixels tall.
+    Sizes go with the turn, being live pixel measurements of the axis that just
+    stopped existing.
+    """
+    if node is None or isinstance(node, lt.Leaf):
+        return node
+    flipped = lt.HORIZONTAL if node.orientation == lt.VERTICAL else lt.VERTICAL
+    children = tuple(_rotate(child) for child in node.children)
+    return lt.Split(flipped, tuple(c for c in children if c is not None), ())
 
 
 class BlockCanvas(QWidget):
@@ -217,15 +241,12 @@ class BlockCanvas(QWidget):
         # side by side — with the sizes the user dragged alongside. The canvas
         # stays the single source of truth; the board is only the view it renders
         # them through, and stays None for a host that doesn't offer the strip.
-        self._pinned: list[list[str]] = []
+        # The strip, as a tree exactly like the page's. It used to be lines of
+        # keys with two parallel lists of pixel sizes beside it; the sizes live in
+        # the tree now, where they cannot drift out of step with the blocks they
+        # describe.
+        self._region: lt.Node | None = None
         self._pin_edge = DEFAULT_EDGE
-        self._pin_align = DEFAULT_ALIGN
-        # The proportions the user dragged, as live pixel sizes. They only mean
-        # anything against the shape they were measured in, so a block arriving
-        # somewhere clears the sizes on that axis rather than trying to slot a
-        # value in beside them (see pin_block).
-        self._pin_sizes: list[int] = []  # how the lines share the strip's length
-        self._pin_line_sizes: list[list[int]] = []  # within each line
         self._pin_extent = DEFAULT_EXTENT
         self._board: PinnedBoard | None = None
 
@@ -614,29 +635,24 @@ class BlockCanvas(QWidget):
         """
         if self._board is None:
             return
-        lines = [[self._frames[key] for key in line] for line in self._pinned]
-        self._board.set_blocks(
-            lines, self._pin_edge, self._pin_align, self._pin_sizes, self._pin_line_sizes
-        )
+        self._board.set_blocks(self._region, self._frames, self._pin_edge)
 
     def _sync_from_board(self) -> None:
-        """Read the strip's live proportions back out of the board.
+        """Read the strip's live proportions back into the region tree.
 
-        The splitter handles are dragged by the user, not by us, so the sizes and
-        the strip's thickness are only true on the widgets; pull them in before
-        anything snapshots or rebuilds the arrangement. Anything whose shape no
-        longer matches the model is dropped rather than kept — a stale size list
-        would be applied to the wrong blocks.
+        The handles are dragged by the user, not by us, so the sizes are only true
+        on the widgets until somebody asks; pull them in before anything snapshots
+        or rebuilds. The strip used to keep two parallel lists of pixel sizes for
+        this, which could and did drift out of step with the blocks they described;
+        the sizes are in the tree now, and this walks the same splitters the page
+        walks with the same function.
         """
         if self._board is None:
             return
-        extents = self._board.line_extents()
-        self._pin_sizes = extents if len(extents) == len(self._pinned) else []
-        sizes = self._board.block_sizes()
-        matches = len(sizes) == len(self._pinned) and all(
-            len(within) == len(line) for within, line in zip(sizes, self._pinned, strict=False)
-        )
-        self._pin_line_sizes = sizes if matches else []
+        region = self._region
+        for path, widget in self._board.panel.split_paths():
+            region = self._absorb_sizes(region, path, widget) if region is not None else region
+        self._region = lt.normalize(region)
         # The thickness the strip was *asked* for, not the one its blocks forced on
         # it — see PinnedBoard.desired_extent.
         extent = self._board.desired_extent()
@@ -673,7 +689,6 @@ class BlockCanvas(QWidget):
             "page": lt.to_dict(lt.rows_to_page(rows)),
             "region": {
                 "edge": DEFAULT_EDGE,
-                "align": DEFAULT_ALIGN,
                 "extent": DEFAULT_EXTENT,
                 "root": lt.to_dict(lt.lines_to_region(pinned, DEFAULT_EDGE)),
             },
@@ -704,9 +719,8 @@ class BlockCanvas(QWidget):
             "page": lt.to_dict(self._page),
             "region": {
                 "edge": self._pin_edge,
-                "align": self._pin_align,
                 "extent": self._pin_extent,
-                "root": lt.to_dict(lt.lines_to_region(self.pinned_lines(), self._pin_edge)),
+                "root": lt.to_dict(self._region),
             },
             "floating": {key: self._window_geometry(key) for key in self._windows},
             "hidden": sorted(self._hidden),
@@ -755,7 +769,7 @@ class BlockCanvas(QWidget):
         if parsed is None:
             return False
         page, region, floating, hidden, anchors = parsed
-        edge, align, extent, region_root = region
+        edge, extent, region_root = region
 
         for key in list(self._windows):
             self._destroy_window(key)
@@ -766,15 +780,8 @@ class BlockCanvas(QWidget):
         self._set_page(page)
         self._hidden = set(hidden)
         self._anchors = anchors
-        self._pinned = lt.region_lines(region_root, edge)
+        self._region = region_root
         self._pin_edge = edge
-        self._pin_align = align
-        # The strip's own proportions do not survive the move to a tree: they
-        # described a layout engine that no longer exists, and a wrong remembered
-        # size is worse than none. Its blocks lay themselves out once, from their
-        # own hints, and the next drag is remembered properly.
-        self._pin_sizes = []
-        self._pin_line_sizes = []
         self._pin_extent = extent
         if self._board is not None:
             # The model is authoritative here, not the widgets: force the strip to
@@ -877,9 +884,6 @@ class BlockCanvas(QWidget):
         extent = raw_region.get("extent")
         if not (isinstance(extent, int) and not isinstance(extent, bool) and extent > 0):
             extent = DEFAULT_EXTENT
-        align = raw_region.get("align", DEFAULT_ALIGN)
-        if align not in PIN_ALIGNMENTS:
-            return None
 
         seen: list[str] = lt.keys(page) + lt.keys(region)
         for key, geom in floating.items():
@@ -901,7 +905,7 @@ class BlockCanvas(QWidget):
                 if key in known and anchor is not None:
                     anchors[key] = anchor
 
-        return page, (edge, align, extent, region), floating, list(hidden), anchors
+        return page, (edge, extent, region), floating, list(hidden), anchors
 
     @staticmethod
     def _valid_geometry(geom: object) -> bool:
@@ -924,21 +928,11 @@ class BlockCanvas(QWidget):
             self._destroy_window(key)
             return
         if self.is_pinned(key):
-            self._sync_from_board()  # keep the other pinned blocks' dragged sizes
-            for index, line in enumerate(self._pinned):
-                if key not in line:
-                    continue
-                slot = line.index(key)
-                line.pop(slot)
-                if index < len(self._pin_line_sizes) and slot < len(self._pin_line_sizes[index]):
-                    self._pin_line_sizes[index].pop(slot)
-                if not line:  # the line emptied out; it collapses away with its size
-                    self._pinned.pop(index)
-                    if index < len(self._pin_sizes):
-                        self._pin_sizes.pop(index)
-                    if index < len(self._pin_line_sizes):
-                        self._pin_line_sizes.pop(index)
-                break
+            # Keep the other pinned blocks' dragged sizes: taking one out frees its
+            # room for its siblings, and the tree drops the sizes that described a
+            # run this block was in.
+            self._sync_from_board()
+            self._region = lt.remove(self._region, key)
         self._set_page(lt.remove(self._page, key))
         frame = self._frames[key]
         frame.setParent(self)
@@ -1129,35 +1123,65 @@ class BlockCanvas(QWidget):
         self._hidden.discard(key)
         # Remember where it sat, so unpinning can put it back there.
         anchor = self._anchor_for(key, self._rows)
-        # Taking the block out can collapse the line it was in, shifting every
-        # line after it up one — so a target line named against the strip as it
-        # looks *now* has to move with it.
-        before = len(self._pinned)
-        from_line = next((i for i, existing in enumerate(self._pinned) if key in existing), None)
-        self._detach(key)  # also syncs the live sizes out of the board
+        beside = self._pin_target(key, line, slot)
+        self._detach(key)
         if anchor is not None:
             self._anchors[key] = anchor
-        if line is not None and from_line is not None and len(self._pinned) < before:
-            if from_line < line:
-                line -= 1
-        at = len(self._pinned) if line is None else max(0, min(line, len(self._pinned)))
-        # Arriving somewhere forgets the sizes on that axis — see _forget_sizes.
-        if new_line or line is None or not self._pinned:
-            self._pinned.insert(at, [key])
-            self._pin_sizes = []
-            if len(self._pin_line_sizes) == len(self._pinned) - 1:
-                self._pin_line_sizes.insert(at, [])  # its blocks will lay themselves out
-            else:
-                self._pin_line_sizes = []
-        else:
-            at = min(at, len(self._pinned) - 1)
-            target = self._pinned[at]
-            index = max(0, min(slot, len(target)))
-            target.insert(index, key)
-            if at < len(self._pin_line_sizes):
-                self._pin_line_sizes[at] = []
+        self._place_in_region(key, beside, "bottom" if new_line or beside is None else "right")
         self._relayout()
         self._settled()
+
+    def pin_at(self, key: str, target: str | None, side: str) -> None:
+        """Pin *key* beside *target*, on the given side of it.
+
+        The strip's own drag move, and the counterpart of :meth:`place_beside` on
+        the page. A *target* of None puts the block in an empty strip.
+        """
+        if self._board is None:
+            return
+        self._sync_from_board()
+        self._hidden.discard(key)
+        anchor = self._anchor_for(key, self._rows)
+        self._detach(key)
+        if anchor is not None:
+            self._anchors[key] = anchor
+        self._place_in_region(key, target if target != key else None, side)
+        self._relayout()
+        self._settled()
+
+    def _pin_target(self, key: str, line: int | None, slot: int) -> str | None:
+        """Translate the old line/slot vocabulary into a block to land beside.
+
+        The strip has no lines any more, but plenty of callers — an anchor
+        resolving, the pin picker, the title bar's ``🖈`` — still speak in them,
+        and every one of those really means "somewhere sensible in the strip".
+        A line names the run of blocks it used to hold; a slot names a place in
+        that run.
+        """
+        lines = self.pinned_lines()
+        lines = [[k for k in existing if k != key] for existing in lines]
+        lines = [existing for existing in lines if existing]
+        if not lines:
+            return None
+        if line is None:
+            return lines[-1][-1]
+        run = lines[max(0, min(line, len(lines) - 1))]
+        return run[max(0, min(slot, len(run) - 1))]
+
+    def _place_in_region(self, key: str, target: str | None, side: str) -> None:
+        """Put *key* into the strip's tree. Assumes it has been detached."""
+        if self._region is None or target is None or lt.find(self._region, target) is None:
+            self._region = lt.normalize(
+                lt.Leaf((key,))
+                if self._region is None
+                else lt.Split(self._along_axis(), (self._region, lt.Leaf((key,))))
+            )
+            return
+        self._region = lt.normalize(lt.insert_beside(self._region, key, target, side))
+
+    def _along_axis(self) -> str:
+        """The axis the strip's blocks stack along, which is its own long one."""
+        return lt.VERTICAL if is_vertical_strip(self._pin_edge) else lt.HORIZONTAL
 
     def unpin_block(self, key: str) -> None:
         """Take *key* out of the strip and dock it back onto the page.
@@ -1185,49 +1209,50 @@ class BlockCanvas(QWidget):
             self.unpin_block(key)
 
     def is_pinned(self, key: str) -> bool:
-        return any(key in line for line in self._pinned)
+        return lt.find(self._region, key) is not None
 
     def pinned_keys(self) -> list[str]:
-        """Every pinned block, in strip order (lines, then within each line)."""
-        return [key for line in self._pinned for key in line]
+        """Every pinned block, in reading order."""
+        return lt.keys(self._region)
 
     def pinned_lines(self) -> list[list[str]]:
-        return [list(line) for line in self._pinned]
+        """The strip's blocks as the lines it used to hold them in.
+
+        Derived, not stored. The strip is a tree now and a run of cells is only a
+        "line" if you squint at it the way the old code did — but plenty of callers
+        and tests still ask the question in those terms, and the answer is honest
+        enough (see :func:`~mm_companion.ui.layout_tree.region_lines`).
+        """
+        return lt.region_lines(self._region, self._pin_edge)
+
+    def pin_region(self) -> lt.Node | None:
+        """The strip's tree — the seam a layout history or a test reads."""
+        return self._region
 
     def pin_edge(self) -> str:
         return self._pin_edge
-
-    def pin_align(self) -> str:
-        return self._pin_align
 
     def set_pin_edge(self, edge: str) -> None:
         """Park the strip on another side of the page."""
         if edge not in PIN_EDGES or edge == self._pin_edge:
             return
         self._sync_from_board()
-        self._pin_edge = edge
-        # Every remembered size was measured along the old axis and means nothing
-        # on the new one — a strip dragged 600px wide down the side would become a
-        # 600px-deep floor. Start from the default thickness and let the blocks'
-        # own minimums push it out from there.
-        self._pin_sizes = []
-        self._pin_line_sizes = []
+        previous, self._pin_edge = self._pin_edge, edge
+        # A strip that changed *axis* takes its blocks round with it: a column down
+        # the right edge is a row along the bottom, not a column squeezed into a
+        # short band. A move between two side edges is only a change of side, so the
+        # shape stays and only its live pixel sizes go — they measured a layout on
+        # the other side of the page.
+        turned = is_vertical_strip(previous) != is_vertical_strip(edge)
+        self._region = _rotate(self._region) if turned else _forget_sizes(self._region)
+        # And the thickness with them: a strip dragged 600px wide down the side
+        # would otherwise become a 600px-deep floor. Start from the default and let
+        # the blocks push it out from there.
         self._pin_extent = DEFAULT_EXTENT
         self._render_pinned()
         if self._board is not None:
             self._board.set_extent(self._pin_extent)
         self._settled()
-
-    def set_pin_align(self, align: str) -> None:
-        """Set how pinned blocks sit across the strip (fill / start / center / end)."""
-        if align not in PIN_ALIGNMENTS or align == self._pin_align:
-            return
-        self._sync_from_board()
-        self._pin_align = align
-        self._render_pinned()
-        self._settled()
-
-    # -- remembering where a closed block came from --------------------------
 
     @staticmethod
     def _anchor_for(key: str, rows: list[list[str]]) -> Anchor | None:
@@ -1390,7 +1415,7 @@ class BlockCanvas(QWidget):
         if not active:
             return
         if pin_at is not None:
-            self.pin_block(key, pin_at.line, pin_at.slot, new_line=pin_at.new_line)
+            self.pin_at(key, pin_at.target, pin_at.side)
             return
         if slot is None:
             return

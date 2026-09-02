@@ -58,24 +58,39 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   the nearest ancestor that is **not** a splitter: a `QSplitter` adopts every child
   widget into its own list of panes, so an overlay parented to one becomes a pane
   of it, which put an invisible strip of nothing at the left of every row.
-- Beside the page is still the **pinned strip** (`ui/pinned_panel.py`), the one
-  place that does *not* scroll. `PinnedBoard` is what the host puts in its layout —
-  a splitter holding the page and a `PinnedPanel`, whose orientation and child
-  order *are* the strip's edge and whose handle sets its thickness. The **`PinnedHandle`
-  (📌) is always visible**: the empty strip's whole content, the drop target that
-  gets the first block in, the grip the strip is dragged to another edge by
-  (lighting four `EdgeZoneOverlay` bands), and the button that opens its menu.
-  The canvas still owns the model — the panel is a view and holds no arrangement
-  state; `_relayout` renders the strip **first** so the rows are the last to claim a
-  frame, and the rescue pass that follows only touches frames still inside the
-  page's own stack (rescuing one the strip had just taken would undo the render
-  order from the other direction). The strip's model is a region *tree* like the
-  page's; `layout_tree.region_lines` is the bridge that hands the strip's own
-  widgets the lines they still speak in.
+- Beside the page is the **pinned strip** (`ui/pinned_panel.py`), the one place
+  that does *not* scroll — and it is **the same engine as the page**. `PinnedPanel`
+  renders a region tree through the very same `build_node`, so a block in the strip
+  sits in a `GridSplitter` with the same dividers and the same detents as one on
+  the page, and can be split and nested exactly as freely. The strip's own
+  `_PinnedLine` and `_PinnedSlot` are gone with the concept of a *line*: there is no
+  "line along the strip holding blocks across it" any more, only cells. A drop names
+  a block and a `side` of it, like the page's; `layout_tree.region_lines` still
+  derives the old shape for anything that wants to read the strip in those terms.
+- **Alignment went with the lines.** `fill`/`start`/`center`/`end` existed because a
+  block that pinned its own size could not fill the cell it was given and would
+  otherwise sit adrift in the middle of one. No block pins its own size now — the
+  user does — so every block fills its cell and the choice had nothing left to
+  decide. The menu item is gone and the key is out of the schema.
+- **Moving the strip to another edge turns its tree.** A column down the right edge
+  is a *row* along the bottom, so `_rotate` swaps every split's axis when the edge
+  changes axis; a move between two side edges is only a change of side, so the shape
+  stays and only its live pixel sizes go. Both drop the sizes, which measured an
+  axis that has just stopped existing.
+- `PinnedBoard` is what the host puts in its layout — a splitter holding the page and
+  the panel, whose orientation and child order *are* the strip's edge and whose handle
+  sets its thickness. The **`PinnedHandle` (📌) is always visible**: the empty strip's
+  whole content, the drop target that gets the first block in, the grip the strip is
+  dragged to another edge by (lighting four `EdgeZoneOverlay` bands), and the button
+  that opens its menu. The canvas still owns the model — the panel is a view and holds
+  no arrangement state; `_relayout` renders the strip **first** so the rows are the
+  last to claim a frame, and the rescue pass that follows only touches frames still
+  inside the page's own stack (rescuing one the strip had just taken would undo the
+  render order from the other direction).
 - **Nothing holds the window open any more.** `PinnedPanel.minimumSizeHint` used to
   report the strip's whole content, capped at the usable screen, precisely so the
-  *window* would be held open rather than the strip clipping. That was right while
-  a squashed block was a clipped one. It reports its handle and no more now, and
+  *window* would be held open rather than the strip clipping. That was right while a
+  squashed block was a clipped one. It reports its handle and no more now, and
   `_usable_screen` and `_scrollbar_allowance` went with it — they existed only to
   serve it. A strip too short for its blocks squashes them, and they scroll inside
   themselves.

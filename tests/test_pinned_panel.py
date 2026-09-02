@@ -77,16 +77,16 @@ def _drag(canvas, sheet: CharacterSheet, key: str, target: QPoint) -> None:
 def _pinned(sheet: CharacterSheet) -> dict:
     """The strip, in the shape these tests have always read it in.
 
-    The arrangement holds one tree per region now, so the strip's ``lines`` are
-    derived rather than stored (:func:`layout_tree.region_lines`). Reading them
-    back out here keeps every test below saying what it always said about *the
-    strip*, and confines the schema change to one function.
+    The strip *is* a tree now, rendered by the same splitters the page uses, so
+    its ``lines`` are derived rather than stored
+    (:func:`layout_tree.region_lines`). Reading them back out here keeps every
+    test below saying what it always said about the strip, and confines the model
+    change to one function.
     """
     region = sheet.arrangement()["region"]
     root = lt.from_dict(region["root"], set(sheet.block_keys()))
     return {
         "edge": region["edge"],
-        "align": region["align"],
         "extent": region["extent"],
         "lines": lt.region_lines(root, region["edge"]),
     }
@@ -231,67 +231,80 @@ def test_reset_layout_restores_the_default_strip(make_sheet) -> None:
     # page. The live pixel sizes are whatever the rendered lines measure, so they
     # are not part of the default.
     pinned = _pinned(sheet)
-    assert (pinned["edge"], pinned["lines"], pinned["align"], pinned["extent"]) == (
+    assert (pinned["edge"], pinned["lines"], pinned["extent"]) == (
         "right",
         [["dice"], ["scene"]],
-        "fill",
         320,
     )
     assert any("conditions" in row for row in _rows(sheet))
 
 
-def test_two_blocks_can_share_a_line_across_the_strip(make_sheet) -> None:
+def test_two_blocks_can_sit_across_the_strip(make_sheet) -> None:
     # The strip is a small canvas, not a single stack: blocks go beside each other
-    # as readily as under each other.
+    # as readily as under each other. It renders that with the page's own
+    # splitters now, so "a line across the strip" is simply a horizontal split.
     sheet = make_sheet()
     sheet.pin_block("conditions")
     _settle()
 
-    sheet.pin_block("abilities", line=0, slot=1, new_line=False)
+    sheet.canvas.pin_at("abilities", "conditions", "right")
     _settle()
 
     assert sheet.canvas.pinned_lines() == [["conditions", "abilities"]]
-    line = sheet.board.panel._lines[0]
-    assert line.orientation() == Qt.Orientation.Horizontal  # a right-edge strip
-    first, second = line.slots
+    (split,) = sheet.board.panel.splitters()
+    assert split.orientation() == Qt.Orientation.Horizontal  # a right-edge strip
+    first, second = sheet.block_frame("conditions"), sheet.block_frame("abilities")
     assert first.x() < second.x()  # side by side, not stacked
     assert first.y() == second.y()
 
 
-def test_a_drop_in_the_middle_of_a_line_joins_it_instead_of_starting_one(make_sheet) -> None:
+def test_a_drop_on_a_pinned_block_names_it_and_a_side(make_sheet) -> None:
+    """The same reading the page makes: a drop says which block it lands beside
+    and which side of it to take, which is the only way to say "under that one"."""
     sheet = make_sheet()
     sheet.pin_block("conditions")
     _settle()
     panel = sheet.board.panel
-    line = panel._lines[0]
+    frame = sheet.block_frame("conditions")
 
-    middle = line.mapToGlobal(line.rect().center())
+    middle = frame.mapToGlobal(frame.rect().center())
     slot = panel.drop_slot(middle)
 
-    assert slot is not None and slot.new_line is False
-    assert slot.line == 0
+    assert slot is not None
+    assert slot.target == "conditions"
+    assert slot.side in ("left", "right")
 
 
-def test_moving_a_pinned_block_into_its_own_line_gives_it_a_fair_share(make_sheet) -> None:
+def test_a_drop_at_the_end_of_a_pinned_block_stacks_under_it(make_sheet) -> None:
+    sheet = make_sheet()
+    sheet.pin_block("conditions")
+    _settle()
+    panel = sheet.board.panel
+    frame = sheet.block_frame("conditions")
+
+    low = frame.mapToGlobal(QPoint(frame.width() // 2, frame.height() - 3))
+    slot = panel.drop_slot(low)
+
+    assert slot is not None and slot.target == "conditions" and slot.side == "bottom"
+
+
+def test_moving_a_pinned_block_into_its_own_cell_gives_it_a_fair_share(make_sheet) -> None:
     # Regression: the remembered proportions are live pixel sizes, only true of the
-    # shape they were measured in. A line alone in the strip is recorded as the
+    # shape they were measured in. A cell alone in the strip is recorded as the
     # strip's whole length, so slotting the newcomer's natural size in beside that
     # number handed it a sliver — a block filling a fraction of its band until the
     # strip was resized and Qt redistributed.
     sheet = make_sheet()
     sheet.pin_block("conditions")
-    sheet.pin_block("advantages", line=0, slot=1, new_line=False)
+    sheet.canvas.pin_at("advantages", "conditions", "right")
     _settle()
 
-    sheet.pin_block("advantages", line=0, slot=0, new_line=True)  # move it up
+    sheet.canvas.pin_at("advantages", "conditions", "top")  # move it above
     _settle()
 
     assert sheet.canvas.pinned_lines() == [["advantages"], ["conditions"]]
     moved = sheet.block_frame("advantages")
-    assert moved.height() >= moved.sizeHint().height()
-    panel = sheet.board.panel
-    for line, size in zip(panel._lines, panel._splitter.sizes(), strict=True):
-        assert size >= line.minimumSizeHint().height()
+    assert moved.height() >= moved.minimumSizeHint().height()
 
 
 def test_the_strips_thickness_does_not_follow_what_is_pinned_in_it(make_sheet) -> None:
@@ -377,7 +390,7 @@ def test_the_strip_demands_no_room_of_the_window(make_sheet) -> None:
     _settle()
     panel = sheet.board.panel
 
-    content = panel._splitter.sizeHint()
+    content = panel._host_widget.sizeHint()
     assert panel.minimumSizeHint().width() < content.width()
     assert panel.minimumSizeHint().height() < content.height()
 
@@ -396,10 +409,10 @@ def test_the_strip_may_squash_a_block_below_its_content(make_sheet) -> None:
     _settle()
     panel = sheet.board.panel
 
-    panel._splitter.setSizes([10_000, 1])
+    panel.splitters()[0].setSizes([10_000, 1])
     _settle()
 
-    thin = min(line.height() for line in panel._lines)
+    thin = min(sheet.block_frame(k).height() for k in ("conditions", "advantages"))
     squashed = next(
         f
         for f in (sheet.block_frame(k) for k in ("conditions", "advantages"))
@@ -455,30 +468,40 @@ def test_moving_the_strip_to_another_edge_keeps_its_own_thickness(make_sheet) ->
 
 
 def test_the_strip_stacks_its_blocks_along_its_own_axis(make_sheet) -> None:
+    """And takes them round with it when the axis changes.
+
+    The splitter is re-read rather than held: the strip renders its tree with the
+    page's own ``build_node`` now, so changing edge rebuilds the widgets instead of
+    re-orienting one long-lived splitter.
+    """
     sheet = make_sheet()
     sheet.pin_block("conditions")
     sheet.pin_block("abilities")
     _settle()
-    splitter = sheet.board.panel._splitter
 
-    assert splitter.orientation() == Qt.Orientation.Vertical  # a right-edge strip
+    assert sheet.board.panel.splitters()[0].orientation() == Qt.Orientation.Vertical
 
     sheet.canvas.set_pin_edge("bottom")
     _settle()
 
-    assert splitter.orientation() == Qt.Orientation.Horizontal
+    assert sheet.board.panel.splitters()[0].orientation() == Qt.Orientation.Horizontal
+    # And the blocks are still both there, side by side rather than stacked.
+    assert sheet.canvas.pinned_keys() == ["conditions", "abilities"]
 
 
-def test_alignment_is_remembered_and_only_takes_known_values(make_sheet) -> None:
+def test_alignment_is_gone_and_every_block_fills_its_cell(make_sheet) -> None:
+    """``fill``/``start``/``center``/``end`` existed because a block that pinned
+    its own size could not fill the cell it was given and would otherwise sit
+    adrift in the middle of one. No block pins its own size now — the user does —
+    so the choice had nothing left to decide."""
     sheet = make_sheet()
     sheet.pin_block("conditions")
-
-    sheet.canvas.set_pin_align("center")
     _settle()
-    assert _pinned(sheet)["align"] == "center"
 
-    sheet.canvas.set_pin_align("sideways")  # not an alignment
-    assert _pinned(sheet)["align"] == "center"
+    assert not hasattr(sheet.canvas, "set_pin_align")
+    assert "align" not in sheet.arrangement()["region"]
+    frame = sheet.block_frame("conditions")
+    assert frame.width() == sheet.board.panel._host_widget.width()
 
 
 # -- the drop target --------------------------------------------------------
@@ -490,7 +513,8 @@ def test_an_empty_strip_takes_a_drop_anywhere_on_it(make_sheet) -> None:
 
     center = panel.mapToGlobal(panel.rect().center())
 
-    assert panel.drop_slot(center) == PinSlot(new_line=True, line=0, slot=0)
+    # Nothing to land beside, so the strip names no target at all.
+    assert panel.drop_slot(center) == PinSlot()
 
 
 def test_a_drop_outside_the_strip_is_not_the_strips_business(make_sheet) -> None:
@@ -502,19 +526,20 @@ def test_a_drop_outside_the_strip_is_not_the_strips_business(make_sheet) -> None
     assert sheet.board.drop_slot(over_the_page) is None
 
 
-def test_a_drop_lands_before_or_after_the_block_it_is_dropped_on(make_sheet) -> None:
+def test_a_drop_lands_above_or_below_the_block_it_is_dropped_on(make_sheet) -> None:
     sheet = make_sheet()
     sheet.pin_block("conditions")
     sheet.pin_block("abilities")
     _settle()
     panel = sheet.board.panel
-    first, second = (line.slots[0] for line in panel._lines)
+    first = sheet.block_frame("conditions")
+    second = sheet.block_frame("abilities")
 
-    above_first = first.mapToGlobal(QPoint(first.width() // 2, 1))
-    below_second = second.mapToGlobal(QPoint(second.width() // 2, second.height() - 1))
+    above_first = first.mapToGlobal(QPoint(first.width() // 2, 2))
+    below_second = second.mapToGlobal(QPoint(second.width() // 2, second.height() - 2))
 
-    assert panel.drop_slot(above_first) == PinSlot(new_line=True, line=0, slot=0)
-    assert panel.drop_slot(below_second) == PinSlot(new_line=True, line=2, slot=0)
+    assert panel.drop_slot(above_first) == PinSlot("conditions", "top")
+    assert panel.drop_slot(below_second) == PinSlot("abilities", "bottom")
 
 
 def test_the_strip_shows_and_clears_its_drop_feedback(make_sheet) -> None:
@@ -523,7 +548,7 @@ def test_the_strip_shows_and_clears_its_drop_feedback(make_sheet) -> None:
     _settle()
     panel = sheet.board.panel
 
-    panel.show_drop(PinSlot(new_line=True, line=1, slot=0))
+    panel.show_drop(PinSlot("conditions", "bottom"))
     assert panel._drops.state == "accept"
     assert panel._indicator.isVisible()
 
@@ -616,8 +641,8 @@ def test_a_block_dragged_into_the_strip_keeps_its_content_laid_out(make_sheet) -
     panel = sheet.board.panel
 
     _drag(canvas, sheet, "conditions", panel.mapToGlobal(panel.rect().center()))
-    line = panel._lines[0]
-    beside = line.mapToGlobal(QPoint(line.width() - 5, line.height() // 2))
+    landed = sheet.block_frame("conditions")
+    beside = landed.mapToGlobal(QPoint(landed.width() - 5, landed.height() // 2))
     _drag(canvas, sheet, "abilities", beside)
     _wait()
     _wait()
@@ -626,8 +651,13 @@ def test_a_block_dragged_into_the_strip_keeps_its_content_laid_out(make_sheet) -
     assert frame.layout().geometry().height() > 0
     assert frame.title_bar.height() > 0
     assert frame.section.height() > 0
-    # Laid out *by its slot*, not left at the width it had on the page.
-    assert frame.width() == frame.parentWidget().width()
+    # Laid out by the strip's own splitter, not left at the width it had on the
+    # page. It shares that width with the block it landed beside, so what is
+    # asserted is that the two of them account for the strip between them.
+    parent = frame.parentWidget()
+    shares = sum(parent.widget(i).width() for i in range(parent.count()))
+    assert shares + parent.handleWidth() * (parent.count() - 1) == parent.width()
+    assert 0 < frame.width() < parent.width()
 
 
 def test_dragging_one_pinned_block_beside_another_joins_its_line(make_sheet) -> None:
@@ -638,8 +668,8 @@ def test_dragging_one_pinned_block_beside_another_joins_its_line(make_sheet) -> 
     canvas = sheet.canvas
     frame = sheet.block_frame("abilities")
     start = frame.title_bar.mapToGlobal(QPoint(10, 5))
-    first_line = sheet.board.panel._lines[0]
-    beside = first_line.mapToGlobal(QPoint(first_line.width() - 6, first_line.height() // 2))
+    first = sheet.block_frame("conditions")
+    beside = first.mapToGlobal(QPoint(first.width() - 6, first.height() // 2))
 
     canvas.title_bar_pressed("abilities", start)
     canvas.title_bar_moved("abilities", start + QPoint(-40, -40))
@@ -711,7 +741,6 @@ def test_the_strip_survives_a_save_and_restore(make_sheet) -> None:
     sheet.pin_block("conditions")
     sheet.pin_block("abilities")
     sheet.canvas.set_pin_edge("left")
-    sheet.canvas.set_pin_align("start")
     _settle()
     blob = sheet.save_layout()
 
@@ -724,8 +753,7 @@ def test_the_strip_survives_a_save_and_restore(make_sheet) -> None:
     restored = _pinned(sheet)
     assert restored["lines"] == [["conditions"], ["abilities"]]
     assert restored["edge"] == "left"
-    assert restored["align"] == "start"
-    assert sheet.board.panel._splitter.count() == 2
+    assert sheet.board.panel.splitters()[0].count() == 2
 
 
 def test_a_restore_puts_the_pinned_blocks_back_in_their_lines(make_sheet) -> None:
@@ -752,7 +780,7 @@ def test_a_restore_puts_the_pinned_blocks_back_in_their_lines(make_sheet) -> Non
     assert _pinned(sheet)["lines"] == [["conditions"], ["abilities"]]
 
 
-def test_a_pinned_block_moves_between_lines_without_losing_its_place(make_sheet) -> None:
+def test_a_pinned_block_moves_beside_another_without_losing_its_place(make_sheet) -> None:
     sheet = make_sheet()
     sheet.pin_block("conditions")
     sheet.pin_block("abilities")
@@ -760,12 +788,13 @@ def test_a_pinned_block_moves_between_lines_without_losing_its_place(make_sheet)
     _settle()
     assert sheet.canvas.pinned_lines() == [["conditions"], ["abilities"], ["resistances"]]
 
-    # Into the third line, named against the strip as it looks now — taking the
-    # block out of its own line collapses that one, so the target shifts up.
-    sheet.pin_block("conditions", line=2, slot=0, new_line=False)
+    # Beside the last one. The strip speaks in blocks and sides now, so there is
+    # no line index to shift when taking the block out collapses the run it was in
+    # — which is the whole class of bug the old vocabulary kept inviting.
+    sheet.canvas.pin_at("conditions", "resistances", "right")
     _settle()
 
-    assert sheet.canvas.pinned_lines() == [["abilities"], ["conditions", "resistances"]]
+    assert sheet.canvas.pinned_lines() == [["abilities"], ["resistances", "conditions"]]
 
 
 def test_a_layout_that_puts_one_block_in_two_places_is_rejected(make_sheet) -> None:
@@ -884,13 +913,7 @@ def test_the_strip_reports_whether_it_rebuilt(make_sheet) -> None:
     sheet.pin_block("conditions")
     _settle()
     panel = sheet.board.panel
-    args = (
-        [[sheet.block_frame(key) for key in line] for line in sheet.canvas._pinned],
-        sheet.canvas._pin_edge,
-        sheet.canvas._pin_align,
-        sheet.canvas._pin_sizes,
-        sheet.canvas._pin_line_sizes,
-    )
+    args = (sheet.canvas.pin_region(), sheet.canvas._frames, sheet.canvas._pin_edge)
     assert panel.set_blocks(*args) is False  # nothing moved -> skipped
     panel.invalidate()
     assert panel.set_blocks(*args) is True  # a restore always rebuilds

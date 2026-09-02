@@ -46,7 +46,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -94,22 +94,6 @@ class PinHost(Protocol):
     def set_pin_edge(self, edge: str) -> None: ...
     def unpin_all(self) -> None: ...
     def pin_edge(self) -> str: ...
-
-
-def _is_at_or_within(widget: QWidget, ancestor: QWidget) -> bool:
-    """Whether *widget* is *ancestor* or sits somewhere under it.
-
-    "At or under", not "under": a cell holding one block **is** that block's
-    frame, with no wrapper of its own, so a plain ancestor walk misses exactly the
-    common case. The page learned this the same way — see
-    ``BlockCanvas._is_at_or_within``.
-    """
-    parent: QWidget | None = widget
-    while parent is not None:
-        if parent is ancestor:
-            return True
-        parent = parent.parentWidget()
-    return False
 
 
 class PinnedHandle(QToolButton):
@@ -216,14 +200,11 @@ class PinnedPanel(QFrame):
         self._host_layout.setContentsMargins(0, 0, 0, 0)
         self._host_layout.setSpacing(0)
 
-        # The last-resort scroll (see the module docstring): with the strip's
-        # minimum holding the window open, the content fits and no bar ever shows.
-        # Both axes stay on `AsNeeded` — the minimum is capped at the usable screen,
-        # and where the room genuinely is not there a bar beats clipping a block.
-        # What makes a bar rare is that the minimum is re-reported when the content
-        # changes (see :meth:`eventFilter`); it was not, and the Dice block showing
-        # its spec chip was enough to bring one up on a window that had plenty of
-        # room to grow into.
+        # The last-resort scroll. It is genuinely a last resort now: the strip
+        # demands no room of the window, so a strip too short for its blocks
+        # squashes them and they reflow, and only once every one of them is at its
+        # own floor does anything here have somewhere to scroll to. Both axes stay
+        # on `AsNeeded` for that case, where a bar beats clipping a block.
         self._scroll = QScrollArea(self)
         self._scroll.setObjectName("pinnedScroll")
         self._scroll.setWidgetResizable(True)
@@ -340,15 +321,23 @@ class PinnedPanel(QFrame):
         cell holding one block **is** that block's frame, so discarding it would
         destroy a live block, exactly as it did on the page.
         """
-        for frame in self._frames.values():
-            if _is_at_or_within(frame, self._host_widget):
+        root, self._root = self._root, None
+        if root is None:
+            return
+        # Asked of the widget tree, not of the frame dict this panel was last
+        # handed. That dict is a snapshot, and a block destroyed since it was taken
+        # (a Notes copy closed, say) is a dangling C++ object that raises the
+        # moment anything asks it a question — and an exception here would take the
+        # application down, not merely fail to tidy up.
+        for frame in [root, *root.findChildren(BlockFrame)]:
+            if isinstance(frame, BlockFrame):
                 frame.hide()
                 frame.setParent(self)
-        root, self._root = self._root, None
-        if root is not None:
-            self._host_layout.removeWidget(root)
-            if not isinstance(root, BlockFrame):
-                discard_widget(root)
+        self._host_layout.removeWidget(root)
+        # A cell holding one block **is** that block's frame, and it has just been
+        # rescued above; anything else is a container we made.
+        if not isinstance(root, BlockFrame):
+            discard_widget(root)
 
     def _apply_edge(self) -> None:
         """Put the handle at the strip's leading corner and the lines beside it."""
@@ -376,18 +365,6 @@ class PinnedPanel(QFrame):
             else:
                 self.setFixedHeight(self.empty_extent())
         self.updateGeometry()
-
-    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802 - Qt override
-        """Re-report the strip's minimum whenever its content's own changes.
-
-        See the ``installEventFilter`` in ``__init__`` for why this is needed at
-        all: the scroll area between this widget and the blocks breaks Qt's own
-        invalidation chain, so without this the window keeps a minimum computed
-        before the block grew.
-        """
-        if watched is self._host_widget and event.type() == QEvent.Type.LayoutRequest:
-            self.updateGeometry()
-        return super().eventFilter(watched, event)
 
     def empty_extent(self) -> int:
         """How thick the strip is with nothing pinned: its handle, and no more."""

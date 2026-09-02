@@ -498,6 +498,37 @@ def test_which_tab_is_showing_round_trips_too(make_sheet) -> None:
     assert sheet.canvas.group_for("powers").active_key() == "skills"
 
 
+def test_a_group_survives_the_next_rebuild_of_the_page(make_sheet, qapp) -> None:
+    """The crash this guards took the whole application down.
+
+    A tab group is cached across a rebuild, and a group that is a whole row *is*
+    the row widget. The sweep that sheds the previous render's rows recognised a
+    lone ``BlockFrame`` and spared it, but not a group — so the very widget just
+    handed back for reuse was deleted, and its members' frames went with it. The
+    next thing to ask either frame a question died on a dangling C++ object, and
+    a Python exception raised inside a Qt override does not print and carry on: it
+    takes the process with it.
+    """
+    import shiboken6
+    from PySide6.QtCore import QEvent
+
+    sheet = make_sheet()
+    sheet.canvas.merge_blocks("equipment", "powers")
+    pump()
+    group = sheet.canvas.group_for("powers")
+    assert group in sheet.canvas._row_widgets, "the group is not a row; nothing is proved"
+
+    # Any structural change at all rebuilds the rows.
+    sheet.canvas.hide_block("complications")
+    pump()
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+    assert shiboken6.isValid(group), "the reused group was destroyed"
+    for key in ("powers", "equipment"):
+        assert shiboken6.isValid(sheet.block_frame(key)), f"{key}'s frame went with it"
+    assert sheet.canvas.group_for("powers").keys == ["powers", "equipment"]
+
+
 def test_a_grouped_block_lends_its_title_bar_to_the_group(make_sheet) -> None:
     """Two rows of chrome for one cell is one too many, and the group's buttons
     act on whichever block is showing anyway."""

@@ -139,8 +139,19 @@ class GridSplitter(QSplitter):
         mark.show_targets(targets, settled, self.orientation() == Qt.Orientation.Horizontal)
 
     def clear_detent_marks(self) -> None:
-        if self._mark is not None:
-            self._mark.clear()
+        """Take the mark down and get rid of it.
+
+        Destroyed rather than hidden. The mark cannot be a child of the splitter
+        it belongs to — a ``QSplitter`` adopts every child widget as a *pane* — so
+        it lives on the nearest ancestor that is not one, and that ancestor
+        routinely outlives the splitter (the pinned strip's host does, across every
+        rebuild). A hidden mark left behind there is a widget nothing will ever
+        collect. It only exists while a handle is being dragged, so making it live
+        exactly that long is both simpler and leak-free.
+        """
+        mark, self._mark = self._mark, None
+        if mark is not None:
+            discard_widget(mark)
 
     def _mark_host(self) -> QWidget | None:
         """The nearest ancestor that will not swallow a child widget as a pane."""
@@ -225,6 +236,13 @@ class RowGrip(QWidget):
     below it down. That is the one behaviour a splitter cannot give.
     """
 
+    #: Asked, on press, for the row above's current height and the heights it
+    #: reads well at. A grip that had to be *told* those beforehand is a grip that
+    #: silently works from zero if anybody forgets — which is exactly what
+    #: happened: nothing called the arming method, so every drag treated the row
+    #: as 0px tall and set its height to however far the mouse had moved. Asking
+    #: at the moment of the press cannot be forgotten and cannot go stale.
+    armed = Signal()
     #: Emitted while dragging, with the height the row above should now have.
     heightDragged = Signal(int)
     #: Emitted on release, once the drag has settled.
@@ -244,7 +262,7 @@ class RowGrip(QWidget):
         self._targets: list[int] = []
 
     def begin_from(self, height: int, targets: Sequence[int]) -> None:
-        """Tell the grip what the row above is now, before a drag starts."""
+        """Say what the row above is right now. Answered in response to :attr:`armed`."""
         self._start_height = int(height)
         self._targets = [int(target) for target in targets]
 
@@ -254,6 +272,15 @@ class RowGrip(QWidget):
             return
         self._dragging = True
         self._press_y = event.globalPosition().toPoint().y()
+        self._start_height = 0
+        self._targets = []
+        self.armed.emit()  # the stack answers with the row's height and detents
+        if self._start_height <= 0:
+            # Nobody answered. Refuse the drag rather than treating the row as
+            # zero pixels tall and collapsing it to however far the mouse moves.
+            self._dragging = False
+            super().mousePressEvent(event)
+            return
         self.update()
         event.accept()
 
@@ -350,6 +377,7 @@ class RowStack(QWidget):
             self._layout.addWidget(holder)
             row.show()
             grip = RowGrip(self)
+            grip.armed.connect(lambda i=index: self.arm_grip(i))
             grip.heightDragged.connect(lambda value, i=index: self._on_dragged(i, value))
             grip.dragFinished.connect(self.heightsChanged.emit)
             self._layout.addWidget(grip)

@@ -28,7 +28,7 @@ from typing import Protocol
 
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QColor, QPainter
-from PySide6.QtWidgets import QSplitter, QSplitterHandle, QWidget
+from PySide6.QtWidgets import QApplication, QSplitter, QSplitterHandle, QWidget
 
 from mm_companion.ui import theme
 
@@ -104,6 +104,13 @@ class GridHandle(QSplitterHandle):
     def __init__(self, orientation: Qt.Orientation, parent: QSplitter) -> None:
         super().__init__(orientation, parent)
         self._press_offset = 0
+        self._press_global = QPoint()
+        # Whether the pointer has moved far enough for this to be a drag at all.
+        # Without it the *first* pixel of movement is enough for the detent to pull
+        # the handle onto a recommended size — so a click with a hand's worth of
+        # jitter in it moved the divider by a whole band, which reads as the page
+        # twitching when you touch it.
+        self._engaged = False
         self._hovered = False
         self._dragging = False
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
@@ -133,7 +140,9 @@ class GridHandle(QSplitterHandle):
         # Where inside the handle it was grabbed, so it does not jump under the
         # pointer on the first move.
         self._press_offset = self._along(event.position().toPoint())
+        self._press_global = event.globalPosition().toPoint()
         self._dragging = True
+        self._engaged = False
         targets = self._targets()
         marker = getattr(self.splitter(), "mark_detents", None)
         if callable(marker):
@@ -147,11 +156,21 @@ class GridHandle(QSplitterHandle):
         parent = self.parentWidget()
         if parent is None:
             return
-        local = parent.mapFromGlobal(event.globalPosition().toPoint())
+        here = event.globalPosition().toPoint()
+        if not self._engaged:
+            moved = (here - self._press_global).manhattanLength()
+            if moved < QApplication.startDragDistance():
+                return
+            self._engaged = True
+        local = parent.mapFromGlobal(here)
         wanted = self._along(local) - self._press_offset
         targets = self._targets()
         snapped = snap_to_detent(wanted, targets, int(theme.metric("grid.detent")))
-        legal = self.closestLegalPosition(snapped, self._index)
+        # One argument, not two: a handle already knows which splitter position it
+        # is. Passing the index as well raised a TypeError out of every single
+        # mouse-move, which Qt swallowed into the console and left the divider
+        # apparently dead — horizontal resizing did not work at all.
+        legal = self.closestLegalPosition(snapped)
         marker = getattr(self.splitter(), "mark_detents", None)
         if callable(marker):
             marker(self._index, targets, legal if legal == snapped != wanted else None)
@@ -161,6 +180,7 @@ class GridHandle(QSplitterHandle):
     def mouseReleaseEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
         if self._dragging and event.button() == Qt.MouseButton.LeftButton:
             self._dragging = False
+            self._engaged = False
             clear = getattr(self.splitter(), "clear_detent_marks", None)
             if callable(clear):
                 clear()

@@ -132,6 +132,28 @@ class Anchor:
         return cls(neighbour, bool(value.get("in_row")), bool(value.get("before")))
 
 
+def _widget_tree(roots: list[QWidget]) -> set[int]:
+    """Every widget at or under *roots*, by identity.
+
+    Held as ``id()`` rather than the widgets themselves: this is compared against
+    widgets from the *previous* render, and a ``QWidget`` whose C++ half has gone
+    raises from ``__eq__`` and ``__hash__`` alike. Identity is the one question
+    that is always safe to ask.
+    """
+    seen: set[int] = set()
+
+    def walk(widget: QWidget | None) -> None:
+        if widget is None or id(widget) in seen:
+            return
+        seen.add(id(widget))
+        for child in widget.findChildren(QWidget):
+            seen.add(id(child))
+
+    for root in roots:
+        walk(root)
+    return seen
+
+
 def _forget_sizes(node: lt.Node | None) -> lt.Node | None:
     """*node* with every remembered proportion dropped, keeping its shape."""
     if node is None or isinstance(node, lt.Leaf):
@@ -460,11 +482,25 @@ class BlockCanvas(QWidget):
         for key in placed:
             self._frames[key].show()
 
-        # Only the containers we made are shed. A row holding a single block *is*
-        # that block's frame — build_node returns the frame itself for a lone leaf
-        # — and discarding one would destroy a live block rather than a wrapper.
+        # Only the containers we made *this* time round are shed, and only the ones
+        # nothing is still using. Two widgets survive a rebuild and both were
+        # destroyed by a naive sweep here:
+        #
+        # * a row holding a single block **is** that block's frame (build_node
+        #   returns the frame itself for a lone leaf), so shedding it destroyed a
+        #   live block;
+        # * a row holding a tab group **is** that group, and groups are cached
+        #   across a rebuild — so the very widget just handed back for reuse was
+        #   then deleted, and it took its members' frames down with it. That one
+        #   killed the application a moment later, when anything asked those frames
+        #   a question.
+        #
+        # Asking "is this in the new tree" rather than "is this a kind of widget I
+        # recognise" is what makes it safe against the next widget that learns to
+        # survive a rebuild.
+        kept = _widget_tree(rows)
         for row in old_rows:
-            if not isinstance(row, BlockFrame):
+            if id(row) not in kept and not isinstance(row, BlockFrame):
                 discard_widget(row)
 
         if self._layout.indexOf(self._stack) < 0:

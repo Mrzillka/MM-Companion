@@ -16,7 +16,6 @@ from PySide6.QtCore import QPoint, Qt
 from PySide6.QtWidgets import QApplication, QLabel, QScrollArea, QSplitter
 
 from mm_companion.ui import layout_tree as lt
-from mm_companion.ui import theme
 from mm_companion.ui.block_canvas import BlockCanvas
 from mm_companion.ui.block_frame import BlockFrame
 from mm_companion.ui.block_sizes import RecommendedSize
@@ -165,10 +164,16 @@ class TestDividers:
 
 
 class TestDetents:
-    def test_a_row_divider_offers_its_blocks_recommended_height(self, canvas: BlockCanvas) -> None:
-        targets = canvas._stack._row_detents(canvas._stack._rows[0])
+    def test_a_row_divider_offers_fit_to_content_and_the_recommendation(
+        self, canvas: BlockCanvas
+    ) -> None:
+        """Two marks, and the first is the more useful: the height at which
+        nothing in the row has to scroll."""
+        stack = canvas._stack
+        targets = stack._row_detents(0)
 
-        assert targets == [120]  # block "a" recommends 120 tall
+        assert 120 in targets  # block "a" recommends 120 tall
+        assert stack._rows[0].sizeHint().height() in targets  # and fit-to-content
 
     def test_a_split_divider_offers_the_block_on_either_side_of_it(
         self, canvas: BlockCanvas, qapp: QApplication
@@ -192,7 +197,7 @@ class TestDetents:
         self, canvas: BlockCanvas
     ) -> None:
         # "c" states nothing, so it falls back to the honest answer: its content.
-        targets = canvas._stack._row_detents(canvas._stack._rows[2])
+        targets = canvas._stack._row_detents(2)
 
         assert targets and targets[0] > 0
 
@@ -202,7 +207,10 @@ class TestDetents:
 
 class TestNothingRefuses:
     def test_the_page_reports_no_width_worth_speaking_of(self, canvas: BlockCanvas) -> None:
-        assert canvas.minimumSizeHint().width() <= int(theme.metric("block.min-extent"))
+        """Small enough to be no constraint. The exact number is Qt's now — the
+        page states no minimum of its own, so this is the rows' own minimums summed
+        by an ordinary QVBoxLayout."""
+        assert canvas.minimumSizeHint().width() < 200
 
     def test_the_page_reports_its_full_height_so_it_scrolls(self, canvas: BlockCanvas) -> None:
         """The other half of the asymmetry. Without this the scroll area would

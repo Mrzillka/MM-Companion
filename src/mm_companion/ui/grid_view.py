@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 
-from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, QRect, Qt, Signal
 from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import QSizePolicy, QSplitter, QVBoxLayout, QWidget
 
@@ -245,6 +245,9 @@ class RowGrip(QWidget):
     armed = Signal()
     #: Emitted while dragging, with the height the row above should now have.
     heightDragged = Signal(int)
+    #: The drag has been pulled onto one of the recommended heights, so the mark
+    #: for it can light up — the same signal a splitter's handle sends its mark.
+    detentReached = Signal(int)
     #: Emitted on release, once the drag has settled.
     dragFinished = Signal()
 
@@ -260,6 +263,11 @@ class RowGrip(QWidget):
         self._press_y = 0
         self._start_height = 0
         self._targets: list[int] = []
+
+    @property
+    def targets(self) -> list[int]:
+        """The heights this grip will stick at."""
+        return list(self._targets)
 
     def begin_from(self, height: int, targets: Sequence[int]) -> None:
         """Say what the row above is right now. Answered in response to :attr:`armed`."""
@@ -292,6 +300,8 @@ class RowGrip(QWidget):
         wanted = max(0, self._start_height + moved)
         settled = snap_to_detent(wanted, self._targets, int(theme.metric("grid.detent")))
         self.heightDragged.emit(settled)
+        if settled != wanted:
+            self.detentReached.emit(settled)
         event.accept()
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
@@ -361,6 +371,10 @@ class RowStack(QWidget):
         self._holders: list[_RowHolder] = []
         self._grips: list[RowGrip] = []
         self._heights: list[int] = []
+        # The same overlay a GridSplitter uses for its own detents, so a row grip
+        # and a divider mark their recommended sizes identically. Built on the
+        # first drag and destroyed on release (see :class:`_DetentMark`).
+        self._mark: _DetentMark | None = None
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
     def set_rows(self, rows: Sequence[QWidget], heights: Sequence[int]) -> None:
@@ -379,6 +393,8 @@ class RowStack(QWidget):
             grip = RowGrip(self)
             grip.armed.connect(lambda i=index: self.arm_grip(i))
             grip.heightDragged.connect(lambda value, i=index: self._on_dragged(i, value))
+            grip.detentReached.connect(lambda value, i=index: self._on_dragged(i, value, True))
+            grip.dragFinished.connect(self.clear_detent_marks)
             grip.dragFinished.connect(self.heightsChanged.emit)
             self._layout.addWidget(grip)
             self._grips.append(grip)
@@ -390,28 +406,27 @@ class RowStack(QWidget):
         """The height of each row; zero for one that is still sized by its content."""
         return list(self._heights)
 
-    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
-        """As tall as its rows, and as narrow as anyone likes.
-
-        The asymmetry *is* the "width tiles, height scrolls" bargain, stated in the
-        one place a layout will read it. Reporting the full height as a minimum is
-        what makes the page scroll: the scroll area sizes its widget to the
-        viewport but never below the widget's minimum, so a page of rows taller
-        than the window overflows and grows a scrollbar instead of squashing them.
-        Reporting no width at all is what lets every row be dragged narrow.
-        """
-        return QSize(0, self.sizeHint().height())
-
-    def row_widgets(self) -> list[QWidget]:
-        return list(self._rows)
+    # No ``minimumSizeHint`` here, and that is the point. It used to report the
+    # rows' full height, so the page would overflow the viewport and scroll — but
+    # computing ``sizeHint()`` *inside* ``minimumSizeHint()`` makes the minimum
+    # depend on the width, which is the one thing a widget in a QScrollArea must
+    # never do: the bar appears, the viewport narrows, the content gets taller,
+    # the minimum grows, and the whole thing can chase itself down the stack. It
+    # was never needed. A holder with a ``Minimum`` vertical policy already reports
+    # its content height as its minimum, and one with a fixed height reports that,
+    # so ``QVBoxLayout`` sums exactly the same number on its own (see
+    # ``tests/test_grid_resize.py``). The same warning is written out in full on
+    # :class:`~mm_companion.ui.flow_layout.FlowContainer`, which reached it first.
 
     # -- dragging -------------------------------------------------------------
 
-    def _on_dragged(self, index: int, height: int) -> None:
+    def _on_dragged(self, index: int, height: int, settled: bool = False) -> None:
         if not 0 <= index < len(self._rows):
             return
         self._heights[index] = max(0, int(height))
         self._apply_height(index)
+        if 0 <= index < len(self._grips):
+            self._mark_rows(index, self._grips[index].targets, height if settled else None)
 
     def _apply_height(self, index: int) -> None:
         """Pin the *holder* to a height, or let it follow its content again.
@@ -438,17 +453,63 @@ class RowStack(QWidget):
         self.updateGeometry()
 
     def arm_grip(self, index: int) -> None:
-        """Tell the grip under row *index* where that row is, before it is dragged."""
+        """Tell the grip under row *index* how tall that row is, as it is pressed.
+
+        The height comes from the *holder*, which is what actually has one: a row
+        that has never been dragged states no height of its own and its holder is
+        as tall as whatever is in it.
+        """
         if not 0 <= index < len(self._grips):
             return
-        row = self._rows[index]
-        height = self._heights[index] or self._holders[index].sizeHint().height()
-        self._grips[index].begin_from(height, self._row_detents(row))
+        holder = self._holders[index]
+        height = self._heights[index] or holder.height() or holder.sizeHint().height()
+        targets = self._row_detents(index)
+        self._grips[index].begin_from(height, targets)
+        self._mark_rows(index, targets, None)
 
-    def _row_detents(self, row: QWidget) -> list[int]:
-        """The heights this row reads well at: what its blocks recommend."""
-        wanted = _recommended_extent(row, horizontal=False)
-        return [wanted] if wanted > 0 else []
+    def _mark_rows(self, index: int, targets: Sequence[int], settled: int | None) -> None:
+        """Show where this row's recommended heights are, while it is being dragged.
+
+        The heights are turned into positions down the page here, because that is
+        the only difference between marking a row and marking a divider — the
+        overlay itself is the one a :class:`GridSplitter` uses, unchanged.
+        """
+        if not 0 <= index < len(self._holders):
+            return
+        top = self._holders[index].y()
+        mark = self._ensure_mark()
+        if mark is None:
+            return
+        mark.setGeometry(self.rect())
+        mark.show_targets(
+            [top + target for target in targets],
+            None if settled is None else top + settled,
+            horizontal=False,
+        )
+
+    def _ensure_mark(self) -> _DetentMark | None:
+        if self._mark is None:
+            self._mark = _DetentMark(self)
+        return self._mark
+
+    def clear_detent_marks(self) -> None:
+        """Take the mark down and destroy it — see :meth:`GridSplitter.clear_detent_marks`."""
+        mark, self._mark = self._mark, None
+        if mark is not None:
+            discard_widget(mark)
+
+    def _row_detents(self, index: int) -> list[int]:
+        """The heights row *index* reads well at.
+
+        Two of them, and the first is the more useful: **fit to content**, the
+        height at which nothing in the row has to scroll. The second is what the
+        blocks recommend, which is what they open at. A row nobody has dragged is
+        already at the first, so the mark under an untouched row shows you what you
+        are about to leave.
+        """
+        row = self._rows[index]
+        wanted = {row.sizeHint().height(), _recommended_extent(row, horizontal=False)}
+        return sorted(height for height in wanted if height > 0)
 
     def _shed(self) -> None:
         while self._layout.count():

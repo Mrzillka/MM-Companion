@@ -29,7 +29,6 @@ from PySide6.QtCore import (
     QPoint,
     QPropertyAnimation,
     QRect,
-    QSize,
     QTimer,
     Signal,
 )
@@ -526,18 +525,10 @@ class BlockCanvas(QWidget):
         self._remember_sizes()
         self._settled()
 
-    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
-        """The page's own shape rule: as tall as its rows, as narrow as you like.
-
-        This is the whole of "width tiles, height scrolls", and it is the *inverse*
-        of what the canvas used to say. It used to report the widest row's content
-        as a minimum width, which held the window open; it reports almost none now,
-        so every row can be dragged narrow and its blocks reflow. The height goes
-        the other way: stating the rows' full height is what makes the page
-        overflow the viewport and scroll, rather than squashing every row to fit a
-        window nobody sized for them.
-        """
-        return QSize(int(theme.metric("block.min-extent")), self.sizeHint().height())
+    # No ``minimumSizeHint`` here either, for the reason written out on
+    # :class:`~mm_companion.ui.grid_view.RowStack`: the page's own layout already
+    # sums its rows, and asking a widget's sizeHint from inside its minimumSizeHint
+    # is how a scroll area ends up chasing its own scrollbar.
 
     def _watch_splitters(self, widget: QWidget) -> None:
         """Follow every divider under *widget*, so a drag becomes a settled gesture."""

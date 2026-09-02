@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from functools import wraps
 
 from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QFontMetrics
@@ -432,6 +433,36 @@ def resurface(window: QWidget) -> None:
     window.activateWindow()
 
 
+def no_reentry(method):
+    """Make a reflow hook a no-op while it is already running on this widget.
+
+    Every adaptive decision in the app is called from ``resizeEvent`` and changes
+    something a layout can notice — hiding a column, wrapping a form's rows,
+    re-dealing a grid. Qt is entitled to lay out again *synchronously* in the
+    middle of that, which calls the hook again, which changes something again. The
+    hysteresis dead-bands are what stop the answer oscillating between events;
+    this is what stops one event nesting inside itself, which is not a flicker but
+    a stack overflow and takes the process with it.
+
+    Cheap enough to put on every one of them, and worth it: the failure mode is
+    the single worst one this layer has.
+    """
+
+    flag = f"_in_{method.__name__}"
+
+    @wraps(method)
+    def guarded(self, *args, **kwargs):
+        if getattr(self, flag, False):
+            return False
+        setattr(self, flag, True)
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            setattr(self, flag, False)
+
+    return guarded
+
+
 #: Below this, a form stacks its captions above their fields instead of beside
 #: them, and the dead-band that stops it flipping back and forth on its own.
 FORM_WRAP_WIDTH = 260
@@ -483,6 +514,7 @@ class ReflowingForm(QFormLayout):
     def wrapped(self) -> bool:
         return self._wrapped
 
+    @no_reentry
     def sync_wrap(self, available: int, *, floor: int = 0) -> bool:
         """Wrap or unwrap to suit *available* px. Returns whether it changed."""
         wrapped = wraps_form_rows(available, self._wrapped, floor=floor)

@@ -22,6 +22,7 @@ from PySide6.QtWidgets import QGridLayout, QLabel, QWidget
 
 from mm_companion.core.rules import HOMERULE_TINT
 from mm_companion.ui import theme
+from mm_companion.ui.widgets import no_reentry
 
 #: How a changed value is tinted, as colour-token names: an extra improved it
 #: (green), a flaw limited it (red), a Dev-mode override replaced it (a distinct
@@ -131,6 +132,7 @@ class TermsGridBox(QWidget):
     def pairs(self) -> int:
         return self._pairs
 
+    @no_reentry
     def sync_pairs(self, available: int | None = None) -> bool:
         """Re-deal if this width now favours a different number of pairs."""
         margins = self._grid.contentsMargins()

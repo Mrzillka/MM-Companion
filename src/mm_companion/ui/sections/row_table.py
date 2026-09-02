@@ -50,6 +50,7 @@ from PySide6.QtWidgets import (
 
 from mm_companion.ui.drop_feedback import DropFeedback, DropIndicator
 from mm_companion.ui.wheel_guard import guard_wheel
+from mm_companion.ui.widgets import no_reentry
 
 #: How far the pointer must travel with the button down before a press counts as a
 #: drag rather than a click. Matches the pinned strip's chips, so a row and a chip
@@ -240,6 +241,7 @@ class AutoHeightTable(QTableWidget):
             width -= vertical.width()
         return width - 2 * self.frameWidth()
 
+    @no_reentry
     def sync_shed_columns(self) -> bool:
         """Hide or restore columns to suit the width. Returns whether it changed."""
         if not self._shed_order:

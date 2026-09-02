@@ -217,6 +217,28 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   preset would make wrong. This is UI config, **not** game content, so it lives
   under `ui/` and not the OGL `data/` dir; the active theme's `blocks` map overrides
   any of it, since how much room a block needs depends on the look's density.
+- **The numbers were measured, not inherited.** They began life as *floors*, and a
+  number that stopped a block clipping is not the same as the width it reads well
+  at. `tests/test_recommended_sizes.py` floats each block out, binary-searches the
+  narrowest width at which its content still fits after everything it knows how to
+  reflow, and fails if a recommendation sits under that — which is how Advantages
+  turned out to be recommending 300 for a block that needs 316. Measured on
+  Classic at 100% scale:
+
+  | Block | Recommends | Needs |
+  | --- | --- | --- |
+  | `advantages` | 330 | 316 |
+  | `skills` | 300 | 296 |
+  | `system_info` | 340 | 206 |
+  | `base_info`, `character_image`, `complications`, `conditions`, `equipment`, `powers` | as shipped | reflow the whole way down |
+
+  The six in the last row have **no measurable comfort width**: their content
+  wraps or flows, so they never grow a horizontal scrollbar however narrow they
+  get, and what they recommend is a judgement about how their chips and cards read
+  rather than a number a scrollbar can answer. The test only checks the "not
+  narrower than this" half for them. `dice`, `scene` and `notes` are exempt
+  outright — the roller reflows all the way down too, but a die and a history in
+  100px is not a roller anybody wants, and a note is as wide as you make it.
 - A floated block moves into a `BlockWindow`, **frameless and pinnable above other
   applications** (`ui/frameless.py`), which hosts the frame **directly**. It used to
   wrap it in a scroll area of its own, because that was the only way a floated block

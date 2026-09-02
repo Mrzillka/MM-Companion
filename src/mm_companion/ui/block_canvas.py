@@ -145,6 +145,11 @@ class BlockCanvas(QWidget):
     #: A block was dropped *onto* another (source, target). The canvas only
     #: reports it: what merging two blocks means is the host's business.
     merge_requested = Signal(str, str)
+    #: One arrangement gesture has *finished* — a drop landed, a divider was let
+    #: go, a block was pinned or closed. Distinct from ``arrangement_changed``,
+    #: which fires for every intermediate state of a drag as well: this is the
+    #: moment a layout history has something worth keeping.
+    gesture_finished = Signal()
 
     def __init__(
         self,
@@ -229,6 +234,11 @@ class BlockCanvas(QWidget):
         self._layout.setSpacing(8)
 
         self._indicator = DropIndicator(self)
+        # Coalesces a run of handle movements into one finished gesture.
+        self._size_settle = QTimer(self)
+        self._size_settle.setSingleShot(True)
+        self._size_settle.setInterval(self.SIZE_SETTLE_MS)
+        self._size_settle.timeout.connect(self._flush_sizes)
         self._stack.heightsChanged.connect(self._on_sizes_settled)
 
         # Drag state.
@@ -328,7 +338,7 @@ class BlockCanvas(QWidget):
             self._set_page(lt.insert_beside(self._page, key, beside, "right"))
         self._relayout()
         self.block_added.emit(key)
-        self.arrangement_changed.emit()
+        self._settled()
 
     def remove_block(self, key: str) -> None:
         """Destroy block *key*'s frame and forget it everywhere.
@@ -351,7 +361,7 @@ class BlockCanvas(QWidget):
         self._on_top.pop(key, None)
         self._relayout()
         self.block_removed.emit(key)
-        self.arrangement_changed.emit()
+        self._settled()
 
     def _row_of(self, key: str) -> int | None:
         for index, row in enumerate(self._rows):
@@ -420,7 +430,9 @@ class BlockCanvas(QWidget):
 
         rows: list[QWidget] = []
         for child in self._page.children:
-            rows.append(build_node(child, self._build_leaf, self._stack))
+            row = build_node(child, self._build_leaf, self._stack)
+            rows.append(row)
+            self._watch_splitters(row)
         self._row_widgets = rows
         self._stack.set_rows(rows, self._row_heights())
 
@@ -438,10 +450,24 @@ class BlockCanvas(QWidget):
             self._layout.addWidget(self._stack)
         self._indicator.raise_()
 
-    def _on_sizes_settled(self) -> None:
-        """A divider drag finished: take the new sizes into the model and say so."""
-        self._remember_sizes()
+    def _settled(self) -> None:
+        """One gesture is over: tell anyone laying out, and anyone remembering."""
         self.arrangement_changed.emit()
+        self.gesture_finished.emit()
+
+    #: How long after the last handle movement a divider drag counts as over.
+    #: A splitter reports every frame of one, and a divider pulled across the page
+    #: would otherwise be fifty entries in the layout history rather than one.
+    SIZE_SETTLE_MS = 250
+
+    def _on_sizes_settled(self) -> None:
+        """A divider moved. Wait for it to stop before calling that a gesture."""
+        self._size_settle.start()
+
+    def _flush_sizes(self) -> None:
+        """The dividers have stopped: take the sizes into the model and say so."""
+        self._remember_sizes()
+        self._settled()
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
         """The page's own shape rule: as tall as its rows, as narrow as you like.
@@ -455,6 +481,13 @@ class BlockCanvas(QWidget):
         window nobody sized for them.
         """
         return QSize(int(theme.metric("block.min-extent")), self.sizeHint().height())
+
+    def _watch_splitters(self, widget: QWidget) -> None:
+        """Follow every divider under *widget*, so a drag becomes a settled gesture."""
+        if isinstance(widget, QSplitter):
+            widget.sizesSettled.connect(self._on_sizes_settled)
+            for index in range(widget.count()):
+                self._watch_splitters(widget.widget(index))
 
     def _row_heights(self) -> list[int]:
         """The height stated for each row; zero where the user has not set one."""
@@ -522,7 +555,7 @@ class BlockCanvas(QWidget):
     def _on_tab_activated(self, key: str) -> None:
         """Remember which tab of a group is showing, so a restore brings it back."""
         self._set_page(lt.set_active(self._page, key))
-        self.arrangement_changed.emit()
+        self._settled()
 
     def _on_tab_split(self, key: str, global_pos: QPoint) -> None:
         """A tab was dragged clear of its bar: take that block out of the group.
@@ -757,7 +790,7 @@ class BlockCanvas(QWidget):
 
         for key in sorted(was_hidden ^ self._hidden):
             self.block_visibility_changed.emit(key, key not in self._hidden)
-        self.arrangement_changed.emit()
+        self._settled()
         return True
 
     def _reconcile_instances(self, model: object) -> None:
@@ -961,7 +994,7 @@ class BlockCanvas(QWidget):
         window.show()
 
         self._relayout()
-        self.arrangement_changed.emit()
+        self._settled()
 
     @staticmethod
     def _available_height(window: BlockWindow) -> int:
@@ -1035,7 +1068,7 @@ class BlockCanvas(QWidget):
         self._detach(key)
         self.place_beside(key, slot.target, slot.side)
         self._relayout()
-        self.arrangement_changed.emit()
+        self._settled()
 
     def merge_blocks(self, key: str, target: str) -> None:
         """Put *key* into *target*'s cell, so the two of them share a tab bar."""
@@ -1052,7 +1085,7 @@ class BlockCanvas(QWidget):
             self.place_beside(key, target, "right")
         self._set_page(lt.merge_into(self._page, key, target))
         self._relayout()
-        self.arrangement_changed.emit()
+        self._settled()
 
     def dock_block(self, key: str, row: int, slot: int, new_row: bool = False) -> None:
         """Dock *key* into the arrangement at (row, slot), creating a new row when
@@ -1061,7 +1094,7 @@ class BlockCanvas(QWidget):
         self._detach(key)
         self._place(key, DropSlot(new_row, row, slot))
         self._relayout()
-        self.arrangement_changed.emit()
+        self._settled()
 
     # -- the pinned strip ----------------------------------------------------
 
@@ -1124,7 +1157,7 @@ class BlockCanvas(QWidget):
             if at < len(self._pin_line_sizes):
                 self._pin_line_sizes[at] = []
         self._relayout()
-        self.arrangement_changed.emit()
+        self._settled()
 
     def unpin_block(self, key: str) -> None:
         """Take *key* out of the strip and dock it back onto the page.
@@ -1144,7 +1177,7 @@ class BlockCanvas(QWidget):
         self._detach(key)
         self._place(key, slot)
         self._relayout()
-        self.arrangement_changed.emit()
+        self._settled()
 
     def unpin_all(self) -> None:
         """Empty the strip, docking every pinned block back onto the page."""
@@ -1183,7 +1216,7 @@ class BlockCanvas(QWidget):
         self._render_pinned()
         if self._board is not None:
             self._board.set_extent(self._pin_extent)
-        self.arrangement_changed.emit()
+        self._settled()
 
     def set_pin_align(self, align: str) -> None:
         """Set how pinned blocks sit across the strip (fill / start / center / end)."""
@@ -1192,7 +1225,7 @@ class BlockCanvas(QWidget):
         self._sync_from_board()
         self._pin_align = align
         self._render_pinned()
-        self.arrangement_changed.emit()
+        self._settled()
 
     # -- remembering where a closed block came from --------------------------
 
@@ -1245,7 +1278,7 @@ class BlockCanvas(QWidget):
             self._anchors[key] = anchor
         self._relayout()
         self.block_visibility_changed.emit(key, False)
-        self.arrangement_changed.emit()
+        self._settled()
 
     def show_block(self, key: str) -> None:
         """Reopen a hidden block where it was closed from.
@@ -1266,7 +1299,7 @@ class BlockCanvas(QWidget):
         self._relayout()
         self._fade_in(self._frames[key])
         self.block_visibility_changed.emit(key, True)
-        self.arrangement_changed.emit()
+        self._settled()
 
     @staticmethod
     def _fade_in(frame: BlockFrame) -> None:
@@ -1415,7 +1448,7 @@ class BlockCanvas(QWidget):
         if window is not None:
             window.set_on_top(on_top)
             self._frames[key].title_bar.set_floating(True, on_top=on_top)
-        self.arrangement_changed.emit()
+        self._settled()
 
     def is_block_on_top(self, key: str) -> bool:
         """Whether block *key* stays above other applications while it is floated.

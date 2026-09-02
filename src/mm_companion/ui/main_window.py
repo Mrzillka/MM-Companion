@@ -21,6 +21,7 @@ from mm_companion.core.character import Character
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.compact import CompactController
 from mm_companion.ui.connection_indicator import install_connection_indicator
+from mm_companion.ui.layout_undo import LayoutHistory, UndoRouter
 from mm_companion.ui.undo import UndoController
 
 CHARACTER_FILTER = "Character files (*.json)"
@@ -128,6 +129,16 @@ class MainWindow(QMainWindow):
         if not self._gm_view:
             self._undo = UndoController(self._sheet, parent=self)
             self._undo.stateChanged.connect(self._on_undo_state)
+        # And the layout's own, which every window gets — a GM's read-only view of
+        # a player's sheet cannot be edited but its blocks can still be dragged,
+        # and a mis-drag there wants taking back just as much.
+        self._layout_history = LayoutHistory(self._sheet.canvas, parent=self)
+        self._router = UndoRouter(self._undo, self._layout_history, parent=self)
+        self._router.stateChanged.connect(self._on_undo_state)
+        # Only a *finished* gesture is a step: the canvas announces every
+        # intermediate state of a drag, and a divider pulled across the page would
+        # otherwise fill the history with fifty steps nobody wants.
+        self._sheet.canvas.gesture_finished.connect(self._router.note_layout_step)
         self._build_menu_bar(locked)
         # The sheet is a scrolling page in its own right (it owns its scroll area),
         # so the only thing this wrapper is for is having the compact page beside
@@ -263,16 +274,14 @@ class MainWindow(QMainWindow):
         menu bar and a shortcut is inactive while the widget owning it is hidden. An
         action may belong to several widgets; the window is always visible.
         """
-        if self._undo is None:
-            return
         self._undo_action = menu_bar.addAction(UNDO_GLYPH)
         self._undo_action.setShortcut(QKeySequence.StandardKey.Undo)
         self._undo_action.setToolTip("Undo (Ctrl+Z)")
-        self._undo_action.triggered.connect(self._undo.undo)
+        self._undo_action.triggered.connect(self._router.undo)
         self._redo_action = menu_bar.addAction(REDO_GLYPH)
         self._redo_action.setShortcuts([QKeySequence("Ctrl+Shift+Z"), QKeySequence("Ctrl+Y")])
         self._redo_action.setToolTip("Redo (Ctrl+Shift+Z)")
-        self._redo_action.triggered.connect(self._undo.redo)
+        self._redo_action.triggered.connect(self._router.redo)
         for action in (self._undo_action, self._redo_action):
             self.addAction(action)
         self._on_undo_state()
@@ -294,11 +303,11 @@ class MainWindow(QMainWindow):
         sheet before it has anywhere to be clean against. For that sheet
         ``_on_edited`` stays the only setter.
         """
+        if hasattr(self, "_undo_action"):
+            self._undo_action.setEnabled(self._router.can_undo)
+            self._redo_action.setEnabled(self._router.can_redo)
         if self._undo is None:
             return
-        if hasattr(self, "_undo_action"):
-            self._undo_action.setEnabled(self._undo.can_undo)
-            self._redo_action.setEnabled(self._undo.can_redo)
         if not self._undo.has_saved_baseline:
             return
         dirty = not self._undo.at_saved_state()
@@ -494,7 +503,14 @@ class MainWindow(QMainWindow):
         geometry = layout["window_geometry"]
         if geometry:
             self.restoreGeometry(QByteArray.fromBase64(geometry.encode("ascii")))
-        return self._sheet.restore_layout(layout["dock_state"])
+        restored = self._sheet.restore_layout(layout["dock_state"])
+        # Whatever the window opened with is where undo stops. Restoring a saved
+        # layout is not something the user just did, and Ctrl+Z on a fresh window
+        # taking the page back to the factory arrangement would be a nasty
+        # surprise. Reset Layout *is* recordable, since that one is a real
+        # gesture and the most worth taking back.
+        self._layout_history.rebase()
+        return restored
 
     def _persist_layout(self) -> None:
         """Save the window geometry and block arrangement as a global preference.

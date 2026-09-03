@@ -179,6 +179,74 @@ class TestDraggingARowGrip:
 
         assert 0 < stack.heights()[0] < tall
 
+    def test_the_page_does_not_shrink_while_the_grip_is_held(self, sheet, qapp) -> None:
+        """The bottom-row complaint, in one assertion.
+
+        Every mouse-move used to re-sum the page, so shortening a row shortened
+        the *page*; the scroll value was clamped to the smaller maximum, the
+        content slid down inside the viewport, and the divider stood still on
+        screen while the hand dragging it walked away. The stack refuses to get
+        shorter until the grip is let go.
+        """
+        stack = sheet.canvas._stack
+        drag(qapp, stack._grips[0], QPoint(40, 3), QPoint(0, 200))  # room to lose
+        tall = stack.height()
+
+        grip = stack._grips[0]
+        anchor = grip.mapToGlobal(QPoint(40, 3))
+        _send(grip, QMouseEvent.Type.MouseButtonPress, QPoint(40, 3), held=True)
+        _send(
+            grip, QMouseEvent.Type.MouseMove, grip.mapFromGlobal(anchor - QPoint(0, 150)), held=True
+        )
+        _settle(qapp, 2)
+
+        assert stack._holders[0].height() < tall, "the row itself did not shrink"
+        assert stack.height() >= tall, "the page shrank under the pointer"
+
+        _send(grip, QMouseEvent.Type.MouseButtonRelease, QPoint(40, 3), held=False)
+        _settle(qapp)
+        assert stack.minimumHeight() == 0, "the page never got its own height back"
+
+    def test_the_freeze_is_released_even_if_the_page_is_rebuilt_under_it(self, sheet, qapp) -> None:
+        stack = sheet.canvas._stack
+        grip = stack._grips[0]
+        _send(grip, QMouseEvent.Type.MouseButtonPress, QPoint(40, 3), held=True)
+        assert stack.minimumHeight() > 0  # positive control: it did freeze
+
+        sheet.canvas._relayout()
+        _settle(qapp)
+
+        assert stack.minimumHeight() == 0
+
+    def test_a_grip_dragged_past_the_window_keeps_growing_the_row(self, sheet, qapp) -> None:
+        """Auto-scroll, and the reason it extends the drag as well as scrolling.
+
+        The pointer stops moving once it reaches the bottom of the window, so
+        without this the row can only be made as much taller as there was room
+        left below it, and the drag has to be let go and started again.
+        """
+        canvas = sheet.canvas
+        stack = canvas._stack
+        grip = stack._grips[0]
+
+        _send(grip, QMouseEvent.Type.MouseButtonPress, QPoint(40, 3), held=True)
+        stack.arm_grip(0)  # the press already did; harmless, and states the intent
+        before = stack.heights()[0]
+
+        viewport = canvas._scroll_area.viewport()
+        below = viewport.mapToGlobal(QPoint(40, viewport.height() + 60))
+        canvas._maybe_grip_autoscroll(below)
+        assert canvas._grip_timer.isActive(), "the pointer was outside the window"
+        for _ in range(5):
+            canvas._grip_autoscroll_tick()
+        _settle(qapp)
+
+        assert stack.heights()[0] > before
+
+        _send(grip, QMouseEvent.Type.MouseButtonRelease, QPoint(40, 3), held=False)
+        _settle(qapp)
+        assert not canvas._grip_timer.isActive(), "the auto-scroll outlived the drag"
+
     def test_the_rows_below_keep_their_own_heights(self, sheet, qapp) -> None:
         """Not zero-sum: the page grows instead of robbing the next row."""
         stack = sheet.canvas._stack

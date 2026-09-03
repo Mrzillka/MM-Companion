@@ -245,6 +245,11 @@ class RowGrip(QWidget):
     armed = Signal()
     #: Emitted while dragging, with the height the row above should now have.
     heightDragged = Signal(int)
+    #: Emitted while dragging, with the pointer's position on screen. The page
+    #: listens so it can auto-scroll when the drag runs into the edge of the
+    #: window — which is the only way to make a row taller than the room left
+    #: below it without letting go and starting again.
+    dragMoved = Signal(QPoint)
     #: The drag has been pulled onto one of the recommended heights, so the mark
     #: for it can light up — the same signal a splitter's handle sends its mark.
     detentReached = Signal(int)
@@ -263,6 +268,9 @@ class RowGrip(QWidget):
         self._press_y = 0
         self._start_height = 0
         self._targets: list[int] = []
+        # Where the pointer was last seen, so :meth:`extend` can re-derive the
+        # height from a drag the pointer is not currently moving.
+        self._last_global = QPoint()
 
     @property
     def targets(self) -> list[int]:
@@ -279,7 +287,8 @@ class RowGrip(QWidget):
             super().mousePressEvent(event)
             return
         self._dragging = True
-        self._press_y = event.globalPosition().toPoint().y()
+        self._last_global = event.globalPosition().toPoint()
+        self._press_y = self._last_global.y()
         self._start_height = 0
         self._targets = []
         self.armed.emit()  # the stack answers with the row's height and detents
@@ -296,13 +305,36 @@ class RowGrip(QWidget):
         if not self._dragging:
             super().mouseMoveEvent(event)
             return
-        moved = event.globalPosition().toPoint().y() - self._press_y
+        self._last_global = event.globalPosition().toPoint()
+        self._restate_height()
+        self.dragMoved.emit(self._last_global)
+        event.accept()
+
+    def extend(self, delta: int) -> None:
+        """Grow the drag by *delta* pixels, as if the pointer had moved that far.
+
+        What the page's auto-scroll drives. While the pointer rests in the band
+        at the edge of the window the page slides underneath it, and the row has
+        to gain exactly what the viewport gave up — otherwise the grip creeps out
+        from under the hand that is dragging it, which is the same complaint the
+        frozen page height (see :meth:`RowStack.arm_grip`) exists to answer.
+
+        Spelled as a shift of the *press* position rather than of the height, so
+        the drag stays one absolute sum from where it began and cannot drift.
+        """
+        if not self._dragging or not delta:
+            return
+        self._press_y -= int(delta)
+        self._restate_height()
+
+    def _restate_height(self) -> None:
+        """Re-derive the row's height from the press and the pointer, and say so."""
+        moved = self._last_global.y() - self._press_y
         wanted = max(0, self._start_height + moved)
         settled = snap_to_detent(wanted, self._targets, int(theme.metric("grid.detent")))
         self.heightDragged.emit(settled)
         if settled != wanted:
             self.detentReached.emit(settled)
-        event.accept()
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
         if self._dragging and event.button() == Qt.MouseButton.LeftButton:
@@ -361,6 +393,11 @@ class RowStack(QWidget):
 
     #: A row was dragged to a new height; the canvas records it in the tree.
     heightsChanged = Signal()
+    #: A row grip is being dragged, and the pointer is here. The canvas answers
+    #: with :meth:`extend_active_drag` when that is at the edge of the window.
+    gripDragMoved = Signal(QPoint)
+    #: The grip has been let go.
+    gripDragFinished = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -371,6 +408,10 @@ class RowStack(QWidget):
         self._holders: list[_RowHolder] = []
         self._grips: list[RowGrip] = []
         self._heights: list[int] = []
+        # The grip currently being dragged, so the page's auto-scroll has
+        # something to extend, and the height frozen for the duration of it.
+        self._active_grip: RowGrip | None = None
+        self._frozen_height = 0
         # The same overlay a GridSplitter uses for its own detents, so a row grip
         # and a divider mark their recommended sizes identically. Built on the
         # first drag and destroyed on release (see :class:`_DetentMark`).
@@ -394,6 +435,10 @@ class RowStack(QWidget):
             grip.armed.connect(lambda i=index: self.arm_grip(i))
             grip.heightDragged.connect(lambda value, i=index: self._on_dragged(i, value))
             grip.detentReached.connect(lambda value, i=index: self._on_dragged(i, value, True))
+            grip.dragMoved.connect(self.gripDragMoved.emit)
+            # Thaw first: the page's height must be its own again before anyone
+            # asked to record the drag goes looking at it.
+            grip.dragFinished.connect(self._end_grip_drag)
             grip.dragFinished.connect(self.clear_detent_marks)
             grip.dragFinished.connect(self.heightsChanged.emit)
             self._layout.addWidget(grip)
@@ -463,9 +508,48 @@ class RowStack(QWidget):
             return
         holder = self._holders[index]
         height = self._heights[index] or holder.height() or holder.sizeHint().height()
+        if height <= 0:
+            return  # the grip refuses the drag; nothing to freeze or mark
         targets = self._row_detents(index)
-        self._grips[index].begin_from(height, targets)
+        grip = self._grips[index]
+        grip.begin_from(height, targets)
+        self._active_grip = grip
+        self._freeze()
         self._mark_rows(index, targets, None)
+
+    def extend_active_drag(self, delta: int) -> None:
+        """Grow the grip currently being dragged by *delta* (see :meth:`RowGrip.extend`)."""
+        if self._active_grip is not None:
+            self._active_grip.extend(delta)
+
+    def _freeze(self) -> None:
+        """Hold the page's total height for the length of one grip drag.
+
+        Every mouse-move of a grip pins its row's holder to a new height, so the
+        stack re-sums and the *page* gets shorter the instant a row does. Behind a
+        ``QScrollArea`` that is not a cosmetic detail: the scroll value is clamped
+        to the smaller maximum, the content slides down inside the viewport, and
+        the divider the user is dragging sits still on screen while their hand
+        walks away from it. Dragging a bottom row shorter was close to unusable
+        for exactly this reason.
+
+        So the stack refuses to get shorter until the drag is over, and the slack
+        goes into the trailing stretch it already has. This is **not** the
+        content-shaped minimum the page's shape rule forbids: it is one number
+        read off the widget's own height at the instant of a mouse press, it is
+        not a function of the width, nothing recomputes it while it stands, and it
+        is gone again on release. Growing is unaffected — a row dragged taller
+        still pushes the page past the viewport, which is what makes it scroll.
+        """
+        self._frozen_height = max(0, self.height())
+        self.setMinimumHeight(self._frozen_height)
+
+    def _end_grip_drag(self) -> None:
+        """Let the page find its own height again, and stand the auto-scroll down."""
+        self._active_grip = None
+        self._frozen_height = 0
+        self.setMinimumHeight(0)
+        self.gripDragFinished.emit()
 
     def _mark_rows(self, index: int, targets: Sequence[int], settled: int | None) -> None:
         """Show where this row's recommended heights are, while it is being dragged.
@@ -512,6 +596,9 @@ class RowStack(QWidget):
         return sorted(height for height in wanted if height > 0)
 
     def _shed(self) -> None:
+        # A rebuild in the middle of a drag would leave the freeze standing with
+        # no grip left to release it.
+        self._end_grip_drag()
         while self._layout.count():
             self._layout.takeAt(0)
         for grip in self._grips:

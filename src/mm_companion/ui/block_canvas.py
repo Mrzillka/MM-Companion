@@ -79,6 +79,29 @@ InstanceFactory = Callable[[str], tuple[str, QWidget, RecommendedSize] | None]
 #: clicked is a block nobody can use.
 DEFAULT_ON_TOP = True
 
+#: The fastest the page auto-scrolls, in pixels per tick. There is no natural
+#: ceiling in the curve below — a pointer dragged well past the bottom of the
+#: window, which is exactly what somebody making a row taller does, would
+#: otherwise scroll faster the further out of the window their hand went.
+MAX_SCROLL_STEP = 32
+
+
+def edge_velocity(y: int, height: int, hot: int) -> int:
+    """How far to scroll for a pointer *y* pixels down a viewport *height* tall.
+
+    Zero away from the edges, and away from zero — faster the deeper in, capped —
+    once the pointer is inside the *hot* band at either end or has left the
+    viewport altogether. Kept as a plain function for the reason
+    :func:`~mm_companion.ui.grid_handle.snap_to_detent` is: it is the whole of a
+    decision two different drags make, and it is worth being able to ask it a
+    question without a window.
+    """
+    if y < hot:
+        return -min(MAX_SCROLL_STEP, max(4, (hot - y) // 3))
+    if y > height - hot:
+        return min(MAX_SCROLL_STEP, max(4, (y - (height - hot)) // 3))
+    return 0
+
 
 @dataclass(frozen=True)
 class DropSlot:
@@ -295,6 +318,16 @@ class BlockCanvas(QWidget):
         self._autoscroll_timer = QTimer(self)
         self._autoscroll_timer.setInterval(16)
         self._autoscroll_timer.timeout.connect(self._autoscroll_tick)
+        # The same idea for a row grip dragged to the edge of the window. Its own
+        # timer rather than a mode on the one above: the two gestures can never
+        # run at once, but one of them tearing the other's velocity down mid-drag
+        # is the sort of thing a shared flag invites.
+        self._grip_velocity = 0
+        self._grip_timer = QTimer(self)
+        self._grip_timer.setInterval(16)
+        self._grip_timer.timeout.connect(self._grip_autoscroll_tick)
+        self._stack.gripDragMoved.connect(self._maybe_grip_autoscroll)
+        self._stack.gripDragFinished.connect(self._stop_grip_autoscroll)
 
         self.apply_arrangement(self.default_arrangement())
 
@@ -1789,22 +1822,25 @@ class BlockCanvas(QWidget):
 
     _HOT = 40  # px band at the viewport edges that triggers auto-scroll
 
+    def _edge_velocity(self, global_pos: QPoint) -> int:
+        """How fast the page should scroll for a pointer at *global_pos*, or zero.
+
+        Shared by the two gestures that need it — dragging a *block* near the
+        edge of the page, and dragging a row *grip* there — because they want the
+        identical curve and had no business being two of them.
+        """
+        if self._scroll_area is None:
+            return 0
+        viewport = self._scroll_area.viewport()
+        return edge_velocity(viewport.mapFromGlobal(global_pos).y(), viewport.height(), self._HOT)
+
     def _stop_autoscroll(self) -> None:
         """Stand the edge auto-scroll down, wherever the gesture has got to."""
         self._autoscroll_velocity = 0
         self._autoscroll_timer.stop()
 
     def _maybe_autoscroll(self, global_pos: QPoint) -> None:
-        if self._scroll_area is None:
-            return
-        viewport = self._scroll_area.viewport()
-        y = viewport.mapFromGlobal(global_pos).y()
-        velocity = 0
-        if y < self._HOT:
-            velocity = -max(4, (self._HOT - y) // 3)
-        elif y > viewport.height() - self._HOT:
-            velocity = max(4, (y - (viewport.height() - self._HOT)) // 3)
-
+        velocity = self._edge_velocity(global_pos)
         self._autoscroll_velocity = velocity
         if velocity and not self._autoscroll_timer.isActive():
             self._autoscroll_timer.start()
@@ -1817,4 +1853,35 @@ class BlockCanvas(QWidget):
             return
         bar = self._scroll_area.verticalScrollBar()
         bar.setValue(bar.value() + self._autoscroll_velocity)
+
+    # -- auto-scroll while a row grip is being dragged ------------------------
+
+    def _stop_grip_autoscroll(self) -> None:
+        self._grip_velocity = 0
+        self._grip_timer.stop()
+
+    def _maybe_grip_autoscroll(self, global_pos: QPoint) -> None:
+        """Follow a row grip dragged into the band at the edge of the window."""
+        velocity = self._edge_velocity(global_pos)
+        self._grip_velocity = velocity
+        if velocity and not self._grip_timer.isActive():
+            self._grip_timer.start()
+        elif not velocity and self._grip_timer.isActive():
+            self._grip_timer.stop()
+
+    def _grip_autoscroll_tick(self) -> None:
+        """Grow the row, *then* scroll — in that order, and it matters.
+
+        A row dragged past the bottom of the window is usually already at the end
+        of the page's scroll range, so scrolling first would move nothing and the
+        drag would simply stop. Extending the row makes the page taller, which is
+        what gives the scrollbar somewhere to go; scrolling by the same amount
+        afterwards keeps the grip exactly under the pointer.
+        """
+        if not self._grip_velocity or self._scroll_area is None:
+            self._grip_timer.stop()
+            return
+        self._stack.extend_active_drag(self._grip_velocity)
+        bar = self._scroll_area.verticalScrollBar()
+        bar.setValue(bar.value() + self._grip_velocity)
         self.update_drag(QCursor.pos())

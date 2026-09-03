@@ -4,8 +4,9 @@ Every resize on the page happens by dragging one of these, so it has two jobs
 that pull against each other. It has to be *easy to grab* — a hairline is not a
 grab target, and the page is nothing but hairlines if the divider is drawn as
 one — and it has to be *quiet*, because a page of visible gutters reads as a
-spreadsheet rather than a character sheet. So it is `grid.handle` pixels wide,
-painted as nothing at rest and a soft accent under the pointer.
+spreadsheet rather than a character sheet. So it is `grid.grab` pixels wide
+to the mouse, and painted as nothing at rest and a `grid.handle`-wide accent
+down the middle of that under the pointer.
 
 The interesting half is the **detent**. A block's recommended size used to be a
 floor the layout enforced; the grid lets anyone drag straight past it, which is
@@ -31,9 +32,6 @@ from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QApplication, QSplitter, QSplitterHandle, QWidget
 
 from mm_companion.ui import theme
-
-#: How much of the handle's thickness the hover mark paints down the middle.
-_MARK_RATIO = 0.5
 
 
 def snap_to_detent(position: int, targets: Sequence[int], strength: int) -> int:
@@ -74,12 +72,13 @@ def paint_divider(
         return
     colour = QColor(theme.color("accent"))
     colour.setAlphaF(0.9 if dragging else 0.45)
+    line = max(1, int(theme.metric("grid.handle")))
     rect = widget.rect()
     if horizontal:
-        inset = int(rect.width() * (1 - _MARK_RATIO) / 2)
+        inset = max(0, (rect.width() - line) // 2)
         painter.fillRect(rect.adjusted(inset, 0, -inset, 0), colour)
     else:
-        inset = int(rect.height() * (1 - _MARK_RATIO) / 2)
+        inset = max(0, (rect.height() - line) // 2)
         painter.fillRect(rect.adjusted(0, inset, 0, -inset), colour)
 
 
@@ -91,6 +90,7 @@ class DetentHost(Protocol):
     def clear_detent_marks(self) -> None: ...
     def update_collapse_marks(self) -> None: ...
     def commit_collapse(self) -> None: ...
+    def fit_pane(self, index: int) -> None: ...
 
 
 class GridHandle(QSplitterHandle):
@@ -180,6 +180,29 @@ class GridHandle(QSplitterHandle):
         self._ask("update_collapse_marks")
         event.accept()
 
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        """Fit the block *before* this divider to the size it reads well at.
+
+        The detent marks where that size is and the drag can settle on it, but
+        neither is a way to simply say "just make it right" — which is the gesture
+        a splitter has always answered with a double-click, and the one thing the
+        recommended sizes had no direct route to.
+
+        The pane before rather than either: a rule you can predict beats one that
+        guesses which side you meant, and every divider has a pane on both sides
+        of it, so the one you want is always a double-click away on one handle or
+        its neighbour.
+        """
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mouseDoubleClickEvent(event)
+            return
+        self._dragging = False
+        self._engaged = False
+        fit = getattr(self.splitter(), "fit_pane", None)
+        if callable(fit):
+            fit(self._index - 1)
+        event.accept()
+
     def mouseReleaseEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
         if self._dragging and event.button() == Qt.MouseButton.LeftButton:
             self._dragging = False
@@ -228,5 +251,11 @@ class GridHandle(QSplitterHandle):
 
 
 def handle_thickness() -> int:
-    """How wide every divider on the page is, from the theme."""
-    return max(1, int(theme.metric("grid.handle")))
+    """How wide every divider on the page is *to the mouse*, from the theme.
+
+    Deliberately not what gets painted. A hairline is not a grab target and a
+    page of visible gutters is not a character sheet, so the two numbers were
+    always going to want to differ: ``grid.grab`` is the catchable size and
+    ``grid.handle`` is the accent line drawn down the middle of it.
+    """
+    return max(1, int(theme.metric("grid.grab")))

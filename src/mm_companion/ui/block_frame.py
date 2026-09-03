@@ -60,6 +60,7 @@ class DragHost(Protocol):
     def request_hide(self, key: str) -> None: ...
     def request_pin(self, key: str) -> None: ...
     def request_on_top(self, key: str, on_top: bool) -> None: ...
+    def request_menu(self, key: str, global_pos: QPoint) -> None: ...
 
 
 class TitleBar(QFrame):
@@ -164,6 +165,21 @@ class TitleBar(QFrame):
     def title_text(self) -> str:
         """The caption in full, even when the bar is too narrow to show all of it."""
         return self._label.text()
+
+    def contextMenuEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        """Right-click: everything the bar can do, in words.
+
+        The three buttons are the fast path and stay exactly as they are. This is
+        for the rest — *Fit to content* has no button and never could have one,
+        and the arrangement gestures were otherwise a 6px divider you had to find
+        and a title bar you had to know was draggable.
+
+        Asked of the host rather than built here, for the reason the whole class
+        is dumb: what a block may do depends on where it is, and where it is, is
+        the canvas's business.
+        """
+        self._host.request_menu(self._key, event.globalPos())
+        event.accept()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:

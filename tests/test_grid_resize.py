@@ -12,8 +12,8 @@ Three claims, and they are the three the whole rework rests on:
 from __future__ import annotations
 
 import pytest
-from PySide6.QtCore import QPoint, QRect, Qt
-from PySide6.QtWidgets import QApplication, QLabel, QScrollArea, QSplitter
+from PySide6.QtCore import QPoint, QRect, QSize, Qt
+from PySide6.QtWidgets import QApplication, QLabel, QScrollArea, QSplitter, QWidget
 
 from mm_companion.ui import layout_tree as lt
 from mm_companion.ui.block_canvas import BlockCanvas, drop_side
@@ -445,3 +445,102 @@ def test_a_drag_gesture_lands_a_block_under_another(canvas: BlockCanvas, qapp) -
     assert slot is not None
     assert slot.target == "a"
     assert slot.side == "bottom"
+
+
+class _Recommending(QWidget):
+    """A pane that states a recommended width, the way a block frame does.
+
+    A *hint* as well, and separately, because the two are different answers: a
+    block with no recommendation still has content, and what a fit means for it
+    is the width that content takes.
+    """
+
+    def __init__(self, width: int, hint: int = 150) -> None:
+        super().__init__()
+        self._width = width
+        self._hint = hint
+
+    def recommended_size(self) -> RecommendedSize:
+        return RecommendedSize(self._width, 0)
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        return QSize(self._hint, 50)
+
+
+def _fittable(qapp, widths: list[int]) -> GridSplitter:
+    splitter = GridSplitter(Qt.Orientation.Horizontal)
+    for width in widths:
+        splitter.addWidget(_Recommending(width))
+    splitter.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+    splitter.resize(600, 100)
+    splitter.show()
+    qapp.processEvents()
+    return splitter
+
+
+class TestFittingToContent:
+    """The gesture that says "just make it right".
+
+    The detent marks where a block's recommended size is and a drag can settle on
+    it, but neither is a way to simply *ask* for it — the one thing the
+    recommendations had no direct route to, and the gesture a splitter has
+    answered with a double-click for as long as there have been splitters.
+    """
+
+    def test_it_fits_the_pane_before_the_divider(self, qapp) -> None:
+        splitter = _fittable(qapp, [200, 200])
+        total = sum(splitter.sizes())
+        splitter.setSizes([100, total - 100])
+        qapp.processEvents()
+
+        splitter.fit_pane(0)
+        qapp.processEvents()
+
+        assert splitter.sizes()[0] == 200
+        assert sum(splitter.sizes()) == total, "the row's total width moved"
+
+    def test_a_pane_with_no_recommendation_fits_its_content(self, qapp) -> None:
+        """Abilities and Resistances state no width; their tables measure one."""
+        splitter = _fittable(qapp, [0, 200])
+        splitter.setSizes([50, sum(splitter.sizes()) - 50])
+        qapp.processEvents()
+
+        splitter.fit_pane(0)
+        qapp.processEvents()
+
+        assert splitter.sizes()[0] == 150  # the hint, since there is no recommendation
+
+    def test_fitting_the_last_pane_is_refused_rather_than_wrapping(self, qapp) -> None:
+        """There is no neighbour on the far side to take the width from."""
+        splitter = _fittable(qapp, [200, 200])
+        before = splitter.sizes()
+
+        splitter.fit_pane(1)
+
+        assert splitter.sizes() == before
+
+    def test_fitting_a_row_forgets_its_height_rather_than_measuring_one(self, canvas, qapp) -> None:
+        """So it goes on tracking the content, exactly as an undragged row does."""
+        canvas._stack.arm_grip(0)
+        canvas._stack._on_dragged(0, 320)
+        qapp.processEvents()
+        assert canvas._stack.heights()[0] == 320
+
+        canvas._stack.fit_row(0)
+        qapp.processEvents()
+
+        assert canvas._stack.heights()[0] == 0
+
+    def test_fitting_a_block_does_both_at_once(self, canvas, qapp) -> None:
+        canvas.drop_block("b", _slot(target="a", side="right"))
+        canvas._stack.arm_grip(0)
+        canvas._stack._on_dragged(0, 320)
+        qapp.processEvents()
+        canvas._row_widgets[0].setSizes([80, 700])
+        qapp.processEvents()
+
+        canvas.fit_block("a")
+        qapp.processEvents()
+
+        assert canvas._row_widgets[0].sizes()[0] == 200  # a's recommendation
+        assert canvas._stack.heights()[0] == 0

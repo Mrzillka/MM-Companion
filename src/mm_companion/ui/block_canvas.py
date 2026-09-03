@@ -36,6 +36,7 @@ from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (
     QAbstractScrollArea,
     QGraphicsOpacityEffect,
+    QMenu,
     QSplitter,
     QToolTip,
     QVBoxLayout,
@@ -48,7 +49,7 @@ from mm_companion.ui.block_frame import BlockFrame, BlockWindow
 from mm_companion.ui.block_sizes import UNBOUNDED, RecommendedSize
 from mm_companion.ui.blocks.base import instance_template
 from mm_companion.ui.drop_feedback import DropIndicator, DropRegion
-from mm_companion.ui.grid_view import RowStack, build_node
+from mm_companion.ui.grid_view import GridSplitter, RowStack, build_node
 from mm_companion.ui.pinned import (
     DEFAULT_EDGE,
     DEFAULT_EXTENT,
@@ -1620,6 +1621,84 @@ class BlockCanvas(QWidget):
             self.unpin_block(key)
         else:
             self.pin_block(key)
+
+    def block_menu(self, key: str) -> QMenu:
+        """Everything a block can be told to do from its own title bar.
+
+        Built rather than shown, so it can be asked what it offers without an
+        event loop putting it on screen — the entries differ by where the block
+        is, which is exactly the part worth being able to test.
+
+        Every item routes to a method that already existed. The menu is not new
+        behaviour; it is the first place several pieces of existing behaviour can
+        be *found* without knowing they are there.
+        """
+        menu = QMenu(self)
+        frame = self._frames.get(key)
+        if frame is None:
+            return menu
+        floating = key in self._windows
+        menu.addAction("Fit to content", lambda: self.fit_block(key))
+        menu.addSeparator()
+        if self.is_pinned(key):
+            menu.addAction("Send back to the page", lambda: self.unpin_block(key))
+        elif not floating:
+            menu.addAction("Pin to the strip", lambda: self.pin_block(key))
+        if floating:
+            menu.addAction("Dock back on the page", lambda: self.dock_block_back(key))
+            on_top = menu.addAction("Keep above other windows")
+            on_top.setCheckable(True)
+            on_top.setChecked(self._wants_on_top(key))
+            on_top.toggled.connect(lambda wanted: self.set_block_on_top(key, wanted))
+        else:
+            menu.addAction("Pop out into its own window", lambda: self.float_block(key))
+        menu.addSeparator()
+        menu.addAction("Close", lambda: self.hide_block(key))
+        return menu
+
+    def request_menu(self, key: str, global_pos: QPoint) -> None:
+        """Show :meth:`block_menu` where the right-click landed."""
+        menu = self.block_menu(key)
+        if not menu.isEmpty():
+            menu.exec(global_pos)
+
+    def dock_block_back(self, key: str) -> None:
+        """Bring a floated block back to where it was popped out from.
+
+        The same fallback ladder :meth:`show_block` and :meth:`unpin_block` walk —
+        the anchor it left, then its default position, then a new row at the end —
+        so "dock" means the same thing however the block got out.
+        """
+        if key not in self._windows:
+            return
+        slot = self._resolve_anchor(self._anchors.pop(key, None))
+        if slot is None:
+            slot = self._resolve_anchor(self._anchor_for(key, self._default_rows))
+        if slot is None:
+            slot = DropSlot(True, len(self._rows), 0)
+        self._detach(key)
+        self._place(key, slot)
+        self._relayout()
+        self._settled()
+
+    def fit_block(self, key: str) -> None:
+        """Give one block the size it reads well at, in both directions.
+
+        Its width out of its neighbour in the row, and its row back to the height
+        of its content — the two halves of "just make it right", which the
+        detents could mark but nothing could actually *do*.
+        """
+        frame = self._frames.get(key)
+        if frame is None:
+            return
+        widget = self.group_for(key) or frame
+        parent = widget.parentWidget()
+        if isinstance(parent, GridSplitter):
+            parent.fit_pane(parent.indexOf(widget))
+        for index, row in enumerate(self._row_widgets):
+            if self._is_at_or_within(widget, row):
+                self._stack.fit_row(index)
+                break
 
     def request_on_top(self, key: str, on_top: bool) -> None:
         """The same pin button, in a window: above other applications, or not."""

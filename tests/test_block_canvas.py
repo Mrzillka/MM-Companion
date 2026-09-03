@@ -54,6 +54,11 @@ def make_sheet(qapp: QApplication):
     QApplication.processEvents()
 
 
+def _settle(times: int = 5) -> None:
+    for _ in range(times):
+        QApplication.processEvents()
+
+
 def page_rows(sheet) -> list[list[str]]:
     """The page's top-level rows, each as a flat list of keys.
 
@@ -395,3 +400,71 @@ def test_update_drag_leaves_no_autoscroll_running_when_nothing_may_land(make_she
     QApplication.processEvents()
     assert not canvas._autoscroll_timer.isActive()
     assert canvas._autoscroll_velocity == 0
+
+
+class TestTheTitleBarMenu:
+    """Right-clicking a block's title bar, which used to do nothing at all.
+
+    The three buttons are the fast path and are unchanged. This is for the rest:
+    *Fit to content* has no button and never could have one, and the arrangement
+    gestures were otherwise a 10px divider you had to find and a title bar you had
+    to know was draggable.
+    """
+
+    def _labels(self, sheet, key: str) -> list[str]:
+        menu = sheet.canvas.block_menu(key)
+        return [action.text() for action in menu.actions() if not action.isSeparator()]
+
+    def test_a_docked_block_can_be_fitted_pinned_popped_out_or_closed(self, make_sheet) -> None:
+        sheet = make_sheet()
+        assert self._labels(sheet, "skills") == [
+            "Fit to content",
+            "Pin to the strip",
+            "Pop out into its own window",
+            "Close",
+        ]
+
+    def test_a_pinned_block_is_offered_the_way_back(self, make_sheet) -> None:
+        sheet = make_sheet()
+        sheet.canvas.pin_block("skills")
+        _settle()
+
+        labels = self._labels(sheet, "skills")
+        assert "Send back to the page" in labels
+        assert "Pin to the strip" not in labels
+
+    def test_a_floated_block_is_offered_docking_and_staying_on_top(self, make_sheet) -> None:
+        sheet = make_sheet()
+        sheet.canvas.float_block("skills")
+        _settle()
+
+        labels = self._labels(sheet, "skills")
+        assert "Dock back on the page" in labels
+        assert "Keep above other windows" in labels
+        assert "Pop out into its own window" not in labels
+
+    def test_an_unknown_block_offers_nothing_rather_than_raising(self, make_sheet) -> None:
+        sheet = make_sheet()
+        assert sheet.canvas.block_menu("no-such-block").isEmpty()
+
+    def test_docking_back_returns_the_block_to_the_row_it_left(self, make_sheet) -> None:
+        sheet = make_sheet()
+        before = page_rows(sheet)
+        sheet.canvas.float_block("skills")
+        _settle()
+        assert "skills" not in [key for row in page_rows(sheet) for key in row]
+
+        sheet.canvas.dock_block_back("skills")
+        _settle()
+
+        assert page_rows(sheet) == before
+
+    def test_closing_from_the_menu_is_the_close_button(self, make_sheet) -> None:
+        sheet = make_sheet()
+        menu = sheet.canvas.block_menu("skills")
+        close = next(action for action in menu.actions() if action.text() == "Close")
+
+        close.trigger()
+        _settle()
+
+        assert sheet.canvas.is_hidden("skills")

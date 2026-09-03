@@ -185,7 +185,8 @@
       "label": "Block minimum",
       "hint": "How small a block may be dragged before it stops shrinking and scrolls inside itself, in pixels."
     },
-    "grid.handle": {"label": "Divider thickness", "hint": "The grab target between two blocks, in pixels."},
+    "grid.grab": {"label": "Divider grab target", "hint": "How wide a divider is to the mouse, in pixels. Also the gutter between two blocks."},
+    "grid.handle": {"label": "Divider thickness", "hint": "How much of a divider is painted under the pointer, in pixels, centred in its grab target."},
     "grid.detent": {
       "label": "Divider detent",
       "hint": "How much resistance a divider meets at a block's recommended size, in pixels. Zero turns it off."

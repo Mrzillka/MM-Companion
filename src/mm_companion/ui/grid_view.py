@@ -175,6 +175,28 @@ class GridSplitter(QSplitter):
         if collapsing:
             self.paneCollapsed.emit(collapsing)
 
+    def fit_pane(self, index: int) -> None:
+        """Give pane *index* the extent it reads well at, out of its neighbour.
+
+        Zero-sum, like every other resize inside a row: the width has to come
+        from somewhere, and the block next door is where it came from when the
+        divider was dragged by hand. Capped at the pair's total, so fitting a
+        block wider than the whole row leaves its neighbour at nothing rather
+        than growing the row.
+        """
+        sizes = self.sizes()
+        if not 0 <= index < len(sizes) - 1:
+            return
+        horizontal = self.orientation() == Qt.Orientation.Horizontal
+        wanted = _recommended_extent(self.widget(index), horizontal)
+        if wanted <= 0:
+            return
+        pair = sizes[index] + sizes[index + 1]
+        sizes[index] = max(0, min(int(wanted), pair))
+        sizes[index + 1] = pair - sizes[index]
+        self.setSizes(sizes)
+        self.sizesSettled.emit()
+
     def mark_detents(self, index: int, targets: Sequence[int], settled: int | None) -> None:
         """Show where the recommended sizes are while a handle is being dragged."""
         del index
@@ -302,6 +324,8 @@ class RowGrip(QWidget):
     detentReached = Signal(int)
     #: Emitted on release, once the drag has settled.
     dragFinished = Signal()
+    #: Double-clicked: put the row above back to the height of its content.
+    fitRequested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -391,6 +415,22 @@ class RowGrip(QWidget):
             event.accept()
             return
         super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        """Put the row above back to "as tall as what is in it".
+
+        The same gesture as a double-click on a divider inside a row, and the
+        same answer: the size the block reads well at, without hunting for it.
+        For a row that is *fit to content*, which is what an undragged row has
+        always been and what the first of its two detents marks.
+        """
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mouseDoubleClickEvent(event)
+            return
+        self._dragging = False
+        self.fitRequested.emit()
+        self.update()
+        event.accept()
 
     def event(self, event: QEvent) -> bool:
         if event.type() in (QEvent.Type.HoverEnter, QEvent.Type.HoverLeave):
@@ -490,6 +530,7 @@ class RowStack(QWidget):
             grip.heightDragged.connect(lambda value, i=index: self._on_dragged(i, value))
             grip.detentReached.connect(lambda value, i=index: self._on_dragged(i, value, True))
             grip.dragMoved.connect(self.gripDragMoved.emit)
+            grip.fitRequested.connect(lambda i=index: self.fit_row(i))
             # Thaw first: the page's height must be its own again before anyone
             # asked to record the drag goes looking at it.
             grip.dragFinished.connect(self._end_grip_drag)
@@ -571,6 +612,21 @@ class RowStack(QWidget):
         self._active_grip = grip
         self._freeze()
         self._mark_rows(index, targets, None)
+
+    def fit_row(self, index: int) -> None:
+        """Put row *index* back to the height of its content.
+
+        Which is spelled as *forgetting* the height rather than measuring one: a
+        row that states no height has always meant "be as tall as what is in
+        you", so the fit is the same arrangement a row nobody ever dragged is in,
+        and it goes on tracking the content afterwards instead of freezing at
+        whatever the content happened to be at this moment.
+        """
+        if not 0 <= index < len(self._heights) or self._heights[index] == 0:
+            return
+        self._heights[index] = 0
+        self._apply_height(index)
+        self.heightsChanged.emit()
 
     def extend_active_drag(self, delta: int) -> None:
         """Grow the grip currently being dragged by *delta* (see :meth:`RowGrip.extend`)."""

@@ -656,7 +656,7 @@ class _BoardSplitter(GridSplitter):
     divider on the sheet — it was a bare ``QSplitter`` before, which is why this
     was the only resize in the app with no detent and no mark.
 
-    It offers **one** target where its parent offers two. The other pane is the
+    It offers **one** target where the class it extends offers two. The other pane is the
     whole page, whose ``sizeHint`` is a number about a scroll area rather than a
     width anybody wants the strip to stop at, and a detent there would be a mark
     on the page side promising something nobody meant.

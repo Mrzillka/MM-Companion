@@ -103,7 +103,7 @@
 
     "_block.min-extent": "How small a docked block may be dragged before it stops shrinking. Small on purpose: the grid is the user's, and a block dragged to a sliver reflows as far as it can and then scrolls inside its own frame rather than refusing. This is the floor of the frame itself, so it wants to be about the height of a title bar — enough that a block squashed to nothing can still be found and dragged back open.",
     "block.min-extent": 24,
-    "_grid.grab": "How wide the divider between two blocks is to the mouse, in pixels. Every resize on the page happens by grabbing one, so it has to be catchable without aiming; it is also the gutter between two blocks, which is why it is not simply made huge. Painted narrower than this - see grid.handle - so the grab target can grow without the gap between blocks looking like one.",
+    "_grid.grab": "How wide the divider between two blocks is to the mouse, in pixels. Every resize on the page happens by grabbing one, so it has to be catchable without aiming; it is also the gutter between two blocks, which is why it is not simply made huge. Painted narrower than this — see grid.handle — so the grab target can grow without the gap between blocks looking like one.",
     "grid.grab": 10,
     "_grid.handle": "How much of a divider is painted when the pointer is over it, in pixels, centred in the grab target above. Also the thickness of the line marking where a dragged block will land, which is the same mark answering the same question.",
     "grid.handle": 6,

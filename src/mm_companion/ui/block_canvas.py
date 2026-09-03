@@ -1415,7 +1415,7 @@ class BlockCanvas(QWidget):
         return None
 
     def _keys_in(self, widget: QWidget) -> list[str]:
-        """Every block rendered inside *widget* - which may be one, or a dozen.
+        """Every block rendered inside *widget* — which may be one, or a dozen.
 
         A pane of a splitter is a block's frame, a tab group holding several, or
         another splitter holding either; asking the frames which of them ended up
@@ -1429,7 +1429,7 @@ class BlockCanvas(QWidget):
     def _on_pane_collapsing(self, widget: QWidget, closing: bool) -> None:
         self._warn_closing(self._keys_in(widget), closing)
 
-    def _on_pane_collapsed(self, widgets: list) -> None:
+    def _on_pane_collapsed(self, widgets: list[QWidget]) -> None:
         keys: list[str] = []
         for widget in widgets:
             keys.extend(key for key in self._keys_in(widget) if key not in keys)
@@ -1467,8 +1467,8 @@ class BlockCanvas(QWidget):
 
         :meth:`hide_block` relayouts and settles per block, which for a row
         squashed to nothing would be three redraws and three entries in the layout
-        history for one flick of the wrist. This is the same bookkeeping - the
-        anchor that remembers where each block was, so reopening puts it back -
+        history for one flick of the wrist. This is the same bookkeeping — the
+        anchor that remembers where each block was, so reopening puts it back —
         done once for all of them.
         """
         wanted = [key for key in keys if key in self._frames and key not in self._hidden]

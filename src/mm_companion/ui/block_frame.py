@@ -251,6 +251,14 @@ class _InnerScroll(QScrollArea):
             event.ignore()  # nothing here to scroll; let the page have it
             return
         super().wheelEvent(event)
+        # And **accept it**, whether or not that moved anything. This is the line
+        # that actually keeps the gesture: ``QAbstractSlider`` ignores a wheel that
+        # does not change its value, so a block already at its bottom handed the
+        # event back still ignored — and Qt walks an ignored wheel up the parent
+        # chain by itself, to the page, which scrolled. Declining to chain is not
+        # something the check above can express, because the decision to pass the
+        # event on is made *after* this, by Qt, on a flag nobody here had set.
+        event.accept()
 
 
 class BlockFrame(QFrame):

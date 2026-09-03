@@ -35,7 +35,10 @@ through rather than reinvent. When building new sheet widgets, use it:
   block short enough to have no bar at all. `has_scroll_range(area, event)` is
   that test on its own, because `_InnerScroll` asks the identical question about
   itself before declining a wheel it has no use for, and two spellings of one rule
-  is how they drift apart.
+  is how they drift apart. Note that *routing* the wheel is only half of it: the
+  surface it lands on has to **accept** it, or Qt walks it up to the page anyway —
+  see the note on `_InnerScroll` in
+  [The character sheet](sheet-and-blocks.md#block-frames-the-canvas-api-and-layout-persistence).
 - `ui/lock.py` — `set_widget_locked(widget, locked)` implements the read-only
   **view** mode. Locking is *not* `setEnabled(False)` (which greys a control
   out); a locked field keeps showing its value but sheds its input chrome

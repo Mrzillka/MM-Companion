@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mm_companion.ui.block_frame import _InnerScroll
 from mm_companion.ui.wheel_guard import guard_wheel, has_scroll_range
 
 
@@ -51,6 +52,11 @@ class _Nest(QWidget):
     The same shape the sheet really has: ``CharacterSheet``'s page scroll around
     the canvas, a block's ``_InnerScroll`` around its section, and a spin box or
     a table inside that.
+
+    The block is the **real** ``_InnerScroll`` and not a stand-in ``QScrollArea``,
+    which is not fussiness: a plain scroll area has none of the wheel behaviour
+    under test here, so a double would have gone on passing every assertion below
+    while the app misbehaved. It did, once.
     """
 
     def __init__(self, block_content: int, page_content: int) -> None:
@@ -64,8 +70,7 @@ class _Nest(QWidget):
         host = QWidget()
         host_layout = QVBoxLayout(host)
         host_layout.setContentsMargins(0, 0, 0, 0)
-        self.block = QScrollArea(host)
-        self.block.setWidgetResizable(True)
+        self.block = _InnerScroll(host)
         self.block.setFixedHeight(100)
         host_layout.addWidget(self.block)
         # Something under the block, so the page has a range of its own.
@@ -114,6 +119,50 @@ def test_the_page_does_not_take_over_when_the_block_runs_out(qapp: QApplication)
 
     assert bar.value() == bar.maximum()
     assert nest.page.verticalScrollBar().value() == 0, "the sheet scrolled under the block"
+
+
+class TestTheBlockKeepsTheGesture:
+    """Accepting the wheel, which is the half that actually holds it.
+
+    Whether the page also scrolls is not decided by who *handles* the event but by
+    whether the event comes back **accepted**: Qt walks an ignored wheel up the
+    parent chain by itself, and the page is on that chain. ``QAbstractSlider``
+    ignores a wheel that does not change its value, so a block already at its
+    bottom scrolled nothing, handed the event back ignored, and the whole sheet
+    moved — with every test here passing, because a *sent* event does not run
+    Qt's propagation loop and the assertions were all about scrollbar values.
+
+    So these assert the flag, which is the thing the real behaviour is read off.
+    """
+
+    def test_a_block_at_the_end_of_its_range_still_accepts_it(self, qapp) -> None:
+        nest = _Nest(block_content=600, page_content=800)
+        bar = nest.block.verticalScrollBar()
+        bar.setValue(bar.maximum())
+
+        event = _wheel(-120)
+        QApplication.sendEvent(nest.block.viewport(), event)
+
+        assert event.isAccepted(), "the sheet would scroll under the block"
+
+    def test_a_block_in_the_middle_of_its_range_accepts_it(self, qapp) -> None:
+        nest = _Nest(block_content=600, page_content=800)
+        nest.block.verticalScrollBar().setValue(0)
+
+        event = _wheel(-120)
+        QApplication.sendEvent(nest.block.viewport(), event)
+
+        assert event.isAccepted()
+
+    def test_a_block_with_no_range_declines_it(self, qapp) -> None:
+        """The other half: a block with nothing to scroll must not eat the wheel,
+        or the page would stop scrolling everywhere a block covers it."""
+        nest = _Nest(block_content=20, page_content=800)
+
+        event = _wheel(-120)
+        QApplication.sendEvent(nest.block.viewport(), event)
+
+        assert not event.isAccepted()
 
 
 def test_a_block_with_nothing_to_scroll_never_takes_the_wheel(qapp: QApplication) -> None:

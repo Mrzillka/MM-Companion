@@ -274,6 +274,19 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   while the pointer is over it, and the guard routes a wheel that started over a
   spin box or a table into it on the same rule. See
   [Shared UI utilities](ui-utilities.md), where that rule lives in full.
+- **Keeping the wheel is `event.accept()`, and it is a separate line from
+  deciding to keep it.** Whether the page *also* scrolls is not settled by who
+  handles the event but by whether it comes back accepted: Qt walks an ignored
+  wheel up the parent chain on its own, and the page is on that chain.
+  `QAbstractSlider` ignores a wheel that does not change its value, so a block
+  already at its bottom scrolled nothing, handed the event back still ignored, and
+  the whole sheet moved — with the check above passing every time, because the
+  decision to pass the event on is made *after* it, by Qt, on a flag nobody had
+  set. `_InnerScroll.wheelEvent` therefore accepts unconditionally once it has
+  decided the wheel is its. The tests watch `isAccepted()` for the same reason: a
+  wheel delivered with `sendEvent` never runs Qt's propagation loop, so asserting
+  on scrollbar values alone cannot see this at all — which is exactly how it
+  shipped once.
 - **`minimumSizeHint` is a title bar and `block.min-extent`, and says nothing about
   the content.** It used to be `max(content, the JSON floor)` in both dimensions,
   and that climbed out through the row, the page, the pinned strip and the window

@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication, QScrollArea, QSplitter
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.ui import layout_tree as lt
 from mm_companion.ui.block_canvas import SCHEMA_VERSION
+from mm_companion.ui.block_sizes import load_block_sizes
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.pinned import PinSlot
 
@@ -941,3 +942,80 @@ def test_a_restore_rebuilds_the_strip_even_with_the_same_blocks_in_it(make_sheet
 
     assert rebuilds, "the strip was never asked to rebuild"
     assert _pinned(sheet)["lines"] == [["conditions", "advantages"]]
+
+
+class TestTheStripsOwnDetent:
+    """The one divider on the sheet that had no recommended-size hint.
+
+    The strip's *internal* dividers always had one — they are the page's own
+    splitters, so they came with it. The handle that sets the strip's
+    **thickness** was a bare ``QSplitter``: no detent, no mark, and no way to
+    find the width at which the blocks in it actually read.
+    """
+
+    def test_the_board_offers_the_thickness_the_blocks_want(self, make_sheet) -> None:
+        sheet = make_sheet()
+        sheet.pin_block("dice")
+        _settle()
+
+        splitter = sheet.board._splitter
+        wanted = sheet.board.panel.recommended_size().width
+        assert wanted > 0, "the strip states no thickness to stick at"
+
+        (target,) = splitter.detent_positions(1)
+        sizes = splitter.sizes()
+        total = sum(sizes) + splitter.handleWidth() * (len(sizes) - 1)
+        assert target == total - splitter.handleWidth() - wanted
+
+    def test_it_offers_nothing_for_the_page_side(self, make_sheet) -> None:
+        """One target, not the two a divider between blocks gets.
+
+        The other pane is the whole page, whose hint is a number about a scroll
+        area rather than a width anybody wants the strip to stop at.
+        """
+        sheet = make_sheet()
+        sheet.pin_block("dice")
+        _settle()
+
+        assert len(sheet.board._splitter.detent_positions(1)) == 1
+
+    def test_an_empty_strip_sticks_at_nothing(self, make_sheet) -> None:
+        sheet = make_sheet()  # empty by default
+        _settle()
+
+        assert sheet.board.panel.recommended_size().width == 0
+        assert sheet.board._splitter.detent_positions(1) == []
+
+    def test_blocks_down_the_strip_want_the_widest_of_them(self, make_sheet) -> None:
+        """Stacked down a left/right strip they share the thickness, not divide it."""
+        sheet = make_sheet()
+        sheet.pin_block("dice")
+        sheet.canvas.pin_at("conditions", target="dice", side="bottom")
+        _settle()
+
+        sizes = load_block_sizes()
+        widest = max(sizes["dice"].width, sizes["conditions"].width)
+        assert sheet.board.panel.recommended_size().width >= widest
+
+    def test_moving_the_strip_to_the_bottom_turns_the_question(self, make_sheet) -> None:
+        """Thickness is a height there, and the same two blocks now divide it."""
+        sheet = make_sheet()
+        sheet.pin_block("dice")
+        sheet.canvas.pin_at("conditions", target="dice", side="bottom")
+        _settle()
+        across = sheet.board.panel.recommended_size()
+
+        sheet.canvas.set_pin_edge("bottom")
+        _settle()
+        down = sheet.board.panel.recommended_size()
+
+        assert across.width > 0 and across.height == 0
+        assert down.height > 0 and down.width == 0
+
+    def test_the_strip_still_cannot_be_collapsed_by_its_handle(self, make_sheet) -> None:
+        """Its handle *is* the strip when it is empty; a collapsed one is lost."""
+        sheet = make_sheet()
+        sheet.pin_block("dice")
+        _settle()
+
+        assert sheet.board._splitter.childrenCollapsible() is False

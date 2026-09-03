@@ -54,7 +54,6 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QMenu,
     QScrollArea,
-    QSplitter,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -63,8 +62,9 @@ from PySide6.QtWidgets import (
 from mm_companion.ui import layout_tree as lt
 from mm_companion.ui import theme
 from mm_companion.ui.block_frame import BlockFrame
-from mm_companion.ui.block_sizes import UNBOUNDED
+from mm_companion.ui.block_sizes import UNBOUNDED, RecommendedSize
 from mm_companion.ui.drop_feedback import DropFeedback, DropIndicator
+from mm_companion.ui.grid_handle import handle_thickness
 from mm_companion.ui.grid_view import GridSplitter, build_node
 from mm_companion.ui.pinned import (
     DEFAULT_EDGE,
@@ -372,6 +372,68 @@ class PinnedPanel(QFrame):
         along_thickness = hint.width() if is_vertical_strip(self._edge) else hint.height()
         return max(EMPTY_EXTENT, along_thickness + 4)
 
+    def recommended_size(self) -> RecommendedSize:
+        """How thick the strip would like to be, from the blocks that are in it.
+
+        The strip's *internal* dividers have always marked their detents — they
+        are the page's own splitters, so they came with them. The handle that sets
+        the strip's **thickness** had none: it is the one divider in the app that
+        was a bare ``QSplitter``, so dragging the strip wider or narrower was the
+        only resize on the sheet with no hint of where the blocks would like to
+        stop. This is the number that fixes that.
+
+        Asked of the region tree rather than of Qt, because the answer is a sum
+        along one axis and a maximum across it, and only the tree knows which is
+        which: two blocks stacked down a strip on the left both want their own
+        *width*, so the strip wants the wider of them; the same two side by side
+        along the bottom want the strip to be as thick as the taller. Duck-typed
+        into the grid exactly like a frame's own, so
+        ``grid_view._recommended_extent`` needs no case for it.
+        """
+        thickness = self._node_extent(self._rendered)
+        if thickness <= 0:
+            return RecommendedSize()
+        thickness += self._chrome()
+        vertical = is_vertical_strip(self._edge)
+        return RecommendedSize(thickness if vertical else 0, 0 if vertical else thickness)
+
+    def _chrome(self) -> int:
+        """What the strip costs around its blocks, across its thickness."""
+        margins = self._grid.contentsMargins()
+        vertical = is_vertical_strip(self._edge)
+        if vertical:
+            return margins.left() + margins.right() + 2 * self._scroll.frameWidth()
+        return margins.top() + margins.bottom() + 2 * self._scroll.frameWidth()
+
+    def _node_extent(self, node: lt.Node | None) -> int:
+        """How much of the strip's thickness *node* wants.
+
+        A run **along** the thickness adds up (and pays for the dividers between);
+        a run across it takes the largest, since its children share the thickness
+        rather than dividing it. A cell is the largest recommendation of the
+        blocks in it — a tab group shows one at a time, so the group wants
+        whatever its roomiest member does.
+        """
+        if node is None:
+            return 0
+        along_thickness = lt.HORIZONTAL if is_vertical_strip(self._edge) else lt.VERTICAL
+        if isinstance(node, lt.Leaf):
+            wanted = 0
+            for key in node.keys:
+                frame = self._frames.get(key)
+                if frame is None:
+                    continue
+                size = frame.recommended_size()
+                stated = size.width if is_vertical_strip(self._edge) else size.height
+                wanted = max(wanted, int(stated))
+            return wanted
+        extents = [self._node_extent(child) for child in node.children]
+        if not extents:
+            return 0
+        if node.orientation == along_thickness:
+            return sum(extents) + handle_thickness() * (len(extents) - 1)
+        return max(extents)
+
     def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
         """Its handle, and nothing about what is pinned in it.
 
@@ -586,6 +648,45 @@ class EdgeZoneOverlay(QWidget):
         self._zones["bottom"].setGeometry(band, height - band, max(0, width - 2 * band), band)
 
 
+class _BoardSplitter(GridSplitter):
+    """The one divider that sets the strip's thickness.
+
+    A ``GridSplitter`` so the strip's edge is dragged by the same handle, drawn
+    the same way and sticking at a recommended size the same way as every other
+    divider on the sheet — it was a bare ``QSplitter`` before, which is why this
+    was the only resize in the app with no detent and no mark.
+
+    It offers **one** target where its parent offers two. The other pane is the
+    whole page, whose ``sizeHint`` is a number about a scroll area rather than a
+    width anybody wants the strip to stop at, and a detent there would be a mark
+    on the page side promising something nobody meant.
+    """
+
+    def __init__(self, panel: QWidget, orientation: Qt.Orientation, parent: QWidget) -> None:
+        super().__init__(orientation, parent)
+        self.setObjectName("pinnedBoardSplitter")
+        self._panel = panel
+        # The strip is never collapsed by a drag: its handle *is* the strip when
+        # nothing is pinned, and a collapsed one could not be got back.
+        self.setChildrenCollapsible(False)
+
+    def detent_positions(self, index: int) -> list[int]:
+        sizes = self.sizes()
+        if not 0 < index < len(sizes):
+            return []
+        wanted = self._panel.recommended_size()
+        horizontal = self.orientation() == Qt.Orientation.Horizontal
+        stated = wanted.width if horizontal else wanted.height
+        if stated <= 0:
+            return []
+        total = sum(sizes) + self.handleWidth() * (len(sizes) - 1)
+        # Which side of the handle the strip is on decides which end the target is
+        # measured from — the same sum the page's splitter does, with one target.
+        leading = self.widget(index - 1) is self._panel
+        target = int(stated) if leading else total - self.handleWidth() - int(stated)
+        return [target] if target >= 0 else []
+
+
 class PinnedBoard(QWidget):
     """The page and the pinned strip side by side; the strip's edge *is* the layout.
 
@@ -608,9 +709,7 @@ class PinnedBoard(QWidget):
         self.panel.edge_drag_moved.connect(self._edge_drag_moved)
         self.panel.edge_drag_finished.connect(self._edge_drag_finished)
 
-        self._splitter = QSplitter(Qt.Orientation.Horizontal, self)
-        self._splitter.setObjectName("pinnedBoardSplitter")
-        self._splitter.setChildrenCollapsible(False)
+        self._splitter = _BoardSplitter(self.panel, Qt.Orientation.Horizontal, self)
         # The one place the strip's thickness is *chosen*: this signal fires for a
         # dragged handle and never for setSizes, so content that forces the strip
         # open is not mistaken for a preference (see _remember_dragged_extent).

@@ -49,8 +49,15 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.ui.drop_feedback import DropFeedback, DropIndicator
+from mm_companion.ui.reflow import SHED_HYSTERESIS, parts_to_shed
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import no_reentry
+
+#: The table's own name for :func:`~mm_companion.ui.reflow.parts_to_shed`, which is
+#: the same decision asked about columns rather than about widgets. Re-exported so
+#: the four table blocks (and the tests that pin the dead-band's nesting) go on
+#: naming it in the terms of the thing they are shedding.
+columns_to_shed = parts_to_shed
 
 #: How far the pointer must travel with the button down before a press counts as a
 #: drag rather than a click. Matches the pinned strip's chips, so a row and a chip
@@ -64,75 +71,6 @@ INDICATOR_HEIGHT = 2
 #: its own preset modes whatever it likes; this one is shared because
 #: :class:`RowReorder` is only enabled in it.
 SORT_MANUAL = "manual"
-
-
-#: How much narrower than a boundary the table has to be before it sheds another
-#: column, and how much wider before it takes one back. The same dead-band, for
-#: the same reason, as :func:`~mm_companion.ui.sections.column_flow.column_count`'s
-#: and :func:`~mm_companion.ui.reflow.prefers_row`'s: shedding a column changes
-#: what wraps, which changes the block's height, which can toggle a scrollbar,
-#: which changes the width back over the boundary — an endless relayout otherwise.
-SHED_HYSTERESIS = 24
-
-
-def columns_to_shed(
-    available: int,
-    widths: Sequence[int],
-    shed_order: Sequence[int],
-    *,
-    current: Sequence[int] = (),
-    hysteresis: int = 0,
-) -> tuple[int, ...]:
-    """Which columns to hide so the rest fit in *available* pixels.
-
-    *shed_order* is the columns a block is willing to give up, **worst first** —
-    the abbreviation before the name, the modifier before the rank. Everything not
-    named in it is load-bearing and is never hidden, so a table can always be
-    dragged narrower than it can honestly show and the columns that remain are the
-    ones worth keeping. Past that the block scrolls; nothing is ever lost.
-
-    A non-positive *available* (a table that has not been laid out yet) sheds
-    nothing, so the first paint is the full table and the real answer arrives on
-    the first ``resizeEvent``.
-
-    *hysteresis* is the dead-band, and it applies from the **first** column
-    onwards. It used to stand down whenever *current* was empty — which is
-    precisely the state a table is in before it sheds anything, so the one
-    transition most worth damping was the one transition that never was.
-    """
-    if available <= 0 or not shed_order:
-        return ()
-    total = sum(widths)
-    shed: list[int] = []
-    for column in shed_order:
-        if total <= available:
-            break
-        if 0 <= column < len(widths):
-            shed.append(column)
-            total -= widths[column]
-
-    if not hysteresis:
-        return tuple(shed)
-
-    def needed(hidden: Sequence[int]) -> int:
-        """What the arrangement with *hidden* dropped actually takes."""
-        gone = set(hidden)
-        return sum(w for i, w in enumerate(widths) if i not in gone)
-
-    # Only change the answer once the width is past the boundary by a full band in
-    # the direction it is moving, or the answer flips back and forth on its own.
-    # Both bands are measured against what the arrangement *in force* needs, which
-    # is what makes them nest: from any state, the width at which another column
-    # goes is a band below that number and the width at which one comes back is a
-    # band above it, so there is no width at which both are true. Measuring the
-    # shedding side against the *post*-shed width instead — which is what this did
-    # — let the two overlap, and a table sitting in the overlap shed and restored
-    # the same column for as long as the layout kept asking.
-    if len(shed) > len(current):
-        return tuple(shed) if available <= needed(current) - hysteresis else tuple(current)
-    if len(shed) < len(current):
-        return tuple(shed) if available >= needed(shed) + hysteresis else tuple(current)
-    return tuple(shed)
 
 
 class AutoHeightTable(QTableWidget):
@@ -164,6 +102,13 @@ class AutoHeightTable(QTableWidget):
     the column's own width rather than a scrollbar's. The minimum is now the same
     number whatever is hidden, so the decision reads a width it cannot move.
     """
+
+    #: The set of hidden columns changed. A block whose *readout* depends on which
+    #: columns are showing listens — the stat tables print a plain total once the
+    #: Rank column beside it has gone, because a row with neither would say nothing
+    #: at all. Emitted from :meth:`sync_shed_columns`, so it fires once per real
+    #: change rather than once per resize.
+    shedChanged = Signal()
 
     def __init__(
         self,
@@ -331,6 +276,7 @@ class AutoHeightTable(QTableWidget):
             if 0 <= column < self.columnCount():
                 self.setColumnHidden(column, column in hidden)
         self.updateGeometry()
+        self.shedChanged.emit()
         return True
 
     def shed_columns(self) -> tuple[int, ...]:

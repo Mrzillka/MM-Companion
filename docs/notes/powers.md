@@ -310,6 +310,23 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   reason improvising exists: an improvised effect is one nobody has bought, and the
   constructor is the only place an unbought power is ever held. The cost it reckons from is
   `power_gross_cost`, because the rules put Removable out of bounds here.
+- **A card narrows by giving its effect summary up, terms first.** The effect body is
+  a `reflow.ShedBox` (`ui/cards/effects.py::effect_body`) holding what a player bought
+  — the extras and flaws — beside what it costs them at the table — the game terms.
+  They sit side by side because they are read together and a card is a wide, shallow
+  thing; a card on a page the user drags is not always wide, and the terms grid
+  re-dealing itself into a single column only goes so far. Past that the card used to
+  be cut off down its right-hand edge. So: **the terms go first**, because they are the
+  same numbers the Power Constructor prints and the card's own roll footer repeats,
+  while a rank bought with three extras and a flaw is a fact about the build that
+  appears nowhere else; then the modifiers; then it clips. An effect with nothing
+  bought onto it has only the terms in the box, so at the very floor it keeps them and
+  they wrap — dropping them there would leave the body empty rather than shorter.
+  The power's name in the header is an **`ElidingLabel`** for the same reason a skill
+  name is: a plain `QLabel` reports its whole text as a minimum, so the card was held
+  open at the length of whatever the power was called, and a block narrower than that
+  clipped its own buttons off rather than letting the card adapt. Equipment gets all of
+  it for nothing, since an item's card is drawn by the same code.
 - **The constructor forwards rolls; it does not make them.** It is a window, not a sheet
   block, so it is not on the block bus — `PowerConstructorWindow.rollRequested` is
   connected by the `PowersSection` that opened it, which hands the request on exactly as

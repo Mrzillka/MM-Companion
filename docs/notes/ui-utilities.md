@@ -45,6 +45,18 @@ through rather than reinvent. When building new sheet widgets, use it:
   (frame, spin buttons, dropdown arrow) so it reads like a label. Combo boxes
   have no native read-only mode, so it installs an event-filter interaction
   blocker.
+- `ui/reflow.py` — the three answers to "this does not fit across", and the pure
+  arithmetic each of them is. `prefers_row` / `ReflowBox` put the same parts on the
+  other axis; `parts_to_shed` / `ShedBox` give a part up entirely, worst first;
+  `sections/column_flow.py`'s `column_count` / `ColumnFlowPanels` use fewer panels.
+  All three carry the **same dead-band** and for the same reason, and `parts_to_shed`
+  is the *one* implementation of "which of these, in this order, do I drop to fit" —
+  the table blocks re-export it as `columns_to_shed` and ask it about columns, a
+  power card's effect summary asks it about widgets. A `ShedBox` reports the
+  shed-down arrangement as its **minimum**, invariant of what is hidden right now,
+  which is the rule every adaptive widget on the sheet follows: a minimum is a
+  refusal, and a minimum that moved with the decision would be reading a width it
+  had itself just set. Reach for one of the three rather than inventing a fourth.
 - `ui/flow_layout.py` — a reflowing layout for wrapping widget rows. **Host a
   `FlowLayout` in a `FlowContainer`, never a bare `QWidget`.** The layout answers
   `hasHeightForWidth` with *no*, on purpose: Qt evaluates that at the parent's

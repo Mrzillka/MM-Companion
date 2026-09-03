@@ -201,12 +201,12 @@ def _narrow_to(sheet, qapp, width: int) -> None:
 
 
 def test_a_squeezed_stat_table_drops_the_abbreviation(squeezed, qapp) -> None:
-    """It repeats what the name beside it says, which is why it is the one column
-    the two stat tables are willing to give up."""
+    """It repeats what the name beside it says, which is why it is the *first*
+    column the two stat tables are willing to give up."""
     table = squeezed.abilities.table
     assert table.shed_columns() == ()
 
-    _narrow_to(squeezed, qapp, 780)
+    _narrow_to(squeezed, qapp, 930)
 
     assert table.shed_columns() == (COL_ABBR,)
     assert table.isColumnHidden(COL_ABBR)
@@ -214,15 +214,91 @@ def test_a_squeezed_stat_table_drops_the_abbreviation(squeezed, qapp) -> None:
         assert not table.isColumnHidden(column), "a load-bearing column was hidden"
 
 
+def test_a_table_squeezed_further_gives_up_the_rank_too(squeezed, qapp) -> None:
+    """Down to the trait and its number, which is what a sheet is read for.
+
+    The build is typed once, at a width the player chooses; the total is read at
+    whatever width the page has left. Name and Total are the two that never go.
+    """
+    table = squeezed.abilities.table
+
+    _narrow_to(squeezed, qapp, 800)
+
+    assert table.shed_columns() == (COL_ABBR, COL_RANK)
+    for column in (COL_NAME, COL_TOTAL):
+        assert not table.isColumnHidden(column), "a load-bearing column was hidden"
+
+
+def test_the_total_carries_the_number_once_the_rank_has_gone(squeezed, qapp) -> None:
+    """Or a two-column Abilities block would be a column of blank cells: the Total
+    is an "and here is what changed" while the rank it changed is beside it, and
+    there is nothing beside it any more."""
+    section = squeezed.abilities
+    strength = section._ability_enh["STR"]
+    assert strength.text() == "", "an unmodified trait states its change, not its value"
+
+    _narrow_to(squeezed, qapp, 800)
+
+    assert strength.text() == str(section._abilities["STR"].value())
+
+
 def test_it_takes_the_column_back_when_the_room_returns(squeezed, qapp) -> None:
     table = squeezed.abilities.table
-    _narrow_to(squeezed, qapp, 780)
+    _narrow_to(squeezed, qapp, 930)
     assert table.shed_columns() == (COL_ABBR,)
 
     _narrow_to(squeezed, qapp, 1700)
 
     assert table.shed_columns() == ()
     assert not table.isColumnHidden(COL_ABBR)
+
+
+def test_a_squeezed_skills_panel_keeps_the_skill_and_its_total(squeezed, qapp) -> None:
+    """Same bargain as the stat tables, one column further: the governing ability,
+    its rank and the situational modifier go, and then the ranks."""
+    from mm_companion.ui.sections.skills import COL_NAME as SKILL_NAME
+    from mm_companion.ui.sections.skills import COL_RANKS as SKILL_RANKS
+    from mm_companion.ui.sections.skills import COL_TOTAL as SKILL_TOTAL
+
+    table = squeezed.skills._tables[0]
+
+    _narrow_to(squeezed, qapp, 420)
+
+    assert SKILL_RANKS in table.shed_columns(), "the ranks were kept at any width"
+    for column in (SKILL_NAME, SKILL_TOTAL):
+        assert not table.isColumnHidden(column), "a load-bearing column was hidden"
+
+
+def test_a_squeezed_advantages_panel_keeps_its_description(squeezed, qapp) -> None:
+    """The Type goes; the prose stays and *wraps*.
+
+    A column of prose has a way of getting narrower that a one-word category does
+    not, so losing the description outright skipped the very adaptation it was
+    best placed to make. Lose the Type, then break the lines, then crop.
+    """
+    from mm_companion.core.character import AdvantageSelection
+
+    squeezed.character.advantages.extend(
+        AdvantageSelection(name=advantage.name) for advantage in squeezed._data.advantages[:6]
+    )
+    squeezed.reseed()
+    squeezed.bus.flush()
+    _settle(qapp)
+    table = squeezed.advantages._tables[0]
+
+    _narrow_to(squeezed, qapp, 420)
+
+    assert table.shed_columns() == (1,)
+    assert not table.isColumnHidden(2), "the prose column was dropped rather than wrapped"
+
+
+def test_a_flow_block_reports_a_floor_it_can_reach_not_one_it_reads_well_at(squeezed, qapp) -> None:
+    """The two are different questions, and answering them the same way is what made
+    a narrowed block clip instead of adapt: while the section asked for a comfortable
+    panel, the frame handed it that width whatever the viewport did and the table
+    never got narrow enough to shed a column."""
+    for section in (squeezed.skills, squeezed.advantages):
+        assert section.minimumSizeHint().width() < section._min_col_width()
 
 
 def test_the_system_block_stacks_its_captions_when_squeezed(squeezed, qapp) -> None:
@@ -260,7 +336,7 @@ def test_a_shed_column_does_not_move_the_block_minimum(squeezed, qapp) -> None:
 
     _narrow_to(squeezed, qapp, 560)
 
-    assert table.shed_columns() == (COL_ABBR,), "the block was never squeezed enough"
+    assert COL_ABBR in table.shed_columns(), "the block was never squeezed enough"
     assert table.minimumSizeHint().width() == before
 
 
@@ -287,5 +363,5 @@ def test_a_hidden_column_still_reports_the_width_it_would_take(squeezed, qapp) -
 
     _narrow_to(squeezed, qapp, 560)
 
-    assert table.shed_columns() == (COL_ABBR,), "the block was never squeezed enough"
+    assert COL_ABBR in table.shed_columns(), "the block was never squeezed enough"
     assert table.natural_column_widths()[COL_ABBR] == showing

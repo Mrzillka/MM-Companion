@@ -39,11 +39,24 @@ exactly these pieces.
   the one before it, so it ended as a **stack overflow** — the app vanishing, exit
   code `0xC00000FD`, the moment the Resistances block was dragged past about 230px.
 - **A table narrows by shedding columns, worst first** (`set_shed_order`,
-  `columns_to_shed`, `sync_shed_columns` on resize). The order names what the block
-  is willing to give up — the stat grids offer only the abbreviation, which repeats
-  the name beside it; Rank is what you type and Total is what you read, so a table
-  missing either has stopped being the table. Past the order the name elides and
-  then the block scrolls; nothing is ever lost. Two things the fix above had to get
+  `sync_shed_columns` on resize). The decision itself is `reflow.parts_to_shed`,
+  which this module re-exports as `columns_to_shed` because the same question —
+  "which of these, in this order, do I drop to fit" — is asked about a card's
+  widgets too (`reflow.ShedBox`), and a second implementation would be a second
+  dead-band to get wrong.
+  The order names what the block is willing to give up. Column 1 goes first
+  everywhere: it repeats what the row already says (an ability's short code) or
+  restates a number the Total carries anyway (a resistance's base). **Then Rank**,
+  in all four blocks, and that is a real loss taken deliberately: a table squeezed
+  to two columns is a trait and its number, which is what a sheet is *read* for,
+  and the build is typed once at a width the player chooses while the sheet is read
+  at whatever width the page has left. The consequence is that the spin boxes are
+  not there to type into at that width — widen the block and they come straight
+  back. Abilities' Total column stops being an "and here is what changed" while
+  Rank is gone and prints the number outright (`apply_stat_effects(always=…)`,
+  driven by `AutoHeightTable.shedChanged`), or a narrow Abilities block would be a
+  column of blank cells. Past the order the name wraps, then elides, then the block
+  scrolls; nothing is ever lost. Two things the fix above had to get
   right with it, and both were wrong:
   - **The dead-band applies from the first column.** It used to stand down whenever
     nothing was shed yet (`not current`), which is the state every table starts in —
@@ -87,20 +100,35 @@ exactly these pieces.
   rows. It holds no model: the block supplies `on_move(source, target, before)` and
   an `accepts` predicate. `move_within` is the pop/insert with the downward
   correction a drop position needs.
-- **`ColumnFlowPanels.minimumSizeHint` reports exactly one panel** — its floor *and*
-  its ceiling (`ui/sections/column_flow.py`). A ceiling because the side-by-side
-  tables would otherwise inflate the section's minimum to the full multi-column
-  width, pinning the page wide and forcing at least two columns. A **floor** because
-  it used to be `min(hint.width(), _min_col_width())`, and whenever the section's own
-  layout minimum was the smaller of the two the block asked for *less than a panel
-  needs*: the frame's `block_sizes.json` floor applied instead and the stretching name
-  column silently absorbed the shortfall, which is what cut a long skill name off. It
-  also made the answer depend on the **lock** (a locked section hides its picker and
-  asks for less), which is the standing rule in `tests/test_lock_geometry.py` that a
-  lock toggle may change a block's height but never its width. Asking for a whole
-  panel is only safe because `_min_col_width` is now *bounded* — see the next bullet;
-  while it tracked the widest label without a ceiling, a name a player typed would
-  have held the window open at whatever width printed it on one line.
+- **`ColumnFlowPanels` answers two different width questions, and answering them the
+  same way is what made a narrowed block clip instead of adapt** (`ui/sections/column_flow.py`).
+  `_min_col_width` is what a panel *reads well* at — the widest label present plus
+  every column — and it is the right **divisor** for "how many of these fit". It was
+  also being reported as `minimumSizeHint`, and there it is a refusal: a panel is not
+  stuck at that width, since its table sheds columns and its name column wraps. The
+  block hands its section the larger of the viewport and that minimum, so at every
+  size below a comfortable panel the section was handed a comfortable panel's width,
+  the table never got narrow enough to shed a single column, and whatever the viewport
+  could not show was simply cut off — which is exactly what a squeezed Skills or
+  Advantages block did.
+  `minimumSizeHint` reports **`_panel_floor_width`** instead: the narrowest one panel
+  knows how to *reach*. Skills answers with a name and a total, Advantages with both
+  columns at their own **header captions** (the same rule `_name_col_width` already
+  floors the name at, and the honest floor for a column of prose — `min_desc_width` is
+  a comfort number, and using one as a floor is the confusion this split ends). Both
+  are metrics and constants, because a floor may move with neither the **lock**
+  (`tests/test_lock_geometry.py`: a lock toggle may change a block's height, never its
+  width) nor with anything the adaptive decisions themselves change.
+  It is still a **ceiling**: the side-by-side tables would otherwise inflate the
+  minimum to the full multi-column width, pinning the page wide and forcing at least
+  two columns. Asking for a whole panel at all is only safe because `_min_col_width`
+  is *bounded* — see the next bullet; while it tracked the widest label without a
+  ceiling, a name a player typed would have held the window open at whatever width
+  printed it on one line.
+  `_init_flow_panels` also sets `SetNoConstraint` on the section's layout, for the
+  reason `ReflowBox.init_reflow` does: a layout otherwise *imposes* its
+  `totalMinimumSize` on the widget it manages, which beats any override and pinned the
+  block at whatever the picker row happened to need.
 - **`wrapping_column_width(metrics, texts, *, padding, cap, floor)`** — how wide a
   **first column that wraps** should be. A name column that must not clip has only
   two ways out, grow without limit or break the line, and the two blocks used to
@@ -160,6 +188,21 @@ Three things the blocks add on top:
   never part of the build, and a base a condition had rewritten would read as something
   the character *has*.
 
+- **Advantages** sheds its **Type** column and *only* its Type column. The
+  Description used to go next, and that was the wrong order of business for a column
+  of prose: prose has a way of getting narrower that a one-word category does not, so
+  it wraps and the row gets taller (`word_wrap`), and only past the point where even
+  that cannot help does the cell elide. Losing it outright skipped both. So the order
+  is **lose the Type, then break the lines, then crop**. The Advantage column is
+  `Fixed` at a width measured from the names, and in a panel narrower than the block
+  reads well at that was the whole panel — the stretching Description was left with
+  the remainder and broke one word to a line — so `_name_column_for` clamps it to the
+  panel, keeping the Description at least its own caption. That clamp is applied on
+  every resize (`_sync_name_columns`) past a **dead-band**, and the band is
+  load-bearing: every write there re-measures the wrapped rows, which changes the
+  block's height, which brings the block's scrollbar out or takes it away, which moves
+  the panel's width by the bar's extent and asks again — measured going round at
+  exactly twelve pixels a turn, forever.
 - **Advantages** dropped its ▲/▼ and "Remove" buttons for those gestures. Its picker
   keeps "Add"; removal is a thing done *to a row*, so it is on the row.
 - **A granted advantage is an advantage everywhere except the budget.** An advantage's

@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QApplication, QScrollArea
 
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.ui.character_sheet import CharacterSheet
+from mm_companion.ui.wheel_guard import _WheelGuard
 
 
 @pytest.fixture(scope="module")
@@ -19,8 +20,9 @@ def qapp() -> QApplication:
 def _sheet_in_page() -> tuple[CharacterSheet, QScrollArea]:
     """A sheet and its own page scroll area.
 
-    The sheet owns its outer page scroll area (blocks no longer scroll on their
-    own), so the wheel guard redirects the wheel there — no extra wrapper needed.
+    The sheet owns the outer page scroll area. Each block owns one too now, so
+    the guard picks between them (see ``test_wheel_routing.py``); the page is
+    still what a wheel nothing else can use falls back to.
     """
     sheet = CharacterSheet(load_game_data())
     return sheet, sheet.page_scroll_area()
@@ -65,20 +67,30 @@ def test_focused_spin_box_reacts_to_wheel(qapp: QApplication) -> None:
     assert spin.value() != 5
 
 
-def test_locked_combo_still_lets_the_page_scroll(qapp: QApplication) -> None:
+def test_locked_combo_still_lets_the_sheet_scroll(qapp: QApplication) -> None:
     """A locked combo is a label, so it must not eat the wheel: the sheet opens locked
-    by default and the pointer crossing a dropdown would otherwise freeze the page."""
+    by default and the pointer crossing a dropdown would otherwise freeze the sheet.
+
+    *Which* surface moves is the routing rule's business — the block the combo is
+    in while that block has room, the page once it has not (see
+    ``test_wheel_routing.py``). What this asserts is the older promise the combo
+    itself has to keep: the gesture gets out of the combo and reaches whichever
+    surface was going to answer it.
+    """
     sheet, page = _sheet_in_page()
     sheet.set_locked(True)
     combo = sheet.system_info._size_combo
 
-    # Being unfocusable is what tells the wheel guard the wheel belongs to the page.
+    # Being unfocusable is what tells the wheel guard the wheel belongs to a page.
     assert combo.focusPolicy() == Qt.FocusPolicy.NoFocus
 
+    event = _wheel(combo)
+    target = _WheelGuard._target_scroll_area(combo, event)
+    assert target is not None
     page.verticalScrollBar().setValue(100)
-    before = page.verticalScrollBar().value()
-    QApplication.sendEvent(combo, _wheel(combo))
-    assert page.verticalScrollBar().value() > before
+    before = target.verticalScrollBar().value()
+    QApplication.sendEvent(combo, event)
+    assert target.verticalScrollBar().value() > before
 
 
 def test_locked_combo_value_cannot_be_changed_by_the_wheel(qapp: QApplication) -> None:

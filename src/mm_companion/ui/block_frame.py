@@ -41,6 +41,7 @@ from mm_companion.ui import theme
 from mm_companion.ui.block_sizes import RecommendedSize
 from mm_companion.ui.drop_feedback import DropFeedback
 from mm_companion.ui.frameless import apply_window_flags, describe_on_top, size_grip_row
+from mm_companion.ui.wheel_guard import can_scroll
 from mm_companion.ui.widgets import ElidingLabel
 
 #: How strongly a block dropped *into* is washed. Heavier than the default
@@ -211,7 +212,11 @@ class _InnerScroll(QScrollArea):
       too short would eat the gesture and the page under it would stop scrolling.
       Passing the event up when this block has no scrollbar on that axis (or is
       already at the end of it) keeps the page's own scroll working everywhere it
-      used to, which is the behaviour the wheel guard has always promised.
+      used to, which is the behaviour the wheel guard has always promised. The test
+      is :func:`~mm_companion.ui.wheel_guard.can_scroll`, shared with the guard
+      rather than spelled out twice: the guard asks the same question of this
+      block when it decides where to send a wheel that started over a spin box or
+      a table inside it, and two spellings of one rule is how they drift apart.
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -224,14 +229,7 @@ class _InnerScroll(QScrollArea):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
     def wheelEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
-        bar = self.verticalScrollBar()
-        spent = bar.minimum() == bar.maximum()
-        if not spent:
-            delta = event.angleDelta().y()
-            at_top = delta > 0 and bar.value() == bar.minimum()
-            at_bottom = delta < 0 and bar.value() == bar.maximum()
-            spent = at_top or at_bottom
-        if spent:
+        if not can_scroll(self, event):
             event.ignore()  # let the page have it
             return
         super().wheelEvent(event)

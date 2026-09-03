@@ -246,6 +246,40 @@ class _InnerScroll(QScrollArea):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
+    def set_section(self, section: QWidget) -> None:
+        """Hold *section* in the viewport, top-aligned unless it asked for the height.
+
+        A resizable page is the first thing that can hand a block **more** room than
+        its content wants, and ``setWidgetResizable`` gives all of it to the section
+        — which then has to put it somewhere. A ``QVBoxLayout`` with nothing
+        expanding in it spreads the surplus *equally between its items*, so a Powers
+        block dragged twice as tall as its cards did not grow a margin at the
+        bottom: it grew a gap between every line on every card. Every block with a
+        stacked layout had the same defect and it read as a rendering bug, because
+        nothing on screen said which of the gaps was the slack.
+
+        So the surplus is given somewhere deliberate. A section that states
+        ``fills_height`` genuinely wants it — a note's editor, the roller's history,
+        the portrait, the turn order all grow into the room — and is held as it
+        always was. Everything else sits at the top of a spacer, at exactly the
+        height its content asks for, and the space below it is plainly empty.
+        Opt-in rather than derived: a widget's own vertical policy says nothing
+        about whether its *children* have a use for the height (the roller's
+        ``QGroupBox`` is ``Preferred`` and its history very much wants to grow),
+        and ``QLayout.expandingDirections`` answers "both" for any layout that has
+        not overridden it — a ``QFormLayout``, which is what two blocks here are.
+        """
+        if getattr(section, "fills_height", False):
+            self.setWidget(section)
+            return
+        body = QWidget()
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(section)
+        layout.addStretch(1)
+        self.setWidget(body)
+
     def wheelEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
         if not has_scroll_range(self, event):
             event.ignore()  # nothing here to scroll; let the page have it
@@ -323,7 +357,12 @@ class BlockFrame(QFrame):
         # pass its child's minimum on, so whatever the section says it needs, the
         # frame can still be dragged smaller and the content scrolls instead.
         self._scroll = _InnerScroll(self)
-        self._scroll.setWidget(section)
+        self._scroll.set_section(section)
+        # The last content height this frame told its row about — see
+        # :meth:`_follow_content_height`. Seeded to a number no section reports, so
+        # the first answer always counts as a change.
+        self._content_height = -1
+        section.installEventFilter(self)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -389,6 +428,54 @@ class BlockFrame(QFrame):
         if event.type() == QEvent.Type.ParentChange:
             self._relayout.start(0)
         super().changeEvent(event)
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: ANN001, N802 - Qt override
+        """Follow the section's own height, which nothing else can carry out of here.
+
+        The scroll area is a **barrier**, deliberately: it is what stops the
+        section's minimum climbing out through the row, the page and the window
+        (see the class docstring). But this frame's :meth:`sizeHint` is the
+        section's content height all the same, and Qt only re-asks a widget for its
+        hint when something *invalidates the layout holding it* — which the scroll
+        area now absorbs. So a section that grew taller told the viewport and
+        nobody else: the row went on using the height it had cached, and the block
+        kept the shape it had when the page last rebuilt.
+
+        That is what a narrowed block looked like it was doing wrong. Its
+        descriptions wrapped, its rows got taller, the table said so — and the row
+        stayed exactly as tall as it was, so the extra content ended up scrolled
+        out of sight inside a frame that had plenty of page under it.
+        """
+        if watched is self.section and event.type() == QEvent.Type.LayoutRequest:
+            self._follow_content_height()
+        return super().eventFilter(watched, event)
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        """A width change re-wraps the section, so re-ask how tall it now is.
+
+        The belt to :meth:`eventFilter`'s braces: a section whose height moved
+        without any layout of its own being invalidated (a table re-measuring its
+        own wrapped rows in place) posts nothing at all.
+        """
+        super().resizeEvent(event)
+        self._follow_content_height()
+
+    def _follow_content_height(self) -> None:
+        """Tell whoever holds this block that its content height has moved.
+
+        Guarded on the height actually having changed, and that guard is what makes
+        it safe to call from a resize: ``updateGeometry`` asks the row to lay out
+        again, which resizes this frame, which is a resize event. The chain settles
+        because the second pass finds the same number and stops. It can still climb
+        once — a taller page can bring the page's scrollbar out, which narrows every
+        block, which wraps more text — but that is monotonic and one-way, since the
+        bar does not go away again.
+        """
+        height = self.content_size_hint().height()
+        if height == self._content_height:
+            return
+        self._content_height = height
+        self.updateGeometry()
 
     def _refresh_layout(self) -> None:
         """Recompute the block's inner layout, and again until it is not degenerate.

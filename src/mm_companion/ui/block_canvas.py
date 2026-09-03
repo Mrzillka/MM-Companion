@@ -1173,13 +1173,45 @@ class BlockCanvas(QWidget):
         else:
             self.place_beside(key, target_row[-1], "right")
 
-    def place_beside(self, key: str, target: str, side: str) -> None:
+    def place_beside(self, key: str, target: str, side: str, *, extent: int = 0) -> None:
         """Put *key* on the given side of *target*. Assumes it has been detached.
 
         The one structural move a drag makes, and the only one that can put a
-        block *under* another rather than next to it.
+        block *under* another rather than next to it. An *extent* is the target
+        cell's live size along the drop's axis, and asks for the pair to divide it
+        — see :func:`~mm_companion.ui.layout_tree.insert_beside`.
         """
-        self._set_page(lt.insert_beside(self._page, key, target, side))
+        self._set_page(lt.insert_beside(self._page, key, target, side, extent=extent))
+
+    def _cell_extent(self, target: str, side: str) -> int:
+        """The live size, along *side*'s axis, of the cell rendering *target*.
+
+        What a drop needs to keep the promise its mark makes: the wash fills half
+        of the block under the pointer, so the arriving block has to be given
+        exactly that. Read off the widget because only the widget knows — the tree
+        carries a size for a run somebody has dragged and nothing at all for one
+        laid out from its children's hints, which is most of them.
+
+        The *cell* rather than the frame: a block inside a tab group shares its
+        cell with the rest of the group, and it is the group that is being halved.
+        """
+        frame = self._frames.get(target)
+        if frame is None:
+            return 0
+        cell = self.group_for(target) or frame
+        return cell.width() if side in ("left", "right") else cell.height()
+
+    def _capture_sizes(self) -> None:
+        """Take the live divider positions into the tree before a gesture moves them.
+
+        The handles are dragged by the user and are only true on the widgets until
+        somebody asks, so a structural change made against a tree that has not been
+        asked would rearrange the page from the blocks' own hints and throw away
+        every proportion the user had set. Reading them in first is also what lets
+        a drop halve exactly the cell it landed on and leave the rest of the run
+        alone.
+        """
+        self._remember_sizes()
 
     def drop_block(self, key: str, slot: DropSlot) -> None:
         """Land *key* where *slot* says — beside a block, under one, or in a new row.
@@ -1194,8 +1226,12 @@ class BlockCanvas(QWidget):
         if slot.target == key:
             return
         self._hidden.discard(key)
+        # Both *before* the detach: removing a block frees its space for its
+        # siblings, so the run it left drops the sizes that described it.
+        self._capture_sizes()
+        extent = self._cell_extent(slot.target, slot.side)
         self._detach(key)
-        self.place_beside(key, slot.target, slot.side)
+        self.place_beside(key, slot.target, slot.side, extent=extent)
         self._relayout()
         self._settled()
 
@@ -1622,10 +1658,13 @@ class BlockCanvas(QWidget):
         wanted = tuple(keys)
         if len(wanted) < 2 or any(key not in self._frames for key in wanted):
             return
+        # Before anything moves, for the reason :meth:`drop_block` captures them.
+        self._capture_sizes()
         if slot.onto is not None:
             page = lt.merge_leaf_into(self._page, wanted, slot.onto)
         elif slot.target is not None and not slot.new_row:
-            page = lt.move_leaf(self._page, wanted, slot.target, slot.side)
+            extent = self._cell_extent(slot.target, slot.side)
+            page = lt.move_leaf(self._page, wanted, slot.target, slot.side, extent=extent)
         else:
             page = lt.move_leaf_to_row(self._page, wanted, slot.row)
         if page is None or page == self._page:

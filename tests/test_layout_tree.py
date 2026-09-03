@@ -151,10 +151,17 @@ class TestRemove:
         before = page()
         assert lt.remove(before, "nobody") is before
 
-    def test_a_departure_clears_the_sizes_of_the_run_it_left(self) -> None:
-        # They described a run of three; they say nothing about a run of two.
+    def test_the_survivors_of_a_departure_keep_the_sizes_they_had(self) -> None:
+        # A row renormalises them to its real width, so the *proportions* the user
+        # dragged survive; the page's are absolute heights that owe nothing to the
+        # row that left, and dropping them forgot every height on the sheet the
+        # moment one block was closed.
         split = Split(HORIZONTAL, (Leaf(("a",)), Leaf(("b",)), Leaf(("c",))), (10, 20, 30))
-        assert lt.remove(split, "b").sizes == ()
+        assert lt.remove(split, "b").sizes == (10, 30)
+
+    def test_closing_a_row_leaves_every_other_row_where_it_was(self) -> None:
+        page = Split(VERTICAL, (Leaf(("a",)), Leaf(("b",)), Leaf(("c",))), (100, 200, 300))
+        assert lt.remove(page, "b").sizes == (100, 300)
 
 
 class TestInsertBeside:
@@ -191,12 +198,45 @@ class TestInsertBeside:
         ]  # fmt: skip
         assert after.children[3] == Leaf(("powers",))
 
-    def test_an_arrival_clears_the_sizes_of_the_run_it_joins(self) -> None:
-        # The hard-won pinned-strip lesson: a remembered size is only true of the
-        # shape it was measured in, and mixing one with a newcomer's natural hint
-        # is what once handed a moved block a sliver of the strip.
+    def test_an_arrival_takes_half_of_the_block_it_lands_beside(self) -> None:
+        # The promise the drop mark makes: the wash fills half the target, so the
+        # target is what pays for the arrival and its neighbours do not move. It
+        # used to clear the whole run's sizes, which redistributed every cell in it.
         sized = Split(HORIZONTAL, (Leaf(("abilities",)), Leaf(("resistances",))), (300, 400))
-        assert lt.insert_beside(sized, "powers", "abilities", "right").sizes == ()
+        after = lt.insert_beside(sized, "powers", "abilities", "right")
+        assert after.sizes == (150, 150, 400)
+        assert lt.keys(after) == ["abilities", "powers", "resistances"]
+
+    def test_the_newcomer_never_comes_out_the_larger_of_the_pair(self) -> None:
+        sized = Split(HORIZONTAL, (Leaf(("abilities",)), Leaf(("resistances",))), (301, 400))
+        assert lt.insert_beside(sized, "powers", "abilities", "right").sizes == (151, 150, 400)
+        assert lt.insert_beside(sized, "powers", "abilities", "left").sizes == (150, 151, 400)
+
+    def test_a_run_with_nothing_remembered_still_lays_out_from_hints(self) -> None:
+        # Nothing to keep and nothing to halve — the arrival simply joins the run.
+        bare = Split(HORIZONTAL, (Leaf(("abilities",)), Leaf(("resistances",))))
+        assert lt.insert_beside(bare, "powers", "abilities", "right").sizes == ()
+
+    def test_a_wrapped_cell_divides_the_extent_it_is_given(self) -> None:
+        # A drop across the parent's axis wraps the target in a new split, which has
+        # no remembered sizes of its own — so the live extent is what it halves.
+        page = Split(VERTICAL, (Leaf(("abilities",)), Leaf(("skills",))), (200, 300))
+        after = lt.insert_beside(page, "powers", "abilities", "right", extent=480)
+        assert after.sizes == (200, 300)  # the rows themselves did not move
+        pair = (Leaf(("abilities",)), Leaf(("powers",)))
+        assert after.children[0] == Split(HORIZONTAL, pair, (240, 240))
+
+    def test_a_row_nobody_has_dragged_divides_into_two_of_itself(self) -> None:
+        # Zero is not a size on the page: it means "be as tall as your content".
+        page = Split(VERTICAL, (Leaf(("abilities",)), Leaf(("skills",))), (0, 300))
+        after = lt.insert_beside(page, "powers", "abilities", "bottom")
+        assert after.sizes == (0, 0, 300)
+
+    def test_a_new_row_does_not_forget_the_heights_of_the_others(self) -> None:
+        # A block dragged into a row of its own is no business of the rows already
+        # on the page; the newcomer states zero, which means "as tall as your content".
+        page = Split(VERTICAL, (Leaf(("a",)), Leaf(("b",))), (100, 200))
+        assert lt.append_row(page, "powers", 1).sizes == (100, 0, 200)
 
     def test_an_unknown_target_lands_the_block_in_a_row_of_its_own(self) -> None:
         after = lt.insert_beside(page(), "powers", "nobody", "right")

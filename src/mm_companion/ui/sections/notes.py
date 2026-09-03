@@ -81,6 +81,11 @@ class _OpenNote:
 class NotesSection(QGroupBox):
     """One Notes block: a tab per open note, over the workspace's ``notes/`` dir."""
 
+    #: An editor grows into whatever height the block is given — see
+    #: :meth:`~mm_companion.ui.block_frame._InnerScroll.set_section`. A note is as
+    #: long as you make it and the room is where you make it longer.
+    fills_height = True
+
     #: A tab was opened, closed or reordered — a character edit, so undoable.
     edited = Signal()
     #: The block's title should now read this (the active note's name).

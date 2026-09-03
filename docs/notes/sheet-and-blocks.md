@@ -34,6 +34,16 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   taller rather than making it scroll inside a height nobody chose. A zero in a
   split's `sizes` is a real value and not a gap; a run of nothing but zeros is the
   same as no sizes at all and is dropped.
+- **What happens to a row somebody else's gesture did not touch: nothing.** Adding a
+  row (`append_node_row`) and taking one away (`_remove`) both used to clear the
+  whole run's sizes, on the reasoning that numbers describing a run of three say
+  nothing about a run of two. That is true of a **row**, whose children share a fixed
+  extent — and a splitter renormalises the remembered numbers to its real width, so
+  keeping them keeps the proportions the user dragged rather than falling back to the
+  blocks' own hints. It is flatly wrong of the **page**, whose sizes are absolute
+  heights that owe nothing to each other: closing one block forgot the height of every
+  other row on the sheet, and so did dragging a block into a row of its own. Both keep
+  what the survivors had now; a newly added row states zero and tracks its content.
 - **Every row is wrapped in a `_RowHolder` the stack owns**, and that is a bug fix
   rather than tidiness. A row holding a single block *is* that block's frame, with
   no container of its own — so anything the stack set on it (a fixed height, a
@@ -356,6 +366,54 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   tall as its rows (so the page overflows the viewport and *scrolls* rather than
   squashing every row into a window nobody sized for them). It is the exact inverse
   of what it used to say.
+- **A drop takes half of the block it lands beside, and nothing else moves.** The
+  mark promises exactly that — the `DropRegion` wash fills half the target — and
+  the tree used to break it: the run the arrival joined had its remembered sizes
+  *cleared* and was laid out afresh from every cell's own hint, so the block you
+  had aimed at frequently came out the size it went in while its neighbour paid
+  for the arrival. `insert_beside` now replaces the target's own share with two
+  halves of it and leaves every other cell in the run alone. This is not the
+  "never mix a remembered size with a newcomer's natural hint" rule being broken:
+  every cell in the run ends with an explicit number, and the newcomer's is
+  derived from the cell it displaced. A run with nothing remembered still has
+  nothing to halve, so the canvas takes the live divider positions into the tree
+  (`_capture_sizes`) **before** the drag moves anything — before the `_detach`, in
+  particular, since removing a block frees its space and drops the sizes that
+  described the run it left. The one measurement the tree cannot make for itself
+  is the target cell's live pixel size, which it needs when the cell is *wrapped*
+  in a brand-new split (a drop across the parent's axis); the canvas passes it as
+  `extent`. A zero in the page's own sizes is not a size but "take your content's",
+  so a row nobody has dragged divides into two of itself rather than into two
+  noughts.
+- **A block sits at the top of the height it is given, unless it asked for that
+  height.** A resizable page is the first thing that can hand a block *more* room
+  than its content wants, and `setWidgetResizable` gives all of it to the section
+  — which then has to put it somewhere. A `QVBoxLayout` with nothing expanding in
+  it spreads the surplus **equally between its items**, so a Powers block dragged
+  twice as tall as its cards did not grow a margin at the bottom: it grew a gap
+  between every line on every card, and it read as a rendering fault because
+  nothing on screen said which of the gaps was the slack. `_InnerScroll.set_section`
+  therefore holds the section over a spacer. A section that genuinely wants the
+  height says so with **`fills_height`** — Notes' editor, the roller's history, the
+  portrait, the Scene board — and is held as it always was. Opt-in rather than
+  derived: a widget's own vertical policy says nothing about whether its *children*
+  have a use for the height (the roller's `QGroupBox` is `Preferred` and it is the
+  history inside it that wants the room), and `QLayout.expandingDirections` answers
+  "both" for any layout that has not overridden it, which a `QFormLayout` has not.
+- **A block whose content changes height has to say so itself.** The inner scroll
+  area is a *barrier* — that is the whole reason a block can be dragged smaller
+  than its section — and a barrier does not carry a changed **hint** out either.
+  So a section that got taller told its viewport and nobody else: the row went on
+  using the height it had cached, and the extra content sat scrolled out of sight
+  inside a frame with page to spare underneath it. That is what a narrowed
+  Advantages block looked like it was doing wrong — its descriptions wrapped, its
+  rows grew, the table said so, and the row stayed exactly as tall as it was.
+  `BlockFrame` watches the section for `LayoutRequest` (and re-asks on its own
+  resize) and calls `updateGeometry` when the number has actually moved. That
+  guard is what makes it safe to call from a resize, since `updateGeometry` asks
+  the row to lay out again, which resizes the frame. It can still climb once — a
+  taller page brings the page's scrollbar out, which narrows every block, which
+  wraps more text — but that is monotonic, since the bar does not go away again.
 - **The drag says four things, and it reads a block in *shares* of itself.**
   `_hit_test` answers: merge into it, stack above or below it, sit beside it, or —
   past the row entirely (`_GAP`) — start a new row. A `DropSlot` therefore carries

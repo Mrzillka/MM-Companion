@@ -320,6 +320,53 @@ def test_a_dragged_height_survives_a_save_and_restore(qapp: QApplication) -> Non
     canvas.deleteLater()
 
 
+class TestADropTakesHalfOfWhatItLandsBeside:
+    """The mark's promise, kept.
+
+    The wash shown under a drag fills half the block being dropped beside, so that
+    block is what pays for the arrival and its neighbours must not move. The page
+    used to clear the whole run's remembered sizes and lay it out afresh from every
+    cell's hint, which redistributed the entire row: the block you had aimed at
+    frequently came out the same size it went in while the one next to it shrank.
+    """
+
+    def _row_widths(self, canvas) -> dict[str, int]:
+        row = canvas._row_widgets[0]
+        return {row.widget(i).key: row.sizes()[i] for i in range(row.count())}
+
+    def test_the_target_gives_up_half_and_its_neighbours_do_not_move(self, make_sheet) -> None:
+        from mm_companion.ui.block_canvas import DropSlot
+
+        sheet = make_sheet()
+        canvas = sheet.canvas
+        before = self._row_widths(canvas)
+        target, *rest = list(before)
+
+        canvas.drop_block("skills", DropSlot(False, 0, 0, target=target, side="right"))
+        _settle()
+
+        after = self._row_widths(canvas)
+        assert list(after) == [target, "skills", *rest]
+        # Half of the target, give or take the divider the pair now has between them.
+        assert abs(after[target] - before[target] // 2) <= 4
+        assert abs(after["skills"] - before[target] // 2) <= 4
+        for key in rest:
+            assert abs(after[key] - before[key]) <= 4, f"{key} paid for a drop beside {target}"
+
+    def test_it_lands_on_the_side_the_mark_showed(self, make_sheet) -> None:
+        from mm_companion.ui.block_canvas import DropSlot
+
+        sheet = make_sheet()
+        canvas = sheet.canvas
+        target = canvas._row_widgets[0].widget(1).key
+
+        canvas.drop_block("skills", DropSlot(False, 0, 0, target=target, side="left"))
+        _settle()
+
+        keys = list(self._row_widths(canvas))
+        assert keys[keys.index("skills") + 1] == target
+
+
 def test_the_page_is_as_tall_as_its_rows_rather_than_its_window(qapp: QApplication) -> None:
     """The other half of "height scrolls": dragging a row taller makes the page
     longer instead of stealing the height from the row below it."""

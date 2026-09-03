@@ -282,28 +282,48 @@ def _remove(node: Node, key: str) -> Node | None:
             continue
         children.append(replacement)
         kept.append(sizes[index] if sizes else 0)
-    # A child leaving frees its space for its siblings, so the sizes that
-    # described the old run no longer describe this one.
-    lost = len(children) != len(node.children)
-    return Split(node.orientation, tuple(children), () if lost else tuple(kept))
+    # The survivors keep the sizes they had. This used to drop the whole run's
+    # sizes when a child left, on the reasoning that the space it freed is no
+    # longer described by them — true of a *row*, where a splitter renormalises
+    # the remembered numbers to its real width and so keeps the proportions the
+    # user dragged, and flatly wrong of the **page**, whose sizes are absolute
+    # heights that owe nothing to each other. Closing one block therefore forgot
+    # the height of every other row on the sheet.
+    return Split(node.orientation, tuple(children), tuple(kept))
 
 
-def insert_beside(node: Node | None, key: str, target: str, side: str) -> Node:
+def insert_beside(node: Node | None, key: str, target: str, side: str, *, extent: int = 0) -> Node:
     """Put *key* in its own cell on the given *side* of the cell holding *target*.
 
     When the target's parent already divides along the side's axis, the new cell
     joins that run; otherwise the target's cell is wrapped in a new split of the
-    axis the drop asked for. Either way the run the newcomer joins loses its
-    remembered sizes, so it is laid out from the cells' own hints rather than
-    squeezing the arrival into whatever slack was left over.
+    axis the drop asked for.
+
+    **The newcomer takes half of the target and nothing else moves.** That is the
+    promise the drop mark makes — the wash under the pointer fills half the block
+    being dropped beside — and it used to be broken: the run the arrival joined had
+    its remembered sizes *cleared* and was laid out afresh from every cell's own
+    hint, so the block you aimed at frequently did not change size at all while its
+    neighbours paid for the arrival. Halving is not the mistake that rule was
+    written against ("a remembered size mixed with a newcomer's natural hint"),
+    because every cell in the run ends up with an explicit number and the newcomer's
+    is derived from the cell it displaced.
+
+    A run with nothing remembered has no proportion to keep and none to halve, so it
+    is still laid out from the cells' hints. *extent* is the one measurement the
+    tree cannot make for itself: the target cell's live pixel size along the drop's
+    axis, needed when the cell is *wrapped* in a brand-new split, since a new run
+    has no sizes of its own to divide. Without it that pair falls back to its hints.
 
     A *target* that is not in the tree puts *key* in a row of its own at the end,
     which is the same answer the old canvas gave a block it could not place.
     """
-    return insert_node_beside(node, Leaf((key,)), target, side)
+    return insert_node_beside(node, Leaf((key,)), target, side, extent=extent)
 
 
-def insert_node_beside(node: Node | None, arriving: Node, target: str, side: str) -> Node:
+def insert_node_beside(
+    node: Node | None, arriving: Node, target: str, side: str, *, extent: int = 0
+) -> Node:
     """Put a whole *arriving* cell on the given *side* of the cell holding *target*.
 
     The general form of :func:`insert_beside`, which is now one line of it. What
@@ -319,15 +339,27 @@ def insert_node_beside(node: Node | None, arriving: Node, target: str, side: str
     path = find(node, target)
     if path is None:
         return append_node_row(node, arriving)
-    grown = _insert_at(node, path, arriving, _SIDE_AXIS[side], _SIDE_AFTER[side])
+    grown = _insert_at(node, path, arriving, _SIDE_AXIS[side], _SIDE_AFTER[side], int(extent))
     return normalize(grown) or arriving
 
 
-def _insert_at(node: Node, path: Path, arriving: Node, axis: str, after: bool) -> Node:
+def _share_extent(extent: int, after: bool) -> tuple[int, ...]:
+    """*extent* divided between the cell that was there and the one arriving.
+
+    The odd pixel goes to whichever of the two is *not* the newcomer, so a block
+    dropped beside another never comes out the larger of the pair.
+    """
+    half = extent // 2
+    return (extent - half, half) if after else (half, extent - half)
+
+
+def _insert_at(node: Node, path: Path, arriving: Node, axis: str, after: bool, extent: int) -> Node:
     if not path:
-        # The target *is* this node: wrap it in a split of the requested axis.
+        # The target *is* this node: wrap it in a split of the requested axis. The
+        # pair divides the extent the target had, so the newcomer takes half of it
+        # and nothing outside this cell moves at all.
         pair = (node, arriving) if after else (arriving, node)
-        return Split(axis, pair)
+        return Split(axis, pair, _share_extent(extent, after) if extent > 0 else ())
     index, rest = path[0], path[1:]
     if not isinstance(node, Split):
         raise IndexError("path runs past a leaf")
@@ -337,8 +369,18 @@ def _insert_at(node: Node, path: Path, arriving: Node, axis: str, after: bool) -
         # nesting another split inside it.
         slot = index + 1 if after else index
         children = node.children[:slot] + (arriving,) + node.children[slot:]
-        return node.with_children(children)
-    replaced = _insert_at(child, rest, arriving, axis, after)
+        sizes = node.usable_sizes()
+        if not sizes:
+            # Nothing remembered about this run, so there is no proportion to keep
+            # and nothing to halve.
+            return node.with_children(children)
+        # The target gives up half of *its own* share and every other cell in the
+        # run keeps exactly what it had. A zero is not a size but "take your
+        # content's" — the page's own answer for a row nobody has dragged — so it
+        # divides into two of itself rather than into two noughts of a number.
+        divided = _share_extent(sizes[index], after) if sizes[index] > 0 else (0, 0)
+        return Split(node.orientation, children, sizes[:index] + divided + sizes[index + 1 :])
+    replaced = _insert_at(child, rest, arriving, axis, after, extent)
     children = node.children[:index] + (replaced,) + node.children[index + 1 :]
     # The child's own extent did not change, so this run keeps its proportions.
     return Split(node.orientation, children, node.usable_sizes())
@@ -350,11 +392,21 @@ def append_row(node: Node | None, key: str, index: int | None = None) -> Split:
 
 
 def append_node_row(node: Node | None, arriving: Node, index: int | None = None) -> Split:
-    """Add a whole *arriving* cell as a row of its own — see :func:`insert_node_beside`."""
+    """Add a whole *arriving* cell as a row of its own — see :func:`insert_node_beside`.
+
+    Every other row keeps the height it had, and the newcomer states **zero**, which
+    on the page means "be as tall as your content" — the same thing a row nobody has
+    dragged says. Dropping the sizes here instead forgot every height on the sheet
+    the moment a block was dragged into a row of its own, which is not something a
+    row *elsewhere* on the page has any part in.
+    """
     page = as_page(node)
     slot = len(page.children) if index is None else max(0, min(index, len(page.children)))
     children = page.children[:slot] + (arriving,) + page.children[slot:]
-    return Split(VERTICAL, children, ())
+    sizes = page.usable_sizes()
+    if not sizes:
+        return Split(VERTICAL, children, ())
+    return Split(VERTICAL, children, sizes[:slot] + (0,) + sizes[slot:])
 
 
 def merge_into(node: Node | None, key: str, target: str) -> Node | None:
@@ -441,19 +493,22 @@ def _detach_leaf(node: Node | None, keys: Sequence[str]) -> tuple[Node | None, L
     return detached, leaf
 
 
-def move_leaf(node: Node | None, keys: Sequence[str], target: str, side: str) -> Node | None:
+def move_leaf(
+    node: Node | None, keys: Sequence[str], target: str, side: str, *, extent: int = 0
+) -> Node | None:
     """Take the whole cell holding *keys* out and put it beside *target*.
 
     :func:`move`'s counterpart for a tab group, and the model half of dragging one
     by its bar. A *target* inside the cell being moved is a no-op — a group dropped
-    on itself has not gone anywhere.
+    on itself has not gone anywhere. *extent* halves the target, exactly as it does
+    for :func:`insert_beside`.
     """
     if node is None or target in tuple(keys):
         return node
     detached, leaf = _detach_leaf(node, keys)
     if leaf is None or detached is None or find(detached, target) is None:
         return node
-    return insert_node_beside(detached, leaf, target, side)
+    return insert_node_beside(detached, leaf, target, side, extent=extent)
 
 
 def move_leaf_to_row(node: Node | None, keys: Sequence[str], index: int) -> Node | None:

@@ -13,7 +13,14 @@ from __future__ import annotations
 
 import pytest
 from PySide6.QtCore import QPoint, QRect, QSize, Qt
-from PySide6.QtWidgets import QApplication, QLabel, QScrollArea, QSplitter, QWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QLabel,
+    QScrollArea,
+    QSplitter,
+    QVBoxLayout,
+    QWidget,
+)
 
 from mm_companion.ui import layout_tree as lt
 from mm_companion.ui.block_canvas import BlockCanvas, drop_side
@@ -72,7 +79,12 @@ class TestDropping:
 
         row = canvas.page_tree().children[0]
         assert row.orientation == lt.HORIZONTAL
-        assert row.children[0] == lt.Split(lt.VERTICAL, (lt.Leaf(("a",)), lt.Leaf(("c",))))
+        stacked = row.children[0]
+        assert stacked.orientation == lt.VERTICAL
+        assert stacked.children == (lt.Leaf(("a",)), lt.Leaf(("c",)))
+        # The pair divides the height "a" had, which is the promise the drop mark
+        # made: the wash filled the bottom half of "a" and nothing else moved.
+        assert len(set(stacked.sizes)) == 1, "the newcomer did not take half of its target"
         assert row.children[1] == lt.Leaf(("b",))
 
     def test_the_stack_is_rendered_as_a_real_nested_splitter(
@@ -476,6 +488,87 @@ def _fittable(qapp, widths: list[int]) -> GridSplitter:
     splitter.show()
     qapp.processEvents()
     return splitter
+
+
+class TestABlockTallerThanItsContent:
+    """What a resizable page is the first thing that can hand a block: *more* room
+    than it wants down."""
+
+    def _frame(self, qapp) -> BlockFrame:
+        section = QWidget()
+        layout = QVBoxLayout(section)
+        for text in ("one", "two", "three"):
+            layout.addWidget(QLabel(text))
+        frame = BlockFrame("a", "A", section, RecommendedSize(200, 120), _NoHost())
+        frame.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        frame.resize(300, 600)  # far taller than three labels
+        frame.show()
+        for _ in range(6):
+            qapp.processEvents()
+        return frame
+
+    def test_the_slack_goes_under_the_section_not_between_its_lines(self, qapp) -> None:
+        """``setWidgetResizable`` gives the surplus to the section, and a stacked
+        layout with nothing expanding in it spreads that *equally between its
+        items* — so a Powers block dragged twice as tall as its cards did not grow
+        a margin at the bottom, it grew a gap between every line on every card."""
+        frame = self._frame(qapp)
+        try:
+            section = frame.section
+            assert section.height() == section.sizeHint().height()
+            assert section.y() == 0, "the section was not left at the top of the slack"
+        finally:
+            frame.hide()
+            frame.deleteLater()
+
+    def test_a_section_that_asks_for_the_height_still_gets_it(self, qapp) -> None:
+        """A note's editor, the roller's history, the portrait, the turn order: all
+        of them grow into the room, and say so with ``fills_height``."""
+        section = QWidget()
+        section.fills_height = True
+        QVBoxLayout(section).addWidget(QLabel("filler"))
+        frame = BlockFrame("a", "A", section, RecommendedSize(200, 120), _NoHost())
+        frame.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        frame.resize(300, 600)
+        frame.show()
+        for _ in range(6):
+            qapp.processEvents()
+        try:
+            assert section.height() > section.sizeHint().height()
+        finally:
+            frame.hide()
+            frame.deleteLater()
+
+    def test_a_block_whose_content_grows_tells_its_row(self, qapp) -> None:
+        """The scroll area is a barrier by design — it is what stops the section's
+        minimum climbing out to the window — so nothing carried a *changed* content
+        height out of it either. The row went on using the height it had cached, and
+        the extra content ended up scrolled out of sight with page to spare.
+        """
+        frame = self._frame(qapp)
+        try:
+            before = frame.sizeHint().height()
+            frame.section.layout().addWidget(QLabel("four"))
+            for _ in range(6):
+                qapp.processEvents()
+            assert frame.sizeHint().height() > before
+            assert frame.height() >= frame.sizeHint().height() - 1
+        finally:
+            frame.hide()
+            frame.deleteLater()
+
+
+class _NoHost:
+    """The drag host a bare frame needs and never calls."""
+
+    def title_bar_pressed(self, key, global_pos): ...
+    def title_bar_moved(self, key, global_pos): ...
+    def title_bar_released(self, key, global_pos): ...
+    def request_float(self, key): ...
+    def request_hide(self, key): ...
+    def request_pin(self, key): ...
+    def block_menu(self, key):
+        return None
 
 
 class TestFittingToContent:

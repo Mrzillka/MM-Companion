@@ -83,6 +83,11 @@ class ScalingImageLabel(QLabel):
 class CharacterImageSection(QGroupBox):
     """A character portrait with a load button, backed by the shared :class:`Character`."""
 
+    #: The portrait rescales to whatever room it is given, so it takes the height
+    #: rather than sitting at the top of it (see
+    #: :meth:`~mm_companion.ui.block_frame._InnerScroll.set_section`).
+    fills_height = True
+
     edited = Signal()
 
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:

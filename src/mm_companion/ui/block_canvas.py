@@ -345,7 +345,15 @@ class BlockCanvas(QWidget):
         # Drag state.
         self._scroll_area: QAbstractScrollArea | None = None
         self._drag_key: str | None = None
+        # Every block moving in the current gesture. One for a block dragged by
+        # its title bar; all of them for a tab group dragged by its handle. The
+        # hit test asks this rather than ``_drag_key`` so it cannot offer a cell
+        # a place inside itself.
+        self._drag_keys: tuple[str, ...] = ()
         self._drag_active = False
+        # Where a group drag was pressed, so it can wait for the drag distance
+        # before it starts marking places to land.
+        self._group_press = QPoint()
         # The frame currently washed as a merge target, so it can be cleared.
         self._merge_hint: str | None = None
         self._press_global = QPoint()
@@ -651,6 +659,11 @@ class BlockCanvas(QWidget):
             group.splitMoved.connect(self.update_drag)
             group.splitReleased.connect(self._on_tab_split_released)
             group.activeChanged.connect(self._on_tab_activated)
+            group.groupDragStarted.connect(lambda pos, g=group: self._group_pressed(g, pos))
+            group.groupDragMoved.connect(lambda pos, g=group: self._group_moved(g, pos))
+            group.groupDragReleased.connect(lambda pos, g=group: self._group_released(g, pos))
+            group.tabMenuRequested.connect(self.request_menu)
+            group.groupMenuRequested.connect(lambda pos, g=group: self.request_group_menu(g, pos))
             self._groups[keys] = group
         else:
             group.refresh_titles()
@@ -1560,6 +1573,67 @@ class BlockCanvas(QWidget):
             window.move(global_pos - self._grab_offset)
         self.update_drag(global_pos)
 
+    # -- dragging a whole tab group ------------------------------------------
+
+    def _group_pressed(self, group, global_pos: QPoint) -> None:
+        """A group's handle went down. Nothing moves until the pointer does."""
+        self._group_press = global_pos
+        self._drag_keys = ()
+        self._drag_active = False
+
+    def _group_moved(self, group, global_pos: QPoint) -> None:
+        """Mark where the cell would land, once this is a drag rather than a click.
+
+        A group does **not** tear out into a window on the way, and a block does.
+        That is the honest difference between moving a *cell of the grid* and
+        moving a block: a ``BlockWindow`` hosts one block, and a floating tab group
+        would be a fourth place a block can live with a saved-layout schema to
+        match. What the gesture has instead is the marks — the shaded region and
+        the seam — which is the same feedback the drop itself acts on.
+        """
+        if not self._drag_active:
+            if (global_pos - self._group_press).manhattanLength() < self._start_distance():
+                return
+            self._drag_active = True
+            self._drag_keys = tuple(group.keys)
+            self._drag_key = group.active_key()
+        self.update_drag(global_pos)
+
+    def _group_released(self, group, global_pos: QPoint) -> None:
+        keys = self._drag_keys
+        if not self._drag_active or not keys:
+            self._end_drag()
+            return
+        slot = self._hit_test(global_pos)
+        onto = self._merge_hint
+        self._end_drag()
+        if slot is None:
+            return
+        self.drop_group(keys, replace(slot, onto=onto) if onto else slot)
+
+    def drop_group(self, keys: Sequence[str], slot: DropSlot) -> None:
+        """Put the whole cell holding *keys* where *slot* says.
+
+        The three answers a drop can give, each one line of
+        :mod:`~mm_companion.ui.layout_tree`: into another cell (one group of
+        everything), beside a named block, or a row of its own. The strip is not
+        among them — see :meth:`update_drag`.
+        """
+        wanted = tuple(keys)
+        if len(wanted) < 2 or any(key not in self._frames for key in wanted):
+            return
+        if slot.onto is not None:
+            page = lt.merge_leaf_into(self._page, wanted, slot.onto)
+        elif slot.target is not None and not slot.new_row:
+            page = lt.move_leaf(self._page, wanted, slot.target, slot.side)
+        else:
+            page = lt.move_leaf_to_row(self._page, wanted, slot.row)
+        if page is None or page == self._page:
+            return
+        self._set_page(page)
+        self._relayout()
+        self._settled()
+
     def title_bar_pressed(self, key: str, global_pos: QPoint) -> None:
         self._drag_key = key
         self._drag_active = False
@@ -1644,6 +1718,12 @@ class BlockCanvas(QWidget):
             return menu
         floating = key in self._windows
         menu.addAction("Fit to content", lambda: self.fit_block(key))
+        if self.group_for(key) is not None:
+            # First, and above the separator: for a block in a group this is the
+            # item that undoes the thing it is *in*, and it belongs beside the
+            # other question about this block's place rather than among the
+            # actions that send it somewhere else entirely.
+            menu.addAction("Move out of the group", lambda: self.split_block_out(key))
         menu.addSeparator()
         if self.is_pinned(key):
             menu.addAction("Send back to the page", lambda: self.unpin_block(key))
@@ -1660,6 +1740,62 @@ class BlockCanvas(QWidget):
         menu.addSeparator()
         menu.addAction("Close", lambda: self.hide_block(key))
         return menu
+
+    def group_menu(self, keys: Sequence[str]) -> QMenu:
+        """What the strip past the last tab offers: things about the *cell*.
+
+        Deliberately short, and none of it duplicates a tab's own menu. A group is
+        not pinned, popped out or closed as a thing — its members are, and each
+        tab says so for itself — so what is left is the two questions that are
+        only about the cell: how big it is, and whether it goes on being one.
+        """
+        menu = QMenu(self)
+        wanted = [key for key in keys if key in self._frames]
+        if len(wanted) < 2:
+            return menu
+        menu.addAction("Fit to content", lambda: self.fit_block(wanted[0]))
+        menu.addSeparator()
+        menu.addAction("Ungroup", lambda: self.ungroup(wanted))
+        menu.addAction("Close these blocks", lambda: self.close_blocks(wanted))
+        return menu
+
+    def request_group_menu(self, group, global_pos: QPoint) -> None:
+        """Show :meth:`group_menu` where the right-click landed."""
+        menu = self.group_menu(group.keys)
+        if not menu.isEmpty():
+            menu.exec(global_pos)
+
+    def split_block_out(self, key: str) -> None:
+        """Take *key* out of its tab group into a cell beside it, and stay put.
+
+        The same tree op a tab dragged clear of its bar performs; what it does not
+        do is hand the block to the drag controller afterwards, because nobody is
+        dragging anything. See :meth:`_on_tab_split` for the other half.
+        """
+        if self.group_for(key) is None:
+            return
+        self._set_page(lt.split_out(self._page, key))
+        self._relayout()
+        self._settled()
+
+    def ungroup(self, keys: Sequence[str]) -> None:
+        """Break a cell back into one cell per block, side by side.
+
+        Every member but the first is split out in turn, each landing to the right
+        of what is left, so the blocks end up in the order their tabs were in. One
+        relayout and one entry in the layout history: it was one menu click.
+        """
+        wanted = [key for key in keys if key in self._frames]
+        if len(wanted) < 2:
+            return
+        page = self._page
+        for key in wanted[1:]:
+            page = lt.split_out(page, key)
+        if page is None or page == self._page:
+            return
+        self._set_page(page)
+        self._relayout()
+        self._settled()
 
     def request_menu(self, key: str, global_pos: QPoint) -> None:
         """Show :meth:`block_menu` where the right-click landed."""
@@ -1806,6 +1942,7 @@ class BlockCanvas(QWidget):
     def _end_drag(self) -> None:
         self._show_merge(None)
         self._drag_key = None
+        self._drag_keys = ()
         self._drag_active = False
         self._stop_autoscroll()
         self._indicator.hide_indicator()
@@ -1824,7 +1961,11 @@ class BlockCanvas(QWidget):
             if self._board is not None:
                 self._board.hide_drop()
             return
-        pin_at = self._pin_hit_test(global_pos)
+        # A group is a cell of the *page*. The strip renders a multi-key cell as
+        # whichever tab is active and draws no bar, so a group dropped there would
+        # arrive as one visible block with the rest of it nowhere — pin the
+        # members you want, one at a time, which is what the tab menu is for.
+        pin_at = None if self._drag_keys else self._pin_hit_test(global_pos)
         if pin_at is not None:
             # Over the strip: it owns the feedback, and the page shows none — two
             # insert lines at once would be a lie about where the block lands.
@@ -1907,7 +2048,7 @@ class BlockCanvas(QWidget):
     def _slot_in_row(self, index: int, row: QWidget, global_pos: QPoint) -> DropSlot:
         """What a drop inside *row* means, judged against the block it is over."""
         frame = self._frame_under(row, global_pos)
-        if frame is None or frame.key == self._drag_key:
+        if frame is None or frame.key in self._dragging_keys():
             keys = self._rows[index] if index < len(self._rows) else []
             return DropSlot(False, index, len(keys))
 
@@ -1953,14 +2094,26 @@ class BlockCanvas(QWidget):
             parent = parent.parentWidget()
         return False
 
+    def _dragging_keys(self) -> tuple[str, ...]:
+        """The blocks the current gesture is carrying.
+
+        ``_drag_keys`` while a whole cell is moving, and the one dragged block
+        otherwise. Everything that has to avoid offering the gesture a place
+        inside itself asks this rather than ``_drag_key``.
+        """
+        if self._drag_keys:
+            return self._drag_keys
+        return (self._drag_key,) if self._drag_key is not None else ()
+
     def _merge_target(self, key: str) -> str | None:
         """Whether a drop onto *key* really is a merge.
 
         Every block takes every merge now — a tab group holds whole blocks, so
         there is nothing for a block to have an opinion about. The check that is
-        left is only that a block is not being merged into itself.
+        left is that nothing is being merged into something it is carrying.
         """
-        if self._drag_key is None or key == self._drag_key:
+        dragging = self._dragging_keys()
+        if not dragging or key in dragging:
             return None
         return key if key in self._frames else None
 

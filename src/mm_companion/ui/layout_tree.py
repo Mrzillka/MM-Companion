@@ -300,14 +300,25 @@ def insert_beside(node: Node | None, key: str, target: str, side: str) -> Node:
     A *target* that is not in the tree puts *key* in a row of its own at the end,
     which is the same answer the old canvas gave a block it could not place.
     """
+    return insert_node_beside(node, Leaf((key,)), target, side)
+
+
+def insert_node_beside(node: Node | None, arriving: Node, target: str, side: str) -> Node:
+    """Put a whole *arriving* cell on the given *side* of the cell holding *target*.
+
+    The general form of :func:`insert_beside`, which is now one line of it. What
+    arrives is a node rather than a key because a tab group is a cell like any
+    other and has to be movable as one — the alternative was moving its blocks one
+    at a time and merging them back together at the far end, which is the same
+    answer arrived at through four intermediate arrangements nobody asked for.
+    """
     if side not in SIDES:
         raise ValueError(f"{side!r} is not one of {SIDES}")
-    arriving = Leaf((key,))
     if node is None:
         return arriving
     path = find(node, target)
     if path is None:
-        return append_row(node, key)
+        return append_node_row(node, arriving)
     grown = _insert_at(node, path, arriving, _SIDE_AXIS[side], _SIDE_AFTER[side])
     return normalize(grown) or arriving
 
@@ -335,8 +346,12 @@ def _insert_at(node: Node, path: Path, arriving: Node, axis: str, after: bool) -
 
 def append_row(node: Node | None, key: str, index: int | None = None) -> Split:
     """Add *key* as a row of its own, at *index* (the end when None)."""
+    return append_node_row(node, Leaf((key,)), index)
+
+
+def append_node_row(node: Node | None, arriving: Node, index: int | None = None) -> Split:
+    """Add a whole *arriving* cell as a row of its own — see :func:`insert_node_beside`."""
     page = as_page(node)
-    arriving = Leaf((key,))
     slot = len(page.children) if index is None else max(0, min(index, len(page.children)))
     children = page.children[:slot] + (arriving,) + page.children[slot:]
     return Split(VERTICAL, children, ())
@@ -401,6 +416,88 @@ def move(node: Node | None, key: str, target: str, side: str) -> Node | None:
     if detached is None or find(detached, target) is None:
         return node
     return insert_beside(detached, key, target, side)
+
+
+def _detach_leaf(node: Node | None, keys: Sequence[str]) -> tuple[Node | None, Leaf | None]:
+    """Take the cell holding *keys* out whole, and hand it back with the rest.
+
+    The cell itself is returned rather than rebuilt from the keys, so which tab was
+    active travels with it — a group put down somewhere else showing a different
+    block than it showed when it was picked up is a small thing that feels like a
+    bug every time.
+    """
+    wanted = tuple(keys)
+    if node is None or not wanted:
+        return node, None
+    path = find(node, wanted[0])
+    if path is None:
+        return node, None
+    leaf = at(node, path)
+    if not isinstance(leaf, Leaf) or leaf.keys != wanted:
+        return node, None
+    detached: Node | None = node
+    for key in wanted:
+        detached = remove(detached, key)
+    return detached, leaf
+
+
+def move_leaf(node: Node | None, keys: Sequence[str], target: str, side: str) -> Node | None:
+    """Take the whole cell holding *keys* out and put it beside *target*.
+
+    :func:`move`'s counterpart for a tab group, and the model half of dragging one
+    by its bar. A *target* inside the cell being moved is a no-op — a group dropped
+    on itself has not gone anywhere.
+    """
+    if node is None or target in tuple(keys):
+        return node
+    detached, leaf = _detach_leaf(node, keys)
+    if leaf is None or detached is None or find(detached, target) is None:
+        return node
+    return insert_node_beside(detached, leaf, target, side)
+
+
+def move_leaf_to_row(node: Node | None, keys: Sequence[str], index: int) -> Node | None:
+    """Take the whole cell holding *keys* out and give it a row of its own at *index*.
+
+    The index counts rows of the page **as it stands**, which is how a drop names
+    the seam it landed on; removing the cell first can take a row with it, so the
+    seam is re-measured against what is left rather than trusted.
+    """
+    if node is None:
+        return node
+    page = as_page(node)
+    before = len(page.children)
+    detached, leaf = _detach_leaf(page, keys)
+    if leaf is None:
+        return node
+    page = as_page(detached)
+    lost = before - len(page.children)
+    return append_node_row(page, leaf, max(0, index - lost) if index > 0 else 0)
+
+
+def merge_leaf_into(node: Node | None, keys: Sequence[str], target: str) -> Node | None:
+    """Move the whole cell holding *keys* into the cell holding *target*.
+
+    One group, holding everything both cells held. The arriving blocks keep their
+    order and the one that was showing goes on showing, which is the same promise
+    :func:`merge_into` makes for a single block.
+    """
+    wanted = tuple(keys)
+    if node is None or target in wanted:
+        return node
+    if find(node, target) is None:
+        return node
+    detached, leaf = _detach_leaf(node, wanted)
+    if leaf is None or detached is None:
+        return node
+    path = find(detached, target)
+    if path is None:  # the target's cell went with the removal
+        return node
+    into = at(detached, path)
+    if not isinstance(into, Leaf):
+        return node
+    grown = Leaf(into.keys + leaf.keys, len(into.keys) + leaf.active)
+    return normalize(_replace_at(detached, path, grown))
 
 
 def set_active(node: Node | None, key: str) -> Node | None:

@@ -361,6 +361,18 @@ def build(target: str):
         _pump(_app_of(win))
         row.update_collapse_marks()
         return win
+    elif target == "tab-group":
+        # A tab group and its handle: the strip past the last tab, which is what
+        # the whole cell is dragged by and what its own menu hangs off.
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=False)
+        win.show()
+        _pump(_app_of(win))
+        canvas = win._sheet.canvas
+        canvas.merge_blocks("complications", "conditions")
+        _pump(_app_of(win))
+        return win
     elif target == "focus":
         # Put keyboard focus on an ability spin box, so the focus ring — the only
         # visible sign that a wheel-guarded control now owns the scroll wheel —
@@ -1328,6 +1340,7 @@ def main(argv: list[str] | None = None) -> int:
             "grid-drop-beside",
             "grid-drop-merge",
             "grid-close",
+            "tab-group",
             "constructor",
             "constructor-extended",
             "constructor-bands",

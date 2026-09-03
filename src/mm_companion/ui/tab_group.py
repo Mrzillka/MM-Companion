@@ -17,14 +17,25 @@ Dragging a tab off the bar takes that block back out, through the same gesture
 the block that leaves can dock, stack, pin, float or merge somewhere else without
 this module knowing any of it happened.
 
-One honest limitation: there is no gesture for moving a *whole* group at once —
-each tab is dragged out on its own. A group of one collapses back into a plain
-block, so nothing gets stuck; it is simply more clicks than it might be.
+The **strip of bar to the right of the last tab** is the group's own handle
+(:class:`_GroupHandle`), and it is to a group what a title bar is to a block:
+drag it and the whole cell moves, right-click it and the group's menu opens. The
+two gestures cannot be confused because they are on different widgets — a tab is
+a tab, and everything past the last one is the cell.
+
+One thing a group deliberately cannot do is **float**. A block dragged by its
+title bar tears out into a window that follows the cursor; a group being moved
+stays where it is and the page marks where it will land. That is not an omission
+waiting to be filled in: a ``BlockWindow`` hosts one block, ``floating`` in a
+saved layout is a geometry per block key, and "a tab group in a window of its own"
+would be a fourth place a block can live and a schema to go with it. Dragging one
+tab out is how a member of a group gets into a window, which is the same gesture
+it always was.
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, QSize, Qt, Signal
+from PySide6.QtCore import QPoint, QSignalBlocker, QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -62,6 +73,14 @@ class TabGroupFrame(QFrame):
     splitReleased = Signal(QPoint)
     #: The user brought a different tab to the front.
     activeChanged = Signal(str)
+    #: The whole cell is being dragged by its handle: pressed, moved, released.
+    #: The canvas drives these exactly as it drives a title bar's.
+    groupDragStarted = Signal(QPoint)
+    groupDragMoved = Signal(QPoint)
+    groupDragReleased = Signal(QPoint)
+    #: Right-clicked: on a tab (that block's menu) or on the handle (the group's).
+    tabMenuRequested = Signal(str, QPoint)
+    groupMenuRequested = Signal(QPoint)
 
     def __init__(
         self,
@@ -90,11 +109,18 @@ class TabGroupFrame(QFrame):
         self._stack = QStackedWidget()
         self._stack.setObjectName("blockTabStack")
 
+        # The bar takes only the room its tabs need, and the handle takes the
+        # rest. It used to be the bar that stretched, which left the strip past
+        # the last tab belonging to the QTabBar — so a press there was a press on
+        # a bar with no tab under it, and telling that apart from a tab drag would
+        # have been a rule about coordinates rather than about widgets.
+        self._handle = _GroupHandle(self)
         header = QWidget()
         header_row = QHBoxLayout(header)
         header_row.setContentsMargins(0, 0, 0, 0)
         header_row.setSpacing(0)
-        header_row.addWidget(self._bar, stretch=1)
+        header_row.addWidget(self._bar)
+        header_row.addWidget(self._handle, stretch=1)
         self._buttons = _GroupButtons(self, host)
         header_row.addWidget(self._buttons)
 
@@ -121,6 +147,8 @@ class TabGroupFrame(QFrame):
             moved=self.splitMoved.emit,
             released=self.splitReleased.emit,
         )
+        self._bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._bar.customContextMenuRequested.connect(self._tab_menu_at)
 
     # -- what the grid asks of any cell --------------------------------------
 
@@ -171,12 +199,25 @@ class TabGroupFrame(QFrame):
         return QSize(extent, chrome + extent)
 
     def release(self, key: str) -> BlockFrame | None:
-        """Take *key* out of the group and hand its frame back, title bar restored."""
+        """Take *key* out of the group and hand its frame back, title bar restored.
+
+        The bar is silenced while the tab goes, and that is a fix rather than
+        tidiness. Removing a tab makes Qt pick another one and announce it, which
+        this reports as ``activeChanged`` — indistinguishable, from the canvas's
+        side, from the user clicking a tab. So dissolving a group raised a second
+        "one gesture finished", and a menu click that took three blocks apart
+        landed in the layout history twice. Which tab a *surviving* group shows is
+        decided by the tree (``layout_tree.remove`` keeps the user looking at what
+        they were looking at) and re-read when it is rebuilt, so there is nothing
+        here worth announcing either way.
+        """
         for index, frame in enumerate(self._frames):
             if frame.key != key:
                 continue
             self._frames.pop(index)
+            blocker = QSignalBlocker(self._bar)
             self._bar.removeTab(index)
+            del blocker
             self._stack.removeWidget(frame)
             frame.set_tabbed(False)
             return frame
@@ -200,6 +241,20 @@ class TabGroupFrame(QFrame):
             self._buttons.follow(self._frames[index])
             self.activeChanged.emit(self._frames[index].key)
 
+    def _tab_menu_at(self, point: QPoint) -> None:
+        """Right-click on a tab: that block's own menu, wherever the block is.
+
+        Falls through to the group's menu past the last tab, which cannot normally
+        happen — the handle owns that strip — but a bar narrow enough to be
+        scrolling its tabs can still report a click on nothing.
+        """
+        index = self._bar.tabAt(point)
+        where = self._bar.mapToGlobal(point)
+        if 0 <= index < len(self._frames):
+            self.tabMenuRequested.emit(self._frames[index].key, where)
+            return
+        self.groupMenuRequested.emit(where)
+
     def _begin_split(self, index: int, global_pos: QPoint) -> bool:
         if not 0 <= index < len(self._frames) or len(self._frames) < 2:
             # A cell's only tab *is* that cell: dragging it out would leave an
@@ -207,6 +262,64 @@ class TabGroupFrame(QFrame):
             return False
         self.splitRequested.emit(self._frames[index].key, global_pos)
         return True
+
+
+class _GroupHandle(QFrame):
+    """The strip past the last tab: a group's drag handle and menu button.
+
+    What a :class:`~mm_companion.ui.block_frame.TitleBar` is to a block, minus the
+    caption (the tabs are the caption) and the buttons (they are next door). Left-
+    drag moves the whole cell; right-click opens the group's menu.
+
+    A widget of its own rather than a rule about where on the tab bar the pointer
+    is, because "a tab" and "not a tab" then stop being coordinates and start being
+    two different things that can each answer for themselves.
+    """
+
+    def __init__(self, group: TabGroupFrame) -> None:
+        super().__init__(group)
+        self._group = group
+        self.setObjectName("blockTabHandle")
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.setToolTip("Drag to move these blocks together; right-click for more")
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        """Never narrower than something you can put a pointer on.
+
+        The bar takes the room its tabs want and this takes the rest, so on a
+        narrow cell with several tabs there would otherwise be no rest — and a
+        group would quietly become the one cell on the page that cannot be moved.
+        The bar is the one that gives way instead; it already elides its captions
+        and scrolls them, which is exactly what that is for. ``block.min-extent``
+        is the same "you have to be able to grab it" number the frame's own floor
+        is, and it is read here rather than kept, so a preset can change it.
+        """
+        return QSize(int(theme.metric("block.min-extent")), 0)
+
+    def mousePressEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mousePressEvent(event)
+            return
+        self._group.groupDragStarted.emit(event.globalPosition().toPoint())
+        event.accept()
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        if not event.buttons() & Qt.MouseButton.LeftButton:
+            super().mouseMoveEvent(event)
+            return
+        self._group.groupDragMoved.emit(event.globalPosition().toPoint())
+        event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mouseReleaseEvent(event)
+            return
+        self._group.groupDragReleased.emit(event.globalPosition().toPoint())
+        event.accept()
+
+    def contextMenuEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        self._group.groupMenuRequested.emit(event.globalPos())
+        event.accept()
 
 
 class _GroupButtons(QWidget):

@@ -424,15 +424,59 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   once the split is requested the moves and the release are forwarded into the
   canvas's ordinary drag controller and the block can dock, stack, pin, merge or stay
   floating exactly as one dragged by its title bar would.
+- **The strip past the last tab is the group's own handle** (`_GroupHandle`), and
+  it is to a group what a title bar is to a block: drag it and the whole cell
+  moves, right-click it and the cell's menu opens. It is a *widget* rather than a
+  rule about where on the tab bar the pointer is — the bar takes only the room its
+  tabs need now and the handle takes the rest — so "a tab" and "not a tab" are two
+  things that each answer for themselves instead of two readings of one
+  coordinate. The handle never shrinks below `block.min-extent`; the bar gives way
+  instead, which is what its eliding and its scroll buttons are for. Otherwise a
+  group would be the one cell on the page that cannot be moved, and only once it
+  was small enough to want moving.
+- **The model half is one call, not a sequence.** `layout_tree` grew
+  `move_leaf`, `move_leaf_to_row` and `merge_leaf_into`, over
+  `insert_node_beside`/`append_node_row` — the general forms that `insert_beside`
+  and `append_row` are now one line of. Moving the *blocks* one at a time and
+  merging them back together at the far end reaches the same arrangement through
+  four intermediate ones the user watches go by. `_detach_leaf` hands back the
+  `Leaf` itself rather than rebuilding one from the keys, so which tab was active
+  travels with the cell. A row index in `move_leaf_to_row` is re-measured after the
+  detach, since removing the cell can take a row out from under the seam the drop
+  named.
+- **A group does not float, and that is a decision rather than an omission.** A
+  block dragged by its title bar tears out into a `BlockWindow` that follows the
+  cursor; a group being moved stays put and the page marks where it will land. A
+  `BlockWindow` hosts one block and `floating` in a saved layout is a geometry per
+  block key, so "a tab group in a window of its own" would be a fourth place a
+  block can live plus the schema to carry it. Dragging one tab out is still how a
+  member of a group gets into a window. For the same reason the **strip refuses a
+  group**: it renders a multi-key cell as whichever tab is active and draws no bar,
+  so a group dropped there would arrive with most of itself nowhere.
+- **`_drag_keys` is what the hit test asks**, not `_drag_key`: one block for a
+  title-bar drag and all of them for a group, so a cell is never offered a place
+  inside itself.
+- **A tab's right-click is its block's own menu** — the whole of `block_menu`,
+  since everything on it still means something for a block in a group — plus *Move
+  out of the group*. The handle's is deliberately short and shares nothing with
+  it: a group is not pinned, popped out or closed *as a thing*, so what is left is
+  the two questions that are only about the cell — *Fit to content*, and *Ungroup*
+  / *Close these blocks*. Screenshot it with `driver.py tab-group`.
+- **Releasing a tab silences the bar.** `QTabBar.removeTab` makes Qt pick another
+  tab and announce it, which the group reports as `activeChanged` —
+  indistinguishable, from the canvas's side, from a user clicking a tab. So
+  dissolving a group raised a second "one gesture finished" and *Ungroup* landed in
+  the layout history twice. Which tab a surviving group shows is the tree's answer
+  (`layout_tree.remove` keeps the user looking at what they were looking at) and is
+  re-read when it is rebuilt, so there was never anything here worth announcing.
 - **The trade, stated plainly.** Two Notes blocks used to merge their *notes* into
   one tab bar; they now stay two blocks sharing a cell, so you get a tab bar of blocks
   each with its own tab bar of notes. That is more chrome than the old answer and it
   is the price of one merge rule instead of a per-block opt-in. The Notes block's own
   `adopt`/`release`/`open_refs`/`accepts_merge` are gone with it; splitting a *note*
   out into a new block is a different feature and stayed.
-- **One honest limitation:** there is no gesture for moving a whole group at once —
-  each tab is dragged out on its own. A group of one collapses back into a plain
-  block, so nothing gets stuck; it is simply more clicks than it might be.
+- A group of one collapses back into a plain block, so nothing can get stuck in
+  one.
 
 ## The model and cross-section signals
 

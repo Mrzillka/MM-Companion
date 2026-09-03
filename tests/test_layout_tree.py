@@ -412,3 +412,108 @@ class TestMigrationFromV7:
         body = lt.migrate_v7(model, KNOWN)
         assert body["region"]["root"] is None
         assert body["region"]["edge"] == "right"
+
+
+class TestMovingAWholeCell:
+    """A tab group is a cell, and a cell has to be movable as one.
+
+    Before this, the only way to move a group was to drag every tab out and merge
+    them back together at the far end — the same arrangement reached through four
+    intermediate ones nobody asked for, each of which the user could see.
+    """
+
+    def grouped(self) -> Split:
+        """The default page with Conditions and Skills merged into one cell."""
+        return lt.as_page(lt.merge_into(page(), "skills", "conditions"))
+
+    def test_the_cell_arrives_whole(self) -> None:
+        moved = lt.move_leaf(self.grouped(), ["conditions", "skills"], "abilities", "left")
+
+        assert lt.leaf_for(moved, "conditions") == lt.leaf_for(moved, "skills")
+        assert lt.keys(lt.leaf_for(moved, "skills")) == ["conditions", "skills"]
+
+    def test_it_lands_on_the_side_it_was_asked_for(self) -> None:
+        moved = lt.move_leaf(self.grouped(), ["conditions", "skills"], "abilities", "left")
+        row = lt.at(moved, (1,))
+
+        assert isinstance(row, Split) and row.orientation == HORIZONTAL
+        assert lt.keys(row) == ["conditions", "skills", "abilities", "resistances"]
+
+    def test_the_row_it_left_goes_with_it(self) -> None:
+        moved = lt.move_leaf(self.grouped(), ["conditions", "skills"], "abilities", "left")
+
+        assert lt.keys(moved).count("conditions") == 1
+        assert len(moved.children) == 2  # the base row, and the one it joined
+
+    def test_which_tab_was_showing_travels_with_it(self) -> None:
+        """A group put down showing a different block than it was picked up
+        showing is a small thing that feels like a bug every time."""
+        start = lt.as_page(lt.set_active(self.grouped(), "conditions"))
+        assert lt.leaf_for(start, "skills").active == 0
+
+        moved = lt.move_leaf(start, ["conditions", "skills"], "abilities", "right")
+
+        assert lt.leaf_for(moved, "skills").active == 0
+
+    def test_dropping_a_group_on_itself_does_nothing(self) -> None:
+        start = self.grouped()
+        assert lt.move_leaf(start, ["conditions", "skills"], "skills", "left") == start
+
+    def test_a_target_that_is_not_there_is_refused(self) -> None:
+        start = self.grouped()
+        assert lt.move_leaf(start, ["conditions", "skills"], "nobody", "left") == start
+
+    def test_keys_that_are_not_one_whole_cell_are_refused(self) -> None:
+        """Half a group is not a cell, and moving one would silently split it."""
+        start = self.grouped()
+        assert lt.move_leaf(start, ["skills"], "abilities", "left") == start
+        assert lt.move_leaf(start, ["conditions", "abilities"], "base_info", "left") == start
+
+    def test_it_can_be_given_a_row_of_its_own(self) -> None:
+        moved = lt.move_leaf_to_row(self.grouped(), ["conditions", "skills"], 0)
+
+        assert lt.keys(moved.children[0]) == ["conditions", "skills"]
+        assert len(moved.children) == 3
+
+    def test_a_row_index_past_the_row_it_vacated_is_re_measured(self) -> None:
+        """The drop names a seam in the page it was looking at, and removing the
+        cell can take a row out from under that seam."""
+        moved = lt.move_leaf_to_row(self.grouped(), ["conditions", "skills"], 3)
+
+        assert lt.keys(moved.children[-1]) == ["conditions", "skills"]
+        assert len(moved.children) == 3
+
+    def test_a_group_merged_into_a_block_makes_one_group_of_everything(self) -> None:
+        merged = lt.merge_leaf_into(self.grouped(), ["conditions", "skills"], "abilities")
+
+        leaf = lt.leaf_for(merged, "abilities")
+        assert lt.keys(leaf) == ["abilities", "conditions", "skills"]
+
+    def test_merging_keeps_the_arriving_group_showing_what_it_showed(self) -> None:
+        start = lt.as_page(lt.set_active(self.grouped(), "skills"))
+        assert lt.leaf_for(start, "skills").active == 1
+
+        merged = lt.merge_leaf_into(start, ["conditions", "skills"], "abilities")
+
+        leaf = lt.leaf_for(merged, "abilities")
+        assert leaf.keys[leaf.active] == "skills"
+
+    def test_merging_a_group_into_one_of_its_own_blocks_does_nothing(self) -> None:
+        start = self.grouped()
+        assert lt.merge_leaf_into(start, ["conditions", "skills"], "skills") == start
+
+    def test_inserting_a_whole_cell_beside_nothing_appends_a_row(self) -> None:
+        arriving = Leaf(("dice", "scene"))
+        grown = lt.insert_node_beside(page(), arriving, "nobody", "left")
+
+        assert grown.children[-1] == arriving
+
+    def test_inserting_into_an_empty_page_is_the_cell_itself(self) -> None:
+        arriving = Leaf(("dice", "scene"))
+        assert lt.insert_node_beside(None, arriving, "anything", "left") == arriving
+
+    def test_a_bad_side_is_still_refused(self) -> None:
+        import pytest
+
+        with pytest.raises(ValueError):
+            lt.insert_node_beside(page(), Leaf(("dice",)), "skills", "sideways")

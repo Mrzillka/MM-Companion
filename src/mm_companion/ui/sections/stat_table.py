@@ -184,7 +184,8 @@ def build_stat_table(
     # The table never scrolls itself; it reports its rows as its size (see
     # :class:`AutoHeightTable`) and the page scrolls when the blocks don't all fit.
     # ``fit_width`` because this table *is* the whole block, so its columns are
-    # what the block's minimum width should be.
+    # what the block opens at — and what is left of them once the shed order below
+    # has gone is the block's floor.
     table = AutoHeightTable(0, len(HEADERS), fit_width=True)
     table.setHorizontalHeaderLabels(HEADERS if base_store is None else BASE_HEADERS)
     table.verticalHeader().setVisible(False)

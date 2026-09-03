@@ -18,12 +18,47 @@ exactly these pieces.
   *Reported live*, which is the point: the old `fit_table_height` did it once with
   `setFixedHeight`, before the stylesheet had touched a row, and the two stat blocks
   carried a hardcoded height "plus a little slack" to cover for it. Two flags:
-  `word_wrap` keeps wrapped rows fitted to their text, and `fit_width` reports the
-  summed column widths too — right for a table that *is* the whole block (the stat
-  grids), wrong for one panel of a column flow, whose section caps its own minimum at
-  a single panel. Height uses `header.isHidden()`, never `isVisible()`: a table that
+  `word_wrap` keeps wrapped rows fitted to their text, and `fit_width` measures the
+  columns across too — right for a table that *is* the whole block (the stat grids),
+  wrong for one panel of a column flow, whose section caps its own minimum at a
+  single panel. Height uses `header.isHidden()`, never `isVisible()`: a table that
   has not been shown has no visible children, and that is exactly when its minimum
   is first asked for.
+- **A `fit_width` table's two widths are different questions.** `sizeHint` is the
+  **whole** table — every column, header text included — and that is what Abilities
+  and Resistances open at, which is what `block_sizes.json` means when it says those
+  two state no recommendation. `minimumSizeHint` is the table with everything in
+  `set_shed_order` *gone*, and it must not move with what is currently hidden.
+  Shedding is how the table gets narrower, so a minimum that counted the columns it
+  is willing to drop is refusing the width it knows how to reach — and worse, it is
+  a **loop**. A block hands its section the viewport's width or the section's
+  minimum, whichever is larger, so while that minimum tracked the shown columns,
+  hiding one narrowed the block, which made the column fit again, which widened the
+  block, which hid it again. No dead-band can damp that: the swing is the column's
+  own width, not a scrollbar's. Each answer is a resize that lays out again inside
+  the one before it, so it ended as a **stack overflow** — the app vanishing, exit
+  code `0xC00000FD`, the moment the Resistances block was dragged past about 230px.
+- **A table narrows by shedding columns, worst first** (`set_shed_order`,
+  `columns_to_shed`, `sync_shed_columns` on resize). The order names what the block
+  is willing to give up — the stat grids offer only the abbreviation, which repeats
+  the name beside it; Rank is what you type and Total is what you read, so a table
+  missing either has stopped being the table. Past the order the name elides and
+  then the block scrolls; nothing is ever lost. Two things the fix above had to get
+  right with it, and both were wrong:
+  - **The dead-band applies from the first column.** It used to stand down whenever
+    nothing was shed yet (`not current`), which is the state every table starts in —
+    so the one transition most worth damping was the one that never was.
+  - **A hidden column still has to report the width it would take**, or the table
+    can never work out that it fits again. Qt cannot answer it: `sectionSizeHint` is
+    zero for a hidden section and `sizeHintForColumn` measures the items without the
+    header's text, so a hidden column reported roughly a *third* of its real width
+    and was restored into a width that could not hold it. `natural_column_widths`
+    measures a column while it is showing and remembers the number; a hidden one
+    answers with that. Every column is measured before it can ever be shed, so the
+    memory is always primed.
+  - Both bands are measured against what the arrangement **in force** needs, which
+    is what makes them nest: another column goes a band *below* that number and one
+    comes back a band *above* it, so there is no width at which both are true.
   **`word_wrap` follows the *header*, not the table's own geometry**, coalesced to
   one `remeasure_wrapped_rows()` a turn on `sectionResized`. How tall a wrapped row
   is depends on the width of the column it wraps in, and that width settles *after*

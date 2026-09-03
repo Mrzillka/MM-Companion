@@ -94,6 +94,11 @@ def columns_to_shed(
     A non-positive *available* (a table that has not been laid out yet) sheds
     nothing, so the first paint is the full table and the real answer arrives on
     the first ``resizeEvent``.
+
+    *hysteresis* is the dead-band, and it applies from the **first** column
+    onwards. It used to stand down whenever *current* was empty — which is
+    precisely the state a table is in before it sheds anything, so the one
+    transition most worth damping was the one transition that never was.
     """
     if available <= 0 or not shed_order:
         return ()
@@ -106,18 +111,27 @@ def columns_to_shed(
             shed.append(column)
             total -= widths[column]
 
-    if not hysteresis or not current:
+    if not hysteresis:
         return tuple(shed)
+
+    def needed(hidden: Sequence[int]) -> int:
+        """What the arrangement with *hidden* dropped actually takes."""
+        gone = set(hidden)
+        return sum(w for i, w in enumerate(widths) if i not in gone)
+
     # Only change the answer once the width is past the boundary by a full band in
-    # the direction it is moving, or the count flips back and forth on its own.
+    # the direction it is moving, or the answer flips back and forth on its own.
+    # Both bands are measured against what the arrangement *in force* needs, which
+    # is what makes them nest: from any state, the width at which another column
+    # goes is a band below that number and the width at which one comes back is a
+    # band above it, so there is no width at which both are true. Measuring the
+    # shedding side against the *post*-shed width instead — which is what this did
+    # — let the two overlap, and a table sitting in the overlap shed and restored
+    # the same column for as long as the layout kept asking.
     if len(shed) > len(current):
-        deeper = tuple(shed)
-        kept = sum(w for i, w in enumerate(widths) if i not in set(deeper))
-        return deeper if available <= kept + hysteresis else tuple(current)
+        return tuple(shed) if available <= needed(current) - hysteresis else tuple(current)
     if len(shed) < len(current):
-        shallower = tuple(shed)
-        kept = sum(w for i, w in enumerate(widths) if i not in set(shallower))
-        return shallower if available >= kept + hysteresis else tuple(current)
+        return tuple(shed) if available >= needed(shed) + hysteresis else tuple(current)
     return tuple(shed)
 
 
@@ -134,10 +148,21 @@ class AutoHeightTable(QTableWidget):
     blocks needed a hardcoded height with "a little slack" in it.
 
     *word_wrap* re-measures wrapped rows on resize (their height depends on the
-    stretched column's width). *fit_width* additionally reports the summed column
-    widths as the minimum width — right for a table that is the whole block, and
-    wrong for one panel of a column flow, whose section caps its own minimum at a
-    single panel and would otherwise be pinned open by the widest of them.
+    stretched column's width). *fit_width* additionally measures the columns
+    across: the **whole** table is the size hint, and the table with everything in
+    :meth:`set_shed_order` dropped is the minimum. Right for a table that is the
+    whole block, and wrong for one panel of a column flow, whose section caps its
+    own minimum at a single panel and would otherwise be pinned open by the widest
+    of them.
+
+    That the minimum leaves the sheddable columns out is not a detail. A block
+    hands its section either the viewport's width or the section's minimum,
+    whichever is larger, so a minimum that moved with what was currently shed made
+    the width the shedding decision reads *a function of that decision*: hiding a
+    column narrowed the block, which made the column fit again, which widened the
+    block, which hid it again — a loop no dead-band can damp, because the swing is
+    the column's own width rather than a scrollbar's. The minimum is now the same
+    number whatever is hidden, so the decision reads a width it cannot move.
     """
 
     def __init__(
@@ -155,6 +180,9 @@ class AutoHeightTable(QTableWidget):
         # Columns this table is willing to give up as it narrows, worst first.
         self._shed_order: tuple[int, ...] = ()
         self._shed: tuple[int, ...] = ()
+        # What each column measured the last time it was showing — see
+        # :meth:`natural_column_widths` for why a hidden one cannot be measured.
+        self._natural: dict[int, int] = {}
         self._reorder: RowReorder | None = None
         self._press_pos: QPoint | None = None
         self._dragged = False
@@ -190,25 +218,53 @@ class AutoHeightTable(QTableWidget):
             height += self.rowHeight(row)
         return height
 
-    def _content_width(self) -> int:
-        """The width every visible column needs, header text included."""
+    def _chrome_width(self) -> int:
+        """Everything across the table that is not a column."""
         width = 2 * self.frameWidth()
-        header = self.horizontalHeader()
         vertical = self.verticalHeader()
         if not vertical.isHidden():
             width += vertical.width()
-        for column in range(self.columnCount()):
-            if self.isColumnHidden(column):
-                continue
-            width += max(self.sizeHintForColumn(column), header.sectionSizeHint(column))
         return width
 
+    def _content_width(self) -> int:
+        """The width the whole table needs, header text included and nothing shed."""
+        return self._chrome_width() + sum(self.natural_column_widths())
+
+    def _floor_width(self) -> int:
+        """The width left once every column this table offers has gone.
+
+        The minimum, and deliberately not the same question as
+        :meth:`_content_width`: shedding is *how* this table gets narrower, so a
+        minimum that counted the columns it is willing to shed would be refusing
+        the very width it knows how to reach — and, because the block hands the
+        section its minimum whenever the viewport is smaller, would be deciding
+        the width the shed decision then reads. See the class docstring.
+        """
+        sheddable = set(self._shed_order)
+        widths = self.natural_column_widths()
+        return self._chrome_width() + sum(
+            width
+            for column, width in enumerate(widths)
+            if column not in sheddable and not self.isColumnHidden(column)
+        )
+
     def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
-        return QSize(super().sizeHint().width(), self._content_height())
+        """The whole table across (when it measures its own columns), content down.
+
+        A *preference*, so it may be content-shaped: this is what Abilities and
+        Resistances open at, and it is the number ``block_sizes.json`` means when
+        it says those two state no recommendation because their tables report
+        their real columns. It used to be carried by ``minimumSizeHint``, where
+        being content-shaped made it a refusal.
+        """
+        width = super().sizeHint().width()
+        if self._fit_width:
+            width = max(width, self._content_width())
+        return QSize(width, self._content_height())
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
         hint = super().minimumSizeHint()
-        width = max(hint.width(), self._content_width()) if self._fit_width else hint.width()
+        width = max(hint.width(), self._floor_width()) if self._fit_width else hint.width()
         return QSize(width, self._content_height())
 
     def set_shed_order(self, columns: Sequence[int]) -> None:
@@ -224,15 +280,29 @@ class AutoHeightTable(QTableWidget):
     def natural_column_widths(self) -> list[int]:
         """What each column would take if it were showing, header text included.
 
-        Measured whether or not the column is currently hidden — a hidden one has
-        to be measurable, or the table could never work out that it now fits again
-        and would stay shed forever.
+        Answered whether or not the column is currently hidden — a hidden one has
+        to be answerable, or the table could never work out that it now fits again
+        and would stay shed forever. It cannot be *measured*, though, and that is
+        the catch this used to walk into: ``QHeaderView.sectionSizeHint`` answers
+        zero for a hidden section and ``sizeHintForColumn`` measures the items
+        without the header's own text, so Qt reported a hidden column at roughly a
+        third of what it really takes — and the table then restored a column into
+        a width that could not hold it, and immediately shed it again.
+
+        So a column is measured while it is showing and *remembered*, and a hidden
+        one answers with the number it last measured. Every column is measured
+        before it can ever be shed, so the memory is always primed.
         """
         header = self.horizontalHeader()
-        return [
-            max(self.sizeHintForColumn(column), header.sectionSizeHint(column))
-            for column in range(self.columnCount())
-        ]
+        widths: list[int] = []
+        for column in range(self.columnCount()):
+            if self.isColumnHidden(column):
+                widths.append(self._natural.get(column, 0))
+                continue
+            natural = max(self.sizeHintForColumn(column), header.sectionSizeHint(column))
+            self._natural[column] = natural
+            widths.append(natural)
+        return widths
 
     def _shed_available_width(self) -> int:
         width = self.viewport().width() or self.width()

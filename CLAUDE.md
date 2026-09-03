@@ -147,7 +147,13 @@ notes file that owns it.
   refusal, and on a page the user drags, whether a block is too small to read is the
   user's call — this is what stops the app resizing its own window. A block's
   configured size in `ui/block_sizes.json` is a **recommendation**: the size it
-  opens at and the size a divider's detent sticks at, and nothing else.
+  opens at and the size a divider's detent sticks at, and nothing else. In
+  particular a minimum may never move with an **adaptive decision** — the columns a
+  table has shed, the panels a flow is showing, the axis a box has reflowed to —
+  because a container hands its child the larger of the viewport and that minimum,
+  so the decision would be reading a width it had itself just set. State the
+  narrowest arrangement you know how to reach and put the content-shaped number in
+  `sizeHint`, which is a preference and may be content-shaped.
 - **Read a setting through its accessor in `core.storage`**, never off
   `load_settings()`: that returns the settings file *verbatim* and does not merge
   `DEFAULT_SETTINGS`, so any key added after a workspace was created reads back as

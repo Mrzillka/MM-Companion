@@ -83,6 +83,39 @@ class TestSheddingColumns:
         )
         assert held == (COL_ABBR,)
 
+    def test_the_band_covers_the_first_column_too(self) -> None:
+        """It used to stand down whenever nothing was shed yet — which is the one
+        state every table starts in, so the transition most worth damping was the
+        one that never was."""
+        whole = sum(WIDTHS)
+
+        assert columns_to_shed(whole - 1, WIDTHS, [COL_ABBR], current=()) == (COL_ABBR,)
+        held = columns_to_shed(
+            whole - 1, WIDTHS, [COL_ABBR], current=(), hysteresis=SHED_HYSTERESIS
+        )
+        assert held == ()
+
+    def test_the_width_it_sheds_at_is_below_the_width_it_restores_at(self) -> None:
+        """Why it cannot flicker, stated as one number against another: from any
+        arrangement, the width at which another column goes is a band *below* what
+        that arrangement needs and the width one comes back at is a band above it,
+        so there is no width at which both are true.
+        """
+        order = [COL_ABBR, COL_TOTAL]
+        current = (COL_ABBR,)
+        widths = range(1, sum(WIDTHS) + 2 * SHED_HYSTERESIS)
+
+        def answer(available: int) -> tuple[int, ...]:
+            return columns_to_shed(
+                available, WIDTHS, order, current=current, hysteresis=SHED_HYSTERESIS
+            )
+
+        sheds = [w for w in widths if len(answer(w)) > len(current)]
+        restores = [w for w in widths if len(answer(w)) < len(current)]
+
+        assert sheds and restores, "the sweep never reached either boundary"
+        assert max(sheds) < min(restores)
+
     def test_it_does_not_take_one_back_until_a_full_band_the_other_way(self) -> None:
         order = [COL_ABBR]
         whole = sum(WIDTHS)
@@ -209,3 +242,50 @@ def test_a_squeezed_block_never_reports_a_bigger_minimum(squeezed, qapp) -> None
     _narrow_to(squeezed, qapp, 780)
 
     assert frame.minimumSizeHint().width() == before
+
+
+def test_a_shed_column_does_not_move_the_block_minimum(squeezed, qapp) -> None:
+    """The loop this closes, in one assertion.
+
+    A block hands its section the viewport's width or the section's minimum,
+    whichever is larger. While that minimum counted the columns the table was
+    willing to *shed*, hiding one narrowed the block, which made the column fit
+    again, which widened the block, which hid it again — for as long as the layout
+    kept asking, and each answer lays out again inside the one before it, so it
+    ended as a stack overflow rather than a flicker.
+    """
+    table = squeezed.resistances.table
+    assert table.shed_columns() == ()
+    before = table.minimumSizeHint().width()
+
+    _narrow_to(squeezed, qapp, 560)
+
+    assert table.shed_columns() == (COL_ABBR,), "the block was never squeezed enough"
+    assert table.minimumSizeHint().width() == before
+
+
+def test_the_whole_table_is_what_a_stat_block_opens_at(squeezed, qapp) -> None:
+    """The columns moved from the minimum to the hint rather than being dropped:
+    a preference may be content-shaped, a refusal may not."""
+    table = squeezed.resistances.table
+    widest = sum(table.natural_column_widths())
+
+    assert table.sizeHint().width() >= widest
+    assert table.minimumSizeHint().width() < widest
+
+
+def test_a_hidden_column_still_reports_the_width_it_would_take(squeezed, qapp) -> None:
+    """Which is the whole of how a shed column ever comes back.
+
+    Qt cannot answer it: a hidden section's header hint is zero and its items are
+    measured without the header's text, so the column reported roughly a third of
+    its real width — and the table restored it into a width that could not hold
+    it, then shed it again on the resize that followed.
+    """
+    table = squeezed.resistances.table
+    showing = table.natural_column_widths()[COL_ABBR]
+
+    _narrow_to(squeezed, qapp, 560)
+
+    assert table.shed_columns() == (COL_ABBR,), "the block was never squeezed enough"
+    assert table.natural_column_widths()[COL_ABBR] == showing

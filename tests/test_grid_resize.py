@@ -12,11 +12,11 @@ Three claims, and they are the three the whole rework rests on:
 from __future__ import annotations
 
 import pytest
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QPoint, QRect, Qt
 from PySide6.QtWidgets import QApplication, QLabel, QScrollArea, QSplitter
 
 from mm_companion.ui import layout_tree as lt
-from mm_companion.ui.block_canvas import BlockCanvas
+from mm_companion.ui.block_canvas import BlockCanvas, drop_side
 from mm_companion.ui.block_frame import BlockFrame
 from mm_companion.ui.block_sizes import RecommendedSize
 from mm_companion.ui.grid_view import GridSplitter, RowStack
@@ -314,18 +314,131 @@ def test_sizes_survive_a_save_and_restore(canvas: BlockCanvas, qapp) -> None:
     assert isinstance(canvas._row_widgets[0], QSplitter)
 
 
+class TestWhereADropLands:
+    """The zone rule on its own: shares of a block, not pixel bands.
+
+    The bands used to be 28px of merge inset and a 24px stack band, which left
+    "beside this block" as a 28px strip down each edge — a target you had to aim
+    at, on a gesture people use constantly. And the merge was never advertised:
+    there is no discovering a gesture whose target is the part of the block you
+    were already standing on.
+    """
+
+    RECT = QRect(0, 0, 300, 300)
+
+    def side(self, x: int, y: int) -> str | None:
+        return drop_side(QPoint(x, y), self.RECT, merge_share=1 / 3)
+
+    def test_the_middle_ninth_means_merge(self) -> None:
+        assert self.side(150, 150) is None
+        assert self.side(110, 110) is None  # just inside the corner of the core
+        assert self.side(190, 190) is None
+
+    def test_just_outside_the_core_is_already_a_side(self) -> None:
+        assert self.side(150, 95) == "top"
+        assert self.side(150, 205) == "bottom"
+        assert self.side(95, 150) == "left"
+        assert self.side(205, 150) == "right"
+
+    def test_a_whole_quarter_of_the_block_means_beside_it(self) -> None:
+        """The complaint this is here to answer: dropping a block second in a row."""
+        assert self.side(10, 150) == "left"
+        assert self.side(60, 150) == "left"
+        assert self.side(290, 150) == "right"
+
+    def test_a_corner_belongs_to_the_edge_it_is_nearest(self) -> None:
+        assert self.side(10, 40) == "left"
+        assert self.side(40, 10) == "top"
+        assert self.side(290, 260) == "right"
+        assert self.side(260, 290) == "bottom"
+
+    def test_the_zones_grow_with_the_block(self) -> None:
+        """A pixel band would be a hairline on a big block and most of a small one."""
+        wide = QRect(0, 0, 1200, 300)
+        assert drop_side(QPoint(200, 150), wide, merge_share=1 / 3) == "left"
+        narrow = QRect(0, 0, 120, 300)
+        assert drop_side(QPoint(20, 150), narrow, merge_share=1 / 3) == "left"
+        assert drop_side(QPoint(60, 150), narrow, merge_share=1 / 3) is None
+
+    def test_a_degenerate_rect_does_not_divide_by_zero(self) -> None:
+        assert drop_side(QPoint(0, 0), QRect(0, 0, 0, 0), merge_share=1 / 3) is not None
+
+
+class TestTheDropMarks:
+    """Three marks between them, and that is what makes the merge findable."""
+
+    def _dragging(self, canvas: BlockCanvas, qapp) -> None:
+        canvas.drop_block("b", _slot(target="a", side="right"))
+        canvas._stack._on_dragged(0, 200)
+        qapp.processEvents()
+        canvas._drag_key = "b"  # as a real drag would have set it
+
+    def test_a_side_marks_the_half_the_block_would_take(self, canvas, qapp) -> None:
+        self._dragging(canvas, qapp)
+        frame = canvas.block_frame("a")
+        geo = canvas._row_geometry(frame)
+
+        canvas._show_indicator(canvas._hit_test(frame.mapToGlobal(QPoint(6, frame.height() // 2))))
+
+        assert canvas._region_mark.isVisible()
+        marked = canvas._region_mark.geometry()
+        assert marked.left() == geo.left()
+        assert abs(marked.width() - geo.width() // 2) <= 1
+        assert marked.height() == geo.height()
+
+    def test_the_middle_washes_the_whole_block_instead(self, canvas, qapp) -> None:
+        self._dragging(canvas, qapp)
+        frame = canvas.block_frame("a")
+        centre = frame.mapToGlobal(QPoint(frame.width() // 2, frame.height() // 2))
+
+        slot = canvas._hit_test(centre)
+        canvas._show_indicator(slot)
+
+        assert slot.onto == "a"
+        assert not canvas._region_mark.isVisible()
+        assert canvas._merge_hint == "a"
+
+    def test_a_new_row_marks_the_seam_and_nothing_else(self, canvas, qapp) -> None:
+        self._dragging(canvas, qapp)
+        frame = canvas.block_frame("a")
+        seam = frame.mapToGlobal(QPoint(frame.width() // 2, frame.height() - 2))
+
+        slot = canvas._hit_test(seam)
+        canvas._show_indicator(slot)
+
+        assert slot.new_row is True
+        assert not canvas._region_mark.isVisible()
+        assert canvas._indicator.isVisible()
+
+    def test_ending_the_drag_takes_every_mark_down(self, canvas, qapp) -> None:
+        self._dragging(canvas, qapp)
+        frame = canvas.block_frame("a")
+        canvas._show_indicator(canvas._hit_test(frame.mapToGlobal(QPoint(6, frame.height() // 2))))
+        assert canvas._region_mark.isVisible()  # positive control
+
+        canvas._end_drag()
+
+        assert not canvas._region_mark.isVisible()
+        assert not canvas._indicator.isVisible()
+
+
 def test_a_drag_gesture_lands_a_block_under_another(canvas: BlockCanvas, qapp) -> None:
     """End to end through the real controller, not the structural op underneath.
 
-    The bottom band of a block means "and below it", which is the one reading the
+    The bottom of a block means "and below it", which is the one reading the
     old hit test had no way to express.
     """
     canvas.drop_block("b", _slot(target="a", side="right"))
+    # A row tall enough to have a middle and two ends. The fixture's blocks are
+    # bare labels, and on a 40px row every point is within _GAP of a boundary.
+    canvas._stack._on_dragged(0, 200)
     qapp.processEvents()
     frame = canvas.block_frame("a")
-    # Inside the row's core (which is inset by _GAP, where a drop means "a new
-    # row") and inside the band along the block's own bottom edge.
-    bottom = frame.mapToGlobal(QPoint(frame.width() // 2, frame.height() - 20))
+    # The zones are shares of the block, not pixel bands, so the point has to be
+    # named as one: three quarters of the way down, well outside the middle ninth
+    # that means "merge", and still inside the row's core (which is inset by
+    # _GAP, where a drop would mean "a new row" instead).
+    bottom = frame.mapToGlobal(QPoint(frame.width() // 2, frame.height() * 3 // 4))
 
     slot = canvas._hit_test(bottom)
 

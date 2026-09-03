@@ -46,7 +46,7 @@ from mm_companion.ui import theme
 from mm_companion.ui.block_frame import BlockFrame, BlockWindow
 from mm_companion.ui.block_sizes import UNBOUNDED, RecommendedSize
 from mm_companion.ui.blocks.base import instance_template
-from mm_companion.ui.drop_feedback import DropIndicator
+from mm_companion.ui.drop_feedback import DropIndicator, DropRegion
 from mm_companion.ui.grid_view import RowStack, build_node
 from mm_companion.ui.pinned import (
     DEFAULT_EDGE,
@@ -101,6 +101,36 @@ def edge_velocity(y: int, height: int, hot: int) -> int:
     if y > height - hot:
         return min(MAX_SCROLL_STEP, max(4, (y - (height - hot)) // 3))
     return 0
+
+
+def drop_side(point: QPoint, rect: QRect, *, merge_share: float) -> str | None:
+    """Which edge of *rect* a drop at *point* belongs to, or None for its middle.
+
+    The block is read in *shares* of itself rather than in pixels, and that is the
+    whole change: the bands used to be 28px of merge inset and a 24px stack band,
+    which left "beside this block" as a 28px strip down each edge. Placing a block
+    second in a row meant hitting that strip, and the merge was never advertised at
+    all — there is no way to discover a gesture whose target is the part of a block
+    you were already over.
+
+    Now the middle ninth (a third across by a third down) means *merge*, and
+    everything outside it belongs to whichever edge is nearest as a share of the
+    block — so the four sides are clean diagonal quadrants, every corner has one
+    answer, and the region grows with the block instead of staying a hairline on a
+    big one.
+
+    Kept out of Qt like :func:`~mm_companion.ui.grid_handle.snap_to_detent`: it is
+    the whole of a decision, and worth asking without a window.
+    """
+    width = max(1, rect.width())
+    height = max(1, rect.height())
+    across = (point.x() - rect.left()) / width
+    down = (point.y() - rect.top()) / height
+    margin = (1 - merge_share) / 2
+    if margin <= across <= 1 - margin and margin <= down <= 1 - margin:
+        return None
+    distances = {"left": across, "right": 1 - across, "top": down, "bottom": 1 - down}
+    return min(distances, key=lambda side: distances[side])
 
 
 @dataclass(frozen=True)
@@ -299,6 +329,10 @@ class BlockCanvas(QWidget):
         self._layout.setSpacing(8)
 
         self._indicator = DropIndicator(self)
+        # The line says *where* the seam falls; this says how much of the target
+        # the newcomer takes. Named for the mark and not for the strip's own
+        # ``_region`` tree, which is a different thing entirely.
+        self._region_mark = DropRegion(self)
         # Coalesces a run of handle movements into one finished gesture.
         self._size_settle = QTimer(self)
         self._size_settle.setSingleShot(True)
@@ -537,7 +571,8 @@ class BlockCanvas(QWidget):
 
         if self._layout.indexOf(self._stack) < 0:
             self._layout.addWidget(self._stack)
-        self._indicator.raise_()
+        self._region_mark.raise_()
+        self._indicator.raise_()  # last, so the seam reads over the wash
 
     def _settled(self) -> None:
         """One gesture is over: tell anyone laying out, and anyone remembering."""
@@ -1606,6 +1641,7 @@ class BlockCanvas(QWidget):
         self._drag_active = False
         self._stop_autoscroll()
         self._indicator.hide_indicator()
+        self._region_mark.hide_indicator()
         if self._board is not None:
             self._board.hide_drop()
 
@@ -1615,6 +1651,7 @@ class BlockCanvas(QWidget):
             # No insert line and no auto-scroll either: both would be promising a
             # landing place that the drop itself is going to refuse.
             self._indicator.hide_indicator()
+            self._region_mark.hide_indicator()
             self._stop_autoscroll()
             if self._board is not None:
                 self._board.hide_drop()
@@ -1631,6 +1668,7 @@ class BlockCanvas(QWidget):
             # viewport's *y* alone, so the strip beside it shares the band: dragging
             # up the right-hand edge into the strip is exactly where this fired.
             self._indicator.hide_indicator()
+            self._region_mark.hide_indicator()
             self._stop_autoscroll()
             self._board.show_drop(pin_at)  # type: ignore[union-attr] - set with pin_at
             return
@@ -1647,18 +1685,15 @@ class BlockCanvas(QWidget):
 
     # -- hit testing / indicator geometry ------------------------------------
 
-    #: How far inside a block's edges the pointer has to be for a drop to mean
-    #: "merge into this" rather than "sit beside it". The outer bands keep the
-    #: ordinary placement, so a block can always be put *next* to another.
-    _MERGE_INSET = 28
+    #: The share of a block, in each dimension, that means "merge into this"
+    #: rather than "sit beside it" — the middle ninth. A share and not a pixel
+    #: inset, because the four placements around it have to stay reachable on a
+    #: block of any size; see :func:`drop_side`.
+    _MERGE_SHARE = 1 / 3
 
-    #: How wide the band along a block's edge is that means "and above/below it"
-    #: rather than "and beside it". Only the top and bottom bands are needed: a
-    #: drop that is neither a merge nor a stack is a placement to the left or the
-    #: right, which is the answer everywhere else in the block.
-    _STACK_BAND = 24
-
-    #: The band above and below a whole row where a drop makes a *new* row.
+    #: The band above and below a whole row where a drop makes a *new* row. Still
+    #: a pixel band, and deliberately: it guards the *seam* between two rows,
+    #: which is a line-shaped target and is marked by a line.
     _GAP = 12
 
     def _hit_test(self, global_pos: QPoint) -> DropSlot | None:
@@ -1710,25 +1745,14 @@ class BlockCanvas(QWidget):
 
         local = frame.mapFromGlobal(global_pos)
         rect = frame.rect()
-        inner = rect.adjusted(
-            self._MERGE_INSET, self._MERGE_INSET, -self._MERGE_INSET, -self._MERGE_INSET
-        )
-        onto = self._merge_target(frame.key)
-        if onto is not None and inner.isValid() and inner.contains(local):
-            return DropSlot(False, index, 0, onto=onto, target=frame.key, side="right")
-
-        # The stack bands sit *inside* the row's core, which is already inset by
-        # _GAP. Measuring them from the frame's own edge would put them under the
-        # band that means "a new row" — the pointer can never be there — and a
-        # block could only ever be stacked by accident.
-        band = min(self._STACK_BAND, max(1, rect.height() // 3))
-        top_band = rect.top() + self._GAP + band
-        bottom_band = rect.bottom() - self._GAP - band
-        if local.y() < top_band:
-            side = "top"
-        elif local.y() > bottom_band:
-            side = "bottom"
-        else:
+        side = drop_side(local, rect, merge_share=self._MERGE_SHARE)
+        if side is None:
+            onto = self._merge_target(frame.key)
+            if onto is not None:
+                return DropSlot(False, index, 0, onto=onto, target=frame.key, side="right")
+            # Nothing to merge into (a block over itself). The middle then means
+            # the nearer side, so the gesture still lands somewhere sensible
+            # rather than being refused for a reason nobody can see.
             side = "left" if local.x() < rect.center().x() else "right"
         return DropSlot(False, index, 0, target=frame.key, side=side)
 
@@ -1773,21 +1797,62 @@ class BlockCanvas(QWidget):
         return key if key in self._frames else None
 
     def _show_indicator(self, slot: DropSlot | None) -> None:
+        """Put up the two marks a drop deserves: the seam, and the room it takes.
+
+        Three states, and between them they are what makes the placements
+        discoverable. Over the middle of a block the whole frame washes — *this
+        block and the dragged one become tabs*. Over a side, half the block washes
+        and a line sits on the seam — *the newcomer takes that half*. Over the gap
+        between rows, the line alone — a new row has no room marked out for it
+        until it exists. Dragging across one block therefore shows all three in
+        turn, which is the only way anybody was ever going to find the merge.
+        """
         if slot is not None and slot.onto is not None:
             # A merge has no *place* to mark, so the target itself is dressed:
             # an insert line here would promise the block lands beside it.
             self._indicator.hide_indicator()
+            self._region_mark.hide_indicator()
             self._show_merge(slot.onto)
             return
         self._show_merge(None)
         if slot is None:
             self._indicator.hide_indicator()
+            self._region_mark.hide_indicator()
             return
+        region = self._region_rect(slot)
+        if region is None:
+            self._region_mark.hide_indicator()
+        else:
+            self._region_mark.move_to(region)
         rect = self._indicator_rect(slot)
         if rect is None:
             self._indicator.hide_indicator()
             return
         self._indicator.move_to(rect)
+
+    def _region_rect(self, slot: DropSlot) -> QRect | None:
+        """The space the dragged block would take, in canvas coordinates.
+
+        Half of the block it is dropped beside, on the named side — which is
+        exactly what ``insert_beside`` does to the tree, so the mark is a promise
+        the drop keeps. None for a new row (there is nothing to halve yet) and for
+        a merge (the target's own wash says the block takes all of it).
+        """
+        if slot.new_row or slot.target is None or slot.onto is not None:
+            return None
+        frame = self._frames.get(slot.target)
+        if frame is None or not frame.isVisible():
+            return None
+        geo = self._row_geometry(frame)
+        if slot.side == "left":
+            return QRect(geo.left(), geo.top(), max(1, geo.width() // 2), geo.height())
+        if slot.side == "right":
+            half = max(1, geo.width() // 2)
+            return QRect(geo.right() - half + 1, geo.top(), half, geo.height())
+        if slot.side == "top":
+            return QRect(geo.left(), geo.top(), geo.width(), max(1, geo.height() // 2))
+        half = max(1, geo.height() // 2)
+        return QRect(geo.left(), geo.bottom() - half + 1, geo.width(), half)
 
     def _indicator_rect(self, slot: DropSlot) -> QRect | None:
         """Where the insert line goes for *slot*, in canvas coordinates.
@@ -1853,6 +1918,7 @@ class BlockCanvas(QWidget):
             return
         bar = self._scroll_area.verticalScrollBar()
         bar.setValue(bar.value() + self._autoscroll_velocity)
+        self.update_drag(QCursor.pos())
 
     # -- auto-scroll while a row grip is being dragged ------------------------
 
@@ -1884,4 +1950,3 @@ class BlockCanvas(QWidget):
         self._stack.extend_active_drag(self._grip_velocity)
         bar = self._scroll_area.verticalScrollBar()
         bar.setValue(bar.value() + self._grip_velocity)
-        self.update_drag(QCursor.pos())

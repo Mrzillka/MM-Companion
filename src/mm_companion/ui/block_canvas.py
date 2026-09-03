@@ -845,7 +845,7 @@ class BlockCanvas(QWidget):
             "hidden_anchors": {
                 key: anchor.to_dict()
                 for key, anchor in self._anchors.items()
-                if key in self._hidden or self.is_pinned(key)
+                if key in self._hidden or self.is_pinned(key) or key in self._windows
             },
         }
 
@@ -1080,8 +1080,14 @@ class BlockCanvas(QWidget):
         frame = self._frames[key]
         old_global = frame.mapToGlobal(QPoint(0, 0))
         old_size = frame.size()
+        # Where it sat, so docking it back puts it there — the same note pinning
+        # and closing both take, and for the same reason. Recorded before
+        # ``_detach`` mutates the rows out from under it.
+        anchor = self._anchor_for(key, self._rows)
         self._detach(key)
         self._hidden.discard(key)
+        if anchor is not None:
+            self._anchors[key] = anchor
 
         on_top = self._wants_on_top(key)
         window = BlockWindow(key, self, self.window())
@@ -1415,11 +1421,10 @@ class BlockCanvas(QWidget):
         another splitter holding either; asking the frames which of them ended up
         under it answers all three without a case for each.
         """
-        return [
-            key
-            for key, frame in self._frames.items()
-            if frame.isVisible() and self._is_at_or_within(frame, widget)
-        ]
+        # Not filtered by visibility: the inactive tabs of a group are hidden and
+        # are still going with it. Nothing else can match — a closed or floated
+        # block's frame is parented to the canvas, never under a divider's pane.
+        return [key for key, frame in self._frames.items() if self._is_at_or_within(frame, widget)]
 
     def _on_pane_collapsing(self, widget: QWidget, closing: bool) -> None:
         self._warn_closing(self._keys_in(widget), closing)

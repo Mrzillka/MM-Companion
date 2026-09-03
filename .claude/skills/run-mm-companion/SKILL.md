@@ -48,6 +48,9 @@ python .claude/skills/run-mm-companion/driver.py sheet-size    # a Huge characte
 python .claude/skills/run-mm-companion/driver.py size-ladder   # the Growth/Shrinking rung strip on a power card
 python .claude/skills/run-mm-companion/driver.py size-ladder-reload  # ...a dialled rung, saved and reopened from disk
 python .claude/skills/run-mm-companion/driver.py size-ladder-narrow  # ...wrapped, in a narrow locked sheet
+python .claude/skills/run-mm-companion/driver.py grid-drop-beside  # the wash showing the half a dropped block takes
+python .claude/skills/run-mm-companion/driver.py grid-drop-merge   # ...and the whole-frame wash that means "make tabs"
+python .claude/skills/run-mm-companion/driver.py grid-close        # a block dragged small enough that letting go closes it
 python .claude/skills/run-mm-companion/driver.py settings     # the Settings window (Themes page)
 python .claude/skills/run-mm-companion/driver.py gm           # GM Mode (session, players, NPCs, rolls)
 python .claude/skills/run-mm-companion/driver.py npc          # the simplified NPC sheet

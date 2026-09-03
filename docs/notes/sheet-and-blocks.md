@@ -41,12 +41,18 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   later dragged into the pinned strip, where it then refused to be squashed. The
   same special case had already destroyed a live block once, when `_relayout` shed
   an "old row" that was really a frame; `_relayout` still guards that explicitly.
-- `ui/grid_handle.py` holds the divider. It is `grid.handle` px wide, painted as
-  **nothing at rest** and a soft accent under the pointer — deliberately not Qt's
-  own handle furniture, which draws a raised panel with dots and would make a page
-  of a dozen blocks a dozen visible gutters. One `paint_divider` serves both
-  divider kinds (the splitter handles and the row grips), because they are the same
-  affordance and would read as two if drawn twice.
+- `ui/grid_handle.py` holds the divider. **Two numbers, not one**: `grid.grab` is
+  how wide it is *to the mouse* (and therefore the gutter between two blocks), and
+  `grid.handle` is the accent painted down the middle of that under the pointer.
+  They were one token, which meant the grab target could not be made catchable
+  without the gap between blocks growing to match — a hairline is not a grab
+  target and a page of visible gutters is not a character sheet, so the two were
+  always going to want to differ. At rest a divider is painted as **nothing** —
+  deliberately not Qt's own handle furniture, which draws a raised panel with dots
+  and would make a page of a dozen blocks a dozen visible gutters. One
+  `paint_divider` serves both divider kinds (the splitter handles and the row
+  grips), because they are the same affordance and would read as two if drawn
+  twice.
 - **The detent** is what makes a recommended size feel like advice rather than a
   wall. `snap_to_detent(position, targets, strength)` pulls a handle onto the
   nearest recommended size within `grid.detent` px; dragging further than the band
@@ -58,6 +64,53 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   the nearest ancestor that is **not** a splitter: a `QSplitter` adopts every child
   widget into its own list of panes, so an overlay parented to one becomes a pane
   of it, which put an invisible strip of nothing at the left of every row.
+- **Double-clicking a divider fits.** The detent marks where a block's recommended
+  size is and a drag can settle on it, but neither is a way to *ask* for it — the
+  one thing the recommendations had no direct route to, and the gesture a splitter
+  has answered with a double-click for as long as there have been splitters.
+  `GridSplitter.fit_pane` gives the pane its recommendation out of its neighbour
+  (zero-sum, like every resize in a row); `RowStack.fit_row` puts a row back to
+  its content height, spelled as *forgetting* the height rather than measuring
+  one, so the row goes on tracking its content afterwards exactly as an undragged
+  row does. A handle fits the pane **before** it — a rule you can predict beats
+  one that guesses which side you meant, and every pane has a divider on both
+  sides of it.
+- **A grip drag freezes the page's height, and this is not the minimum the shape
+  rule forbids.** Every mouse-move pins the dragged row's holder to a new height,
+  so the stack re-sums and the page gets shorter the instant the row does. Behind
+  a `QScrollArea` that is not cosmetic: the scroll value is clamped to the smaller
+  maximum, the content slides down inside the viewport, and the divider stands
+  still on screen while the hand dragging it walks away — dragging a *bottom* row
+  shorter was close to unusable. So `RowStack.arm_grip` records its own height and
+  refuses to go under it until the release, and the slack goes into the trailing
+  stretch it already had. That number is read off the widget at the instant of a
+  press, is not a function of the width, is recomputed by nothing while it stands,
+  and is gone on release; a rebuild *under* a live drag cancels the gesture rather
+  than committing it. Growing is untouched.
+- **And a grip dragged into the edge of the window auto-scrolls**, reusing the
+  block drag's `edge_velocity` curve. It extends the drag *before* it scrolls: a
+  row dragged past the bottom is usually already at the end of the scroll range,
+  so scrolling first would move nothing, and growing the row is what gives the
+  bar somewhere to go.
+- **A block dragged too small to find closes itself**, past `grid.close-extent`
+  (48, against `block.min-extent`'s 24, which is the frame's own floor). The frame
+  washes in the reject colour, the cursor carries a "Release to close" naming the
+  blocks, and letting go closes them — the View menu entry clears and Ctrl+Z puts
+  them back where they were. A row squashed to nothing takes every block in it and
+  counts as **one** gesture, which is what `BlockCanvas.close_blocks` exists for;
+  `hide_block` is now one call into it. **Only a drag may do this**: a restored
+  arrangement, a strip mid-rebuild or a window resize can all hand a pane a tiny
+  size and none of them is anybody asking for a block to go away, so the check
+  hangs off `GridHandle`'s release and the grip's, and off nothing that merely
+  notices a size. The strip gets the rule for free — it renders with the page's own
+  splitters — once the canvas follows its dividers, which until then it did not.
+- **Right-clicking a title bar opens the block's menu** (`BlockCanvas.block_menu`,
+  built rather than shown so it can be asked what it offers without an event
+  loop): Fit to content, the pin, the pop-out — with *keep above other windows*
+  when it already is one — and Close. Every item routes to a method that already
+  existed. It is not new behaviour; it is the first place several pieces of
+  existing behaviour can be *found* without knowing they are there. A block inside
+  a tab group lends its title bar to the group and so has no menu of its own yet.
 - Beside the page is the **pinned strip** (`ui/pinned_panel.py`), the one place
   that does *not* scroll — and it is **the same engine as the page**. `PinnedPanel`
   renders a region tree through the very same `build_node`, so a block in the strip
@@ -79,7 +132,18 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   axis that has just stopped existing.
 - `PinnedBoard` is what the host puts in its layout — a splitter holding the page and
   the panel, whose orientation and child order *are* the strip's edge and whose handle
-  sets its thickness. The **`PinnedHandle` (📌) is always visible**: the empty strip's
+  sets its thickness. That handle was the one divider on the sheet with **no detent
+  and no mark**: the strip's *internal* dividers are the page's own splitters and
+  came with theirs, but the board's was a bare `QSplitter`. It is a `_BoardSplitter`
+  (a `GridSplitter`) now, and `PinnedPanel.recommended_size` answers what thickness
+  the strip wants **from the region tree** rather than from Qt — a run along the
+  thickness adds up and pays for its dividers, a run across it takes the largest,
+  and a cell is the roomiest block in it. Only the tree knows which is which: two
+  blocks stacked down a left-hand strip both want their own *width*, so the strip
+  wants the wider of them; the same two along the bottom want it as thick as the
+  taller. It offers **one** target where a divider between two blocks gets two —
+  the other pane is the whole page, whose hint is a number about a scroll area
+  rather than a width anybody meant the strip to stop at. The **`PinnedHandle` (📌) is always visible**: the empty strip's
   whole content, the drop target that gets the first block in, the grip the strip is
   dragged to another edge by (lighting four `EdgeZoneOverlay` bands), and the button
   that opens its menu. The canvas still owns the model — the panel is a view and holds
@@ -202,9 +266,13 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   block can be dragged to any size: a `QScrollArea` does not pass its child's
   minimum on, so the frame is free to report a minimum of almost nothing and let
   the section reflow — and, past what reflow can save, scroll. It **declines a
-  wheel it cannot use**, passing the event up when it has no scrollbar on that axis
-  or is already at the end of one; otherwise a block a pixel too short would
-  swallow the gesture and the page under it would stop scrolling.
+  wheel it cannot use** — `wheel_guard.can_scroll`, the same test the guard applies
+  to it from the other side — passing the event up when it has no scrollbar on that
+  axis or is already at the end of one; otherwise a block a pixel too short would
+  swallow the gesture and the page under it would stop scrolling. The guard now
+  routes a wheel that started over a spin box or a table *into* this scroll area
+  while it has anywhere to go: see [Shared UI utilities](ui-utilities.md), where
+  the rule for picking between the block and the page lives.
 - **`minimumSizeHint` is a title bar and `block.min-extent`, and says nothing about
   the content.** It used to be `max(content, the JSON floor)` in both dimensions,
   and that climbed out through the row, the page, the pinned strip and the window
@@ -274,15 +342,24 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   tall as its rows (so the page overflows the viewport and *scrolls* rather than
   squashing every row into a window nobody sized for them). It is the exact inverse
   of what it used to say.
-- **The drag says four things now, where it used to say two.** `_hit_test` reads,
-  from the middle of a block outwards: merge into it (`_MERGE_INSET`), stack above
-  or below it (`_STACK_BAND`), sit beside it, or — past the row entirely (`_GAP`) —
-  start a new row. The stack bands sit *inside* the row's core, which is already
-  inset by `_GAP`; measuring them from the frame's own edge would put them under the
-  band that means "a new row", where the pointer can never be, and a block could only
-  ever be stacked by accident. A `DropSlot` therefore carries a `target` block and a
-  `side` as well as the old row-and-index, which is all the older callers (an anchor
-  resolving, a block being reopened or unpinned) have ever known how to say.
+- **The drag says four things, and it reads a block in *shares* of itself.**
+  `_hit_test` answers: merge into it, stack above or below it, sit beside it, or —
+  past the row entirely (`_GAP`) — start a new row. A `DropSlot` therefore carries
+  a `target` block and a `side` as well as the old row-and-index, which is all the
+  older callers (an anchor resolving, a block being reopened or unpinned) have ever
+  known how to say.
+
+  The geometry was pixels — a 28px merge inset and a 24px stack band, leaving
+  "beside" as a **28px strip down each edge**. Placing a block second in a row was
+  a target you had to aim at, on a gesture people use constantly, and the merge was
+  never advertised at all: there is no discovering a gesture whose target is the
+  part of the block you were already standing on. `drop_side` now takes the middle
+  ninth (`_MERGE_SHARE`, a third by a third) as *merge*, and outside it the nearest
+  edge wins measured as a share in each direction — so the four sides are clean
+  diagonal quadrants, every corner has one answer, and the zones grow with the
+  block instead of staying a hairline on a big one. `_GAP` stays a pixel band,
+  deliberately: it guards the *seam* between two rows, which really is a
+  line-shaped target and is marked by a line.
 - Layout persists globally as **JSON** in `settings.json`, under the key named by
   `MainWindow.LAYOUT_KEY` — a class attribute, not a constant, because an `NPCWindow`
   writes `npc_layout` and the GM window `gm_layout`, and an NPC's arrangement written
@@ -328,6 +405,13 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   because two rows of chrome for one cell is one too many and the group's buttons act
   on whichever block is showing anyway. That is why a block behaves identically inside
   a group and out of it: it *is* the same widget, with one row hidden.
+- **A group reports the same minimum a block does** — `block.min-extent` and a
+  header — and that is a fix rather than a detail. It had none, so it inherited its
+  layout's, which was its tab bar plus its buttons: about 218px. A cell holding one
+  block could be dragged to a sliver and the *same* cell holding two refused, so a
+  group could never be squashed and never be closed by being squashed. A minimum
+  its own content decides is the one thing nothing on this page may report. Past it
+  the header clips, exactly as a squashed block's title bar does.
 - **A group owns its members' frames**, so one going away has to hand them back
   before it is deleted or it takes live blocks with it (`_release_group`). Groups are
   kept across a rebuild, keyed by exactly the blocks in them; rebuilding one every
@@ -459,6 +543,20 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   stylesheet border would change the frame's box and relayout the page *while the block
   is being dragged over it*, so the target would shift out from under the cursor the
   instant it lit up, and without an outline the fill has to be heavier to read.
+- **Three marks, and between them the placements are discoverable.** Over the
+  middle of a block the whole frame washes (*these two become tabs*); over a side,
+  a `DropRegion` washes the half the newcomer would take and the thin
+  `DropIndicator` sits on the seam (*it takes that half, and the split falls
+  here*); over the gap between rows, the line alone, because a new row has no room
+  marked out for it until it exists. Dragging across one block therefore shows all
+  three in turn, which is the only way anybody was going to find the merge. Both
+  overlays share a `_SlidingOverlay` base for the animation and the
+  "don't slide across an axis change" rule, are transparent to the mouse, and read
+  their colours as they appear rather than caching a token at construction. The
+  region is filled from `accent` and outlined in `drop.indicator`, because a wash
+  needs channels to dilute and `drop.indicator` is allowed to be a live palette
+  role. Screenshot them with `driver.py grid-drop-beside` / `grid-drop-merge`, and
+  the close warning with `grid-close`.
 - **`title_bar_released` hit-tests before `_end_drag`, and takes `onto` from
   `_merge_hint`** — what the drag last *showed* — rather than asking again. Both halves
   are one bug: `_end_drag` clears `_drag_key`, which `_merge_target` needs to know whose

@@ -13,12 +13,22 @@ through rather than reinvent. When building new sheet widgets, use it:
   and wheel-guarded. Build spin boxes and read-only table cells through these, not
   by hand.
 - `ui/wheel_guard.py` — `guard_wheel(*widgets)` stops nested spin boxes, combo
-  boxes, and inner tables from hijacking the page scroll: a guarded widget only
-  reacts to the wheel once it has keyboard focus, otherwise the wheel is
-  redirected to the enclosing page. `make_spin_box` guards by default. The guard
-  walks up to the **outermost** enclosing scroll area, which is the single page
-  scroll area that `CharacterSheet` owns around the whole canvas (blocks have no
-  inner scroll areas of their own).
+  boxes, and inner tables from hijacking the scroll: a guarded widget only reacts
+  to the wheel once it has keyboard focus, otherwise the wheel is redirected to a
+  scroll area that can use it. `make_spin_box` guards by default.
+  **Which scroll area is the whole of this module's judgement.** It used to be
+  the outermost — the page — and that was right while a block was a plain frame
+  with nothing between it and the page. A block is a scroll area itself now
+  (`BlockFrame._InnerScroll`), so the outermost answer sent every wheel straight
+  past a block the user had squashed: the block sat there with a scrollbar it
+  could not be scrolled by, and the page moved instead. The target is now the
+  **nearest ancestor that still has somewhere to go on this axis**, and the
+  outermost only when nothing does — "scroll the block until it runs out, then
+  the page", which is also what an unguarded wheel over the block's own
+  background already did. `can_scroll(area, event)` is that test on its own,
+  because `_InnerScroll` asks the identical question about itself before
+  declining a wheel it cannot use, and two spellings of one rule is how they
+  drift apart.
 - `ui/lock.py` — `set_widget_locked(widget, locked)` implements the read-only
   **view** mode. Locking is *not* `setEnabled(False)` (which greys a control
   out); a locked field keeps showing its value but sheds its input chrome

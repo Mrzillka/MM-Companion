@@ -282,3 +282,15 @@ def test_hiding_a_block_twice_is_a_no_op(canvas, qapp) -> None:
 
     assert canvas.is_hidden("c")
     assert QPoint  # the import is used by the fixture's helpers
+
+
+def test_collapsing_a_tab_group_closes_every_block_in_it(canvas, qapp) -> None:
+    """A group's inactive tabs are hidden widgets, and they go with it."""
+    canvas.merge_blocks("c", "b")  # b and c become one cell, sharing the row with a
+    qapp.processEvents()
+    _squash(canvas, qapp, [400, _limit() // 2])
+    _row(canvas).commit_collapse()
+    qapp.processEvents()
+
+    assert canvas.is_hidden("b") and canvas.is_hidden("c")
+    assert not canvas.is_hidden("a")

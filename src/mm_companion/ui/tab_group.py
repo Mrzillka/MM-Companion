@@ -24,7 +24,7 @@ block, so nothing gets stuck; it is simply more clicks than it might be.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, Qt, Signal
+from PySide6.QtCore import QPoint, QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -150,6 +150,25 @@ class TabGroupFrame(QFrame):
         widths = [frame.recommended_size().width for frame in self._frames]
         heights = [frame.recommended_size().height for frame in self._frames]
         return RecommendedSize(max(widths, default=0), max(heights, default=0))
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        """``block.min-extent`` and a header, and nothing about what is in it.
+
+        The same answer :meth:`~mm_companion.ui.block_frame.BlockFrame.minimumSizeHint`
+        gives, and it has to be: a cell holding one block could be dragged to a
+        sliver and the *same* cell holding two refused at whatever its tab bar and
+        buttons happened to add up to — which was about 218px, and meant a group
+        could never be squashed, never be closed by being squashed, and behaved
+        unlike every other cell on a page whose whole premise is that how small a
+        thing gets is the user's call.
+
+        Inherited from the layout before this, which is to say it was a minimum
+        its own content decided — the one thing nothing on the page may report.
+        Past this the header clips, exactly as a squashed block's title bar does.
+        """
+        extent = int(theme.metric("block.min-extent"))
+        chrome = self._bar.minimumSizeHint().height() + 2 * self.frameWidth()
+        return QSize(extent, chrome + extent)
 
     def release(self, key: str) -> BlockFrame | None:
         """Take *key* out of the group and hand its frame back, title bar restored."""

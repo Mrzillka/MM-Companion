@@ -67,10 +67,12 @@ def _recommended_extent(widget: QWidget, horizontal: bool) -> int:
 class GridSplitter(QSplitter):
     """One split inside a row: children sharing a fixed extent, zero-sum.
 
-    Supplies the three things :class:`~mm_companion.ui.grid_handle.GridHandle`
-    asks of the splitter it belongs to — where the recommended sizes are, and how
-    to mark and unmark them — and nothing else. Everything about *what* is in it
-    belongs to the canvas.
+    Supplies what :class:`~mm_companion.ui.grid_handle.GridHandle` asks of the
+    splitter it belongs to, and nothing else: where the recommended sizes are and
+    how to mark and unmark them, which panes a release would close, and how to fit
+    one to its content. Everything about *what* is in it belongs to the canvas —
+    the signals here name a *widget*, and turning that back into block keys is the
+    canvas's business.
     """
 
     #: A handle drag settled. The canvas listens so it can record the new sizes.

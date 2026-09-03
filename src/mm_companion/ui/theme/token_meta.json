@@ -190,6 +190,10 @@
       "label": "Divider detent",
       "hint": "How much resistance a divider meets at a block's recommended size, in pixels. Zero turns it off."
     },
+    "grid.close-extent": {
+      "label": "Divider close size",
+      "hint": "How small a block has to be dragged for letting go to close it, in pixels. It goes to the View menu; Ctrl+Z brings it back. Zero turns it off."
+    },
     "column.stat.spin": {"label": "Ability / resistance spin box"},
     "column.skill.name": {"label": "Skill name"},
     "column.skill.name-max": {

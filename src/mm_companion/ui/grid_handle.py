@@ -89,6 +89,8 @@ class DetentHost(Protocol):
     def detent_positions(self, index: int) -> list[int]: ...
     def mark_detents(self, index: int, targets: Sequence[int], settled: int | None) -> None: ...
     def clear_detent_marks(self) -> None: ...
+    def update_collapse_marks(self) -> None: ...
+    def commit_collapse(self) -> None: ...
 
 
 class GridHandle(QSplitterHandle):
@@ -175,18 +177,32 @@ class GridHandle(QSplitterHandle):
         if callable(marker):
             marker(self._index, targets, legal if legal == snapped != wanted else None)
         self.moveSplitter(legal)
+        self._ask("update_collapse_marks")
         event.accept()
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
         if self._dragging and event.button() == Qt.MouseButton.LeftButton:
             self._dragging = False
             self._engaged = False
-            clear = getattr(self.splitter(), "clear_detent_marks", None)
-            if callable(clear):
-                clear()
+            self._ask("clear_detent_marks")
+            # Last, and only from here: a pane left too small to see is closed by
+            # the *drag* that left it that way, never by a layout pass that
+            # happened to hand it a tiny size.
+            self._ask("commit_collapse")
             event.accept()
             return
         super().mouseReleaseEvent(event)
+
+    def _ask(self, method: str) -> None:
+        """Call *method* on the splitter, if it has one.
+
+        Duck-typed like the detent hooks beside it, and for the same reason: the
+        grid's behaviour is the splitter's to offer rather than the handle's to
+        demand, so a handle put in a plain ``QSplitter`` still works.
+        """
+        hook = getattr(self.splitter(), method, None)
+        if callable(hook):
+            hook()
 
     # -- painting -------------------------------------------------------------
 

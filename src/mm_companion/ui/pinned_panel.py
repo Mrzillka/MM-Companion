@@ -647,8 +647,12 @@ class PinnedBoard(QWidget):
         root: lt.Node | None,
         frames: dict[str, BlockFrame],
         edge: str,
-    ) -> None:
+    ) -> bool:
         """Render the strip, re-laying the board out first when the edge changed.
+
+        Answers whether the strip actually rebuilt, which the canvas needs: the
+        dividers are new widgets on a rebuild and it has to follow the new ones,
+        and following the old ones twice would close a block twice.
 
         The thickness is only re-asserted when the strip actually rebuilt. The canvas
         re-renders the strip on every structural change, and most of them are about
@@ -664,9 +668,11 @@ class PinnedBoard(QWidget):
             self._edge = edge
             self._fresh_settle()
             self._apply_edge()  # ends in _apply_extent, as it always has
-        if self.panel.set_blocks(root, frames, edge):
+        rebuilt = self.panel.set_blocks(root, frames, edge)
+        if rebuilt:
             self._fresh_settle()
             self._apply_extent()
+        return rebuilt
 
     def invalidate(self) -> None:
         """Make the next render rebuild the strip (see :meth:`PinnedPanel.invalidate`)."""

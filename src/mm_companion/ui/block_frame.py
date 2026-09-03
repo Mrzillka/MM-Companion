@@ -279,6 +279,8 @@ class BlockFrame(QFrame):
         self.section = section
         # Built on first use: only a block that can be merged into ever needs one.
         self._merge_feedback: DropFeedback | None = None
+        # Likewise for the warning that a divider drag is about to close it.
+        self._close_feedback: DropFeedback | None = None
         self._size = RecommendedSize()
         self.setObjectName("blockFrame")
         self.setFrameShape(QFrame.Shape.StyledPanel)
@@ -480,6 +482,37 @@ class BlockFrame(QFrame):
             self._merge_feedback.show_accept()
         else:
             self._merge_feedback.clear()
+
+    def set_closing(self, closing: bool) -> None:
+        """Warn that letting go of the divider now would close this block.
+
+        The counterpart of :meth:`set_merge_target`, in the other colour and for
+        the other kind of drag. A block can be dragged to a sliver — that is the
+        whole bargain of a grid the user owns — but a sliver is not something
+        anybody can read or find again, so past ``grid.close-extent`` the honest
+        reading of the gesture is that they are getting rid of it. Saying so
+        while the mouse is still down is what makes that a choice rather than a
+        surprise; nothing is destroyed either way, and Ctrl+Z puts it back.
+
+        Its own feedback and not ``_merge_feedback``: the two states can never be
+        up at once, but sharing one would mean a merge and a close taking each
+        other's mark down, and ``DropFeedback.clear`` returns a target to *its*
+        idle style, which is not something to guess at across two meanings.
+        """
+        if self._close_feedback is None:
+            if not closing:
+                return
+            # Border and wash both: this one is not sitting inside another
+            # highlighted target the way the merge wash is, and a warning wants
+            # every bit of the weight it can carry.
+            self._close_feedback = DropFeedback(self, "#blockFrame", radius="radius.card")
+        if closing:
+            # ``solo=False``: a row squashed to nothing warns on every block in
+            # it, and the usual one-at-a-time discipline would leave only the
+            # last of them marked. The canvas clears each of them on release.
+            self._close_feedback.show_reject(sticky=True, solo=False)
+        else:
+            self._close_feedback.clear()
 
     def set_locked(self, locked: bool) -> None:
         """Forward read-only view mode to the section, and re-report the block's size.

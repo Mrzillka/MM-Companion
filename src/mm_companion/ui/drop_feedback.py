@@ -138,14 +138,35 @@ class DropFeedback:
         self._state = self.ACCEPT
         self._paint(self._highlight("accent"))
 
-    def show_reject(self) -> None:
-        """Mark the target as refusing this payload."""
-        clear_all(except_for=self)
+    def show_reject(self, *, sticky: bool = False, solo: bool = True) -> None:
+        """Mark the target as refusing this payload.
+
+        *sticky* leaves the self-clearing timer alone, and is for a mark that is
+        not part of a Qt drag at all: a block being dragged small enough that
+        letting go would close it is warned by this, and that gesture ends in a
+        mouse release the caller definitely hears about. The timer exists for the
+        case that has no such guarantee (see the module docstring), and a warning
+        that quietly withdraws itself 700ms into a drag somebody is still making
+        is worse than none.
+
+        *solo* is the "only one target at a time" discipline, and it is right for
+        a drag, which has one pointer and therefore one answer. It is wrong for
+        the other caller: a *row* squashed to nothing closes every block in it, so
+        the warning has to stand on all of them at once, and each one lighting up
+        would take the last one's mark down. The caller that turns this off is
+        then responsible for clearing what it lit, which it does on the release
+        either way.
+        """
+        if solo:
+            clear_all(except_for=self)
+        else:
+            self._timer.stop()
         self._state = self.REJECT
         self._paint(self._highlight("drop.reject"))
-        # Qt withholds further drag events from a widget that ignored the enter,
-        # so nothing else is guaranteed to take this outline down.
-        self._timer.start()
+        if not sticky:
+            # Qt withholds further drag events from a widget that ignored the
+            # enter, so nothing else is guaranteed to take this outline down.
+            self._timer.start()
 
     def clear(self) -> None:
         """Return the target to its resting style."""

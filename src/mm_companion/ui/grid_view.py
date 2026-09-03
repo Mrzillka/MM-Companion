@@ -75,6 +75,13 @@ class GridSplitter(QSplitter):
 
     #: A handle drag settled. The canvas listens so it can record the new sizes.
     sizesSettled = Signal()
+    #: One pane has been dragged small enough that letting go would close what is
+    #: in it — or has been dragged back out of that. ``(widget, closing)``.
+    paneCollapsing = Signal(object, bool)
+    #: The handle was let go with these panes still that small. A list and one
+    #: emission, because closing the first would relayout the page and leave the
+    #: rest of them pointing at widgets that no longer exist.
+    paneCollapsed = Signal(list)
 
     def __init__(self, orientation: Qt.Orientation, parent: QWidget | None = None) -> None:
         super().__init__(orientation, parent)
@@ -91,6 +98,8 @@ class GridSplitter(QSplitter):
         # mark is built on first use, against the nearest ancestor that is not
         # itself a splitter. See :meth:`_mark_host`.
         self._mark: _DetentMark | None = None
+        # The panes currently warned as too small to keep (see below).
+        self._collapsing: list[QWidget] = []
         self.splitterMoved.connect(lambda *_: self.sizesSettled.emit())
 
     def createHandle(self) -> GridHandle:  # noqa: N802 - Qt override
@@ -127,6 +136,44 @@ class GridSplitter(QSplitter):
             if wanted > 0:
                 targets.append(after - trailing - gap - wanted)
         return [target for target in targets if target >= 0]
+
+    def update_collapse_marks(self) -> None:
+        """Say which panes a release would close, while the handle is still held.
+
+        Collapsing a pane to nothing is allowed — that is the bargain of a grid
+        the user owns — but a block two pixels wide is not something anybody can
+        read, find or drag back open, so the honest reading of the drag is that
+        they are getting rid of it. Warning while the mouse is down turns that
+        from a surprise into a choice, and the block is closed rather than
+        destroyed, so the worst case is one Ctrl+Z.
+
+        Only a *drag* ever asks this. A relayout that happens to hand a pane a
+        tiny size — a restored arrangement, a strip mid-rebuild — must never
+        close anything, which is why this is called from the handle and not from
+        anywhere that merely notices a size.
+        """
+        limit = int(theme.metric("grid.close-extent"))
+        wanted: list[QWidget] = []
+        if limit > 0:
+            for index, size in enumerate(self.sizes()):
+                widget = self.widget(index)
+                if widget is not None and size < limit:
+                    wanted.append(widget)
+        for widget in self._collapsing:
+            if widget not in wanted:
+                self.paneCollapsing.emit(widget, False)
+        for widget in wanted:
+            if widget not in self._collapsing:
+                self.paneCollapsing.emit(widget, True)
+        self._collapsing = wanted
+
+    def commit_collapse(self) -> None:
+        """The handle was let go: close whatever it left too small to see."""
+        collapsing, self._collapsing = self._collapsing, []
+        for widget in collapsing:
+            self.paneCollapsing.emit(widget, False)
+        if collapsing:
+            self.paneCollapsed.emit(collapsing)
 
     def mark_detents(self, index: int, targets: Sequence[int], settled: int | None) -> None:
         """Show where the recommended sizes are while a handle is being dragged."""
@@ -398,6 +445,11 @@ class RowStack(QWidget):
     gripDragMoved = Signal(QPoint)
     #: The grip has been let go.
     gripDragFinished = Signal()
+    #: A row has been dragged small enough that letting go would close the blocks
+    #: in it - or has been dragged back out of that. ``(index, closing)``.
+    rowCollapsing = Signal(int, bool)
+    #: The grip was let go with its row still that small.
+    rowCollapsed = Signal(int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -412,6 +464,8 @@ class RowStack(QWidget):
         # something to extend, and the height frozen for the duration of it.
         self._active_grip: RowGrip | None = None
         self._frozen_height = 0
+        # The row currently warned as too short to keep (see _mark_collapse).
+        self._collapsing_row: int | None = None
         # The same overlay a GridSplitter uses for its own detents, so a row grip
         # and a divider mark their recommended sizes identically. Built on the
         # first drag and destroyed on release (see :class:`_DetentMark`).
@@ -470,6 +524,7 @@ class RowStack(QWidget):
             return
         self._heights[index] = max(0, int(height))
         self._apply_height(index)
+        self._mark_collapse(index, self._heights[index])
         if 0 <= index < len(self._grips):
             self._mark_rows(index, self._grips[index].targets, height if settled else None)
 
@@ -522,6 +577,30 @@ class RowStack(QWidget):
         if self._active_grip is not None:
             self._active_grip.extend(delta)
 
+    def _mark_collapse(self, index: int, height: int) -> None:
+        """Warn, or stop warning, that this row is being dragged out of existence.
+
+        The row's counterpart of :meth:`GridSplitter.update_collapse_marks`, and
+        it takes the *whole row* with it: a row nought pixels tall is every block
+        in it gone, so saying so about only one of them would be a lie.
+        """
+        limit = int(theme.metric("grid.close-extent"))
+        wanted = index if limit > 0 and height < limit else None
+        if wanted == self._collapsing_row:
+            return
+        if self._collapsing_row is not None:
+            self.rowCollapsing.emit(self._collapsing_row, False)
+        self._collapsing_row = wanted
+        if wanted is not None:
+            self.rowCollapsing.emit(wanted, True)
+
+    def _clear_collapse_mark(self) -> int | None:
+        """Take the warning down, and say which row it was on."""
+        index, self._collapsing_row = self._collapsing_row, None
+        if index is not None:
+            self.rowCollapsing.emit(index, False)
+        return index
+
     def _freeze(self) -> None:
         """Hold the page's total height for the length of one grip drag.
 
@@ -545,7 +624,21 @@ class RowStack(QWidget):
         self.setMinimumHeight(self._frozen_height)
 
     def _end_grip_drag(self) -> None:
-        """Let the page find its own height again, and stand the auto-scroll down."""
+        """The grip was let go: thaw, stand the auto-scroll down, act on the mark."""
+        collapsed = self._clear_collapse_mark()
+        self._cancel_grip_drag()
+        if collapsed is not None:
+            self.rowCollapsed.emit(collapsed)
+
+    def _cancel_grip_drag(self) -> None:
+        """Let go of the drag without deciding anything by it.
+
+        What a rebuild *under* a live drag gets. The freeze has to come off or the
+        page keeps a height nobody asked for, but a row that happens to be short
+        at that moment was not dragged there by anybody, and closing its blocks
+        would be a gesture the user never made.
+        """
+        self._clear_collapse_mark()
         self._active_grip = None
         self._frozen_height = 0
         self.setMinimumHeight(0)
@@ -598,7 +691,7 @@ class RowStack(QWidget):
     def _shed(self) -> None:
         # A rebuild in the middle of a drag would leave the freeze standing with
         # no grip left to release it.
-        self._end_grip_drag()
+        self._cancel_grip_drag()
         while self._layout.count():
             self._layout.takeAt(0)
         for grip in self._grips:

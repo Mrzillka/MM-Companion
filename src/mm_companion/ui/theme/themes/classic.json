@@ -107,6 +107,8 @@
     "grid.handle": 6,
     "_grid.detent": "How much resistance a divider meets at a block's recommended size, in pixels. The handle sticks there and needs a deliberate extra pull to go past, so nobody crosses it by accident and everybody can find their way back to it. Zero turns the detent off.",
     "grid.detent": 12,
+    "_grid.close-extent": "How small a block has to be dragged for letting go of the divider to close it, in pixels. Bigger than block.min-extent, which is the floor of the frame itself: this is the size at which a block has stopped being something you can read or find, so the honest reading of the drag is that you are getting rid of it. Nothing is destroyed — the block is closed, its View menu entry clears, and Ctrl+Z brings it back where it was. Zero turns the behaviour off and a block can be dragged to a sliver again.",
+    "grid.close-extent": 48,
 
     "card.margins": [8, 6, 8, 6],
     "card.margins.off": [5, 3, 5, 3],

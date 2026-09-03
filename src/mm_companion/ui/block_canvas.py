@@ -19,7 +19,7 @@ indicator, and edge auto-scroll.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
     QAbstractScrollArea,
     QGraphicsOpacityEffect,
     QSplitter,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -362,6 +363,8 @@ class BlockCanvas(QWidget):
         self._grip_timer.timeout.connect(self._grip_autoscroll_tick)
         self._stack.gripDragMoved.connect(self._maybe_grip_autoscroll)
         self._stack.gripDragFinished.connect(self._stop_grip_autoscroll)
+        self._stack.rowCollapsing.connect(self._on_row_collapsing)
+        self._stack.rowCollapsed.connect(self._on_row_collapsed)
 
         self.apply_arrangement(self.default_arrangement())
 
@@ -602,8 +605,21 @@ class BlockCanvas(QWidget):
         """Follow every divider under *widget*, so a drag becomes a settled gesture."""
         if isinstance(widget, QSplitter):
             widget.sizesSettled.connect(self._on_sizes_settled)
+            self._watch_collapses(widget)
             for index in range(widget.count()):
                 self._watch_splitters(widget.widget(index))
+
+    def _watch_collapses(self, splitter: QSplitter) -> None:
+        """Follow one divider for a block being squashed out of existence.
+
+        Split out from :meth:`_watch_splitters` because the pinned strip wants
+        this half and not the other: its sizes reach the model through
+        :meth:`_sync_from_board` on demand rather than through ``sizesSettled``,
+        and giving its dividers the page's settle timer as well would be a second
+        route for the same numbers.
+        """
+        splitter.paneCollapsing.connect(self._on_pane_collapsing)
+        splitter.paneCollapsed.connect(self._on_pane_collapsed)
 
     def _row_heights(self) -> list[int]:
         """The height stated for each row; zero where the user has not set one."""
@@ -730,7 +746,11 @@ class BlockCanvas(QWidget):
         """
         if self._board is None:
             return
-        self._board.set_blocks(self._region, self._frames, self._pin_edge)
+        if self._board.set_blocks(self._region, self._frames, self._pin_edge):
+            # Only when the strip actually rebuilt: its dividers are new widgets
+            # then, and connecting the same ones twice would close a block twice.
+            for splitter in self._board.panel.splitters():
+                self._watch_collapses(splitter)
 
     def _sync_from_board(self) -> None:
         """Read the strip's live proportions back into the region tree.
@@ -1387,18 +1407,82 @@ class BlockCanvas(QWidget):
             return DropSlot(True, r if anchor.before else r + 1, 0)
         return None
 
+    def _keys_in(self, widget: QWidget) -> list[str]:
+        """Every block rendered inside *widget* - which may be one, or a dozen.
+
+        A pane of a splitter is a block's frame, a tab group holding several, or
+        another splitter holding either; asking the frames which of them ended up
+        under it answers all three without a case for each.
+        """
+        return [
+            key
+            for key, frame in self._frames.items()
+            if frame.isVisible() and self._is_at_or_within(frame, widget)
+        ]
+
+    def _on_pane_collapsing(self, widget: QWidget, closing: bool) -> None:
+        self._warn_closing(self._keys_in(widget), closing)
+
+    def _on_pane_collapsed(self, widgets: list) -> None:
+        keys: list[str] = []
+        for widget in widgets:
+            keys.extend(key for key in self._keys_in(widget) if key not in keys)
+        self.close_blocks(keys)
+
+    def _on_row_collapsing(self, index: int, closing: bool) -> None:
+        rows = self._rows
+        self._warn_closing(rows[index] if 0 <= index < len(rows) else [], closing)
+
+    def _on_row_collapsed(self, index: int) -> None:
+        rows = self._rows
+        self.close_blocks(rows[index] if 0 <= index < len(rows) else [])
+
+    def _warn_closing(self, keys: Sequence[str], closing: bool) -> None:
+        """Dress the blocks a release would close, and name them under the cursor.
+
+        The wash says *something* is about to go; the tooltip says which, which
+        matters when a whole row is going at once and the blocks in it have been
+        squashed too small to read their own title bars.
+        """
+        titles = []
+        for key in keys:
+            frame = self._frames.get(key)
+            if frame is None:
+                continue
+            frame.set_closing(closing)
+            titles.append(frame.base_title)
+        if closing and titles:
+            QToolTip.showText(QCursor.pos(), f"Release to close {', '.join(titles)}")
+        elif not closing:
+            QToolTip.hideText()
+
+    def close_blocks(self, keys: Sequence[str]) -> None:
+        """Close several blocks at once, as one gesture.
+
+        :meth:`hide_block` relayouts and settles per block, which for a row
+        squashed to nothing would be three redraws and three entries in the layout
+        history for one flick of the wrist. This is the same bookkeeping - the
+        anchor that remembers where each block was, so reopening puts it back -
+        done once for all of them.
+        """
+        wanted = [key for key in keys if key in self._frames and key not in self._hidden]
+        if not wanted:
+            return
+        for key in wanted:
+            self._frames[key].set_closing(False)
+            anchor = self._anchor_for(key, self._rows)  # before _detach mutates _rows
+            self._detach(key)
+            self._hidden.add(key)
+            if anchor is not None:
+                self._anchors[key] = anchor
+        self._relayout()
+        for key in wanted:
+            self.block_visibility_changed.emit(key, False)
+        self._settled()
+
     def hide_block(self, key: str) -> None:
         """Close *key* (removed from the sheet, reopenable from the View menu)."""
-        if key in self._hidden:
-            return
-        anchor = self._anchor_for(key, self._rows)  # before _detach mutates _rows
-        self._detach(key)
-        self._hidden.add(key)
-        if anchor is not None:
-            self._anchors[key] = anchor
-        self._relayout()
-        self.block_visibility_changed.emit(key, False)
-        self._settled()
+        self.close_blocks([key])
 
     def show_block(self, key: str) -> None:
         """Reopen a hidden block where it was closed from.

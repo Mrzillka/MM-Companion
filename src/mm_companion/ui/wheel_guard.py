@@ -11,14 +11,23 @@ outermost — the page — and that was right while a block was a plain frame wi
 nothing between it and the page. A block is a scroll area itself now
 (:class:`~mm_companion.ui.block_frame._InnerScroll`), so the outermost answer sent
 every wheel straight past a block the user had squashed: the block sat there with
-a scrollbar it could not be scrolled by, and the page moved instead. So the target
-is the **nearest ancestor that still has somewhere to go on this axis**, and the
-outermost only when nothing does — which reads as "scroll the block until it runs
-out, then the page", and needs no explaining to anybody using it.
+a scrollbar it could not be scrolled by, and the page moved instead.
 
-:func:`can_scroll` is that test on its own, because the block's own scroll area
-asks exactly the same question about itself before deciding to decline a wheel it
-cannot use. Two spellings of one rule is how they drift apart.
+So the target is the **nearest ancestor that has a scroll range on this axis**,
+and the outermost only when none of them has: *the wheel belongs to the thing it
+is over, if that thing scrolls at all.* Note what this deliberately does **not**
+do — it does not hand the gesture on when the block reaches its end. A surface
+that owns the wheel keeps it until the pointer leaves, because the alternative is
+worse than it sounds: wheeling down a squashed block lands you at its bottom and
+then, with no change of gesture and nothing on screen to say so, the whole page
+starts moving underneath you. Chaining is only comfortable where the inner
+surface is small and incidental; a block is neither. The page is still reached by
+wheeling anywhere that is not a scrolling block — the gaps between rows, a title
+bar, any block short enough not to have a bar at all.
+
+:func:`has_scroll_range` is that test on its own, because the block's own scroll
+area asks exactly the same question about itself before deciding to decline a
+wheel it cannot use. Two spellings of one rule is how they drift apart.
 """
 
 from __future__ import annotations
@@ -41,22 +50,16 @@ def _bar_for(area: QAbstractScrollArea, event: QWheelEvent) -> tuple[QScrollBar,
     return area.verticalScrollBar(), angle.y()
 
 
-def can_scroll(area: QAbstractScrollArea, event: QWheelEvent) -> bool:
-    """Whether *area* can still move in the direction *event* is pushing.
+def has_scroll_range(area: QAbstractScrollArea, event: QWheelEvent) -> bool:
+    """Whether *area* scrolls at all on the axis *event* is pushing.
 
-    False for an area with no range at all, and false at the end of one — a
-    surface already at its bottom has no more use for a downward wheel than one
-    that never scrolled, and treating the two the same is what lets a gesture
-    carry on out to whatever encloses it.
+    A question about the surface, not about the moment. Being *at the end* of a
+    range is emphatically not the same as having none: an area at its bottom still
+    owns the wheel, because handing the gesture on there is how a page starts
+    moving under a pointer that never left the block it was aimed at.
     """
-    bar, delta = _bar_for(area, event)
-    if bar.minimum() == bar.maximum():
-        return False
-    if delta > 0 and bar.value() == bar.minimum():
-        return False
-    if delta < 0 and bar.value() == bar.maximum():
-        return False
-    return True
+    bar, _delta = _bar_for(area, event)
+    return bar.minimum() != bar.maximum()
 
 
 class _WheelGuard(QObject):
@@ -95,9 +98,9 @@ class _WheelGuard(QObject):
 
     @staticmethod
     def _target_scroll_area(widget: QWidget, event: QWheelEvent) -> QAbstractScrollArea | None:
-        """The nearest enclosing scroll area that can use this wheel.
+        """The nearest enclosing scroll area that scrolls on this axis.
 
-        Falls back to the **outermost** — the page — when none of them can, which
+        Falls back to the **outermost** — the page — when none of them does, which
         is both the old behaviour and the right last resort: a gesture nobody can
         act on should still reach the surface the user thinks of as scrolling,
         rather than being swallowed by the widget it started over.
@@ -109,7 +112,7 @@ class _WheelGuard(QObject):
         while parent is not None:
             if isinstance(parent, QAbstractScrollArea):
                 outermost = parent
-                if nearest is None and can_scroll(parent, event):
+                if nearest is None and has_scroll_range(parent, event):
                     nearest = parent
             parent = parent.parentWidget()
         return nearest or outermost

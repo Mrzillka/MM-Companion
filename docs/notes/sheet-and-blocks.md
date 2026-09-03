@@ -266,13 +266,14 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   block can be dragged to any size: a `QScrollArea` does not pass its child's
   minimum on, so the frame is free to report a minimum of almost nothing and let
   the section reflow — and, past what reflow can save, scroll. It **declines a
-  wheel it cannot use** — `wheel_guard.can_scroll`, the same test the guard applies
-  to it from the other side — passing the event up when it has no scrollbar on that
-  axis or is already at the end of one; otherwise a block a pixel too short would
-  swallow the gesture and the page under it would stop scrolling. The guard now
-  routes a wheel that started over a spin box or a table *into* this scroll area
-  while it has anywhere to go: see [Shared UI utilities](ui-utilities.md), where
-  the rule for picking between the block and the page lives.
+  wheel it has no use for** — `wheel_guard.has_scroll_range`, the same test the
+  guard applies to it from the other side — passing the event up when it has no
+  range on that axis; otherwise a block with nothing to scroll would swallow the
+  gesture and the page under it would stop moving. It does **not** pass one up
+  for having reached the end of its range: a block that scrolls owns the wheel
+  while the pointer is over it, and the guard routes a wheel that started over a
+  spin box or a table into it on the same rule. See
+  [Shared UI utilities](ui-utilities.md), where that rule lives in full.
 - **`minimumSizeHint` is a title bar and `block.min-extent`, and says nothing about
   the content.** It used to be `max(content, the JSON floor)` in both dimensions,
   and that climbed out through the row, the page, the pinned strip and the window

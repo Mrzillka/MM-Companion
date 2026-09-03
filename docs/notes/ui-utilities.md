@@ -22,13 +22,20 @@ through rather than reinvent. When building new sheet widgets, use it:
   (`BlockFrame._InnerScroll`), so the outermost answer sent every wheel straight
   past a block the user had squashed: the block sat there with a scrollbar it
   could not be scrolled by, and the page moved instead. The target is now the
-  **nearest ancestor that still has somewhere to go on this axis**, and the
-  outermost only when nothing does — "scroll the block until it runs out, then
-  the page", which is also what an unguarded wheel over the block's own
-  background already did. `can_scroll(area, event)` is that test on its own,
-  because `_InnerScroll` asks the identical question about itself before
-  declining a wheel it cannot use, and two spellings of one rule is how they
-  drift apart.
+  **nearest ancestor that has a scroll range on this axis**, and the outermost
+  only when none of them has: *the wheel belongs to the thing it is over, if that
+  thing scrolls at all.*
+  **It deliberately does not chain at the end of a range.** The first attempt did
+  — "scroll the block until it runs out, then the page" — and that reads as a bug
+  from the other side of the screen: nothing about the gesture changed, the
+  pointer never left the block, and yet the whole sheet starts moving underneath
+  it. Chaining is only comfortable where the inner surface is small and
+  incidental, and a block is neither. The page is still reached by wheeling
+  anywhere that is not a scrolling block — the gaps between rows, a title bar, any
+  block short enough to have no bar at all. `has_scroll_range(area, event)` is
+  that test on its own, because `_InnerScroll` asks the identical question about
+  itself before declining a wheel it has no use for, and two spellings of one rule
+  is how they drift apart.
 - `ui/lock.py` — `set_widget_locked(widget, locked)` implements the read-only
   **view** mode. Locking is *not* `setEnabled(False)` (which greys a control
   out); a locked field keeps showing its value but sheds its input chrome

@@ -41,7 +41,7 @@ from mm_companion.ui import theme
 from mm_companion.ui.block_sizes import RecommendedSize
 from mm_companion.ui.drop_feedback import DropFeedback
 from mm_companion.ui.frameless import apply_window_flags, describe_on_top, size_grip_row
-from mm_companion.ui.wheel_guard import can_scroll
+from mm_companion.ui.wheel_guard import has_scroll_range
 from mm_companion.ui.widgets import ElidingLabel
 
 #: How strongly a block dropped *into* is washed. Heavier than the default
@@ -223,16 +223,18 @@ class _InnerScroll(QScrollArea):
       sections that hold tables that are scroll areas themselves) that is a
       recursion Qt resolves down the C stack. Taking one axis away removes the
       cycle rather than damping it;
-    * it **declines a wheel it cannot use**. A `QScrollArea` normally swallows
-      every wheel event whether or not it has anywhere to go, so a block one pixel
-      too short would eat the gesture and the page under it would stop scrolling.
-      Passing the event up when this block has no scrollbar on that axis (or is
-      already at the end of it) keeps the page's own scroll working everywhere it
-      used to, which is the behaviour the wheel guard has always promised. The test
-      is :func:`~mm_companion.ui.wheel_guard.can_scroll`, shared with the guard
-      rather than spelled out twice: the guard asks the same question of this
-      block when it decides where to send a wheel that started over a spin box or
-      a table inside it, and two spellings of one rule is how they drift apart.
+    * it **declines a wheel it has no use for**. A `QScrollArea` normally swallows
+      every wheel event whether or not it can scroll, so a block with nothing to
+      scroll would eat the gesture and the page under it would stop moving.
+      Passing the event up when this block has no range on that axis keeps the
+      page's own scroll working everywhere it used to.
+
+      It does *not* pass one up because it has reached the end of its range. A
+      block that scrolls owns the wheel for as long as the pointer is over it —
+      see :mod:`mm_companion.ui.wheel_guard`, where the same test
+      (:func:`~mm_companion.ui.wheel_guard.has_scroll_range`) decides which
+      surface a wheel over a spin box or a table belongs to. One rule, asked from
+      both sides; two spellings of it is how they drift apart.
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -245,8 +247,8 @@ class _InnerScroll(QScrollArea):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
     def wheelEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
-        if not can_scroll(self, event):
-            event.ignore()  # let the page have it
+        if not has_scroll_range(self, event):
+            event.ignore()  # nothing here to scroll; let the page have it
             return
         super().wheelEvent(event)
 

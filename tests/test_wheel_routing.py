@@ -1,8 +1,13 @@
 """Where a wheel over a nested widget actually goes.
 
 A block is a scroll area now, so there are two surfaces the wheel could mean and
-the guard has to pick. The rule under test is the one a user would state: scroll
-the block while it has anywhere to go, and the page once it does not.
+the guard has to pick. The rule under test is the one a user would state: **the
+wheel belongs to the thing it is over, if that thing scrolls at all.**
+
+Which is not the same as "until it runs out". A block at the bottom of its range
+keeps the gesture, because the alternative is that wheeling down a squashed block
+silently starts moving the whole page underneath a pointer that never left it.
+The page is reached by wheeling somewhere that is not a scrolling block.
 """
 
 from __future__ import annotations
@@ -18,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from mm_companion.ui.wheel_guard import can_scroll, guard_wheel
+from mm_companion.ui.wheel_guard import guard_wheel, has_scroll_range
 
 
 @pytest.fixture(scope="module")
@@ -93,7 +98,13 @@ def test_a_wheel_over_a_nested_widget_scrolls_the_block_it_is_in(qapp: QApplicat
     assert nest.page.verticalScrollBar().value() == 0
 
 
-def test_the_page_takes_over_once_the_block_has_run_out(qapp: QApplication) -> None:
+def test_the_page_does_not_take_over_when_the_block_runs_out(qapp: QApplication) -> None:
+    """The correction. A block that scrolls keeps the wheel while it is under it.
+
+    Chaining to the page here is the behaviour that reads as a bug: nothing about
+    the gesture changed, the pointer never left the block, and yet the whole sheet
+    starts moving.
+    """
     nest = _Nest(block_content=600, page_content=800)
     bar = nest.block.verticalScrollBar()
     bar.setValue(bar.maximum())
@@ -101,8 +112,8 @@ def test_the_page_takes_over_once_the_block_has_run_out(qapp: QApplication) -> N
     QApplication.sendEvent(nest.guarded, _wheel(-120))
     QApplication.processEvents()
 
-    assert bar.value() == bar.maximum()  # the block had nowhere left to go
-    assert nest.page.verticalScrollBar().value() > 0
+    assert bar.value() == bar.maximum()
+    assert nest.page.verticalScrollBar().value() == 0, "the sheet scrolled under the block"
 
 
 def test_a_block_with_nothing_to_scroll_never_takes_the_wheel(qapp: QApplication) -> None:
@@ -115,8 +126,7 @@ def test_a_block_with_nothing_to_scroll_never_takes_the_wheel(qapp: QApplication
     assert nest.page.verticalScrollBar().value() > 0
 
 
-def test_wheeling_back_up_returns_to_the_block(qapp: QApplication) -> None:
-    """The end of a range is only the end in the direction being pushed."""
+def test_wheeling_back_up_still_moves_the_block(qapp: QApplication) -> None:
     nest = _Nest(block_content=600, page_content=800)
     bar = nest.block.verticalScrollBar()
     bar.setValue(bar.maximum())
@@ -129,7 +139,10 @@ def test_wheeling_back_up_returns_to_the_block(qapp: QApplication) -> None:
     assert nest.page.verticalScrollBar().value() == 40
 
 
-def test_can_scroll_reads_the_end_of_a_range_as_spent(qapp: QApplication) -> None:
+def test_having_a_range_is_a_question_about_the_surface_not_the_moment(
+    qapp: QApplication,
+) -> None:
+    """Being at the end of a range is not the same as having none."""
     area = QScrollArea()
     area.setWidgetResizable(True)
     inner = QLabel("x")
@@ -141,10 +154,15 @@ def test_can_scroll_reads_the_end_of_a_range_as_spent(qapp: QApplication) -> Non
     QApplication.processEvents()
 
     bar = area.verticalScrollBar()
-    bar.setValue(bar.minimum())
-    assert can_scroll(area, _wheel(-120)) is True
-    assert can_scroll(area, _wheel(120)) is False
+    for value in (bar.minimum(), bar.maximum()):
+        bar.setValue(value)
+        assert has_scroll_range(area, _wheel(-120)) is True
+        assert has_scroll_range(area, _wheel(120)) is True
 
-    bar.setValue(bar.maximum())
-    assert can_scroll(area, _wheel(-120)) is False
-    assert can_scroll(area, _wheel(120)) is True
+    empty = QScrollArea()
+    empty.setWidgetResizable(True)
+    empty.setWidget(QLabel("x"))
+    empty.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+    empty.show()
+    QApplication.processEvents()
+    assert has_scroll_range(empty, _wheel(-120)) is False

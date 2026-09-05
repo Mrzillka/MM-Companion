@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QLabel,
     QScrollArea,
+    QSizePolicy,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -576,6 +577,67 @@ class TestABlockTallerThanItsContent:
                 for i in range(len(fields) - 1)
             ]
             assert max(gaps) - min(gaps) <= 1, f"the slack was shared out over the rows: {gaps}"
+        finally:
+            frame.hide()
+            frame.deleteLater()
+
+    def test_a_form_deep_in_the_content_does_not_speak_for_the_block(self, qapp) -> None:
+        """Powers and Equipment kept the gap-between-every-line fault after every
+        other block was cured of it, and this is why.
+
+        ``QFormLayout`` never overrode ``expandingDirections``, so it answers "both";
+        ``QWidgetItem`` folds a widget's own layout's answer into the widget's
+        wherever that widget is allowed to grow. One form on one power card therefore
+        made the card expansive, which made the list of cards expansive, which made
+        the section claim it already had somewhere deliberate to put a tall block's
+        surplus. It had not — the height went down into the cards and came out as a
+        gap between every line of every one of them.
+        """
+        section = QWidget()
+        layout = QVBoxLayout(section)
+        cards = []
+        for _ in range(2):
+            card = QWidget()
+            form = QFormLayout(card)
+            for name in ("type", "action"):
+                form.addRow(f"{name}:", QLabel(name))
+            layout.addWidget(card)
+            cards.append(card)
+        frame = BlockFrame("a", "A", section, RecommendedSize(200, 120), _NoHost())
+        frame.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        frame.resize(300, 600)
+        frame.show()
+        for _ in range(8):
+            qapp.processEvents()
+        try:
+            assert section.height() > section.sizeHint().height(), "the section did not fill"
+            for card in cards:
+                assert card.height() <= card.sizeHint().height() + 1, "a card took the surplus"
+            under = section.height() - cards[-1].geometry().bottom()
+            assert under > section.sizeHint().height() // 2, "the slack is not under the cards"
+        finally:
+            frame.hide()
+            frame.deleteLater()
+
+    def test_a_widget_that_says_it_expands_still_takes_the_room(self, qapp) -> None:
+        """The other half of that rule: a section is only judged to have a use for
+        the height when something in it *says so itself* — a table that stretches its
+        own rows sets ``Expanding`` on itself — and then it gets the room rather than
+        a band of nothing under it."""
+        section = QWidget()
+        layout = QVBoxLayout(section)
+        layout.addWidget(QLabel("caption"))
+        table = QLabel("rows")
+        table.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        layout.addWidget(table)
+        frame = BlockFrame("a", "A", section, RecommendedSize(200, 120), _NoHost())
+        frame.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        frame.resize(300, 600)
+        frame.show()
+        for _ in range(8):
+            qapp.processEvents()
+        try:
+            assert table.height() > 300, "the table was left at its hint under a stretch"
         finally:
             frame.hide()
             frame.deleteLater()

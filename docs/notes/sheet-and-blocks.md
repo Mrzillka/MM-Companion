@@ -404,17 +404,31 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   border. Centrally rather than in each section, because a mod ships a block too and
   the rule that a section fills its block is the page's. A section that already
   expands downwards needs none — one that states **`fills_height`** (Notes' editor,
-  the roller's history, the portrait, the Scene board), or one whose layout has
-  something expanding in it (a table that stretches its rows). A **form** takes a
+  the roller's history, the portrait, the Scene board), or one with something in it
+  that claims the height (a table that stretches its rows). A **form** takes a
   trailing row of `_Slack` instead, since a `QFormLayout` holds widgets rather than
   items and one expanding row is enough to keep the surplus off its captions; only
   a layout none of that can reach keeps the wrapper.
   `fills_height` stays opt-in rather than derived: a widget's own vertical policy
   says nothing about whether its *children* have a use for the height (the roller's
-  `QGroupBox` is `Preferred` and it is the history inside it that wants the room),
-  and `QLayout.expandingDirections` answers "both" for any layout that has not
-  overridden it, which a `QFormLayout` has not — so that question is only ever put
-  to a `QBoxLayout`.
+  `QGroupBox` is `Preferred` and it is the history inside it that wants the room).
+
+  **Who claims the height is asked of the layout's own items, never of
+  `expandingDirections`** (`_claims_the_height`), and that is what Powers and
+  Equipment were still broken on after every other block was cured. `QLayout`
+  answers "both" for any layout that has not overridden the method — a
+  `QFormLayout` has not — and the answer *travels*: `QWidgetItem` folds a widget's
+  own layout's directions into the widget's, wherever that widget's policy is
+  allowed to grow at all. So one form on one power card made the card expansive,
+  which made the list of cards expansive, which made the section say it already had
+  somewhere deliberate for a tall block's surplus. It had not, and the two blocks
+  made of cards were the two that poured a dragged-taller block's whole surplus
+  back down into the cards. What counts as a claim now is what a section states
+  itself: a **stretch factor** in its own layout, or a child whose **own** size
+  policy expands vertically — which is what the tables set on themselves, and why
+  Skills still stretches its rows while Powers grows a band of nothing under
+  *Add Power*. A hidden widget is passed over, since both blocks keep an
+  empty-state label in the layout and hide it once there is anything to show.
 - **Height is measured at the width the block has, and nothing else measures it
   right.** `sizeHint` answers with the height the content would take at its own
   *preferred* width, and `minimumSizeHint` at no particular width at all — a

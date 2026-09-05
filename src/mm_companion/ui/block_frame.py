@@ -238,6 +238,42 @@ class _Slack(QWidget):
         return QSize(0, 0)
 
 
+def _claims_the_height(layout: QBoxLayout) -> bool:
+    """Whether anything in *layout* has a use of its own for the block's surplus.
+
+    Asked of the layout's **own items**, and never of ``layout.expandingDirections()``,
+    which is the question this looks like and is not. A layout that has not overridden
+    that method answers "both" — a ``QFormLayout`` does not override it — and the
+    answer then *travels*: ``QWidgetItem`` folds a widget's own layout's expanding
+    directions into the widget's, wherever the widget's policy is allowed to grow at
+    all. So one form on one power card claimed the vertical, which made the card
+    expansive, which made the list of cards expansive, which made the Powers section
+    say it had somewhere deliberate to put a tall block's spare height. It had not:
+    the surplus went down into the cards and came out as a gap between every line of
+    every one of them, which is the exact fault the trailing stretch exists to cure —
+    on the two blocks that most needed it, since they are the ones made of cards.
+
+    A **stretch factor** and a widget's **own vertical policy** are the two ways of
+    saying "give the extra to me" that a section actually means, both of them stated
+    here rather than derived from something further down: the tables set
+    ``Expanding`` on themselves, and a section that has already put a stretch in its
+    own layout has answered the question by doing it.
+
+    A hidden widget is passed over. Powers and Equipment both keep an empty-state
+    label in the layout all the time and hide it once there is anything to show; a
+    layout ignores it, and so does this.
+    """
+    for index in range(layout.count()):
+        if layout.stretch(index) > 0:
+            return True
+        widget = layout.itemAt(index).widget()
+        if widget is None or widget.isHidden():
+            continue
+        if widget.sizePolicy().expandingDirections() & Qt.Orientation.Vertical:
+            return True
+    return False
+
+
 def _give_trailing_slack(section: QWidget) -> bool:
     """Put the block's spare height somewhere deliberate *inside* *section*.
 
@@ -255,8 +291,8 @@ def _give_trailing_slack(section: QWidget) -> bool:
       roller's ``QGroupBox`` is ``Preferred`` and it is the history inside it that
       wants the room);
     * a **vertical box** gets a trailing stretch, unless something in it already
-      expands downwards — a table that stretches its own rows, which has a better
-      use for the height than an empty band under it would;
+      claims the height (:func:`_claims_the_height`) — a table that stretches its own
+      rows, which has a better use for it than an empty band under it would;
     * a **form** gets a trailing row of :class:`_Slack`, since a ``QFormLayout``
       takes widgets rather than items. One expanding row is enough: Qt gives the
       surplus to whatever expands and leaves the rest at its hint, which is what
@@ -264,10 +300,6 @@ def _give_trailing_slack(section: QWidget) -> bool:
 
     Anything else keeps the wrapper (:func:`_wrap_top_aligned`), because a layout
     this cannot reach into would spread the surplus across its items.
-
-    ``QLayout.expandingDirections`` is only ever asked of a ``QBoxLayout``, and that
-    is not fastidiousness: it answers "both" for any layout that has not overridden
-    it, so a form would claim to fill when it would in fact spread.
     """
     if getattr(section, "fills_height", False):
         return True
@@ -278,7 +310,7 @@ def _give_trailing_slack(section: QWidget) -> bool:
             QBoxLayout.Direction.BottomToTop,
         ):
             return False
-        if not layout.expandingDirections() & Qt.Orientation.Vertical:
+        if not _claims_the_height(layout):
             layout.addStretch(1)
         return True
     if isinstance(layout, QFormLayout):

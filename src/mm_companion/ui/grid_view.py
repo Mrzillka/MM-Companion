@@ -139,8 +139,8 @@ class GridSplitter(QSplitter):
                 targets.append(after - trailing - gap - wanted)
         return [target for target in targets if target >= 0]
 
-    def update_collapse_marks(self) -> None:
-        """Say which panes a release would close, while the handle is still held.
+    def update_collapse_marks(self, handle: int) -> None:
+        """Say which panes a release would close, while *handle* is still held.
 
         Collapsing a pane to nothing is allowed — that is the bargain of a grid
         the user owns — but a block two pixels wide is not something anybody can
@@ -149,17 +149,24 @@ class GridSplitter(QSplitter):
         from a surprise into a choice, and the block is closed rather than
         destroyed, so the worst case is one Ctrl+Z.
 
-        Only a *drag* ever asks this. A relayout that happens to hand a pane a
-        tiny size — a restored arrangement, a strip mid-rebuild — must never
-        close anything, which is why this is called from the handle and not from
-        anywhere that merely notices a size.
+        Only a *drag* ever asks this, and only about **the two panes that drag is
+        moving** — the one before the handle and the one after it. A relayout can
+        hand any pane a tiny size (a restored arrangement, a strip mid-rebuild, a
+        window narrowed until a splitter's proportional share falls under the
+        limit), and none of them is anybody asking for a block to go away. Reading
+        the whole run instead meant a pane left a sliver by a *window resize* was
+        closed by the next drag of any other divider in the same row — a block
+        thrown away by a gesture that never touched it.
         """
         limit = int(theme.metric("grid.close-extent"))
+        sizes = self.sizes()
         wanted: list[QWidget] = []
         if limit > 0:
-            for index, size in enumerate(self.sizes()):
+            for index in (handle - 1, handle):
+                if not 0 <= index < len(sizes) or sizes[index] >= limit:
+                    continue
                 widget = self.widget(index)
-                if widget is not None and size < limit:
+                if widget is not None:
                     wanted.append(widget)
         for widget in self._collapsing:
             if widget not in wanted:

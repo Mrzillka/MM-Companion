@@ -130,11 +130,22 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   blocks, and letting go closes them — the View menu entry clears and Ctrl+Z puts
   them back where they were. A row squashed to nothing takes every block in it and
   counts as **one** gesture, which is what `BlockCanvas.close_blocks` exists for;
-  `hide_block` is now one call into it. **Only a drag may do this**: a restored
+  `hide_block` is now one call into it. **Only a drag may do this, and only to what
+  that drag is moving**: a restored
   arrangement, a strip mid-rebuild or a window resize can all hand a pane a tiny
   size and none of them is anybody asking for a block to go away, so the check
   hangs off `GridHandle`'s release and the grip's, and off nothing that merely
-  notices a size. The strip gets the rule for free — it renders with the page's own
+  notices a size. `update_collapse_marks` takes the **handle's index** for the same
+  reason: it used to read the whole run, so a pane a *window resize* had left a
+  sliver was closed by the next drag of any other divider in the row — a block
+  thrown away by a hand that never went near it. A handle answers for its own two
+  panes; a grip answers for its own row. And a **rebuild takes the warning down**
+  (`_clear_close_warnings`, at the top of `_relayout`) — the wash is put on by a
+  divider and taken off by that divider's release, and a splitter rebuilt out from
+  under a held handle never sends one, so the block wore the reject colour for the
+  rest of the session. The warned blocks are remembered by key rather than
+  re-derived, since by then the arrangement is the new one and row *n* of it need
+  not hold what row *n* held when the warning went up. The strip gets the rule for free — it renders with the page's own
   splitters — once the canvas follows its dividers, which until then it did not.
 - **Right-clicking a title bar opens the block's menu** (`BlockCanvas.block_menu`,
   built rather than shown so it can be asked what it offers without an event

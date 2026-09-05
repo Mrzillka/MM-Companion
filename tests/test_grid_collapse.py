@@ -59,12 +59,16 @@ def _row(canvas: BlockCanvas):
     return canvas._row_widgets[0]
 
 
-def _squash(canvas: BlockCanvas, qapp, sizes: list[int]) -> None:
-    """Put the row's divider where a drag would have, and mark it as one."""
+def _squash(canvas: BlockCanvas, qapp, sizes: list[int], handle: int = 1) -> None:
+    """Put the row's divider where a drag would have, and mark it as one.
+
+    *handle* is which divider the hand is on, because that is the only thing the
+    warning is ever about — the panes on either side of it.
+    """
     row = _row(canvas)
     row.setSizes(sizes)
     qapp.processEvents()
-    row.update_collapse_marks()
+    row.update_collapse_marks(handle)
 
 
 class TestWarningWhileTheDragIsStillHeld:
@@ -195,6 +199,31 @@ class TestAWholeRow:
         assert canvas._stack.minimumHeight() == 0
 
 
+def test_a_pane_this_drag_never_touched_is_left_alone(canvas, qapp) -> None:
+    """The rule's other half, from inside a real drag.
+
+    A window narrowed far enough leaves a splitter's proportional share under the
+    limit all on its own, and that is not a gesture. Reading the whole run rather
+    than the handle's own two panes meant the next drag of *any* divider in the
+    row threw that block away — closed by a hand that never went near it.
+    """
+    canvas.drop_block("c", DropSlot(False, 0, 0, target="b", side="right"))
+    qapp.processEvents()
+    row = _row(canvas)
+    assert row.count() == 3
+
+    # `c` is a sliver because the window is narrow, not because anybody dragged it.
+    row.setSizes([400, 380, _limit() // 2])
+    qapp.processEvents()
+    # The hand is on the *first* divider, between `a` and `b`.
+    row.update_collapse_marks(1)
+    row.commit_collapse()
+    qapp.processEvents()
+
+    assert not canvas.is_hidden("c")
+    assert canvas.block_frame("c")._close_feedback is None
+
+
 def test_a_restored_arrangement_with_a_tiny_pane_closes_nothing(canvas, qapp) -> None:
     """The rule's other half. Only a *drag* may close a block."""
     canvas.drop_block("c", DropSlot(False, 1, 0, target="b", side="right"))
@@ -251,7 +280,7 @@ def test_a_block_squashed_in_the_pinned_strip_closes_too(qapp, monkeypatch) -> N
     strip = splitters[0]
     strip.setSizes([20, 400])
     qapp.processEvents()
-    strip.update_collapse_marks()
+    strip.update_collapse_marks(1)
     strip.commit_collapse()
     for _ in range(4):
         qapp.processEvents()

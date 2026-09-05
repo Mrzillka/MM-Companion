@@ -359,7 +359,7 @@ def build(target: str):
         spare = sum(sizes) - 20
         row.setSizes([20] + [spare // (len(sizes) - 1)] * (len(sizes) - 1))
         _pump(_app_of(win))
-        row.update_collapse_marks()
+        row.update_collapse_marks(1)  # the hand is on the first divider
         return win
     elif target == "tab-group":
         # A tab group and its handle: the strip past the last tab, which is what

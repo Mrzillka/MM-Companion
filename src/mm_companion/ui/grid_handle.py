@@ -177,7 +177,7 @@ class GridHandle(QSplitterHandle):
         if callable(marker):
             marker(self._index, targets, legal if legal == snapped != wanted else None)
         self.moveSplitter(legal)
-        self._ask("update_collapse_marks")
+        self._ask("update_collapse_marks", self._index)
         event.accept()
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
@@ -216,7 +216,7 @@ class GridHandle(QSplitterHandle):
             return
         super().mouseReleaseEvent(event)
 
-    def _ask(self, method: str) -> None:
+    def _ask(self, method: str, *args: object) -> None:
         """Call *method* on the splitter, if it has one.
 
         Duck-typed like the detent hooks beside it, and for the same reason: the
@@ -225,7 +225,7 @@ class GridHandle(QSplitterHandle):
         """
         hook = getattr(self.splitter(), method, None)
         if callable(hook):
-            hook()
+            hook(*args)
 
     # -- painting -------------------------------------------------------------
 

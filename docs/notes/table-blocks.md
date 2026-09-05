@@ -291,6 +291,19 @@ Three things the blocks add on top:
   method rebuilds only when the granted *set* moved, falling through to `refresh_totals`
   otherwise, so the common signal does not cost the block its selection.
 
+  **A specialized row adds to its skill, and says so.** A narrow half-cost pool is
+  bought *on top of* the skill it narrows — Stealth 10 plus 3 ranks of
+  `Stealth::spec::Hiding` hides at 13 — and `_specialization_base_ranks` expresses
+  those parent ranks as an intrinsic `TraitContribution` on the pool's row rather
+  than as an addend inside `skill_total`. Two reasons, and the first is this block's:
+  the row's columns have to sum to its total, so ten ranks the row never shows would
+  read as a bug, while as a contribution they land in the "+" column tooltipped
+  *"+10 from Stealth ranks"*. The second is the resolver's: `GROUP_INTRINSIC` does
+  not compete, so bought ranks can neither supersede a power's boost nor be
+  superseded by a suit of armour's. Only the `spec::` marker qualifies — a focus of
+  a `focused` skill has no shared pool to add to — and the PL cap follows for free,
+  since it measures `skill_total`.
+
   "Add focus…" is a `getItem`, not a `getText`: a skill with an enumerable set of focuses
   offers them, editably, and one whose focuses cannot be listed shows its `focus_note` as
   the prompt instead. The Enhanced Trait picker reads the same two fields, so the two

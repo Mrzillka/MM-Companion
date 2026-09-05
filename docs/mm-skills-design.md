@@ -247,7 +247,9 @@ Enhanced Trait may grant a focus the character never bought.
 `specializations[]` on a **non-focused** skill are the opposite: they're just illustrative common
 uses of the one shared skill (and map loosely onto that skill's `uses[]`), *unless* the player
 deliberately buys **specialized ranks** — the half-cost narrow rank pool from §7 — in which case
-that specialization becomes its own capped rank pool too. Because any of them may be bought that
+that specialization becomes its own capped rank pool too, one bought *on top of* the skill: its
+ranks and the skill's own add together on that narrow use, so a hero with Stealth 10 who buys 3
+ranks of Stealth: Hiding hides at 13 and sneaks at 10. Because any of them may be bought that
 way, the list holds pool **names** on the same rule `focuses[]` does, and a skill whose pools are
 drawn from something unlistable ("by specific sense", "by terrain") puts that in
 `specializationNote` instead — shown as the prompt where a pool is named, never offered as one.
@@ -285,7 +287,9 @@ Investigation/Searching, Technology/Operating, Vehicles/Operate Vehicle, Experti
 Expertise. The resolver checks the use-level flag first, falling back to the skill-level flag.
 
 Cost is data, not code: **1 PP per 2 ranks**, or **1 PP per 4 ranks** for specialized/narrow rank
-pools, with each specialization or focus tracked as its own pool. Expertise is inherently priced
+pools, with each specialization or focus tracked as its own pool. Own pool is about *buying*, not
+about totalling: a specialization is priced alone and **stacks with its parent skill's ranks** when
+rolled (§5), while a focus of a `focused` skill has no parent pool to stack with. Expertise is inherently priced
 at the 4-ranks-per-PP rate because a focus is mandatory (`costNote` on the Expertise entry spells
 this out). Don't special-case any of this in `core` — read the rate from the metadata.
 

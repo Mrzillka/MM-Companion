@@ -1,15 +1,17 @@
 """Section 3: the skills table.
 
 Each skill row lays out its bonus as a sum of columns: the linked ability's
-short code and current rank, the skill's own ranks, and the modifiers imposed
-from outside — bonuses granted by powers and advantages, penalties imposed by
-conditions. The total bonus is their sum. Only the ranks are bought: the "+"
-column is a derived read-out (:func:`skill_modifiers`), never an input, and the
-whole column hides while nothing modifies any row.
+short code and current rank, the skill's own ranks, and the modifiers standing
+on the row from elsewhere — bonuses granted by powers and advantages, penalties
+imposed by conditions, and on a specialized row the parent skill's ranks. The
+total bonus is their sum. Only the ranks column is bought: the "+" column is a
+derived read-out (:func:`skill_modifiers`), never an input, and the whole column
+hides while nothing modifies any row.
 Focused skills (Close Combat, Expertise, Ranged Combat) have no ranks of their
 own — the character instead adds focused instances, each of which becomes its
 own rankable row. Any skill can also carry *specialized* rows: narrow, half-cost
-rank pools rendered as extra indented rows under the skill.
+rank pools rendered as extra indented rows under the skill, whose ranks add to
+the skill's own rather than replacing them.
 
 To save vertical space the skills are laid out across several side-by-side
 tables. The number of panels adapts to the block's width (see

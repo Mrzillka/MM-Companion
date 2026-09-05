@@ -366,6 +366,40 @@ def test_skill_total_is_ability_plus_ranks() -> None:
     assert skill_bonus(char, data, "Stealth") is None
 
 
+def test_specialized_ranks_add_to_the_skill_they_narrow() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.abilities["AGL"] = 2
+    char.skill_ranks["Stealth"] = 10
+    char.specializations["Stealth"] = ["Hiding"]
+    char.skill_ranks["Stealth::spec::Hiding"] = 3
+
+    # The narrow pool is bought on top of the skill, not instead of it: hiding reads
+    # AGL 2 + 10 Stealth + 3 Hiding, while plain Stealth is untouched by the pool.
+    assert skill_total(char, data, "Stealth") == 12
+    assert skill_total(char, data, "Stealth::spec::Hiding") == 15
+    # And the parent ranks are *shown* rather than folded in silently, so the row's
+    # columns still sum to its total.
+    bonus = skill_bonus(char, data, "Stealth::spec::Hiding")
+    assert bonus is not None
+    assert bonus.amount == 10
+    assert bonus.sources == ("Stealth ranks",)
+
+
+def test_a_focus_does_not_pick_up_its_skills_ranks() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.abilities["INT"] = 1
+    char.focuses["Expertise"] = ["Law"]
+    char.skill_ranks["Expertise::Law"] = 4
+    # A focused skill has no shared pool for a focus to add to. Even given ranks on the
+    # bare name (a hand-edited save; the sheet buys none there), the focus stands alone.
+    char.skill_ranks["Expertise"] = 6
+
+    assert skill_total(char, data, "Expertise::Law") == 5  # INT 1 + 4 ranks
+    assert skill_bonus(char, data, "Expertise::Law") is None
+
+
 def test_skill_bonus_folds_in_an_advantage_that_grants_one() -> None:
     data = load_game_data()
     # No shipped advantage grants a flat skill bonus, so stand one up the way a mod

@@ -302,6 +302,8 @@ class BlockCanvas(QWidget):
         self._hidden: set[str] = set()
         # Where each hidden block was closed from, so reopening restores it there.
         self._anchors: dict[str, Anchor] = {}
+        # The blocks currently washed as "release to close" — see _warn_closing.
+        self._warned: set[str] = set()
         self._row_widgets: list[QWidget] = []
         # The page's view. Rows with a height the user dragged keep it; the rest
         # are as tall as their content, exactly as every row used to be.
@@ -523,6 +525,9 @@ class BlockCanvas(QWidget):
         before they are let go and shown once they are placed; containers are shed
         through ``discard_widget``, which hides before it unparents.
         """
+        # A rebuild ends every gesture in flight, so nothing may still be offering
+        # to close a block — the dividers that raised the warning are about to go.
+        self._clear_close_warnings()
         self._render_pinned()  # first: see _render_pinned for why the order matters
         old_rows = self._row_widgets
 
@@ -1498,6 +1503,11 @@ class BlockCanvas(QWidget):
         The wash says *something* is about to go; the tooltip says which, which
         matters when a whole row is going at once and the blocks in it have been
         squashed too small to read their own title bars.
+
+        Which blocks are wearing it is remembered here rather than worked out again
+        from the arrangement (see :meth:`_clear_close_warnings`): the warning is
+        raised by a *divider* and taken down by that divider's release, and the
+        arrangement can have moved on entirely in between.
         """
         titles = []
         for key in keys:
@@ -1505,11 +1515,34 @@ class BlockCanvas(QWidget):
             if frame is None:
                 continue
             frame.set_closing(closing)
+            if closing:
+                self._warned.add(key)
+            else:
+                self._warned.discard(key)
             titles.append(frame.base_title)
         if closing and titles:
             QToolTip.showText(QCursor.pos(), f"Release to close {', '.join(titles)}")
         elif not closing:
             QToolTip.hideText()
+
+    def _clear_close_warnings(self) -> None:
+        """Take down any "release to close" wash, because the page is being rebuilt.
+
+        A rebuild ends whatever gesture was in flight — that is already the rule the
+        row grip follows (``RowStack._shed`` cancels the drag rather than committing
+        it) — so nothing may still be promising to close. Without this the wash was a
+        *permanent* mark on a block: it is put on by a divider and taken off by that
+        divider's release, and a splitter rebuilt out from under a held handle never
+        sends one. The blocks are tracked by key rather than re-derived from the
+        arrangement, because by the time this runs the arrangement is the new one and
+        row *n* of it need not hold what row *n* held when the warning went up.
+        """
+        for key in list(self._warned):
+            frame = self._frames.get(key)
+            if frame is not None:
+                frame.set_closing(False)
+        self._warned.clear()
+        QToolTip.hideText()
 
     def close_blocks(self, keys: Sequence[str]) -> None:
         """Close several blocks at once, as one gesture.
@@ -1523,8 +1556,10 @@ class BlockCanvas(QWidget):
         wanted = [key for key in keys if key in self._frames and key not in self._hidden]
         if not wanted:
             return
+        # Through the same bookkeeping the warning went up by, so nothing is left
+        # standing on a block that is on its way out anyway.
+        self._warn_closing(wanted, False)
         for key in wanted:
-            self._frames[key].set_closing(False)
             anchor = self._anchor_for(key, self._rows)  # before _detach mutates _rows
             self._detach(key)
             self._hidden.add(key)

@@ -199,6 +199,24 @@ class TestAWholeRow:
         assert canvas._stack.minimumHeight() == 0
 
 
+def test_a_rebuild_under_a_held_divider_takes_the_warning_down(canvas, qapp) -> None:
+    """The wash is put on by a divider and taken off by that divider's release.
+
+    A splitter rebuilt out from under a held handle never sends one, so the block
+    kept the reject colour for the rest of the session — a permanent mark saying it
+    was about to be closed. The row grip already cancelled rather than committed on
+    a rebuild; this is the same rule for the other divider.
+    """
+    _squash(canvas, qapp, [_limit() // 2, 780])
+    assert canvas.block_frame("a")._close_feedback.state == DropFeedback.REJECT
+
+    canvas.hide_block("d")  # anything at all that rebuilds the page
+    qapp.processEvents()
+
+    assert canvas.block_frame("a")._close_feedback.state == DropFeedback.IDLE
+    assert not canvas.is_hidden("a"), "a rebuild decided the gesture on its own"
+
+
 def test_a_pane_this_drag_never_touched_is_left_alone(canvas, qapp) -> None:
     """The rule's other half, from inside a real drag.
 

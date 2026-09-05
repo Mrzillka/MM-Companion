@@ -1039,6 +1039,10 @@ class BlockCanvas(QWidget):
         region = lt.from_dict(raw_region.get("root"), known)
         if region is None and raw_region.get("root") not in (None, {}):
             return None
+        # The strip draws no tab bar, so a cell naming several blocks would show
+        # one of them and leave the rest parented to the panel with nowhere to be.
+        # Open any out into cells of their own rather than rejecting the layout.
+        region = lt.ungroup(region, lt.VERTICAL if is_vertical_strip(edge) else lt.HORIZONTAL)
         extent = raw_region.get("extent")
         if not (isinstance(extent, int) and not isinstance(extent, bool) and extent > 0):
             extent = DEFAULT_EXTENT

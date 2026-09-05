@@ -944,6 +944,37 @@ def test_a_restore_rebuilds_the_strip_even_with_the_same_blocks_in_it(make_sheet
     assert _pinned(sheet)["lines"] == [["conditions", "advantages"]]
 
 
+def test_a_hand_written_tab_group_in_the_strip_is_opened_out(make_sheet) -> None:
+    """The strip draws no tab bar, so a cell naming two blocks loses one of them.
+
+    Nothing the app does writes one — a block is pinned one at a time and a drag
+    of a whole group is refused — but a hand-edited settings file can, and the
+    block that was not the active tab arrived parented to the panel with nowhere
+    to be, drawn on top of the strip rather than in it. The honest reading of such
+    a region is "both of these are pinned", not "throw the layout away".
+    """
+    sheet = make_sheet()
+    sheet.pin_block("conditions")
+    sheet.pin_block("advantages")
+    _settle()
+    model = sheet.arrangement()
+    model["region"]["root"] = {
+        "type": "leaf",
+        "keys": ["conditions", "advantages"],
+        "active": 0,
+    }
+
+    assert sheet.canvas.apply_arrangement(model) is True
+    _settle()
+
+    region = sheet.canvas.pin_region()
+    assert lt.keys(region) == ["conditions", "advantages"]
+    assert all(not leaf.tabbed for _path, leaf in lt.iter_leaves(region))
+    for key in ("conditions", "advantages"):
+        frame = sheet.canvas.block_frame(key)
+        assert frame.isVisible(), f"{key} was left with nowhere to be"
+
+
 class TestTheStripsOwnDetent:
     """The one divider on the sheet that had no recommended-size hint.
 

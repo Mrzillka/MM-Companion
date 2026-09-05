@@ -633,7 +633,12 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   block can live plus the schema to carry it. Dragging one tab out is still how a
   member of a group gets into a window. For the same reason the **strip refuses a
   group**: it renders a multi-key cell as whichever tab is active and draws no bar,
-  so a group dropped there would arrive with most of itself nowhere.
+  so a group dropped there would arrive with most of itself nowhere. Nothing the app
+  does can write one, but a hand-edited settings file can, so `layout_tree.ungroup`
+  opens any multi-key cell in a *restored* region out into cells of its own — the
+  honest reading of one is "both of these are pinned", where the alternative was a
+  block parented to the panel with nowhere to be, drawn over the strip rather than
+  in it.
 - **`_drag_keys` is what the hit test asks**, not `_drag_key`: one block for a
   title-bar drag and all of them for a group, so a cell is never offered a place
   inside itself.

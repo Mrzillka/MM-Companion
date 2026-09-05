@@ -346,6 +346,32 @@ class TestReorderLeaf:
         assert lt.reorder_leaf(before, ()) is before
 
 
+class TestUngroup:
+    """What the pinned strip needs: one block per cell, because it draws no tabs."""
+
+    def test_a_group_becomes_one_cell_per_block(self) -> None:
+        grouped = lt.Leaf(("skills", "powers"))
+        opened = lt.ungroup(grouped, lt.VERTICAL)
+        assert opened == lt.Split(lt.VERTICAL, (lt.Leaf(("skills",)), lt.Leaf(("powers",))))
+
+    def test_a_cell_holding_one_block_is_left_exactly_as_it_was(self) -> None:
+        alone = lt.Leaf(("skills",))
+        assert lt.ungroup(alone, lt.VERTICAL) is alone
+
+    def test_a_tree_with_nothing_grouped_keeps_its_sizes(self) -> None:
+        before = lt.Split(lt.VERTICAL, (lt.Leaf(("skills",)), lt.Leaf(("powers",))), (120, 200))
+        assert lt.ungroup(before, lt.HORIZONTAL) == before
+
+    def test_it_reaches_a_group_nested_inside_a_split(self) -> None:
+        before = lt.Split(lt.VERTICAL, (lt.Leaf(("dice",)), lt.Leaf(("skills", "powers"))))
+        after = lt.ungroup(before, lt.VERTICAL)
+        assert lt.keys(after) == ["dice", "skills", "powers"]
+        assert all(not leaf.tabbed for _path, leaf in lt.iter_leaves(after))
+
+    def test_nothing_ungroups_to_nothing(self) -> None:
+        assert lt.ungroup(None, lt.VERTICAL) is None
+
+
 class TestPersistence:
     def test_a_page_round_trips(self) -> None:
         before = page()

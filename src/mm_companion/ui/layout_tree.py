@@ -555,6 +555,35 @@ def merge_leaf_into(node: Node | None, keys: Sequence[str], target: str) -> Node
     return normalize(_replace_at(detached, path, grown))
 
 
+def ungroup(node: Node | None, axis: str) -> Node | None:
+    """*node* with every tab group opened out into one cell per block, along *axis*.
+
+    What the **pinned strip** needs, because the strip is the one renderer that has
+    no tab bar: it draws a multi-key cell as whichever tab is active, so the rest of
+    that cell arrives parented to the panel with nowhere to be — a block sitting
+    over the strip rather than in it. Nothing the app does can write such a region
+    (a block is pinned one at a time, and a drag of a whole group is refused), but a
+    hand-edited settings file can, and the honest reading of one is "these blocks
+    are in the strip" rather than "throw the layout away".
+
+    The order the keys were in is the order they come out in, and a cell already
+    holding one block is returned untouched.
+    """
+    if node is None:
+        return None
+    if isinstance(node, Leaf):
+        if not node.tabbed:
+            return node
+        return Split(axis, tuple(Leaf((key,)) for key in node.keys))
+    return normalize(
+        Split(
+            node.orientation,
+            tuple(child for child in (ungroup(c, axis) for c in node.children) if child),
+            node.usable_sizes(),
+        )
+    )
+
+
 def reorder_leaf(node: Node | None, keys: Sequence[str]) -> Node | None:
     """The cell holding *keys* re-dealt into that order, still showing the same block.
 

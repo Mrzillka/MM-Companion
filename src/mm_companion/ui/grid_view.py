@@ -830,14 +830,3 @@ def build_node(node: Node, build_leaf: LeafBuilder, parent: QWidget | None = Non
     if sizes and all(size > 0 for size in sizes):
         splitter.setSizes(list(sizes))
     return splitter
-
-
-def split_sizes(widget: QWidget) -> tuple[int, ...]:
-    """The live sizes of *widget* if it is a split, else nothing."""
-    return tuple(widget.sizes()) if isinstance(widget, QSplitter) else ()
-
-
-def frame_at(widget: QWidget, point: QPoint) -> QWidget | None:
-    """The deepest child of *widget* containing *point*, in *widget*'s coordinates."""
-    found = widget.childAt(point)
-    return found if found is not None else None

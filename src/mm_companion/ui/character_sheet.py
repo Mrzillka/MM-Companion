@@ -134,11 +134,11 @@ class CharacterSheet(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._board)
 
-        # The page's own minimum width, which no longer tracks the blocks in it
-        # (see _update_min_width). Still recomputed on every arrangement change,
-        # since a preset switch can move the token it does depend on.
         # The block a tab was just split into, while its drag is still in flight.
         self._split_key: str | None = None
+        # The page's own minimum width no longer tracks the blocks in it (see
+        # _update_min_width), but it is still recomputed on every arrangement
+        # change, since a preset switch can move the token it does depend on.
         self._canvas.arrangement_changed.connect(self._update_min_width)
         self._update_min_width()
 

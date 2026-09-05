@@ -47,7 +47,14 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.ui import theme
-from mm_companion.ui.block_frame import BlockFrame, DragHost
+from mm_companion.ui.block_frame import (
+    CLOSE_GLYPH,
+    FLOAT_GLYPH,
+    PIN_GLYPH,
+    BlockFrame,
+    DragHost,
+    chrome_button,
+)
 from mm_companion.ui.block_sizes import RecommendedSize
 from mm_companion.ui.tab_drag import TabSplitGesture
 
@@ -140,8 +147,9 @@ class TabGroupFrame(QFrame):
             # buttons act on whichever block is showing anyway.
             frame.set_tabbed(True)
             self._stack.addWidget(frame)
-            self._bar.addTab(_elide(frame.base_title))
+            self._bar.addTab("")  # captioned by refresh_titles, below
             frame.title_bar.set_title(frame.title)  # keep its own caption current
+        self.refresh_titles()
         self._bar.setCurrentIndex(max(0, min(active, len(self._frames) - 1)))
 
         self._gesture = TabSplitGesture(
@@ -393,9 +401,11 @@ class _GroupButtons(QWidget):
         row.setContentsMargins(0, 0, int(theme.metric("space.sm")), 0)
         row.setSpacing(int(theme.metric("space.xxs")))
         self._buttons = {
-            "pin": _tool("🖈", "Pin the block showing to the fixed strip"),
-            "float": _tool("↗", "Pop the block showing out into its own window"),
-            "close": _tool("✕", "Hide the block showing (reopen from the View menu)"),
+            "pin": chrome_button(PIN_GLYPH, "Pin the block showing to the fixed strip"),
+            "float": chrome_button(FLOAT_GLYPH, "Pop the block showing out into its own window"),
+            "close": chrome_button(
+                CLOSE_GLYPH, "Hide the block showing (reopen from the View menu)"
+            ),
         }
         self._buttons["pin"].clicked.connect(lambda: self._act(host.request_pin))
         self._buttons["float"].clicked.connect(lambda: self._act(host.request_float))
@@ -409,17 +419,6 @@ class _GroupButtons(QWidget):
     def _act(self, action) -> None:  # noqa: ANN001 - a bound host method
         if self._key is not None:
             action(self._key)
-
-
-def _tool(glyph: str, tip: str):
-    from PySide6.QtWidgets import QToolButton
-
-    button = QToolButton()
-    button.setText(glyph)
-    button.setAutoRaise(True)
-    button.setToolTip(tip)
-    button.setCursor(Qt.CursorShape.ArrowCursor)
-    return button
 
 
 def _elide(text: str) -> str:

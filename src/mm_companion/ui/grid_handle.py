@@ -25,7 +25,6 @@ widgets that act on it.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Protocol
 
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QColor, QPainter
@@ -80,17 +79,6 @@ def paint_divider(
     else:
         inset = max(0, (rect.height() - line) // 2)
         painter.fillRect(rect.adjusted(0, inset, 0, -inset), colour)
-
-
-class DetentHost(Protocol):
-    """What a :class:`GridHandle` needs from the splitter it belongs to."""
-
-    def detent_positions(self, index: int) -> list[int]: ...
-    def mark_detents(self, index: int, targets: Sequence[int], settled: int | None) -> None: ...
-    def clear_detent_marks(self) -> None: ...
-    def update_collapse_marks(self) -> None: ...
-    def commit_collapse(self) -> None: ...
-    def fit_pane(self, index: int) -> None: ...
 
 
 class GridHandle(QSplitterHandle):

@@ -242,9 +242,6 @@ class BlockCanvas(QWidget):
     #: View menu can grow and lose an entry with it.
     block_added = Signal(str)
     block_removed = Signal(str)
-    #: A block was dropped *onto* another (source, target). The canvas only
-    #: reports it: what merging two blocks means is the host's business.
-    merge_requested = Signal(str, str)
     #: One arrangement gesture has *finished* — a drop landed, a divider was let
     #: go, a block was pinned or closed. Distinct from ``arrangement_changed``,
     #: which fires for every intermediate state of a drag as well: this is the

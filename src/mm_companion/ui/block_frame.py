@@ -65,6 +65,32 @@ class DragHost(Protocol):
     def request_menu(self, key: str, global_pos: QPoint) -> None: ...
 
 
+#: The glyphs the chrome buttons wear. U+1F588 black pushpin rather than U+1F4CC,
+#: because the plain symbol keeps the row monochrome where the emoji pushpin would
+#: put a colour glyph in every block's header; U+2197 north-east arrow for "pop
+#: out"; U+2715 multiplication x for "close".
+PIN_GLYPH = "🖈"
+FLOAT_GLYPH = "↗"
+CLOSE_GLYPH = "✕"
+
+
+def chrome_button(glyph: str, tip: str = "") -> QToolButton:
+    """One of the little buttons at the right of a block's chrome.
+
+    Shared with :class:`~mm_companion.ui.tab_group.TabGroupFrame`, whose tab bar
+    carries the same three acting on whichever block is showing. They have to look
+    and behave identically — they are the same buttons in a different holder — and
+    two spellings of "flat, arrow cursor, one glyph" is how they stop being.
+    """
+    button = QToolButton()
+    button.setText(glyph)
+    button.setAutoRaise(True)
+    button.setCursor(Qt.CursorShape.ArrowCursor)
+    if tip:
+        button.setToolTip(tip)
+    return button
+
+
 class TitleBar(QFrame):
     """A block's header: the drag handle plus pin, float and close buttons.
 
@@ -102,29 +128,19 @@ class TitleBar(QFrame):
         # Whether this block is in a window of its own, which is what the pin
         # button means by "pin" — see the class docstring.
         self._floating = False
-        self._pin_button = QToolButton()
-        # U+1F588 black pushpin, not U+1F4CC: the plain symbol keeps the title bar
-        # monochrome like its ↗ and ✕ neighbours, where the emoji pushpin would put
-        # a colour glyph in every block's header.
-        self._pin_button.setText("🖈")
-        self._pin_button.setAutoRaise(True)
-        self._pin_button.setCursor(Qt.CursorShape.ArrowCursor)
+        # The pin's tooltip is set by :meth:`set_floating`, which is the only thing
+        # that knows what this block's pin currently means.
+        self._pin_button = chrome_button(PIN_GLYPH)
         self._pin_button.clicked.connect(self._pin_clicked)
         layout.addWidget(self._pin_button)
 
-        self._float_button = QToolButton()
-        self._float_button.setText("↗")  # north-east arrow: pop out
-        self._float_button.setAutoRaise(True)
-        self._float_button.setToolTip("Pop this block out into its own window")
-        self._float_button.setCursor(Qt.CursorShape.ArrowCursor)
+        self._float_button = chrome_button(FLOAT_GLYPH, "Pop this block out into its own window")
         self._float_button.clicked.connect(lambda: self._host.request_float(self._key))
         layout.addWidget(self._float_button)
 
-        self._close_button = QToolButton()
-        self._close_button.setText("✕")  # multiplication x: close/hide
-        self._close_button.setAutoRaise(True)
-        self._close_button.setToolTip("Hide this block (reopen from the View menu)")
-        self._close_button.setCursor(Qt.CursorShape.ArrowCursor)
+        self._close_button = chrome_button(
+            CLOSE_GLYPH, "Hide this block (reopen from the View menu)"
+        )
         self._close_button.clicked.connect(lambda: self._host.request_hide(self._key))
         layout.addWidget(self._close_button)
 
@@ -752,17 +768,6 @@ class BlockFrame(QFrame):
         extent = int(theme.metric("block.min-extent"))
         chrome = self.title_bar.minimumSizeHint().height() + 2 * self.frameWidth()
         return QSize(extent, chrome + extent)
-
-    def set_vertical_fill(self, fill: bool) -> None:
-        """Kept for callers; there is nothing left for it to do.
-
-        A block used to be exactly as tall as its content, so a board with only a
-        few blocks left a dead gap under the last one and the canvas flipped that
-        one block to ``Expanding`` to soak it up. Every block expands now — how
-        tall each row is, is a size in the arrangement and a divider the user can
-        drag — so there is no leftover height for anyone to be given.
-        """
-        return
 
     def set_tabbed(self, tabbed: bool) -> None:
         """Lend this block's title bar to a tab group, or take it back.

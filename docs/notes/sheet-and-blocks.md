@@ -658,9 +658,11 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
 - **The trade, stated plainly.** Two Notes blocks used to merge their *notes* into
   one tab bar; they now stay two blocks sharing a cell, so you get a tab bar of blocks
   each with its own tab bar of notes. That is more chrome than the old answer and it
-  is the price of one merge rule instead of a per-block opt-in. The Notes block's own
-  `adopt`/`release`/`open_refs`/`accepts_merge` are gone with it; splitting a *note*
-  out into a new block is a different feature and stayed.
+  is the price of one merge rule instead of a per-block opt-in. What went with it is
+  the Notes block's `accepts_merge` and the canvas's `merge_requested`, which was the
+  seam that asked the *sheet* what merging two blocks meant. Its `adopt`/`release`/
+  `open_refs` stayed, because splitting a *note* out into a new block is a different
+  feature and still needs them.
 - A group of one collapses back into a plain block, so nothing can get stuck in
   one.
 

@@ -96,7 +96,17 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   stretch it already had. That number is read off the widget at the instant of a
   press, is not a function of the width, is recomputed by nothing while it stands,
   and is gone on release; a rebuild *under* a live drag cancels the gesture rather
-  than committing it. Growing is untouched.
+  than committing it. Growing is untouched — and getting *that* right is the whole
+  reason the freeze is a floor under `RowStack.minimumSizeHint` rather than a
+  `setMinimumHeight`. An explicit minimum does not sit under Qt's answer, it
+  replaces it (the same `qSmartMinSize` rule `_pin_content_height` relies on
+  further down), and Qt's answer is the rows added up, which inside a `QScrollArea`
+  is the *only* way a row dragged taller reaches the page. Spelled as an explicit
+  minimum the freeze held the page in both directions: past the point where the
+  page filled its viewport the grip stood still under a hand that kept moving, the
+  row below was crushed to find the height the dragged one was taking, and both
+  came right on release — which is why the fault read as "the divider stops moving
+  and the block under it clips, but the result is correct".
 - **And a grip dragged into the edge of the window auto-scrolls**, reusing the
   block drag's `edge_velocity` curve. It extends the drag *before* it scrolls: a
   row dragged past the bottom is usually already at the end of the scroll range,

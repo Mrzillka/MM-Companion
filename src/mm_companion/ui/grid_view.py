@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 
-from PySide6.QtCore import QEvent, QPoint, QRect, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import QSizePolicy, QSplitter, QVBoxLayout, QWidget
 
@@ -548,17 +548,37 @@ class RowStack(QWidget):
         """The height of each row; zero for one that is still sized by its content."""
         return list(self._heights)
 
-    # No ``minimumSizeHint`` here, and that is the point. It used to report the
-    # rows' full height, so the page would overflow the viewport and scroll — but
-    # computing ``sizeHint()`` *inside* ``minimumSizeHint()`` makes the minimum
-    # depend on the width, which is the one thing a widget in a QScrollArea must
-    # never do: the bar appears, the viewport narrows, the content gets taller,
-    # the minimum grows, and the whole thing can chase itself down the stack. It
-    # was never needed. A holder with a ``Minimum`` vertical policy already reports
-    # its content height as its minimum, and one with a fixed height reports that,
-    # so ``QVBoxLayout`` sums exactly the same number on its own (see
-    # ``tests/test_grid_resize.py``). The same warning is written out in full on
-    # :class:`~mm_companion.ui.flow_layout.FlowContainer`, which reached it first.
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        """Qt's own answer — the rows added up — held at the frozen height.
+
+        Nothing here **computes** a minimum. ``QWidget`` already answers with the
+        layout's total minimum, which is the rows added up: a holder with a
+        ``Minimum`` vertical policy reports its content height as its minimum, and
+        one pinned by a drag reports that. That sum is how a row dragged taller
+        reaches the page — a ``QScrollArea`` sizes a resizable widget to the larger
+        of its viewport and this, and nothing else — so it is also the one number a
+        freeze must not replace.
+
+        Which is exactly what :meth:`_freeze` used to do. ``setMinimumHeight`` is
+        not a floor under this answer, it *is* the answer: an explicit minimum wins
+        over ``minimumSizeHint`` outright. So the page stopped growing the moment a
+        drag began — the grip stood still under a hand that kept moving, the row
+        below it was crushed to make room for the one being dragged, and both came
+        right on release, when the freeze came off. Flooring the real sum keeps the
+        refusal to *shrink* and lets growth through.
+
+        What must never appear here is a minimum shaped by the *content at this
+        width*: the bar appears, the viewport narrows, the content gets taller, the
+        minimum grows, and the whole thing chases itself down the stack. The frozen
+        height is not that. It is one number read off the widget at the instant of a
+        mouse press, and it is gone again on release. The same warning is written
+        out in full on :class:`~mm_companion.ui.flow_layout.FlowContainer`, which
+        reached it first.
+        """
+        hint = super().minimumSizeHint()
+        if self._frozen_height <= 0:
+            return hint
+        return QSize(hint.width(), max(hint.height(), self._frozen_height))
 
     # -- dragging -------------------------------------------------------------
 
@@ -675,11 +695,17 @@ class RowStack(QWidget):
         content-shaped minimum the page's shape rule forbids: it is one number
         read off the widget's own height at the instant of a mouse press, it is
         not a function of the width, nothing recomputes it while it stands, and it
-        is gone again on release. Growing is unaffected — a row dragged taller
-        still pushes the page past the viewport, which is what makes it scroll.
+        is gone again on release.
+
+        Growing has to be unaffected, and that is why the number is a *floor under*
+        :meth:`minimumSizeHint` rather than an explicit ``setMinimumHeight``. An
+        explicit minimum does not sit under Qt's answer, it replaces it — and Qt's
+        answer is the rows added up, which is the only way a row dragged taller
+        reaches the page inside a ``QScrollArea``. Setting one froze the page in
+        *both* directions.
         """
         self._frozen_height = max(0, self.height())
-        self.setMinimumHeight(self._frozen_height)
+        self.updateGeometry()
 
     def _end_grip_drag(self) -> None:
         """The grip was let go: thaw, stand the auto-scroll down, act on the mark."""
@@ -699,7 +725,7 @@ class RowStack(QWidget):
         self._clear_collapse_mark()
         self._active_grip = None
         self._frozen_height = 0
-        self.setMinimumHeight(0)
+        self.updateGeometry()
         self.gripDragFinished.emit()
 
     def _mark_rows(self, index: int, targets: Sequence[int], settled: int | None) -> None:

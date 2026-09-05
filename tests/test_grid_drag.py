@@ -205,18 +205,43 @@ class TestDraggingARowGrip:
 
         _send(grip, QMouseEvent.Type.MouseButtonRelease, QPoint(40, 3), held=False)
         _settle(qapp)
-        assert stack.minimumHeight() == 0, "the page never got its own height back"
+        assert stack.minimumSizeHint().height() < tall, "the page never got its own height back"
+
+    def test_the_freeze_lets_the_page_go_on_growing(self, sheet, qapp) -> None:
+        """The other half of the freeze, and the half it used to get wrong.
+
+        It was spelled ``setMinimumHeight``, which does not sit *under* Qt's answer
+        for a widget's minimum — it replaces it. Qt's answer is the rows added up,
+        and inside a ``QScrollArea`` that sum is the only way a row dragged taller
+        reaches the page. So the freeze stopped the page growing as well as
+        shrinking: the grip stood still under a hand that kept moving, and the row
+        below it was crushed to find the height the dragged one was taking.
+        """
+        stack = sheet.canvas._stack
+        grip = stack._grips[0]
+        anchor = grip.mapToGlobal(QPoint(40, 3))
+        below = stack._holders[1].height()
+        _send(grip, QMouseEvent.Type.MouseButtonPress, QPoint(40, 3), held=True)
+        frozen = stack.minimumSizeHint().height()
+
+        _send(
+            grip, QMouseEvent.Type.MouseMove, grip.mapFromGlobal(anchor + QPoint(0, 200)), held=True
+        )
+        _settle(qapp, 2)
+
+        assert stack.minimumSizeHint().height() > frozen, "the page was frozen against growing"
+        assert stack._holders[1].height() == below, "the row below paid for the one being dragged"
 
     def test_the_freeze_is_released_even_if_the_page_is_rebuilt_under_it(self, sheet, qapp) -> None:
         stack = sheet.canvas._stack
         grip = stack._grips[0]
         _send(grip, QMouseEvent.Type.MouseButtonPress, QPoint(40, 3), held=True)
-        assert stack.minimumHeight() > 0  # positive control: it did freeze
+        assert stack._frozen_height > 0  # positive control: it did freeze
 
         sheet.canvas._relayout()
         _settle(qapp)
 
-        assert stack.minimumHeight() == 0
+        assert stack._frozen_height == 0
 
     def test_a_grip_dragged_past_the_window_keeps_growing_the_row(self, sheet, qapp) -> None:
         """Auto-scroll, and the reason it extends the drag as well as scrolling.

@@ -45,6 +45,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QSizePolicy,
     QTableWidget,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -73,8 +74,31 @@ INDICATOR_HEIGHT = 2
 SORT_MANUAL = "manual"
 
 
+class _CentredCell(QWidget):
+    """Holds one cell widget at its own height, centred in whatever the row is.
+
+    See :meth:`AutoHeightTable.setCellWidget`. Deliberately not an alignment on the
+    widget itself: a cell widget's geometry is set by the view to the cell's
+    rectangle, so there is no layout listening to an alignment until one is put
+    here.
+    """
+
+    def __init__(self, widget: QWidget) -> None:
+        super().__init__()
+        self._held = widget
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addStretch(1)
+        layout.addWidget(widget)
+        layout.addStretch(1)
+
+    def held(self) -> QWidget:
+        return self._held
+
+
 class AutoHeightTable(QTableWidget):
-    """A table that reports its full content size, so it never scrolls itself.
+    """A table that reports its content size and then *fills* whatever it is given.
 
     The sheet's rule is that a block shows *all* of its content and the page
     scrolls when the blocks don't all fit. A table honours that by reporting the
@@ -84,6 +108,23 @@ class AutoHeightTable(QTableWidget):
     count that moves at runtime; the old ``fit_table_height`` measured once at
     build time, before the stylesheet had touched a row, which is why the two stat
     blocks needed a hardcoded height with "a little slack" in it.
+
+    **And the surplus goes into the rows.** A page the user drags is the first
+    thing that can hand a table more height than its rows want, and a table given
+    it simply drew bare viewport under the last row — inside its own border, so
+    dragging Abilities taller made the block bigger and the *table* no different,
+    which is the exact shape of "it doesn't scale". :meth:`sync_row_stretch`
+    shares the spare height out evenly over the rows instead, so a taller block is
+    a table with wider line spacing and a shorter one tightens back down to its
+    natural rows before the block starts scrolling. A row spanned across every
+    column is a **rule** rather than a row and sits it out — a 3px line between the
+    bought traits and the derived ones would otherwise grow into a 40px band.
+
+    What the table *reports* stays the natural height throughout
+    (:meth:`row_heights`), and that is load-bearing rather than tidy: were the hint
+    to follow the stretched rows, taller rows would mean a taller hint, which means
+    a taller block, which means taller rows, and the block would walk down the page
+    on its own.
 
     *word_wrap* re-measures wrapped rows on resize (their height depends on the
     stretched column's width). *fit_width* additionally measures the columns
@@ -131,8 +172,16 @@ class AutoHeightTable(QTableWidget):
         self._reorder: RowReorder | None = None
         self._press_pos: QPoint | None = None
         self._dragged = False
+        # What each row is tall before any of the block's spare height is shared
+        # out — see :meth:`row_heights`. Empty until the first stretch, and dropped
+        # whenever the rows themselves change.
+        self._row_natural: list[int] = []
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        # ``Expanding`` down, not ``Fixed``: the table takes the height the block
+        # has to give and puts it into its rows (:meth:`sync_row_stretch`). It is
+        # still the *hint* that says what it would like, so nothing here makes a
+        # block open taller than its content.
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         # How tall a wrapped row is depends on the width of the column it wraps in,
         # and that width settles *after* the rows are filled: a ResizeToContents
         # sibling measures the items it was just given, takes its share, and the
@@ -159,9 +208,7 @@ class AutoHeightTable(QTableWidget):
         # block opens a header short.
         if not header.isHidden():
             height += header.height()
-        for row in range(self.rowCount()):
-            height += self.rowHeight(row)
-        return height
+        return height + sum(self.row_heights())
 
     def _chrome_width(self) -> int:
         """Everything across the table that is not a column."""
@@ -283,6 +330,97 @@ class AutoHeightTable(QTableWidget):
         """Which columns are hidden for want of room right now."""
         return self._shed
 
+    # -- filling the height ---------------------------------------------------
+
+    def row_heights(self) -> list[int]:
+        """Each row's height *before* the block's spare height is shared out.
+
+        The natural heights are recorded the moment before a stretch is first
+        applied, at which point every row is still at one — and dropped again by
+        :meth:`setRowCount`, which is the only way rows come and go. Until then the
+        live heights are the natural ones and are read directly, so a table that
+        never gets more room than it wants keeps no state at all.
+        """
+        if len(self._row_natural) == self.rowCount():
+            return list(self._row_natural)
+        return [self.rowHeight(row) for row in range(self.rowCount())]
+
+    def is_rule_row(self, row: int) -> bool:
+        """Whether *row* is chrome drawn across the table rather than a row of data.
+
+        Chrome is spanned across every column — the only way a table has of drawing
+        across itself — which is exactly what tells it apart from a row of data, and
+        is why this needs no register of which rows are which. It catches both of
+        the things that are drawn that way: the rule between the bought traits and
+        the derived ones, and the header a skill's focus buttons sit on.
+        """
+        return self.columnCount() > 1 and self.columnSpan(row, 0) >= self.columnCount()
+
+    def setCellWidget(self, row: int, column: int, widget: QWidget) -> None:  # noqa: N802
+        """Put *widget* in a cell at its own height, centred, however tall the row is.
+
+        A cell widget is given the cell's whole rectangle, which was invisible while
+        every row was exactly as tall as its content and is not once the block shares
+        its spare height out: a stretched Abilities row turned every rank spin box
+        into an 85px pill. Text in a cell is centred in its row; a widget in one
+        should read the same way, so it is held between two stretches.
+
+        Paired with :meth:`cellWidget`, which hands the widget itself back, so no
+        caller has to know the holder is there.
+        """
+        super().setCellWidget(row, column, _CentredCell(widget) if widget is not None else widget)
+
+    def cellWidget(self, row: int, column: int) -> QWidget | None:  # noqa: N802
+        """The widget put in this cell — not the holder :meth:`setCellWidget` wrapped it in."""
+        held = super().cellWidget(row, column)
+        return held.held() if isinstance(held, _CentredCell) else held
+
+    def sync_row_stretch(self) -> None:
+        """Share this table's spare height out evenly over its rows.
+
+        Even, rather than in proportion to what each row already is: the spare
+        height is *line spacing*, and a wrapped two-line row wants the same extra
+        breathing room around it as a one-line row, not twice as much. Rules sit it
+        out (see :meth:`is_rule_row`).
+
+        Nothing here can feed back into the block's size. The stretched heights are
+        written with ``setRowHeight`` and read back by nothing: what this table
+        reports up is built from :meth:`row_heights`, which is the naturals.
+        """
+        rows = self.rowCount()
+        if rows == 0:
+            return
+        natural = self.row_heights()
+        target = list(natural)
+        stretchable = [row for row in range(rows) if not self.is_rule_row(row)]
+        surplus = self.viewport().height() - sum(natural)
+        if surplus > 0 and stretchable:
+            share, extra = divmod(surplus, len(stretchable))
+            for index, row in enumerate(stretchable):
+                target[row] += share + (1 if index < extra else 0)
+        if target == natural and not self._row_natural:
+            return  # nothing to give, and nothing given before: stay stateless
+        self._row_natural = natural
+        for row in range(rows):
+            if self.rowHeight(row) != target[row]:
+                self.setRowHeight(row, target[row])
+
+    def setRowCount(self, rows: int) -> None:  # noqa: N802 - Qt override
+        """Put the rows back to their natural heights before the set of them changes.
+
+        ``setRowCount`` keeps the rows it already has, stretched heights and all, so
+        recording the naturals afresh afterwards would record a *stretched* row as
+        natural — and the table would then grow by that much again on the next pass,
+        and again on the one after. Restoring first means the invariant holds
+        everywhere it is read: a row is at its natural height except between a
+        stretch and the next change to the rows.
+        """
+        for row, height in enumerate(self._row_natural[: self.rowCount()]):
+            if self.rowHeight(row) != height:
+                self.setRowHeight(row, height)
+        self._row_natural = []
+        super().setRowCount(rows)
+
     def remeasure_wrapped_rows(self) -> None:
         """Re-fit every row to its wrapped text (a no-op unless *word_wrap*).
 
@@ -292,8 +430,12 @@ class AutoHeightTable(QTableWidget):
 
         if not self._word_wrap:
             return
+        # ``resizeRowToContents`` writes the *natural* height, so whatever was
+        # recorded before this describes rows that no longer exist at those sizes.
+        self._row_natural = []
         for row in range(self.rowCount()):
             self.resizeRowToContents(row)
+        self.sync_row_stretch()
         self.updateGeometry()
 
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802 - Qt override
@@ -311,6 +453,9 @@ class AutoHeightTable(QTableWidget):
         # measures.
         if event.oldSize().width() != event.size().width():
             self.remeasure_wrapped_rows()
+        # Last, and on a height change as much as a width one: this is the only
+        # thing here that a plain vertical resize has any work to do for.
+        self.sync_row_stretch()
         self.updateGeometry()
 
     # -- drag to reorder -----------------------------------------------------

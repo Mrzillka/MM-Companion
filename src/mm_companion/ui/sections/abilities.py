@@ -87,6 +87,11 @@ class AbilitiesSection(TitledSection):
         self._ability_enh: dict[str, QTableWidgetItem] = {}
 
         layout = QVBoxLayout(self)
+        # No margin round the table: it is the whole of this block, so the section's
+        # own border is the table's border and an 11px band of section between the
+        # two was a frame drawn inside a frame for no reason. Resistances beside it
+        # says the same thing.
+        layout.setContentsMargins(0, 0, 0, 0)
         self.table = build_stat_table(
             data.abilities,
             self._abilities,
@@ -102,8 +107,10 @@ class AbilitiesSection(TitledSection):
             unpin_sink=self.unpinRequested.emit,
             pins=self._pins,
         )
+        # No stretch under it: the table takes the block's spare height itself and
+        # puts it into its rows, so this one still lines up with Resistances beside
+        # it and both of them grow their line spacing rather than their empty half.
         layout.addWidget(self.table)
-        layout.addStretch()  # top-aligned, so it lines up with Resistances beside it
 
         # A narrowed table sheds its Rank column, and the Total column then has to
         # carry the number outright — see :meth:`refresh_enhancements`.

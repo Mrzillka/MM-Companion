@@ -413,8 +413,14 @@ def test_a_drag_crossing_the_strip_stops_the_page_scrolling(make_sheet) -> None:
     QApplication.processEvents()
 
     canvas.title_bar_moved("skills", page_point)
-    QApplication.processEvents()
+    # Asserted *before* pumping, and that is not impatience. ``_autoscroll_tick``
+    # refreshes the drag from ``QCursor.pos()`` — the real mouse, which is right
+    # for a real drag and is nowhere near this synthetic one — so a 16ms tick
+    # landing inside ``processEvents`` reads a velocity of zero and stands the
+    # timer back down. Whether one lands is a race with however long the layout
+    # before it took, which makes this control a coin toss anywhere but here.
     assert canvas._autoscroll_timer.isActive()  # positive control: it did start
+    QApplication.processEvents()
 
     canvas.title_bar_moved("skills", strip_point)
     QApplication.processEvents()

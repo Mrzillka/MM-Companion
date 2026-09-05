@@ -15,6 +15,8 @@ import pytest
 from PySide6.QtCore import QPoint, QRect, QSize, Qt
 from PySide6.QtWidgets import (
     QApplication,
+    QFormLayout,
+    QGroupBox,
     QLabel,
     QScrollArea,
     QSplitter,
@@ -507,16 +509,28 @@ class TestABlockTallerThanItsContent:
             qapp.processEvents()
         return frame
 
-    def test_the_slack_goes_under_the_section_not_between_its_lines(self, qapp) -> None:
+    def test_the_slack_goes_under_the_lines_and_not_between_them(self, qapp) -> None:
         """``setWidgetResizable`` gives the surplus to the section, and a stacked
         layout with nothing expanding in it spreads that *equally between its
         items* — so a Powers block dragged twice as tall as its cards did not grow
-        a margin at the bottom, it grew a gap between every line on every card."""
+        a margin at the bottom, it grew a gap between every line on every card.
+
+        The section takes the whole height (it draws the border, so anything else
+        leaves that border stopping half way down a block that has not finished
+        drawing) and puts the surplus in the trailing stretch under the last line.
+        """
         frame = self._frame(qapp)
         try:
             section = frame.section
-            assert section.height() == section.sizeHint().height()
-            assert section.y() == 0, "the section was not left at the top of the slack"
+            assert section.height() > section.sizeHint().height(), "the section did not fill"
+            assert section.y() == 0
+            labels = section.findChildren(QLabel)
+            gaps = [
+                labels[i + 1].y() - labels[i].geometry().bottom() for i in range(len(labels) - 1)
+            ]
+            assert max(gaps) - min(gaps) <= 1, f"the slack was shared out between the lines: {gaps}"
+            last = labels[-1].geometry().bottom()
+            assert section.height() - last > 3 * max(gaps), "the slack is not under the last line"
         finally:
             frame.hide()
             frame.deleteLater()
@@ -539,6 +553,33 @@ class TestABlockTallerThanItsContent:
             frame.hide()
             frame.deleteLater()
 
+    def test_a_form_fills_the_block_without_its_captions_drifting_apart(self, qapp) -> None:
+        """A ``QFormLayout`` holds widgets rather than items, so it cannot take a
+        stretch — and left to itself it shares the surplus out over its rows, which
+        is the same "gap between every line" the box layouts had. One trailing row
+        of nothing takes it all instead."""
+        section = QGroupBox()
+        form = QFormLayout(section)
+        for name in ("one", "two", "three"):
+            form.addRow(f"{name}:", QLabel(name))
+        frame = BlockFrame("a", "A", section, RecommendedSize(200, 120), _NoHost())
+        frame.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        frame.resize(300, 600)
+        frame.show()
+        for _ in range(8):
+            qapp.processEvents()
+        try:
+            assert section.height() > section.sizeHint().height(), "the form did not fill"
+            fields = [form.itemAt(row, QFormLayout.ItemRole.FieldRole) for row in range(3)]
+            gaps = [
+                fields[i + 1].widget().y() - fields[i].widget().geometry().bottom()
+                for i in range(len(fields) - 1)
+            ]
+            assert max(gaps) - min(gaps) <= 1, f"the slack was shared out over the rows: {gaps}"
+        finally:
+            frame.hide()
+            frame.deleteLater()
+
     def test_a_block_whose_content_grows_tells_its_row(self, qapp) -> None:
         """The scroll area is a barrier by design — it is what stops the section's
         minimum climbing out to the window — so nothing carried a *changed* content
@@ -553,6 +594,284 @@ class TestABlockTallerThanItsContent:
                 qapp.processEvents()
             assert frame.sizeHint().height() > before
             assert frame.height() >= frame.sizeHint().height() - 1
+        finally:
+            frame.hide()
+            frame.deleteLater()
+
+
+class _Wrapping(QWidget):
+    """A widget as tall as its text wraps to, and no taller — a card, in miniature.
+
+    Its layout answers ``heightForWidth`` and its ``minimumSizeHint`` does not, which
+    is not a contrivance: that is every ``QBoxLayout`` holding anything that wraps,
+    and it is the whole of the bug below.
+    """
+
+    def __init__(self, lines: int = 6) -> None:
+        super().__init__()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        label = QLabel(" ".join(f"word{n}" for n in range(40 * lines)))
+        label.setWordWrap(True)
+        layout.addWidget(label)
+
+
+class TestABlockNoTallerThanItsContent:
+    """The other half of the same question, and the one that shipped wrong: a block
+    that is *exactly* as tall as its content must not scroll."""
+
+    def _frame(self, qapp, width: int = 600) -> BlockFrame:
+        frame = BlockFrame("a", "A", _Wrapping(), RecommendedSize(200, 120), _NoHost())
+        frame.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        frame.resize(width, 400)
+        frame.show()
+        for _ in range(6):
+            qapp.processEvents()
+        # However tall this block would like to be, at the width it has.
+        frame.resize(width, frame.sizeHint().height())
+        for _ in range(8):
+            qapp.processEvents()
+        return frame
+
+    def test_a_block_at_its_own_hint_does_not_scroll(self, qapp) -> None:
+        """Qt decides whether to scroll from ``minimumSizeHint``, which a
+        ``QBoxLayout`` builds by summing its items' *unwrapped* hints — no
+        height-for-width anywhere in it. A block wider than its content prefers
+        wraps that content into fewer lines, so the honest height came out 30px
+        under the number Qt was scrolling against, and the Powers block put a
+        scrollbar on 30px of nothing."""
+        frame = self._frame(qapp)
+        try:
+            scroll = frame.findChild(QScrollArea, "blockScroll")
+            assert not scroll.verticalScrollBar().isVisible(), (
+                "the block scrolled over content that fits: "
+                f"viewport {scroll.viewport().height()}, content {scroll.widget().height()}"
+            )
+        finally:
+            frame.hide()
+            frame.deleteLater()
+
+    def test_and_still_scrolls_once_it_is_genuinely_too_short(self, qapp) -> None:
+        """The correction only ever *lowers* an overstated minimum. A block dragged
+        under what its content needs still scrolls, which is the release valve the
+        whole draggable page rests on."""
+        frame = self._frame(qapp)
+        try:
+            frame.resize(frame.width(), 80)
+            for _ in range(8):
+                qapp.processEvents()
+            scroll = frame.findChild(QScrollArea, "blockScroll")
+            assert scroll.verticalScrollBar().isVisible()
+        finally:
+            frame.hide()
+            frame.deleteLater()
+
+    def test_the_hint_is_measured_at_the_width_the_block_has(self, qapp) -> None:
+        """A wide block wraps its text into fewer lines and is therefore shorter.
+        ``sizeHint`` answers at the content's own preferred width, which is not the
+        block's, so the height it reported was a taller block's."""
+        narrow = self._frame(qapp, width=320)
+        wide = self._frame(qapp, width=900)
+        try:
+            assert wide.sizeHint().height() < narrow.sizeHint().height()
+        finally:
+            for frame in (narrow, wide):
+                frame.hide()
+                frame.deleteLater()
+
+
+class TestATableGivenMoreHeightThanItsRows:
+    """Where a table block's spare height goes, now that there can be some."""
+
+    def _table(self, qapp, height: int):
+        from mm_companion.core.character import Character
+        from mm_companion.core.data_loader import load_game_data
+        from mm_companion.ui.sections.abilities import AbilitiesSection
+
+        section = AbilitiesSection(load_game_data(), Character())
+        section.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        section.resize(400, height)
+        section.show()
+        for _ in range(8):
+            qapp.processEvents()
+        return section
+
+    def test_the_rows_take_it_rather_than_the_space_under_them(self, qapp) -> None:
+        """A table given more room than its rows want simply drew bare viewport
+        under the last one — inside its own border, so dragging Abilities taller
+        made the block bigger and the table no different."""
+        section = self._table(qapp, 700)
+        try:
+            table = section.table
+            rows = [table.rowHeight(row) for row in range(table.rowCount())]
+            assert sum(rows) >= table.viewport().height() - 2
+            assert min(rows) > 0
+        finally:
+            section.hide()
+            section.deleteLater()
+
+    def test_a_rule_across_the_table_is_not_a_row_and_does_not_grow(self, qapp) -> None:
+        """The line between the bought traits and the derived ones would otherwise
+        become a 50px band of nothing."""
+        section = self._table(qapp, 700)
+        try:
+            table = section.table
+            rules = [row for row in range(table.rowCount()) if table.is_rule_row(row)]
+            assert rules, "this table is meant to have a rule in it"
+            natural = table.row_heights()
+            for row in rules:
+                assert table.rowHeight(row) == natural[row]
+        finally:
+            section.hide()
+            section.deleteLater()
+
+    def test_what_the_table_reports_is_the_natural_height_throughout(self, qapp) -> None:
+        """Load-bearing rather than tidy: were the hint to follow the stretched
+        rows, taller rows would mean a taller hint, which means a taller block,
+        which means taller rows, and the block would walk down the page on its own.
+        """
+        short = self._table(qapp, 300)
+        tall = self._table(qapp, 900)
+        try:
+            assert tall.table.sizeHint().height() == short.table.sizeHint().height()
+            assert tall.table.minimumSizeHint().height() == short.table.minimumSizeHint().height()
+        finally:
+            for section in (short, tall):
+                section.hide()
+                section.deleteLater()
+
+    def test_the_rows_go_back_when_the_room_does(self, qapp) -> None:
+        section = self._table(qapp, 900)
+        try:
+            table = section.table
+            natural = table.row_heights()
+            assert table.rowHeight(0) > natural[0], "it did not stretch in the first place"
+            section.resize(400, table.sizeHint().height())  # exactly its rows, no surplus
+            for _ in range(8):
+                qapp.processEvents()
+            assert [table.rowHeight(r) for r in range(table.rowCount())] == natural
+        finally:
+            section.hide()
+            section.deleteLater()
+
+    def test_a_widget_in_a_cell_keeps_its_own_height(self, qapp) -> None:
+        """Text in a cell is centred in its row; a rank spin box was instead given
+        the cell's whole rectangle and became an 85px pill."""
+        short = self._table(qapp, 300)
+        tall = self._table(qapp, 900)
+        try:
+            assert tall.table.rowHeight(0) > short.table.rowHeight(0)
+            assert tall._abilities["STR"].height() == short._abilities["STR"].height()
+        finally:
+            for section in (short, tall):
+                section.hide()
+                section.deleteLater()
+
+
+class TestTheDetailsDisclosure:
+    """The real section behind :class:`TestASectionThatNamesItsOwnHeight`."""
+
+    def _section(self, qapp, width: int = 420):
+        from mm_companion.core.character import Character
+        from mm_companion.core.data_loader import load_game_data
+        from mm_companion.ui.sections.base_info import BaseInfoSection
+
+        section = BaseInfoSection(load_game_data(), Character())
+        section.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        section.resize(width, 400)
+        section.show()
+        for _ in range(8):
+            qapp.processEvents()
+        return section
+
+    def test_opening_details_asks_for_exactly_the_height_it_asked_for_shut(self, qapp) -> None:
+        """Not approximately: the group holds the body alone, so the body's own
+        height is exactly what it sheds when it shuts. Anything left over would
+        creep the row open a few pixels every time the box was ticked."""
+        section = self._section(qapp)
+        try:
+            width = section.width()
+            shut = section.preferred_height(width)
+            section._details_group.setChecked(True)
+            for _ in range(8):
+                qapp.processEvents()
+            assert section.preferred_height(width) == shut
+        finally:
+            section.hide()
+            section.deleteLater()
+
+    def test_and_the_content_underneath_really_did_get_taller(self, qapp) -> None:
+        """The positive control: only the *preference* leaves the body out, so
+        there is something for the block to scroll to."""
+        section = self._section(qapp)
+        try:
+            before = section.sizeHint().height()
+            section._details_group.setChecked(True)
+            for _ in range(8):
+                qapp.processEvents()
+            assert section.sizeHint().height() > before
+        finally:
+            section.hide()
+            section.deleteLater()
+
+
+class TestASectionThatNamesItsOwnHeight:
+    """``preferred_height``: how a disclosure inside a block stops rearranging the
+    page around it."""
+
+    class _Disclosing(QWidget):
+        def __init__(self) -> None:
+            super().__init__()
+            layout = QVBoxLayout(self)
+            layout.addWidget(QLabel("always here"))
+            self.body = QLabel(chr(10).join(f"detail {n}" for n in range(10)))
+            layout.addWidget(self.body)
+            self.body.hide()
+
+        def preferred_height(self, width: int) -> int:  # noqa: ARG002
+            height = self.sizeHint().height()
+            if not self.body.isVisible():
+                return height
+            # A hidden item takes its spacing with it, so the body costs its own
+            # height *and* the gap above it.
+            return height - self.body.sizeHint().height() - self.layout().spacing()
+
+    def _frame(self, qapp) -> BlockFrame:
+        frame = BlockFrame("a", "A", self._Disclosing(), RecommendedSize(200, 120), _NoHost())
+        frame.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        frame.resize(300, 400)
+        frame.show()
+        for _ in range(6):
+            qapp.processEvents()
+        return frame
+
+    def test_opening_the_disclosure_does_not_change_what_the_block_asks_for(self, qapp) -> None:
+        frame = self._frame(qapp)
+        try:
+            before = frame.sizeHint().height()
+            frame.section.body.show()
+            for _ in range(8):
+                qapp.processEvents()
+            assert frame.sizeHint().height() == before
+        finally:
+            frame.hide()
+            frame.deleteLater()
+
+    def test_but_the_block_still_scrolls_to_the_rest_of_it(self, qapp) -> None:
+        """Only the *preference* leaves the body out. What the scroll area measures
+        is the whole expanded content, which is what makes the remainder reachable
+        rather than clipped."""
+        frame = self._frame(qapp)
+        try:
+            frame.resize(300, frame.sizeHint().height())
+            for _ in range(8):
+                qapp.processEvents()
+            frame.section.body.show()
+            for _ in range(8):
+                qapp.processEvents()
+            scroll = frame.findChild(QScrollArea, "blockScroll")
+            assert scroll.verticalScrollBar().isVisible()
+            assert scroll.verticalScrollBar().maximum() > 0
         finally:
             frame.hide()
             frame.deleteLater()

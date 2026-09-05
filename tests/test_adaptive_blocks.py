@@ -200,13 +200,20 @@ def _narrow_to(sheet, qapp, width: int) -> None:
     _settle(qapp)
 
 
+#: A sheet narrow enough that the stat tables have shed their first column and no
+#: more. The band is roughly 840-920 and this sits in the middle of it, clear of
+#: both edges: shedding is hysteretic, so a width near a boundary answers
+#: differently depending on which side the sheet arrived from.
+ONE_COLUMN_SHED = 900
+
+
 def test_a_squeezed_stat_table_drops_the_abbreviation(squeezed, qapp) -> None:
     """It repeats what the name beside it says, which is why it is the *first*
     column the two stat tables are willing to give up."""
     table = squeezed.abilities.table
     assert table.shed_columns() == ()
 
-    _narrow_to(squeezed, qapp, 930)
+    _narrow_to(squeezed, qapp, ONE_COLUMN_SHED)
 
     assert table.shed_columns() == (COL_ABBR,)
     assert table.isColumnHidden(COL_ABBR)
@@ -244,7 +251,7 @@ def test_the_total_carries_the_number_once_the_rank_has_gone(squeezed, qapp) -> 
 
 def test_it_takes_the_column_back_when_the_room_returns(squeezed, qapp) -> None:
     table = squeezed.abilities.table
-    _narrow_to(squeezed, qapp, 930)
+    _narrow_to(squeezed, qapp, ONE_COLUMN_SHED)
     assert table.shed_columns() == (COL_ABBR,)
 
     _narrow_to(squeezed, qapp, 1700)

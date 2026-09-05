@@ -36,6 +36,7 @@ from collections.abc import Callable
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
+    QFrame,
     QHeaderView,
     QMenu,
     QSpinBox,
@@ -187,6 +188,12 @@ def build_stat_table(
     # what the block opens at — and what is left of them once the shed order below
     # has gone is the block's floor.
     table = AutoHeightTable(0, len(HEADERS), fit_width=True)
+    # No frame of its own: this table *is* the whole block, and its section already
+    # draws a border round the block's content. Two borders a hair apart read as a
+    # rendering fault, and the section's is the one that belongs to the block — so
+    # the table gives its up and its grid runs to the block's own edge (the section
+    # zeroes the margin between them; see :class:`AbilitiesSection`).
+    table.setFrameShape(QFrame.Shape.NoFrame)
     table.setHorizontalHeaderLabels(HEADERS if base_store is None else BASE_HEADERS)
     table.verticalHeader().setVisible(False)
     table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)

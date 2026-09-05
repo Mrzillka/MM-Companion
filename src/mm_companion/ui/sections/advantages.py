@@ -227,11 +227,12 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
             lambda source, target, before: self.move_advantage(source.key, target.key, before),
             enabled=lambda: not self._locked and self._sort.reorder_enabled(),
         )
+        # No stretch under the panels: when this block is stretched taller than its
+        # content (sharing a row with the much taller Skills block, say) the extra
+        # height goes into the panels' own row spacing. Which is still not "spread
+        # between the rows above" — the tables share it out deliberately and evenly,
+        # rather than the layout dropping it wherever an item happened to give.
         self._init_flow_panels(outer)
-        # Keep the content packed at the top: when this block is stretched taller than
-        # its content (e.g. sharing a row with the much taller Skills block) the extra
-        # height goes to this stretch instead of being spread between the rows above.
-        outer.addStretch(1)
 
         self._advantage_combo.currentIndexChanged.connect(self._sync_rank_enabled)
         self._sync_rank_enabled()

@@ -19,8 +19,8 @@ and the shrink-to-one-column minimum both blocks were carrying their own copy of
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt
-from PySide6.QtWidgets import QBoxLayout, QHBoxLayout, QWidget
+from PySide6.QtCore import QSize
+from PySide6.QtWidgets import QBoxLayout, QHBoxLayout, QSizePolicy, QWidget
 
 from mm_companion.ui.widgets import discard_widget, no_reentry
 
@@ -150,10 +150,17 @@ class ColumnFlowPanels:
         self._tables: list = []
         self._column_count = 0
         self._tables_container = QWidget()
+        # Expanding down, and no ``AlignTop`` on the row of panels: the block's spare
+        # height has to reach the tables, which share it out over their own rows. An
+        # alignment is a refusal to grow, so the panels sat at their content height
+        # with the surplus as bare widget under them — and a table inside a border
+        # that stops half way down a block is the shape of "it doesn't scale".
+        self._tables_container.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
         self._tables_layout = QHBoxLayout(self._tables_container)
         self._tables_layout.setContentsMargins(0, 0, 0, 0)
         self._tables_layout.setSpacing(self.FLOW_SPACING)
-        self._tables_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         parent_layout.addWidget(self._tables_container)
         # Release the section from its own layout's minimum, so :meth:`minimumSizeHint`
         # is actually the answer. A layout otherwise *imposes* ``totalMinimumSize`` on

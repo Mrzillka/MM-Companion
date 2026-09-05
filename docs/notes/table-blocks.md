@@ -24,6 +24,45 @@ exactly these pieces.
   single panel. Height uses `header.isHidden()`, never `isVisible()`: a table that
   has not been shown has no visible children, and that is exactly when its minimum
   is first asked for.
+- **The spare height goes into the rows, and what the table *reports* does not
+  move.** A page the user drags is the first thing that can hand a table more
+  height than its rows want, and a table given it simply drew bare viewport under
+  the last row — inside its own border, so dragging Abilities taller made the block
+  bigger and the table no different, which is the exact shape of "it doesn't
+  scale". `sync_row_stretch` shares the surplus out **evenly** over the rows
+  instead (spare height is line spacing, and a wrapped two-line row wants the same
+  breathing room as a one-line row, not twice as much), so a taller block reads as
+  wider line spacing and a shorter one tightens back to its natural rows before the
+  block starts scrolling. Abilities and Resistances share a row and therefore a
+  height, and the shorter of the two now spends the difference on its own spacing
+  rather than sitting half empty beside a full one.
+
+  Three things hold it together, and each was a bug on the way:
+  - **`row_heights` is the naturals, and everything reported is built from it.**
+    Were the hint to follow the stretched rows, taller rows would mean a taller
+    hint, which means a taller block, which means taller rows: the block walks down
+    the page on its own. The naturals are recorded the instant before the first
+    stretch — when every row still *is* at one — and `setRowCount` puts the rows
+    back before it drops them, because it keeps the rows it already has and
+    recording a stretched row as natural is the same runaway one step removed.
+  - **A row spanned across every column is chrome, not data**, and sits the stretch
+    out (`is_rule_row`). It catches both things drawn that way: the rule between
+    the bought traits and the derived ones, which would otherwise become a 40px
+    band of nothing, and the header a skill's focus buttons sit on. Spanning is the
+    only way a table has of drawing across itself, so it needs no register.
+  - **A widget in a cell keeps its own height** (`setCellWidget` holds it in a
+    `_CentredCell`, `cellWidget` hands it back). The view gives a cell widget the
+    cell's whole rectangle, which was invisible while every row was exactly as tall
+    as its content: a stretched Abilities row turned every rank spin box into an
+    85px pill. Text in a cell is centred in its row and a widget in one now reads
+    the same way.
+- **The stat tables have no frame of their own.** A table that *is* the whole block
+  is framed by its section already, and the 11px band of section between the two
+  was a border drawn inside a border: `build_stat_table` sets `NoFrame` and
+  Abilities and Resistances zero their layout margins, so the grid runs to the
+  block's own edge. It moved the shedding thresholds — 18px more width is most of a
+  column at that size — which is why `tests/test_adaptive_blocks.py` names the
+  width it narrows to rather than repeating a number.
 - **A `fit_width` table's two widths are different questions.** `sizeHint` is the
   **whole** table — every column, header text included — and that is what Abilities
   and Resistances open at, which is what `block_sizes.json` means when it says those

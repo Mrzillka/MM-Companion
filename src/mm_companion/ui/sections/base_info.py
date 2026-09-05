@@ -69,6 +69,37 @@ class BaseInfoSection(QGroupBox):
         self._character.profile[key] = text
         self._emit_edited()
 
+    def preferred_height(self, width: int) -> int:
+        """The height this block wants: the one it has with Details **shut**.
+
+        Read by :meth:`~mm_companion.ui.block_frame.BlockFrame.content_size_hint`,
+        and the whole of "opening Details does not move the rest of the page".
+        Details is a *disclosure*, not content: a row on the sheet is as tall as
+        what is in it, so an expanding group grew the row, which pushed the
+        Abilities row and everything under it 71px down the page and pulled them
+        back up again when it shut. Adding a skill should move the page; ticking a
+        box to look at a character's eye colour should not.
+
+        So the block goes on asking for the height it asks for shut, and the extra
+        fields use the room it already has — the row is as tall as its tallest
+        block, and this is rarely that block — and scroll inside it past that.
+        Only the *preference* drops the body: what the scroll area measures is the
+        real expanded content, which is what makes the remainder scroll into reach
+        rather than being clipped out of it.
+        """
+        height = self.heightForWidth(width) if width > 0 and self.hasHeightForWidth() else -1
+        if height <= 0:
+            height = self.sizeHint().height()
+        if not self._details_body.isVisible():
+            return height
+        # The group holds the body alone, so the body's own height is exactly what
+        # the group sheds when it shuts — no spacing between one item and nothing.
+        body = self._details_body
+        shed = body.heightForWidth(width) if width > 0 and body.hasHeightForWidth() else -1
+        if shed <= 0:
+            shed = body.sizeHint().height()
+        return max(0, height - shed)
+
     def resizeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
         """Stack the captions above their fields, and put the details in one column.
 

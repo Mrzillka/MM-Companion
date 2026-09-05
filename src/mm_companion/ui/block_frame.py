@@ -28,6 +28,8 @@ from typing import Protocol
 from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import (
+    QBoxLayout,
+    QFormLayout,
     QFrame,
     QHBoxLayout,
     QScrollArea,
@@ -203,6 +205,100 @@ class TitleBar(QFrame):
         super().mouseReleaseEvent(event)
 
 
+def content_height(widget: QWidget, width: int) -> int:
+    """How tall *widget* really needs to be at *width* pixels across.
+
+    The honest answer to a question Qt's own sizing only ever asks obliquely.
+    ``sizeHint`` reports the height at the widget's *preferred* width and
+    ``minimumSizeHint`` reports it at no particular width at all — a ``QBoxLayout``
+    builds the latter by summing its items' unwrapped hints — so both overstate a
+    block full of wrapping content by however much that content wraps. Only
+    ``heightForWidth`` knows the width, and only widgets that wrap offer it.
+
+    Never *more* than the widget already claimed: this exists to correct an
+    overstatement, and a page the user drags has no business inventing a minimum
+    the content did not ask for.
+    """
+    claimed = widget.minimumSizeHint().height()
+    if width > 0 and widget.hasHeightForWidth():
+        wrapped = widget.heightForWidth(width)
+        if wrapped > 0:
+            return min(claimed, wrapped)
+    return claimed
+
+
+class _Slack(QWidget):
+    """Nothing, that grows. A stretch for a layout that takes widgets and not items."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        return QSize(0, 0)
+
+
+def _give_trailing_slack(section: QWidget) -> bool:
+    """Put the block's spare height somewhere deliberate *inside* *section*.
+
+    Returns whether it now has somewhere to put it, which is whether the section can
+    be handed the block's whole height. Done here, once, rather than in each section:
+    a mod ships a block too, and the rule that a section fills its block is the
+    page's, not the section's.
+
+    Three answers, and nothing on the sheet needs a fourth:
+
+    * a section that states ``fills_height`` wants the room outright — a note's
+      editor, the roller's history, the portrait, the turn order — and already knows
+      where to put it. Opt-in rather than derived: a widget's own vertical policy
+      says nothing about whether its *children* have a use for the height (the
+      roller's ``QGroupBox`` is ``Preferred`` and it is the history inside it that
+      wants the room);
+    * a **vertical box** gets a trailing stretch, unless something in it already
+      expands downwards — a table that stretches its own rows, which has a better
+      use for the height than an empty band under it would;
+    * a **form** gets a trailing row of :class:`_Slack`, since a ``QFormLayout``
+      takes widgets rather than items. One expanding row is enough: Qt gives the
+      surplus to whatever expands and leaves the rest at its hint, which is what
+      stops a form's captions drifting apart down a tall block.
+
+    Anything else keeps the wrapper (:func:`_wrap_top_aligned`), because a layout
+    this cannot reach into would spread the surplus across its items.
+
+    ``QLayout.expandingDirections`` is only ever asked of a ``QBoxLayout``, and that
+    is not fastidiousness: it answers "both" for any layout that has not overridden
+    it, so a form would claim to fill when it would in fact spread.
+    """
+    if getattr(section, "fills_height", False):
+        return True
+    layout = section.layout()
+    if isinstance(layout, QBoxLayout):
+        if layout.direction() not in (
+            QBoxLayout.Direction.TopToBottom,
+            QBoxLayout.Direction.BottomToTop,
+        ):
+            return False
+        if not layout.expandingDirections() & Qt.Orientation.Vertical:
+            layout.addStretch(1)
+        return True
+    if isinstance(layout, QFormLayout):
+        layout.addRow(_Slack())
+        return True
+    return False
+
+
+def _wrap_top_aligned(section: QWidget) -> QWidget:
+    """Hold *section* at its content height over a spacer, for a layout that cannot
+    hold one of its own. See :meth:`_InnerScroll.set_section`."""
+    body = QWidget()
+    layout = QVBoxLayout(body)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(0)
+    layout.addWidget(section)
+    layout.addStretch(1)
+    return body
+
+
 class _InnerScroll(QScrollArea):
     """The scroll area a block's section lives in — the frame's release valve.
 
@@ -247,7 +343,7 @@ class _InnerScroll(QScrollArea):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
     def set_section(self, section: QWidget) -> None:
-        """Hold *section* in the viewport, top-aligned unless it asked for the height.
+        """Hold *section* in the viewport, filling it, with its slack at the bottom.
 
         A resizable page is the first thing that can hand a block **more** room than
         its content wants, and ``setWidgetResizable`` gives all of it to the section
@@ -258,27 +354,72 @@ class _InnerScroll(QScrollArea):
         stacked layout had the same defect and it read as a rendering bug, because
         nothing on screen said which of the gaps was the slack.
 
-        So the surplus is given somewhere deliberate. A section that states
-        ``fills_height`` genuinely wants it — a note's editor, the roller's history,
-        the portrait, the turn order all grow into the room — and is held as it
-        always was. Everything else sits at the top of a spacer, at exactly the
-        height its content asks for, and the space below it is plainly empty.
-        Opt-in rather than derived: a widget's own vertical policy says nothing
-        about whether its *children* have a use for the height (the roller's
-        ``QGroupBox`` is ``Preferred`` and its history very much wants to grow),
-        and ``QLayout.expandingDirections`` answers "both" for any layout that has
-        not overridden it — a ``QFormLayout``, which is what two blocks here are.
+        The first answer to that was to hold the section at its content height over
+        a spacer *outside* it. It cured the gaps and bought a worse fault: a section
+        is a ``QGroupBox`` and draws a **border**, so a block dragged taller than its
+        cards showed that border stopping half way down with bare block underneath,
+        which reads as the block having failed to draw rather than as slack. The
+        section has to fill the block; the slack has to be *inside* it.
+
+        So the spacer moves in. A section whose top-level layout is a vertical box
+        gets a trailing stretch of its own (:func:`_give_trailing_slack`) and is then
+        handed the whole viewport: the surplus lands under the last row, inside the
+        border, which is what "empty space in this block" should look like. A section
+        that already expands downwards — one that states ``fills_height`` (a note's
+        editor, the roller's history, the portrait, the turn order), or one whose
+        layout has something expanding in it (a table that stretches its rows) —
+        needs no stretch and is handed the height directly. A form takes a trailing
+        row of nothing instead, since it holds widgets rather than items. Only a
+        layout none of that can reach keeps the old wrapper.
         """
-        if getattr(section, "fills_height", False):
-            self.setWidget(section)
+        fills = _give_trailing_slack(section)
+        self.setWidget(section if fills else _wrap_top_aligned(section))
+        self._pin_content_height()
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        """A width change re-wraps the content, so re-take the minimum below."""
+        super().resizeEvent(event)
+        self._pin_content_height()
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: ANN001, N802 - Qt override
+        if watched is self.widget() and event.type() == QEvent.Type.LayoutRequest:
+            self._pin_content_height()
+        return super().eventFilter(watched, event)
+
+    def _pin_content_height(self) -> None:
+        """State what the content really needs at *this* width, as an explicit minimum.
+
+        This is the line that stops a block growing a scrollbar over content that
+        fits. Qt decides whether to scroll from ``qSmartMinSize`` — which is the
+        widget's ``minimumSizeHint``, and a ``QBoxLayout`` builds that one by
+        **summing its items' unwrapped hints**, with no height-for-width anywhere in
+        it. Every card in the Powers block reports the height it would take at its
+        own preferred width; the block is far wider than that, the cards wrap into
+        fewer lines, and the honest total came out 30px under the number Qt was
+        using. So the block was handed a viewport at the wrapped height, told its
+        content needed the unwrapped one, and dutifully put a scrollbar on a block
+        with room to spare.
+
+        ``heightForWidth`` is the measurement that *does* know the width, and
+        :func:`content_height` asks for it. Pinned as an explicit ``minimumHeight``
+        because that is the one number ``qSmartMinSize`` takes over the hint. It can
+        only ever be *lowered* below what the widget already claimed — the point is
+        to correct an overstatement, never to refuse a size on the content's behalf,
+        which is the standing rule for everything on a page the user drags.
+
+        Guarded on the number having moved, which is what makes it safe to call from
+        a resize: the bar appearing narrows the viewport, which wraps more text, which
+        raises the minimum again — but only once, since the bar does not go away.
+        """
+        widget = self.widget()
+        if widget is None:
             return
-        body = QWidget()
-        layout = QVBoxLayout(body)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        layout.addWidget(section)
-        layout.addStretch(1)
-        self.setWidget(body)
+        width = self.viewport().width()
+        if width <= 0:
+            return
+        height = content_height(widget, width)
+        if height != widget.minimumHeight():
+            widget.setMinimumHeight(height)
 
     def wheelEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
         if not has_scroll_range(self, event):
@@ -411,17 +552,50 @@ class BlockFrame(QFrame):
         return self._size
 
     def content_size_hint(self) -> QSize:
-        """What the section would take if nothing constrained it.
+        """What the section would take if nothing constrained its height.
 
         The honest answer to "how big does this block want to be", used for *Fit to
         content* and as the opening size of a block that states no recommendation
         (Abilities and Resistances, whose tables measure their own real columns and
         rows rather than trusting a number in a config file). Asked of the section
         directly, since the frame's own hint is now bounded by the scroll area.
+
+        **Down, at the width this block actually has.** ``sizeHint`` answers with
+        the height the content would take at its own *preferred* width, which for a
+        block of wrapping cards is a much narrower block than the one on screen and
+        so a good deal taller than the truth. That number was the block's height,
+        and the scroll area then measured the same content properly, found it
+        shorter, and put a scrollbar between the two — a Powers block scrolling
+        30px inside a frame with nothing in the bottom 30px of it. Falls back to
+        the hint before this frame has a width to measure at.
+
+        A section may also answer **`preferred_height`** and name a height that is
+        not its content's, which is how a disclosure inside a block stops
+        rearranging the page: Name & Details opens its Details group into the room
+        the block already has and scrolls past that, rather than growing the row and
+        pushing every row under it down the page. Deliberately separate from what
+        the scroll area measures — that still sees the whole expanded content, which
+        is what makes it scroll rather than clip.
         """
         hint = self.section.sizeHint()
+        width = self._scroll.viewport().width()
+        height = self._preferred_height(width)
+        if height is None:
+            height = hint.height()
+            if width > 0 and self.section.hasHeightForWidth():
+                wrapped = self.section.heightForWidth(width)
+                if wrapped > 0:
+                    height = wrapped
         chrome = self.title_bar.sizeHint().height() + 2 * self.frameWidth()
-        return QSize(hint.width() + 2 * self.frameWidth(), hint.height() + chrome)
+        return QSize(hint.width() + 2 * self.frameWidth(), height + chrome)
+
+    def _preferred_height(self, width: int) -> int | None:
+        """What the section says it would like to be tall, if it says anything."""
+        ask = getattr(self.section, "preferred_height", None)
+        if not callable(ask):
+            return None
+        height = ask(width)
+        return None if height is None else int(height)
 
     def changeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
         """Re-run the block's own layout after it is re-homed (see :meth:`_refresh_layout`)."""

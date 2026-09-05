@@ -385,21 +385,61 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   `extent`. A zero in the page's own sizes is not a size but "take your content's",
   so a row nobody has dragged divides into two of itself rather than into two
   noughts.
-- **A block sits at the top of the height it is given, unless it asked for that
-  height.** A resizable page is the first thing that can hand a block *more* room
-  than its content wants, and `setWidgetResizable` gives all of it to the section
-  — which then has to put it somewhere. A `QVBoxLayout` with nothing expanding in
-  it spreads the surplus **equally between its items**, so a Powers block dragged
+- **A block fills the height it is given, and the slack goes inside the section.**
+  A resizable page is the first thing that can hand a block *more* room than its
+  content wants, and `setWidgetResizable` gives all of it to the section — which
+  then has to put it somewhere. A `QVBoxLayout` with nothing expanding in it
+  spreads the surplus **equally between its items**, so a Powers block dragged
   twice as tall as its cards did not grow a margin at the bottom: it grew a gap
   between every line on every card, and it read as a rendering fault because
-  nothing on screen said which of the gaps was the slack. `_InnerScroll.set_section`
-  therefore holds the section over a spacer. A section that genuinely wants the
-  height says so with **`fills_height`** — Notes' editor, the roller's history, the
-  portrait, the Scene board — and is held as it always was. Opt-in rather than
-  derived: a widget's own vertical policy says nothing about whether its *children*
-  have a use for the height (the roller's `QGroupBox` is `Preferred` and it is the
-  history inside it that wants the room), and `QLayout.expandingDirections` answers
-  "both" for any layout that has not overridden it, which a `QFormLayout` has not.
+  nothing on screen said which of the gaps was the slack.
+
+  The first fix held the section at its content height over a spacer *outside* it.
+  That cured the gaps and bought a worse fault: a section is a `QGroupBox` and
+  draws a **border**, so a block dragged taller showed that border stopping half
+  way down with bare block underneath — which reads as a block that failed to draw,
+  not as slack. So the spacer moved in. `_give_trailing_slack` puts a stretch at the
+  bottom of the section's own vertical box layout and `_InnerScroll.set_section`
+  then hands it the whole viewport: the surplus lands under the last row, inside the
+  border. Centrally rather than in each section, because a mod ships a block too and
+  the rule that a section fills its block is the page's. A section that already
+  expands downwards needs none — one that states **`fills_height`** (Notes' editor,
+  the roller's history, the portrait, the Scene board), or one whose layout has
+  something expanding in it (a table that stretches its rows). A **form** takes a
+  trailing row of `_Slack` instead, since a `QFormLayout` holds widgets rather than
+  items and one expanding row is enough to keep the surplus off its captions; only
+  a layout none of that can reach keeps the wrapper.
+  `fills_height` stays opt-in rather than derived: a widget's own vertical policy
+  says nothing about whether its *children* have a use for the height (the roller's
+  `QGroupBox` is `Preferred` and it is the history inside it that wants the room),
+  and `QLayout.expandingDirections` answers "both" for any layout that has not
+  overridden it, which a `QFormLayout` has not — so that question is only ever put
+  to a `QBoxLayout`.
+- **Height is measured at the width the block has, and nothing else measures it
+  right.** `sizeHint` answers with the height the content would take at its own
+  *preferred* width, and `minimumSizeHint` at no particular width at all — a
+  `QBoxLayout` builds that one by summing its items' unwrapped hints, with no
+  height-for-width anywhere in it. For a block of wrapping cards both overstate,
+  and they overstated by different amounts: the block took its height from the
+  first, Qt decided whether to scroll from the second, and the Powers block ended
+  up scrolling 30px inside a frame with nothing in the bottom 30px of it.
+  `content_height` asks `heightForWidth` and `_InnerScroll._pin_content_height`
+  pins the answer as an explicit `minimumHeight`, which is the one number
+  `qSmartMinSize` takes over the hint; `content_size_hint` asks the same question
+  for the frame's own hint. It may only ever **lower** what the widget already
+  claimed — the point is to correct an overstatement, never to invent a refusal,
+  and a block dragged genuinely too short still scrolls.
+- **A section may name a height that is not its content's** — `preferred_height`,
+  read by `content_size_hint` and nothing else. It exists for a **disclosure**:
+  Name & Details' Details group grew the block, which grew the row, which pushed
+  the Abilities row and everything under it 71px down the page and pulled it all
+  back when the box was unticked. Adding a skill should move the page; ticking a
+  box to look at a character's eye colour should not. So the block goes on asking
+  for the height it asks for shut, uses the room it already has — a row is as tall
+  as its tallest block and this is rarely that block — and scrolls past that.
+  Deliberately separate from what the scroll area measures, which still sees the
+  whole expanded content: that is what makes the remainder reachable rather than
+  clipped.
 - **A block whose content changes height has to say so itself.** The inner scroll
   area is a *barrier* — that is the whole reason a block can be dragged smaller
   than its section — and a barrier does not carry a changed **hint** out either.

@@ -585,6 +585,20 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   `setCurrentIndex` makes Qt announce the change, which the canvas cannot tell from a
   click, so a restore would write itself back into the tree and land in the history as
   a gesture of its own.
+- **A tab dragged *along* the bar reorders the cell**, and the frames have to follow.
+  `setMovable` is on — `tab_drag` tells the two gestures apart by direction precisely
+  so sideways can stay a reorder — but what Qt reorders is the **bar**, and nothing
+  else. The group's list of frames stayed put, so from the first reorder tab *n* was
+  one block's caption over another block's body; and since everything the cell answers
+  is indexed by the bar (which block is showing, which one the pin/float/close buttons
+  act on, which one the tree records), they were all wrong together and silently.
+  `_on_tab_moved` re-deals the frames, `tabsReordered` takes the order into the tree
+  through `layout_tree.reorder_leaf` (which carries `active` by *block*, since the
+  indices are the thing that moved), and the canvas **re-keys the live group** —
+  groups are cached by exactly the tuple of blocks in them, so a re-dealt cell would
+  otherwise miss its own entry and be rebuilt for a gesture that moved a caption. The
+  stack is addressed by widget rather than by index throughout, so no member is ever
+  unparented and put back.
 - Dragging a tab clear of the bar takes that block back out, through the shared
   `ui/tab_drag.py::TabSplitGesture` — the same gesture the Notes block uses to drag a
   *note* out into a new block. The bar keeps the mouse grab through all of it, so

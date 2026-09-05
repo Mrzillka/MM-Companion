@@ -664,6 +664,7 @@ class BlockCanvas(QWidget):
             group.splitMoved.connect(self.update_drag)
             group.splitReleased.connect(self._on_tab_split_released)
             group.activeChanged.connect(self._on_tab_activated)
+            group.tabsReordered.connect(self._on_tabs_reordered)
             group.groupDragStarted.connect(lambda pos, g=group: self._group_pressed(g, pos))
             group.groupDragMoved.connect(lambda pos, g=group: self._group_moved(g, pos))
             group.groupDragReleased.connect(lambda pos, g=group: self._group_released(g, pos))
@@ -711,6 +712,24 @@ class BlockCanvas(QWidget):
     def _on_tab_activated(self, key: str) -> None:
         """Remember which tab of a group is showing, so a restore brings it back."""
         self._set_page(lt.set_active(self._page, key))
+        self._settled()
+
+    def _on_tabs_reordered(self, keys: list[str]) -> None:
+        """A tab was dragged along its bar: take the new order into the tree.
+
+        And **re-key the live group**, which is the half that is easy to miss:
+        groups are cached by exactly the tuple of blocks in them, so a group whose
+        keys have been re-dealt would miss its own cache entry on the next rebuild,
+        be released, and be built again — reparenting every member for a gesture
+        that moved nothing but a caption.
+        """
+        wanted = tuple(keys)
+        page = lt.reorder_leaf(self._page, wanted)
+        if page is None or page == self._page:
+            return
+        for existing in [k for k in self._groups if set(k) == set(wanted)]:
+            self._groups[wanted] = self._groups.pop(existing)
+        self._set_page(page)
         self._settled()
 
     def _on_tab_split(self, key: str, global_pos: QPoint) -> None:

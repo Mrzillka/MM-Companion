@@ -73,6 +73,8 @@ class TabGroupFrame(QFrame):
     splitReleased = Signal(QPoint)
     #: The user brought a different tab to the front.
     activeChanged = Signal(str)
+    #: The tabs were dragged into a new order: the block keys as they now read.
+    tabsReordered = Signal(list)
     #: The whole cell is being dragged by its handle: pressed, moved, released.
     #: The canvas drives these exactly as it drives a title bar's.
     groupDragStarted = Signal(QPoint)
@@ -105,6 +107,7 @@ class TabGroupFrame(QFrame):
         # caption must never become a width the cell can no longer be dragged under.
         self._bar.setElideMode(Qt.TextElideMode.ElideRight)
         self._bar.currentChanged.connect(self._on_current_changed)
+        self._bar.tabMoved.connect(self._on_tab_moved)
 
         self._stack = QStackedWidget()
         self._stack.setObjectName("blockTabStack")
@@ -262,9 +265,37 @@ class TabGroupFrame(QFrame):
 
     def _on_current_changed(self, index: int) -> None:
         if 0 <= index < len(self._frames):
-            self._stack.setCurrentIndex(index)
+            # By widget, not by index: the bar reorders itself when a tab is
+            # dragged along it and the stack does not (see :meth:`_on_tab_moved`).
+            self._stack.setCurrentWidget(self._frames[index])
             self._buttons.follow(self._frames[index])
             self.activeChanged.emit(self._frames[index].key)
+
+    def _on_tab_moved(self, before: int, after: int) -> None:
+        """Follow a bar the user has dragged a tab along.
+
+        ``setMovable`` is on because reordering the blocks in a cell is worth
+        having, and :mod:`~mm_companion.ui.tab_drag` tells the two gestures apart
+        by direction for exactly that reason — sideways is a reorder and Qt handles
+        it. What Qt handles is the **bar**, and nothing else: this group's list of
+        frames stayed as it was, so from the first reorder onwards tab *n* was one
+        block's caption over another block's body. Everything the cell answers is
+        indexed by the bar — which block is showing, which one the pin, float and
+        close buttons act on, which one the tree records as active — so they were
+        all wrong together, and silently.
+
+        Only the frames are re-dealt. The stack is addressed by widget now, so its
+        own order does not matter and no member has to be unparented and put back
+        (a reparented widget is briefly a top-level window, which is the one thing
+        a rebuild here may not do).
+        """
+        if not (0 <= before < len(self._frames) and 0 <= after < len(self._frames)):
+            return
+        self._frames.insert(after, self._frames.pop(before))
+        index = self.active_index()
+        self._stack.setCurrentWidget(self._frames[index])
+        self._buttons.follow(self._frames[index])
+        self.tabsReordered.emit(list(self.keys))
 
     def _tab_menu_at(self, point: QPoint) -> None:
         """Right-click on a tab: that block's own menu, wherever the block is.

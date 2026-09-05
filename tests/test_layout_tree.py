@@ -319,6 +319,33 @@ class TestMoveAndActive:
         assert lt.set_sizes(before, (1,), [320]) is before
 
 
+class TestReorderLeaf:
+    """A tab dragged along its bar re-deals one cell, and nothing else."""
+
+    def test_the_keys_come_out_in_the_order_asked_for(self) -> None:
+        grouped = lt.merge_into(page(), "skills", "abilities")
+        leaf = lt.leaf_for(grouped, "skills")
+        after = lt.reorder_leaf(grouped, ("skills",) + tuple(k for k in leaf.keys if k != "skills"))
+        assert lt.leaf_for(after, "skills").keys[0] == "skills"
+
+    def test_the_same_block_goes_on_showing(self) -> None:
+        grouped = lt.merge_into(page(), "skills", "abilities")
+        showing = lt.leaf_for(grouped, "skills").active_key()
+        after = lt.reorder_leaf(grouped, ("skills", "abilities"))
+        assert lt.leaf_for(after, "skills").active_key() == showing
+
+    def test_a_run_that_is_not_one_whole_cell_is_refused(self) -> None:
+        """This re-deals a cell; it is never a way to move a block between two."""
+        before = lt.merge_into(page(), "skills", "abilities")
+        assert lt.reorder_leaf(before, ("skills", "powers")) is before
+        assert lt.reorder_leaf(before, ("skills",)) is before
+
+    def test_an_unknown_block_changes_nothing(self) -> None:
+        before = page()
+        assert lt.reorder_leaf(before, ("nobody", "skills")) is before
+        assert lt.reorder_leaf(before, ()) is before
+
+
 class TestPersistence:
     def test_a_page_round_trips(self) -> None:
         before = page()

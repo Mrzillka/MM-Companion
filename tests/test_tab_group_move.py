@@ -301,3 +301,75 @@ class TestWhichTabIsShowing:
         qapp.processEvents()
 
         assert group_of(canvas).active_key() == "d"
+
+
+class TestReorderingTheTabs:
+    """`setMovable` is on, so a tab dragged along the bar reorders the cell.
+
+    Qt moves the *bar* and nothing else. Everything this cell answers is indexed by
+    the bar — which block is showing, which one the buttons act on, which one the
+    tree records — so before the frames followed, one reorder made every one of
+    them wrong at once, and silently.
+    """
+
+    def test_the_frames_follow_the_bar(self, canvas, qapp) -> None:
+        group = group_of(canvas)
+        assert group.keys == ["c", "d"]
+
+        group._bar.moveTab(0, 1)
+        qapp.processEvents()
+
+        assert group.keys == ["d", "c"]
+        assert [group._bar.tabText(i) for i in range(group._bar.count())] == ["D", "C"]
+
+    def test_the_same_block_goes_on_showing(self, canvas, qapp) -> None:
+        group = group_of(canvas)
+        showing = group.active_key()
+
+        group._bar.moveTab(0, 1)
+        qapp.processEvents()
+
+        assert group.active_key() == showing
+        assert group._stack.currentWidget().key == showing
+
+    def test_the_buttons_still_act_on_the_block_showing(self, canvas, qapp) -> None:
+        group = group_of(canvas)
+        group._bar.moveTab(0, 1)
+        qapp.processEvents()
+        group._bar.setCurrentIndex(1)
+        qapp.processEvents()
+
+        group._buttons._buttons["close"].click()
+        qapp.processEvents()
+
+        assert canvas.is_hidden("c"), "the close button hid a block that was not showing"
+
+    def test_the_tree_keeps_the_new_order(self, canvas, qapp) -> None:
+        """Or it is forgotten the next time the page is rebuilt or saved."""
+        group_of(canvas)._bar.moveTab(0, 1)
+        qapp.processEvents()
+
+        assert lt.leaf_for(canvas.page_tree(), "c").keys == ("d", "c")
+
+    def test_the_group_survives_the_rebuild(self, canvas, qapp) -> None:
+        """Groups are cached by exactly the blocks in them, so a re-dealt cell has
+        to be re-keyed or the next rebuild throws the widget away and makes another."""
+        group = group_of(canvas)
+        group._bar.moveTab(0, 1)
+        qapp.processEvents()
+        canvas._relayout()
+        qapp.processEvents()
+
+        assert group_of(canvas) is group
+
+    def test_it_is_one_step_of_the_layout_history(self, canvas, qapp) -> None:
+        from mm_companion.ui.layout_undo import LayoutHistory
+
+        history = LayoutHistory(canvas)
+        group_of(canvas)._bar.moveTab(0, 1)
+        qapp.processEvents()
+        history.record()
+
+        assert history.undo() is True
+        qapp.processEvents()
+        assert group_of(canvas).keys == ["c", "d"]

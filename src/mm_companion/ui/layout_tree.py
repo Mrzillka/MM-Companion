@@ -555,6 +555,30 @@ def merge_leaf_into(node: Node | None, keys: Sequence[str], target: str) -> Node
     return normalize(_replace_at(detached, path, grown))
 
 
+def reorder_leaf(node: Node | None, keys: Sequence[str]) -> Node | None:
+    """The cell holding *keys* re-dealt into that order, still showing the same block.
+
+    A tab bar reorders itself when a tab is dragged along it, and the tree has to
+    follow or the order is forgotten the moment the page is rebuilt or saved.
+    ``active`` is carried by *block* rather than by index, since the whole point is
+    that the indices have moved.
+
+    A *keys* that is not exactly one cell's contents is refused — this is a
+    re-dealing of one cell, never a way to move a block between two.
+    """
+    wanted = tuple(keys)
+    if node is None or not wanted:
+        return node
+    path = find(node, wanted[0])
+    if path is None:
+        return node
+    leaf = at(node, path)
+    if not isinstance(leaf, Leaf) or set(leaf.keys) != set(wanted) or len(leaf.keys) != len(wanted):
+        return node
+    showing = leaf.active_key()
+    return _replace_at(node, path, Leaf(wanted, wanted.index(showing)))
+
+
 def set_active(node: Node | None, key: str) -> Node | None:
     """Bring *key* to the front of its tab group."""
     if node is None:

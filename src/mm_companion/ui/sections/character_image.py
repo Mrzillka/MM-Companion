@@ -28,7 +28,11 @@ from mm_companion.core.data_loader import GameData
 from mm_companion.core.library import resolve_image_path
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 
-MIN_IMAGE_SIZE = 120
+#: The smallest a portrait is worth drawing at. Not a floor on the *block* —
+#: nothing is, any more — but the size below which the label stops asking for
+#: room and simply takes whatever is left, so the block can be dragged to a
+#: sliver and the picture goes with it instead of holding it open.
+MIN_IMAGE_SIZE = 48
 
 
 class ScalingImageLabel(QLabel):
@@ -44,6 +48,9 @@ class ScalingImageLabel(QLabel):
         super().__init__(parent)
         self._source = QPixmap()
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # A hint, not a minimum: an Ignored size policy already lets the layout
+        # give this label anything, and a real minimum would climb back out
+        # through the block and stop it being dragged narrow.
         self.setMinimumSize(MIN_IMAGE_SIZE, MIN_IMAGE_SIZE)
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
 
@@ -75,6 +82,11 @@ class ScalingImageLabel(QLabel):
 
 class CharacterImageSection(QGroupBox):
     """A character portrait with a load button, backed by the shared :class:`Character`."""
+
+    #: The portrait rescales to whatever room it is given, so it takes the height
+    #: rather than sitting at the top of it (see
+    #: :meth:`~mm_companion.ui.block_frame._InnerScroll.set_section`).
+    fills_height = True
 
     edited = Signal()
 

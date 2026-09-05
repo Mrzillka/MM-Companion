@@ -35,6 +35,7 @@ from mm_companion.core.rules import (
 )
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.sections.stat_table import (
+    COL_RANK,
     PinMenuState,
     apply_stat_effects,
     build_stat_table,
@@ -86,6 +87,11 @@ class AbilitiesSection(TitledSection):
         self._ability_enh: dict[str, QTableWidgetItem] = {}
 
         layout = QVBoxLayout(self)
+        # No margin round the table: it is the whole of this block, so the section's
+        # own border is the table's border and an 11px band of section between the
+        # two was a frame drawn inside a frame for no reason. Resistances beside it
+        # says the same thing.
+        layout.setContentsMargins(0, 0, 0, 0)
         self.table = build_stat_table(
             data.abilities,
             self._abilities,
@@ -101,8 +107,14 @@ class AbilitiesSection(TitledSection):
             unpin_sink=self.unpinRequested.emit,
             pins=self._pins,
         )
+        # No stretch under it: the table takes the block's spare height itself and
+        # puts it into its rows, so this one still lines up with Resistances beside
+        # it and both of them grow their line spacing rather than their empty half.
         layout.addWidget(self.table)
-        layout.addStretch()  # top-aligned, so it lines up with Resistances beside it
+
+        # A narrowed table sheds its Rank column, and the Total column then has to
+        # carry the number outright — see :meth:`refresh_enhancements`.
+        self.table.shedChanged.connect(self.refresh_enhancements)
 
         self.refresh_enhancements()
         self.refresh_cost()
@@ -137,13 +149,27 @@ class AbilitiesSection(TitledSection):
         self.set_priced_title("Abilities", ability_points_spent(self._character, self._data))
 
     def refresh_enhancements(self) -> None:
-        """Recompute each ability's Total cell from standing boosts and condition penalties."""
+        """Recompute each ability's Total cell from standing boosts and condition penalties.
+
+        The cell normally reads ``→ N`` and stays blank on a trait nothing has
+        moved, because it is an *and here is what changed* beside the rank it
+        changed. Once the block is narrow enough to have shed the Rank column there
+        is nothing beside it, so every cell prints its number plainly instead — a
+        two-column Abilities block is a trait and its value, which is what a sheet
+        is read for.
+        """
         bonuses = trait_bonuses(self._character, self._data).get("ability", {})
         cond_effects = {
             a.key: condition_scope_penalty(self._character, self._data, {a.key, a.name})
             for a in self._data.abilities
         }
-        apply_stat_effects(self._abilities, self._ability_enh, bonuses, cond_effects)
+        apply_stat_effects(
+            self._abilities,
+            self._ability_enh,
+            bonuses,
+            cond_effects,
+            always=self.table.isColumnHidden(COL_RANK),
+        )
 
     def _roll_spec(self, key: str) -> RollSpec:
         """This ability's roll, built fresh at click time so it is never stale."""

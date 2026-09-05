@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from PySide6.QtWidgets import QWidget
 
 from mm_companion.core.registry import Registry
-from mm_companion.ui.block_sizes import BlockSize
+from mm_companion.ui.block_sizes import RecommendedSize
 
 #: A GM panel is built from the window that will host it — it needs the window's
 #: model (the session bridge, the cast, the roller) the way a sheet block needs
@@ -69,7 +69,7 @@ class GMBlockDescriptor:
     key: str
     title: str
     factory: GMBlockFactory
-    size: BlockSize = BlockSize()
+    size: RecommendedSize = RecommendedSize()
     default_row: int = 0
     default_col: int = 0
     default_pinned: bool = False

@@ -43,6 +43,12 @@ from mm_companion.ui.session_bridge import live_session
 class DiceSection(QGroupBox):
     """A d20 roller as a sheet block (see the module docstring)."""
 
+    #: The roll history grows into the block, so the roller takes the height it is
+    #: given (see :meth:`~mm_companion.ui.block_frame._InnerScroll.set_section`).
+    #: Not derivable from this widget's own policy: a ``QGroupBox`` is ``Preferred``
+    #: and it is the history *inside* it that wants the room.
+    fills_height = True
+
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         strip_groupbox_caption(self)

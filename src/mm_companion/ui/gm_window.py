@@ -95,7 +95,7 @@ from mm_companion.core.session.protocol import (
 )
 from mm_companion.ui import theme
 from mm_companion.ui.block_canvas import BlockCanvas
-from mm_companion.ui.block_sizes import BlockSize, load_block_sizes
+from mm_companion.ui.block_sizes import RecommendedSize, load_block_sizes
 from mm_companion.ui.blocks.gm_registry import (
     GMBlockDescriptor,
     gm_block_descriptors,
@@ -107,6 +107,7 @@ from mm_companion.ui.card_drop import CardDropFlow
 from mm_companion.ui.compact import CompactController
 from mm_companion.ui.connection_indicator import install_connection_indicator
 from mm_companion.ui.dice_roller import DiceRollerView
+from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.npc_card import NPCCard
 from mm_companion.ui.npc_quick_dialog import QuickNPCDialog
 from mm_companion.ui.npc_window import NPCWindow
@@ -121,7 +122,12 @@ from mm_companion.ui.session_bridge import SessionBridge, last_session, set_acti
 from mm_companion.ui.session_dialogs import HostOptions
 from mm_companion.ui.session_portrait import encode_scene_portrait, shrink_portrait
 from mm_companion.ui.undo import absorbing
-from mm_companion.ui.widgets import ConfirmButton, discard_widget, resurface
+from mm_companion.ui.widgets import (
+    ConfirmButton,
+    discard_widget,
+    enclosing_scroll_areas,
+    resurface,
+)
 
 #: What the listening socket binds to. Every interface, so a player on the LAN
 #: reaches it whichever adapter they come in on; a test overrides it to loopback.
@@ -392,7 +398,7 @@ class GMWindow(QMainWindow):
         # under the last one; let the bottom block (the NPC cards) stretch to fill
         # the page instead.
         self._canvas = BlockCanvas(
-            panels, sizes, default_rows, fill_last=True, default_pinned=gm_default_pin_lines()
+            panels, sizes, default_rows, default_pinned=gm_default_pin_lines()
         )
 
         self._scroll = QScrollArea()
@@ -450,7 +456,13 @@ class GMWindow(QMainWindow):
             self.start_hosting(self._host_options)
 
     def _update_min_width(self) -> None:
-        """Pin the page's min width to the widest docked row (blocks never squash)."""
+        """Hold the board open by a scrollbar's width and very little else.
+
+        This used to track the widest docked row, which is what made the GM window
+        refuse to be narrower than the blocks in it. Its blocks reflow and then
+        scroll inside themselves like every other, so there is no width the board
+        has to refuse — see :meth:`BlockCanvas.content_minimum_width`.
+        """
         bar = self._scroll.verticalScrollBar()
         extra = bar.sizeHint().width() if bar is not None else 0
         self._scroll.setMinimumWidth(self._canvas.content_minimum_width() + extra + 2)
@@ -508,12 +520,12 @@ class GMWindow(QMainWindow):
 
     def _restore_layout(self) -> None:
         """Restore the remembered geometry and block arrangement (its own settings key)."""
-        layout = storage.load_settings().get("gm_layout") or {}
-        geometry = layout.get("window_geometry") if isinstance(layout, dict) else None
-        if isinstance(geometry, str) and geometry:
+        layout = storage.sheet_layout("gm_layout")
+        geometry = layout["window_geometry"]
+        if geometry:
             self.restoreGeometry(QByteArray.fromBase64(geometry.encode("ascii")))
-        state = layout.get("dock_state") if isinstance(layout, dict) else None
-        if isinstance(state, str) and state:
+        state = layout["dock_state"]
+        if state:
             try:
                 self._canvas.apply_arrangement(json.loads(state))
             except (ValueError, TypeError):
@@ -530,12 +542,7 @@ class GMWindow(QMainWindow):
         state = self._compact.saved_geometry() or self.saveGeometry()
         geometry = bytes(state.toBase64()).decode("ascii")
         try:
-            storage.update_settings(
-                gm_layout={
-                    "window_geometry": geometry,
-                    "dock_state": json.dumps(self._canvas.arrangement()),
-                }
-            )
+            storage.set_sheet_layout("gm_layout", geometry, json.dumps(self._canvas.arrangement()))
         except OSError:
             pass
 
@@ -576,7 +583,11 @@ class GMWindow(QMainWindow):
         box = QGroupBox("Scene")
         layout = QVBoxLayout(box)
 
-        buttons = QHBoxLayout()
+        # A wrapping row, for the reason Equipment's three "Add…" buttons wrap:
+        # side by side they are wider than the block ever needs to be, and a row
+        # that cannot wrap is a width the block can never be dragged under.
+        button_row = FlowContainer()
+        buttons = FlowLayout(button_row, spacing=int(theme.metric("space.sm")))
         roll = QPushButton("Roll initiative")
         roll.setToolTip(
             "Roll for every NPC on the Scene, and ask each player for theirs in the "
@@ -591,8 +602,7 @@ class GMWindow(QMainWindow):
         self._new_scene_button.setToolTip("Clear the board and every initiative on it.")
         self._new_scene_button.confirmed.connect(self._new_scene)
         buttons.addWidget(self._new_scene_button)
-        buttons.addStretch()
-        layout.addLayout(buttons)
+        layout.addWidget(button_row)
 
         self._scene_board = SceneBoard(self._data, gm=True)
         self._scene_board.set_placeholder(NO_SCENE_GM)
@@ -622,6 +632,9 @@ class GMWindow(QMainWindow):
         # which is the one thing `DropFeedback` exists to stop a target doing.
         self._cards_container = CardDropFlow("gmPlayerFlow", accepts=_is_player_ref)
         self._cards_flow = self._cards_container.flow
+        # A flow re-wraps on its own; the shared card width has to be re-measured,
+        # since what it may be depends on the room the block has (_sync_card_widths).
+        self._cards_container.widthChanged.connect(self._sync_card_widths)
         layout.addWidget(self._cards_container)
         layout.addStretch()
         return box
@@ -638,7 +651,8 @@ class GMWindow(QMainWindow):
         box = QGroupBox("NPCs")
         layout = QVBoxLayout(box)
 
-        buttons = QHBoxLayout()
+        button_row = FlowContainer()
+        buttons = FlowLayout(button_row, spacing=int(theme.metric("space.sm")))
         quick = QPushButton("Quick NPC…")
         quick.setToolTip("A mook from five numbers — name, attack, effect, defence, toughness.")
         quick.clicked.connect(self._quick_npc)
@@ -649,14 +663,13 @@ class GMWindow(QMainWindow):
         add = QPushButton("Add existing…")
         add.clicked.connect(self._add_existing_npc)
         buttons.addWidget(add)
-        buttons.addStretch()
         # One button rather than two, and its caption is the action it will take —
         # which makes it a readout of the board as well as a control. Shrinking a
         # dozen mooks one caret at a time is the case the collapse exists for.
         self._collapse_all_button = QPushButton(COLLAPSE_ALL)
         self._collapse_all_button.clicked.connect(self._toggle_collapse_all)
         buttons.addWidget(self._collapse_all_button)
-        layout.addLayout(buttons)
+        layout.addWidget(button_row)
 
         self._no_npcs = _wrapped(NO_NPCS)
         self._no_npcs.setEnabled(False)
@@ -671,6 +684,7 @@ class GMWindow(QMainWindow):
         self._npc_container = CardDropFlow("gmNpcFlow", accepts=_is_npc_ref)
         self._npc_flow = self._npc_container.flow
         self._npc_container.dropped.connect(self._drop_on_npcs)
+        self._npc_container.widthChanged.connect(self._sync_card_widths)
         layout.addWidget(self._npc_container)
         layout.addStretch()
         return box
@@ -2397,7 +2411,8 @@ class GMWindow(QMainWindow):
         self._refresh_collapse_all()
 
     def _sync_card_widths(self) -> None:
-        """Give every card in a block the widest width any card in it asked for.
+        """Give every card in a block one width: the widest any card asked for,
+        capped at what the block can actually give it.
 
         A card knows what *it* needs; only the block knows what its columns need.
         The wrapping :class:`~mm_companion.ui.flow_layout.FlowLayout` lays items
@@ -2405,6 +2420,15 @@ class GMWindow(QMainWindow):
         which is why the width used to be a flat 210 + 150 constant, and why a
         card that merely fitted its content would have made the grid ragged and
         re-flowed it every time a pin was added.
+
+        The **cap** is what a resizable board needs. A card's asked-for width used
+        to be the answer outright, so a block dragged narrower than one card simply
+        grew a scrollbar and the GM read their mooks through a letterbox. Now the
+        block's own width is a ceiling: the pinned strip gives up its slack first
+        (down to ``gm.pin-strip.min``, since a narrower strip elides its captions
+        and loses least), and then the body follows. Past what both can give, the
+        cards stay legible and the block scrolls — the same bargain every block on
+        the sheet makes.
 
         Measured per block rather than across both: the NPC grid and the player
         roster are two flows with no columns in common, and a board of pinless
@@ -2415,16 +2439,49 @@ class GMWindow(QMainWindow):
         the widest hint still includes a portrait — but with every card shed of its
         portrait at once, the shared width falls with them.
         """
-        for cards in (
-            [e.card for e in self._npc_state.values() if e.card is not None],
-            list(self._cards.values()),
+        gap = int(theme.metric("space.sm")) * 3
+        strip_floor = int(theme.metric("gm.pin-strip.min"))
+        body_floor = int(theme.metric("gm.card.min"))
+        for container, cards in (
+            (
+                self._npc_container,
+                [e.card for e in self._npc_state.values() if e.card is not None],
+            ),
+            (self._cards_container, list(self._cards.values())),
         ):
             if not cards:
                 continue
             body = max(card.body_width_hint() for card in cards)
             strip = max(card.pin_width_hint() for card in cards)
+            room = self._card_room(container)
+            if room > 0 and body + strip + gap > room:
+                strip = max(strip_floor if strip else 0, min(strip, room - gap - body_floor))
+                body = max(body_floor, min(body, room - gap - strip))
             for card in cards:
                 card.apply_width(body, strip)
+
+    @staticmethod
+    def _card_room(container) -> int:
+        """The width one card may occupy, measured from the **block's viewport**.
+
+        Not from the container, which is the trap: a card is a fixed width, so it
+        sets the flow's minimum, so the block's scroll area gives the flow exactly
+        that — and asking the container how wide it is returns the width the card
+        forced in the first place. The cap would then never bite, which is precisely
+        what it did until this read the viewport instead.
+
+        Zero before the block is realized, which is read as "no cap yet": the first
+        paint uses the cards' own hints and the real answer arrives on the first
+        ``widthChanged``.
+        """
+        areas = enclosing_scroll_areas(container)
+        if not areas:
+            return 0
+        layout = container.layout()
+        margins = layout.contentsMargins() if layout is not None else None
+        inset = (margins.left() + margins.right()) if margins is not None else 0
+        # The innermost is the block's own; anything further out is the page.
+        return max(0, areas[0].viewport().width() - inset)
 
     def _refresh_collapse_all(self) -> None:
         """Restate the button from the board — a caption that lies is worse than none."""
@@ -2801,7 +2858,7 @@ def register_base_gm_blocks(*, replace: bool = False) -> None:
                 # Bound at build time to the window being constructed, which is
                 # what lets a descriptor name an instance method it cannot hold.
                 (lambda name: lambda window: getattr(window, name)())(builder),
-                shipped.get(f"gm_{key}", BlockSize()),
+                shipped.get(f"gm_{key}", RecommendedSize()),
                 row,
                 col,
                 pinned,

@@ -4,43 +4,203 @@ Matters when adding a block, or touching the page, the pinned strip or layout pe
 
 Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
 
-## The page, the canvas and the pinned strip
+## The page is a tree, and the user owns it
 
-- The whole sheet scrolls as **one page**, and the blocks are rearranged on a
-  **custom scrollable canvas** (not Qt docking). A `QMainWindow` dock host can't
-  live inside a `QScrollArea` — its drag-drop and layout break — so scroll +
-  free-form drag/float/redock is done by hand instead. Each block shows **all** of
-  its content and never scrolls on its own; the page scrolls vertically when the
-  blocks don't all fit. `MainWindow` opens at 1000×860.
-- Beside that page is the **pinned strip** (`ui/pinned_panel.py`), the one place
-  that does *not* scroll: blocks parked there stay in view while the page moves
-  behind them. `PinnedBoard` is what the host puts in its layout in place of the
-  bare page scroll area — a splitter holding the page and a `PinnedPanel`, whose
-  orientation and child order *are* the strip's edge (left/right/top/bottom) and
-  whose handle sets the strip's thickness. The strip is a **small canvas, not a
-  stack**: it holds `_PinnedLine`s along its length, each an inner splitter of
-  blocks *across* it, so two pinned blocks sit side by side as readily as one
-  under the other (a drop names a `PinSlot(new_line, line, slot)`, mirroring the
-  page's `DropSlot`). Every splitter is non-collapsible and a `BlockFrame`'s
-  minimum is its whole content, so a handle drag can never squash a block;
-  `PinnedPanel.minimumSizeHint` reports that content minimum so it holds the
-  *window* open rather than clipping (capped at the usable screen, past which the
-  strip scrolls as a last resort). `align` (`fill`/`start`/`center`/`end`) places
-  a block within its cell — a block that can't fill anchors to the start, the way
-  a docked row left-aligns its fixed-width blocks. The remembered proportions are
-  **live pixel sizes, true only of the shape they were measured in**, so a block
-  *arriving* clears them along the axis it joins and lets the splitter lay that
-  axis out from the blocks' own hints; sizes are kept when a block leaves (the
-  survivors' values still came from one layout). Mixing a live size with a
-  newcomer's natural hint is what once handed a moved block a sliver of the strip. The **`PinnedHandle` (📌) is
-  always visible**: it is the empty strip's whole content, the drop target that
-  gets the first block in, the grip the strip is dragged to another edge by
-  (lighting four `EdgeZoneOverlay` bands), and the button that opens the strip's
-  Position/Alignment/Unpin-all menu. A block also pins from its title bar's 🖈.
-  **The canvas still owns the model** — the panel is a view, like `RowWidget`,
-  and holds no arrangement state; `_relayout` renders the strip *first* so the
-  rows are the last to claim a frame. The GM window gets the same strip, since it
-  hosts the same canvas.
+- The arrangement is a **tree of splits and leaves** (`ui/layout_tree.py`), not a
+  list of rows. A `Leaf` names one or more block keys — **one key is a plain
+  block, two or more is a tab group**, which is the whole of the merge feature in
+  the model and the reason there is no third node kind for it. A `Split` divides
+  its space along one axis between its children, carrying the pixel `sizes` the
+  user dragged. **The page itself is a vertical `Split`** whose children are the
+  rows: that is not a special case bolted on top, because a vertical split
+  directly inside a vertical split *is* just more rows, which is exactly what
+  `normalize` collapses. Every structural operation — `insert_beside`, `remove`,
+  `merge_into`, `split_out`, `move`, `set_sizes` — is a pure function over frozen
+  dataclasses, so the structural half of a drag is tested with no widget, window
+  or display server (`tests/test_layout_tree.py`).
+- **Width tiles, height scrolls**, and the two containers in `ui/grid_view.py` are
+  the difference. A `GridSplitter` renders a split *inside* a row: its children
+  share a fixed extent, so a divider drag there is zero-sum — give one block width
+  and its neighbour loses exactly that much. A `RowStack` renders the page: its
+  sizes are *absolute*, the rows may total more than the viewport, and the page
+  scrolls. A drag there therefore **cannot** be zero-sum — pulling the divider
+  under row 2 down makes row 2 taller and pushes everything below it down. That is
+  the one behaviour a `QSplitter` cannot give (a splitter divides a fixed total,
+  and the page has no fixed total to divide), and the only reason the page is not
+  simply another splitter.
+- **A row nobody has dragged states a height of zero**, which means "be as tall as
+  your content". So the sheet behaves exactly as it always did until somebody
+  actually resizes something, and adding a skill still makes the Skills block
+  taller rather than making it scroll inside a height nobody chose. A zero in a
+  split's `sizes` is a real value and not a gap; a run of nothing but zeros is the
+  same as no sizes at all and is dropped.
+- **What happens to a row somebody else's gesture did not touch: nothing.** Adding a
+  row (`append_node_row`) and taking one away (`_remove`) both used to clear the
+  whole run's sizes, on the reasoning that numbers describing a run of three say
+  nothing about a run of two. That is true of a **row**, whose children share a fixed
+  extent — and a splitter renormalises the remembered numbers to its real width, so
+  keeping them keeps the proportions the user dragged rather than falling back to the
+  blocks' own hints. It is flatly wrong of the **page**, whose sizes are absolute
+  heights that owe nothing to each other: closing one block forgot the height of every
+  other row on the sheet, and so did dragging a block into a row of its own. Both keep
+  what the survivors had now; a newly added row states zero and tracks its content.
+- **Every row is wrapped in a `_RowHolder` the stack owns**, and that is a bug fix
+  rather than tidiness. A row holding a single block *is* that block's frame, with
+  no container of its own — so anything the stack set on it (a fixed height, a
+  size policy) was set on the *block*, and travelled with the block when it was
+  later dragged into the pinned strip, where it then refused to be squashed. The
+  same special case had already destroyed a live block once, when `_relayout` shed
+  an "old row" that was really a frame; `_relayout` still guards that explicitly.
+- `ui/grid_handle.py` holds the divider. **Two numbers, not one**: `grid.grab` is
+  how wide it is *to the mouse* (and therefore the gutter between two blocks), and
+  `grid.handle` is the accent painted down the middle of that under the pointer.
+  They were one token, which meant the grab target could not be made catchable
+  without the gap between blocks growing to match — a hairline is not a grab
+  target and a page of visible gutters is not a character sheet, so the two were
+  always going to want to differ. At rest a divider is painted as **nothing** —
+  deliberately not Qt's own handle furniture, which draws a raised panel with dots
+  and would make a page of a dozen blocks a dozen visible gutters. One
+  `paint_divider` serves both divider kinds (the splitter handles and the row
+  grips), because they are the same affordance and would read as two if drawn
+  twice.
+- **The detent** is what makes a recommended size feel like advice rather than a
+  wall. `snap_to_detent(position, targets, strength)` pulls a handle onto the
+  nearest recommended size within `grid.detent` px; dragging further than the band
+  goes straight past, which is the "deliberate extra pull" without a mode or a
+  modifier key. A `GridSplitter` offers **two** targets per handle — the block
+  before it at its recommended size and the block after it at that block's — so a
+  divider between two blocks can settle either without going round the other side.
+  A `_DetentMark` overlay shows where they are during the drag. It is built against
+  the nearest ancestor that is **not** a splitter: a `QSplitter` adopts every child
+  widget into its own list of panes, so an overlay parented to one becomes a pane
+  of it, which put an invisible strip of nothing at the left of every row.
+- **Double-clicking a divider fits.** The detent marks where a block's recommended
+  size is and a drag can settle on it, but neither is a way to *ask* for it — the
+  one thing the recommendations had no direct route to, and the gesture a splitter
+  has answered with a double-click for as long as there have been splitters.
+  `GridSplitter.fit_pane` gives the pane its recommendation out of its neighbour
+  (zero-sum, like every resize in a row); `RowStack.fit_row` puts a row back to
+  its content height, spelled as *forgetting* the height rather than measuring
+  one, so the row goes on tracking its content afterwards exactly as an undragged
+  row does. A handle fits the pane **before** it — a rule you can predict beats
+  one that guesses which side you meant, and every pane has a divider on both
+  sides of it.
+- **A grip drag freezes the page's height, and this is not the minimum the shape
+  rule forbids.** Every mouse-move pins the dragged row's holder to a new height,
+  so the stack re-sums and the page gets shorter the instant the row does. Behind
+  a `QScrollArea` that is not cosmetic: the scroll value is clamped to the smaller
+  maximum, the content slides down inside the viewport, and the divider stands
+  still on screen while the hand dragging it walks away — dragging a *bottom* row
+  shorter was close to unusable. So `RowStack.arm_grip` records its own height and
+  refuses to go under it until the release, and the slack goes into the trailing
+  stretch it already had. That number is read off the widget at the instant of a
+  press, is not a function of the width, is recomputed by nothing while it stands,
+  and is gone on release; a rebuild *under* a live drag cancels the gesture rather
+  than committing it. Growing is untouched — and getting *that* right is the whole
+  reason the freeze is a floor under `RowStack.minimumSizeHint` rather than a
+  `setMinimumHeight`. An explicit minimum does not sit under Qt's answer, it
+  replaces it (the same `qSmartMinSize` rule `_pin_content_height` relies on
+  further down), and Qt's answer is the rows added up, which inside a `QScrollArea`
+  is the *only* way a row dragged taller reaches the page. Spelled as an explicit
+  minimum the freeze held the page in both directions: past the point where the
+  page filled its viewport the grip stood still under a hand that kept moving, the
+  row below was crushed to find the height the dragged one was taking, and both
+  came right on release — which is why the fault read as "the divider stops moving
+  and the block under it clips, but the result is correct".
+- **And a grip dragged into the edge of the window auto-scrolls**, reusing the
+  block drag's `edge_velocity` curve. It extends the drag *before* it scrolls: a
+  row dragged past the bottom is usually already at the end of the scroll range,
+  so scrolling first would move nothing, and growing the row is what gives the
+  bar somewhere to go. Both ends are self-limiting rather than clamped: growing
+  makes its own scroll range, and shrinking stops when the row reaches its floor
+  and the bar reaches zero, leaving the grip a few pixels off the pointer instead
+  of running away from it.
+- **Zero is a height a drag may not say.** It is `RowStack`'s sentinel for *no
+  stated height* — what an undragged row is in, and what `fit_row` puts a row back
+  to — so `RowGrip._restate_height` clamping to it did not squash the row, it
+  released it: drag the divider up past the top of its own row and the block sprang
+  open to its full content height under the pointer, while the collapse warning
+  went on offering to close what was now the tallest thing on the page. The clamp
+  is 1px. Letting go there still closes the row's blocks, which is the *other*
+  behaviour and the right one — the two were only ever confusable because a drag
+  could reach the sentinel by accident.
+- **A block dragged too small to find closes itself**, past `grid.close-extent`
+  (48, against `block.min-extent`'s 24, which is the frame's own floor). The frame
+  washes in the reject colour, the cursor carries a "Release to close" naming the
+  blocks, and letting go closes them — the View menu entry clears and Ctrl+Z puts
+  them back where they were. A row squashed to nothing takes every block in it and
+  counts as **one** gesture, which is what `BlockCanvas.close_blocks` exists for;
+  `hide_block` is now one call into it. **Only a drag may do this, and only to what
+  that drag is moving**: a restored
+  arrangement, a strip mid-rebuild or a window resize can all hand a pane a tiny
+  size and none of them is anybody asking for a block to go away, so the check
+  hangs off `GridHandle`'s release and the grip's, and off nothing that merely
+  notices a size. `update_collapse_marks` takes the **handle's index** for the same
+  reason: it used to read the whole run, so a pane a *window resize* had left a
+  sliver was closed by the next drag of any other divider in the row — a block
+  thrown away by a hand that never went near it. A handle answers for its own two
+  panes; a grip answers for its own row. And a **rebuild takes the warning down**
+  (`_clear_close_warnings`, at the top of `_relayout`) — the wash is put on by a
+  divider and taken off by that divider's release, and a splitter rebuilt out from
+  under a held handle never sends one, so the block wore the reject colour for the
+  rest of the session. The warned blocks are remembered by key rather than
+  re-derived, since by then the arrangement is the new one and row *n* of it need
+  not hold what row *n* held when the warning went up. The strip gets the rule for free — it renders with the page's own
+  splitters — once the canvas follows its dividers, which until then it did not.
+- **Right-clicking a title bar opens the block's menu** (`BlockCanvas.block_menu`,
+  built rather than shown so it can be asked what it offers without an event
+  loop): Fit to content, the pin, the pop-out — with *keep above other windows*
+  when it already is one — and Close. Every item routes to a method that already
+  existed. It is not new behaviour; it is the first place several pieces of
+  existing behaviour can be *found* without knowing they are there. A block inside
+  a tab group lends its title bar to the group and so has no menu of its own yet.
+- Beside the page is the **pinned strip** (`ui/pinned_panel.py`), the one place
+  that does *not* scroll — and it is **the same engine as the page**. `PinnedPanel`
+  renders a region tree through the very same `build_node`, so a block in the strip
+  sits in a `GridSplitter` with the same dividers and the same detents as one on
+  the page, and can be split and nested exactly as freely. The strip's own
+  `_PinnedLine` and `_PinnedSlot` are gone with the concept of a *line*: there is no
+  "line along the strip holding blocks across it" any more, only cells. A drop names
+  a block and a `side` of it, like the page's; `layout_tree.region_lines` still
+  derives the old shape for anything that wants to read the strip in those terms.
+- **Alignment went with the lines.** `fill`/`start`/`center`/`end` existed because a
+  block that pinned its own size could not fill the cell it was given and would
+  otherwise sit adrift in the middle of one. No block pins its own size now — the
+  user does — so every block fills its cell and the choice had nothing left to
+  decide. The menu item is gone and the key is out of the schema.
+- **Moving the strip to another edge turns its tree.** A column down the right edge
+  is a *row* along the bottom, so `_rotate` swaps every split's axis when the edge
+  changes axis; a move between two side edges is only a change of side, so the shape
+  stays and only its live pixel sizes go. Both drop the sizes, which measured an
+  axis that has just stopped existing.
+- `PinnedBoard` is what the host puts in its layout — a splitter holding the page and
+  the panel, whose orientation and child order *are* the strip's edge and whose handle
+  sets its thickness. That handle was the one divider on the sheet with **no detent
+  and no mark**: the strip's *internal* dividers are the page's own splitters and
+  came with theirs, but the board's was a bare `QSplitter`. It is a `_BoardSplitter`
+  (a `GridSplitter`) now, and `PinnedPanel.recommended_size` answers what thickness
+  the strip wants **from the region tree** rather than from Qt — a run along the
+  thickness adds up and pays for its dividers, a run across it takes the largest,
+  and a cell is the roomiest block in it. Only the tree knows which is which: two
+  blocks stacked down a left-hand strip both want their own *width*, so the strip
+  wants the wider of them; the same two along the bottom want it as thick as the
+  taller. It offers **one** target where a divider between two blocks gets two —
+  the other pane is the whole page, whose hint is a number about a scroll area
+  rather than a width anybody meant the strip to stop at. The **`PinnedHandle` (📌) is always visible**: the empty strip's
+  whole content, the drop target that gets the first block in, the grip the strip is
+  dragged to another edge by (lighting four `EdgeZoneOverlay` bands), and the button
+  that opens its menu. The canvas still owns the model — the panel is a view and holds
+  no arrangement state; `_relayout` renders the strip **first** so the rows are the
+  last to claim a frame, and the rescue pass that follows only touches frames still
+  inside the page's own stack (rescuing one the strip had just taken would undo the
+  render order from the other direction).
+- **Nothing holds the window open any more.** `PinnedPanel.minimumSizeHint` used to
+  report the strip's whole content, capped at the usable screen, precisely so the
+  *window* would be held open rather than the strip clipping. That was right while a
+  squashed block was a clipped one. It reports its handle and no more now, and
+  `_usable_screen` and `_scrollbar_allowance` went with it — they existed only to
+  serve it. A strip too short for its blocks squashes them, and they scroll inside
+  themselves.
 
 ## How the sheet is built
 
@@ -144,126 +304,367 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
 ## Block frames, the canvas API and layout persistence
 
 - `ui/block_frame.py`: a `BlockFrame` wraps one section — a `TitleBar` (the drag
-  handle, plus pin `🖈`, float `↗` and close `✕` buttons) above the section, no
-  inner scroll area, sized to its content. A floated block moves into a
-  `BlockWindow` (a top-level window owned by the sheet); its title bar reuses the
-  same drag gesture, so you drag it back onto the page to re-dock.
-  A floated `BlockWindow` is **frameless and can be pinned above other
-  applications**, the same trade the mini roller makes and through the same
-  `ui/frameless.py` helpers: a popped-out block spends its life beside somebody
-  else's window, where the OS title bar is most of what makes it read as a document.
-  The block's own title bar was already the drag handle and its `✕` already hides
-  the block, so all the frame owed was a `QSizeGrip`. The `🖈` **means what the
-  block's current home makes it mean** — pin *to the strip* on the page, pin *on
-  top* in a window — and `TitleBar.set_floating` swaps the two (checkable there,
-  a plain action elsewhere; `↗` hides, since a window is already popped out).
-  That is one glyph honestly read, not a pun: pinning is what it says, and what it
-  pins to is whatever the block is beside. In a window it opens **already lit** —
-  staying on top is the default, see the canvas bullet below. It also **goes as
-  small as it is dragged**, the other half of the same trade: the frame sits in a
-  scroll area that scrolls *both* ways, so the only floor is `float.min-width` /
-  `float.min-height` and past that the block scrolls rather than being clipped —
-  exactly as the mini roller's floor is `compact.min-*`. It still *opens* at the
-  block's natural size, so popping one out never changes how it reads.
-- `ui/block_canvas.py`: the `BlockCanvas` is the single source of truth for the
-  arrangement — `_rows` (an ordered list of rows, each an ordered list of block
-  keys), `_windows` (floated blocks), `_hidden` (closed blocks), and `_pinned`
-  (the strip's lines, with its `_pin_edge`/`_pin_align`/sizes). It renders a
-  `RowWidget` per row (fixed-width blocks keep their size, growable blocks stretch)
-  and owns the drag controller: `title_bar_pressed/moved/released` run one manual
-  gesture (float-out at drag start, `_hit_test` → a `DropIndicator`, dock-on-drop,
-  pin-on-drop over the strip, or leave-floating), plus edge auto-scroll. Structural
-  ops `float_block`, `dock_block`, `show_block`/`hide_block`,
-  `pin_block`/`unpin_block`/`set_pin_edge`/`set_pin_align`, `set_block_on_top`,
-  `set_windows_suspended`, `arrangement`,
-  `apply_arrangement`, `default_arrangement` are the headless-testable seams (drag
-  outcomes without synthetic mouse events). **Which floated blocks stay on top lives
-  in `_on_top`, keyed by block** and not on the `BlockWindow`: dragging a block out
-  and docking it back destroys and rebuilds that window, so anything held on the
-  window is lost the first time it moves. **A popped-out block stays on top by
-  default** (`DEFAULT_ON_TOP`) — it was popped out to be read *beside* something, and
-  one that sinks behind that window the moment it is clicked is no use — which is why
-  `_on_top` is a `dict[str, bool]` and not a set: absence has to mean "never asked"
-  rather than "no", and only an explicit `set_block_on_top` (or a restored layout
-  carrying one) records the exception. Ask `_wants_on_top`, never `key in _on_top`. It
-  persists in the `floating` entry as `on_top`, read tolerantly and so needing no
-  `SCHEMA_VERSION` bump — the `hidden_anchors` precedent — but written **both ways**,
-  since absence now means the default. Note the asymmetry: *moving* a block keeps the
-  choice across a dock (popping it out again puts it back the way it was left), while
-  *restoring a layout* is authoritative and clears it. The default arrangement is supplied by
-  the sheet from the block registry's `default_rows()` (grouping descriptors by
-  their default row/col): the Name & Details block beside the Character Image, then
-  the System / Power Level block full width, the Abilities | Resistances pair, then
-  Conditions, Advantages, Complications, Skills, Powers, Equipment — plus the
-  registry's
-  `default_pin_lines()`, which parks the **Dice Roller** and the **Scene** in the
-  strip on the right, one line each and in that order. The GM window does the same
-  for its **Rolls** block, through the same `default_pinned=` argument and for the
-  same reason — a roller that scrolls away with the board is no use mid-fight, and
-  neither is a turn order — so its page holds the Scene, the Players and the NPCs,
-  and `fill_last` now stretches the NPC cards.
+  handle, plus pin `🖈`, float `↗` and close `✕` buttons) above the section **in a
+  scroll area of its own** (`_InnerScroll`). That scroll area is the whole reason a
+  block can be dragged to any size: a `QScrollArea` does not pass its child's
+  minimum on, so the frame is free to report a minimum of almost nothing and let
+  the section reflow — and, past what reflow can save, scroll. It **declines a
+  wheel it has no use for** — `wheel_guard.has_scroll_range`, the same test the
+  guard applies to it from the other side — passing the event up when it has no
+  range on that axis; otherwise a block with nothing to scroll would swallow the
+  gesture and the page under it would stop moving. It does **not** pass one up
+  for having reached the end of its range: a block that scrolls owns the wheel
+  while the pointer is over it, and the guard routes a wheel that started over a
+  spin box or a table into it on the same rule. See
+  [Shared UI utilities](ui-utilities.md), where that rule lives in full.
+- **Keeping the wheel is `event.accept()`, and it is a separate line from
+  deciding to keep it.** Whether the page *also* scrolls is not settled by who
+  handles the event but by whether it comes back accepted: Qt walks an ignored
+  wheel up the parent chain on its own, and the page is on that chain.
+  `QAbstractSlider` ignores a wheel that does not change its value, so a block
+  already at its bottom scrolled nothing, handed the event back still ignored, and
+  the whole sheet moved — with the check above passing every time, because the
+  decision to pass the event on is made *after* it, by Qt, on a flag nobody had
+  set. `_InnerScroll.wheelEvent` therefore accepts unconditionally once it has
+  decided the wheel is its. The tests watch `isAccepted()` for the same reason: a
+  wheel delivered with `sendEvent` never runs Qt's propagation loop, so asserting
+  on scrollbar values alone cannot see this at all — which is exactly how it
+  shipped once.
+- **`minimumSizeHint` is a title bar and `block.min-extent`, and says nothing about
+  the content.** It used to be `max(content, the JSON floor)` in both dimensions,
+  and that climbed out through the row, the page, the pinned strip and the window
+  to hold the whole application open at the sum of every block's content. On a page
+  the user drags, a minimum is a refusal: whether a block is too small to read has
+  to be the user's call. The floor that is left is about being able to *find* a
+  block you squashed — a title bar you can still grab and drag back open.
+- **`sizeHint` differs by axis, for a reason rather than an oversight.** A block's
+  **width** is *shared* — it and its neighbours divide one row — and what makes that
+  division good is a stable declared preference rather than whatever is typed into
+  the block today, or a Powers block with nine powers would take the row. A block's
+  **height** is *taken*: an undragged row is exactly as tall as what is in it and
+  the page scrolls, which is what the sheet has always done.
+- Each block's **recommended** size lives in `ui/block_sizes.json` (loaded by
+  `ui/block_sizes.py::load_block_sizes` as a `RecommendedSize`). These are no longer
+  constraints. A number here is used for exactly three things — the size a block
+  opens at, the soft detent a divider sticks at, and the mark shown during a drag —
+  and for **nothing** in any layout minimum. There are no maxima: pinning a width
+  was how the old page stopped Abilities being stretched, and a page whose columns
+  the user drags has no use for it. The old `min_*`/`max_*` key names are still read
+  (`min_*` as the recommendation, `max_*` ignored) for the mods in the sibling
+  repository, which pin an engine version and ship `blocks.json` files written
+  against them. Abilities and Resistances state nothing in either dimension, because
+  their tables report their real columns and rows and that beats a number a denser
+  preset would make wrong. This is UI config, **not** game content, so it lives
+  under `ui/` and not the OGL `data/` dir; the active theme's `blocks` map overrides
+  any of it, since how much room a block needs depends on the look's density.
+- **The numbers were measured, not inherited.** They began life as *floors*, and a
+  number that stopped a block clipping is not the same as the width it reads well
+  at. `tests/test_recommended_sizes.py` floats each block out, binary-searches the
+  narrowest width at which its content still fits after everything it knows how to
+  reflow, and fails if a recommendation sits under that — which is how Advantages
+  turned out to be recommending 300 for a block that needs 316. Measured on
+  Classic at 100% scale:
 
-  Two pinned blocks cost more than one, in two ways worth knowing before adding a
-  third. Along a **vertical** strip the lines stack, so the strip's minimum is their
-  minimums added — which is why the Scene block states no `min_height`: at 120px the
-  default arrangement wanted more vertical room than a small laptop screen has, and
-  the strip answered past `_usable_screen` by growing the scrollbar it exists to
-  avoid. Along a **bottom** strip the lines sit side by side and split its *length*
-  instead, so the roller reflows into less width than it gets with the bar to
-  itself. Both are one drag from being undone, and both are why a block earns the
-  strip rather than being put there for tidiness. A block is in *either* the rows or the strip,
-  never both: the arrangement
-  model requires every block exactly once, so `default_arrangement()` excludes the
-  pinned keys from the rows (including its trailing sweep over unplaced blocks).
-- Layout persists globally as **JSON** (not Qt `saveState`): `MainWindow` saves its
-  geometry and `CharacterSheet.save_layout()` (`json.dumps` of `arrangement()` —
-  `{version, rows, floating, hidden, hidden_anchors, pinned{edge, lines, align,
-  sizes, line_sizes, extent}}`) to the key named by `MainWindow.LAYOUT_KEY`
-  in `settings.json` on close, and restores on open (`_restore_layout`).
-  **The key is a class attribute, not a constant**, because two windows share this
-  sheet and do not want the same arrangement: an `NPCWindow` writes `npc_layout`, and
-  the GM window has always had its own `gm_layout` for its own block set. An NPC's
-  arrangement written under `layout` would have closed the roller on every hero.
-  `restore_layout` validates (schema `SCHEMA_VERSION`; every block placed exactly
-  once across rows/floating/hidden/pinned) and returns False to fall back to the
-  default. Where a block *lives* is validated strictly (an unknown key or edge
-  rejects the whole layout); the cosmetic numbers — the strip's sizes and
-  thickness, a hidden block's anchor — degrade to defaults instead. A **View** menu has a checkable show/hide toggle per
-  block (kept in sync via `BlockCanvas.block_visibility_changed`) and a **Reset
-  Layout** action (`CharacterSheet.reset_layout()`).
+  | Block | Recommends | Needs |
+  | --- | --- | --- |
+  | `advantages` | 330 | 316 |
+  | `skills` | 300 | 296 |
+  | `system_info` | 340 | 206 |
+  | `base_info`, `character_image`, `complications`, `conditions`, `equipment`, `powers` | as shipped | reflow the whole way down |
+
+  The six in the last row have **no measurable comfort width**: their content
+  wraps or flows, so they never grow a horizontal scrollbar however narrow they
+  get, and what they recommend is a judgement about how their chips and cards read
+  rather than a number a scrollbar can answer. The test only checks the "not
+  narrower than this" half for them. `dice`, `scene` and `notes` are exempt
+  outright — the roller reflows all the way down too, but a die and a history in
+  100px is not a roller anybody wants, and a note is as wide as you make it.
+- A floated block moves into a `BlockWindow`, **frameless and pinnable above other
+  applications** (`ui/frameless.py`), which hosts the frame **directly**. It used to
+  wrap it in a scroll area of its own, because that was the only way a floated block
+  could go smaller than its content; the frame carries one now and every docked
+  block makes the same bargain, so a second would only mean two sets of scrollbars.
+  What is left there is the floor — `float.min-width`/`float.min-height` — because a
+  window shoved into a corner still has to be findable.
+- `ui/block_canvas.py`: the `BlockCanvas` is the single source of truth for the
+  arrangement — `_page` (the tree), `_windows` (floated blocks), `_hidden` (closed
+  blocks), `_groups` (live tab groups) and the strip's region. `_rows` survives as a
+  read-only **view** over the tree, since most of the class only needs to know which
+  blocks share a row. Structural ops `drop_block`, `merge_blocks`, `dock_block`,
+  `float_block`, `show_block`/`hide_block`, `pin_block`/`unpin_block`,
+  `set_block_on_top`, `arrangement`, `apply_arrangement`, `default_arrangement` are
+  the headless-testable seams.
+- **`minimumSizeHint` on the canvas is the page's shape rule, and it is asymmetric.**
+  As narrow as you like (so every row can be dragged in and its blocks reflow) and as
+  tall as its rows (so the page overflows the viewport and *scrolls* rather than
+  squashing every row into a window nobody sized for them). It is the exact inverse
+  of what it used to say.
+- **A drop takes half of the block it lands beside, and nothing else moves.** The
+  mark promises exactly that — the `DropRegion` wash fills half the target — and
+  the tree used to break it: the run the arrival joined had its remembered sizes
+  *cleared* and was laid out afresh from every cell's own hint, so the block you
+  had aimed at frequently came out the size it went in while its neighbour paid
+  for the arrival. `insert_beside` now replaces the target's own share with two
+  halves of it and leaves every other cell in the run alone. This is not the
+  "never mix a remembered size with a newcomer's natural hint" rule being broken:
+  every cell in the run ends with an explicit number, and the newcomer's is
+  derived from the cell it displaced. A run with nothing remembered still has
+  nothing to halve, so the canvas takes the live divider positions into the tree
+  (`_capture_sizes`) **before** the drag moves anything — before the `_detach`, in
+  particular, since removing a block frees its space and drops the sizes that
+  described the run it left. The one measurement the tree cannot make for itself
+  is the target cell's live pixel size, which it needs when the cell is *wrapped*
+  in a brand-new split (a drop across the parent's axis); the canvas passes it as
+  `extent`. A zero in the page's own sizes is not a size but "take your content's",
+  so a row nobody has dragged divides into two of itself rather than into two
+  noughts.
+- **A block fills the height it is given, and the slack goes inside the section.**
+  A resizable page is the first thing that can hand a block *more* room than its
+  content wants, and `setWidgetResizable` gives all of it to the section — which
+  then has to put it somewhere. A `QVBoxLayout` with nothing expanding in it
+  spreads the surplus **equally between its items**, so a Powers block dragged
+  twice as tall as its cards did not grow a margin at the bottom: it grew a gap
+  between every line on every card, and it read as a rendering fault because
+  nothing on screen said which of the gaps was the slack.
+
+  The first fix held the section at its content height over a spacer *outside* it.
+  That cured the gaps and bought a worse fault: a section is a `QGroupBox` and
+  draws a **border**, so a block dragged taller showed that border stopping half
+  way down with bare block underneath — which reads as a block that failed to draw,
+  not as slack. So the spacer moved in. `_give_trailing_slack` puts a stretch at the
+  bottom of the section's own vertical box layout and `_InnerScroll.set_section`
+  then hands it the whole viewport: the surplus lands under the last row, inside the
+  border. Centrally rather than in each section, because a mod ships a block too and
+  the rule that a section fills its block is the page's. A section that already
+  expands downwards needs none — one that states **`fills_height`** (Notes' editor,
+  the roller's history, the portrait, the Scene board), or one with something in it
+  that claims the height (a table that stretches its rows). A **form** takes a
+  trailing row of `_Slack` instead, since a `QFormLayout` holds widgets rather than
+  items and one expanding row is enough to keep the surplus off its captions; only
+  a layout none of that can reach keeps the wrapper.
+  `fills_height` stays opt-in rather than derived: a widget's own vertical policy
+  says nothing about whether its *children* have a use for the height (the roller's
+  `QGroupBox` is `Preferred` and it is the history inside it that wants the room).
+
+  **Who claims the height is asked of the layout's own items, never of
+  `expandingDirections`** (`_claims_the_height`), and that is what Powers and
+  Equipment were still broken on after every other block was cured. `QLayout`
+  answers "both" for any layout that has not overridden the method — a
+  `QFormLayout` has not — and the answer *travels*: `QWidgetItem` folds a widget's
+  own layout's directions into the widget's, wherever that widget's policy is
+  allowed to grow at all. So one form on one power card made the card expansive,
+  which made the list of cards expansive, which made the section say it already had
+  somewhere deliberate for a tall block's surplus. It had not, and the two blocks
+  made of cards were the two that poured a dragged-taller block's whole surplus
+  back down into the cards. What counts as a claim now is what a section states
+  itself: a **stretch factor** in its own layout, or a child whose **own** size
+  policy expands vertically — which is what the tables set on themselves, and why
+  Skills still stretches its rows while Powers grows a band of nothing under
+  *Add Power*. A hidden widget is passed over, since both blocks keep an
+  empty-state label in the layout and hide it once there is anything to show.
+- **Height is measured at the width the block has, and nothing else measures it
+  right.** `sizeHint` answers with the height the content would take at its own
+  *preferred* width, and `minimumSizeHint` at no particular width at all — a
+  `QBoxLayout` builds that one by summing its items' unwrapped hints, with no
+  height-for-width anywhere in it. For a block of wrapping cards both overstate,
+  and they overstated by different amounts: the block took its height from the
+  first, Qt decided whether to scroll from the second, and the Powers block ended
+  up scrolling 30px inside a frame with nothing in the bottom 30px of it.
+  `content_height` asks `heightForWidth` and `_InnerScroll._pin_content_height`
+  pins the answer as an explicit `minimumHeight`, which is the one number
+  `qSmartMinSize` takes over the hint; `content_size_hint` asks the same question
+  for the frame's own hint. It may only ever **lower** what the widget already
+  claimed — the point is to correct an overstatement, never to invent a refusal,
+  and a block dragged genuinely too short still scrolls.
+- **A section may name a height that is not its content's** — `preferred_height`,
+  read by `content_size_hint` and nothing else. It exists for a **disclosure**:
+  Name & Details' Details group grew the block, which grew the row, which pushed
+  the Abilities row and everything under it 71px down the page and pulled it all
+  back when the box was unticked. Adding a skill should move the page; ticking a
+  box to look at a character's eye colour should not. So the block goes on asking
+  for the height it asks for shut, uses the room it already has — a row is as tall
+  as its tallest block and this is rarely that block — and scrolls past that.
+  Deliberately separate from what the scroll area measures, which still sees the
+  whole expanded content: that is what makes the remainder reachable rather than
+  clipped.
+- **A block whose content changes height has to say so itself.** The inner scroll
+  area is a *barrier* — that is the whole reason a block can be dragged smaller
+  than its section — and a barrier does not carry a changed **hint** out either.
+  So a section that got taller told its viewport and nobody else: the row went on
+  using the height it had cached, and the extra content sat scrolled out of sight
+  inside a frame with page to spare underneath it. That is what a narrowed
+  Advantages block looked like it was doing wrong — its descriptions wrapped, its
+  rows grew, the table said so, and the row stayed exactly as tall as it was.
+  `BlockFrame` watches the section for `LayoutRequest` (and re-asks on its own
+  resize) and calls `updateGeometry` when the number has actually moved. That
+  guard is what makes it safe to call from a resize, since `updateGeometry` asks
+  the row to lay out again, which resizes the frame. It can still climb once — a
+  taller page brings the page's scrollbar out, which narrows every block, which
+  wraps more text — but that is monotonic, since the bar does not go away again.
+- **The drag says four things, and it reads a block in *shares* of itself.**
+  `_hit_test` answers: merge into it, stack above or below it, sit beside it, or —
+  past the row entirely (`_GAP`) — start a new row. A `DropSlot` therefore carries
+  a `target` block and a `side` as well as the old row-and-index, which is all the
+  older callers (an anchor resolving, a block being reopened or unpinned) have ever
+  known how to say.
+
+  The geometry was pixels — a 28px merge inset and a 24px stack band, leaving
+  "beside" as a **28px strip down each edge**. Placing a block second in a row was
+  a target you had to aim at, on a gesture people use constantly, and the merge was
+  never advertised at all: there is no discovering a gesture whose target is the
+  part of the block you were already standing on. `drop_side` now takes the middle
+  ninth (`_MERGE_SHARE`, a third by a third) as *merge*, and outside it the nearest
+  edge wins measured as a share in each direction — so the four sides are clean
+  diagonal quadrants, every corner has one answer, and the zones grow with the
+  block instead of staying a hairline on a big one. `_GAP` stays a pixel band,
+  deliberately: it guards the *seam* between two rows, which really is a
+  line-shaped target and is marked by a line.
+- Layout persists globally as **JSON** in `settings.json`, under the key named by
+  `MainWindow.LAYOUT_KEY` — a class attribute, not a constant, because an `NPCWindow`
+  writes `npc_layout` and the GM window `gm_layout`, and an NPC's arrangement written
+  under `layout` would close the roller on every hero. All three go through
+  `storage.sheet_layout()` / `set_sheet_layout()` now: they each read their key
+  straight off `load_settings()` before, which worked only because they all
+  remembered to write the fallback the standing rule warns about.
+- `SCHEMA_VERSION` is **8**, and the shape is
+  `{version, instances, page, region{edge, align, extent, root}, floating, hidden,
+  hidden_anchors}`. Both older design rules hold exactly: every known block appears
+  **exactly once** across page/region/floating/hidden, and validation is **strict
+  about where a block lives** (an unknown key or edge rejects the whole layout,
+  because guessing would silently move somebody's block) and **lenient about the
+  cosmetic numbers** (sizes, the strip's thickness, a hidden block's anchor all
+  degrade to defaults). `_reconcile_instances` still runs *before* validation, or an
+  instance a saved layout names would not exist yet and the user would lose their
+  page.
+- **A version-7 layout is migrated, not rejected** (`layout_tree.migrate_v7`). Every
+  row and every pinned line of one has an exact reading as a tree, so there was no
+  reason to throw away a page somebody had arranged; the precedent for resetting was
+  set by *adding a block*, which is a much smaller disruption than this. What does
+  not carry over is the strip's per-line pixel sizes — they described a layout engine
+  that no longer exists, and a wrong remembered size is worse than none.
+- A **View** menu has a checkable show/hide toggle per block (kept in sync via
+  `BlockCanvas.block_visibility_changed`) and a **Reset Layout** action.
 - **A GM's NPC opens with the blocks that hold no trait closed** — the roller, the
-  Scene, Notes, Complications (`npc_hidden_keys()`, read off `BlockDescriptor.npc_default`
-  so a mod block declares its own answer). A GM already rolls from the card and from the
-  GM window's own roller, and the Scene on an NPC's sheet is the GM's board rather than
-  this creature's, so those four were four closes on every mook before the numbers fit on
-  one screen. It is a **default, not a mode**: `NPCWindow._restore_layout` seeds it only
-  when nothing was remembered, so a roller reopened once stays open — which is the whole
-  reason the NPC layout needed a key of its own (above), since remembering that under
-  `layout` would have taught every character sheet the same lesson. Cross-block wiring is
-  object-to-object Qt signals, so it keeps working when a block is floated out.
-- Each block's min/max size lives in `ui/block_sizes.json` (loaded by
-  `ui/block_sizes.py::load_block_sizes`, keyed by block: `abilities`,
-  `resistances`, …) and is applied to the `BlockFrame` in `block_frame.py`. A
-  `max_width == min_width` pins a block's width so it can't stretch; the content
-  blocks grow to fill their row. **A bound here is only ever a floor worth
-  stating** — every block already reports its own content as its effective minimum
-  (`BlockFrame.minimumSizeHint`), so a block that says nothing is sized entirely by
-  what is in it. That is why the width floor is stated *only* in `minimumSizeHint`
-  and never as a `setMinimumWidth`: an explicit minimum does not **raise** a
-  widget's layout minimum, it **replaces** it (`qSmartMinSize` ends with
-  `if (minSize.width() > 0) s.setWidth(minSize.width())`). A block whose content
-  needed more than its JSON number therefore told every enclosing layout it did
-  not — invisible on the page, where the row has slack and
-  `content_minimum_width` already asks the hint, but not in the pinned strip,
-  whose own minimum *is* its splitter's, so it squashed the block to the number.
-  Equipment was already wider than its floor; the Extended roller is what made it
-  show. Abilities and Resistances say nothing: they used to share a
-  hardcoded `300×340` in both dimensions, a number compensating for the tables
-  measuring themselves once at build time, and one that a denser or roomier preset
-  made wrong in both directions — their tables report their real rows and columns
-  now (see `AutoHeightTable` in [The table blocks](table-blocks.md)). Tweak the JSON to retune — no code change. This is UI
-  config, **not** game content, so it lives under `ui/` (bundled via the
-  `ui/*.json` `package-data` entry), not the OGL `data/` dir.
+  Scene, Notes, Complications (`npc_hidden_keys()`, read off
+  `BlockDescriptor.npc_default` so a mod block declares its own answer). It is a
+  **default, not a mode**: `NPCWindow._restore_layout` seeds it only when nothing was
+  remembered, which is the whole reason the NPC layout needed a key of its own.
+
+## Tab groups: several blocks in one cell
+
+- A `Leaf` holding more than one key renders as a `TabGroupFrame`
+  (`ui/tab_group.py`): a tab bar with the active block's pin/float/close buttons at
+  the right of it, over the active block's frame. **Merging is uniform** — any block
+  dropped into the middle of any other makes a group of the two. There is no
+  `accepts_merge` any more; a block used to have to opt in, which is why only Notes
+  ever merged, and there is nothing left to opt into.
+- It is a **reuse of the frames**, not a second kind of block. Each member keeps its
+  own `BlockFrame` — its section, its size, its lock state, its live caption — and
+  only lends its title bar to the group (`BlockFrame.set_tabbed`) while it is in one,
+  because two rows of chrome for one cell is one too many and the group's buttons act
+  on whichever block is showing anyway. That is why a block behaves identically inside
+  a group and out of it: it *is* the same widget, with one row hidden.
+- **A group reports the same minimum a block does** — `block.min-extent` and a
+  header — and that is a fix rather than a detail. It had none, so it inherited its
+  layout's, which was its tab bar plus its buttons: about 218px. A cell holding one
+  block could be dragged to a sliver and the *same* cell holding two refused, so a
+  group could never be squashed and never be closed by being squashed. A minimum
+  its own content decides is the one thing nothing on this page may report. Past it
+  the header clips, exactly as a squashed block's title bar does.
+- **A group owns its members' frames**, so one going away has to hand them back
+  before it is deleted or it takes live blocks with it (`_release_group`). Groups are
+  kept across a rebuild, keyed by exactly the blocks in them; rebuilding one every
+  relayout would reparent every member twice a drag and throw away which tab was
+  showing.
+- **A kept group is still re-read from the tree**, and *which tab is showing* was the
+  one thing it was not. That is state the tree holds — `_on_tab_activated` writes it
+  and a saved layout carries it — so leaving it to the widget made the group the one
+  cell on the page a rebuild could not put back the way it was: undoing a tab click,
+  or applying a saved arrangement over a live page, moved nothing at all.
+  `TabGroupFrame.set_active_index` is deliberately **silent**, like `release`:
+  `setCurrentIndex` makes Qt announce the change, which the canvas cannot tell from a
+  click, so a restore would write itself back into the tree and land in the history as
+  a gesture of its own.
+- **A tab dragged *along* the bar reorders the cell**, and the frames have to follow.
+  `setMovable` is on — `tab_drag` tells the two gestures apart by direction precisely
+  so sideways can stay a reorder — but what Qt reorders is the **bar**, and nothing
+  else. The group's list of frames stayed put, so from the first reorder tab *n* was
+  one block's caption over another block's body; and since everything the cell answers
+  is indexed by the bar (which block is showing, which one the pin/float/close buttons
+  act on, which one the tree records), they were all wrong together and silently.
+  `_on_tab_moved` re-deals the frames, `tabsReordered` takes the order into the tree
+  through `layout_tree.reorder_leaf` (which carries `active` by *block*, since the
+  indices are the thing that moved), and the canvas **re-keys the live group** —
+  groups are cached by exactly the tuple of blocks in them, so a re-dealt cell would
+  otherwise miss its own entry and be rebuilt for a gesture that moved a caption. The
+  stack is addressed by widget rather than by index throughout, so no member is ever
+  unparented and put back.
+- Dragging a tab clear of the bar takes that block back out, through the shared
+  `ui/tab_drag.py::TabSplitGesture` — the same gesture the Notes block uses to drag a
+  *note* out into a new block. The bar keeps the mouse grab through all of it, so
+  once the split is requested the moves and the release are forwarded into the
+  canvas's ordinary drag controller and the block can dock, stack, pin, merge or stay
+  floating exactly as one dragged by its title bar would.
+- **The strip past the last tab is the group's own handle** (`_GroupHandle`), and
+  it is to a group what a title bar is to a block: drag it and the whole cell
+  moves, right-click it and the cell's menu opens. It is a *widget* rather than a
+  rule about where on the tab bar the pointer is — the bar takes only the room its
+  tabs need now and the handle takes the rest — so "a tab" and "not a tab" are two
+  things that each answer for themselves instead of two readings of one
+  coordinate. The handle never shrinks below `block.min-extent`; the bar gives way
+  instead, which is what its eliding and its scroll buttons are for. Otherwise a
+  group would be the one cell on the page that cannot be moved, and only once it
+  was small enough to want moving.
+- **The model half is one call, not a sequence.** `layout_tree` grew
+  `move_leaf`, `move_leaf_to_row` and `merge_leaf_into`, over
+  `insert_node_beside`/`append_node_row` — the general forms that `insert_beside`
+  and `append_row` are now one line of. Moving the *blocks* one at a time and
+  merging them back together at the far end reaches the same arrangement through
+  four intermediate ones the user watches go by. `_detach_leaf` hands back the
+  `Leaf` itself rather than rebuilding one from the keys, so which tab was active
+  travels with the cell. A row index in `move_leaf_to_row` is re-measured after the
+  detach, since removing the cell can take a row out from under the seam the drop
+  named.
+- **A group does not float, and that is a decision rather than an omission.** A
+  block dragged by its title bar tears out into a `BlockWindow` that follows the
+  cursor; a group being moved stays put and the page marks where it will land. A
+  `BlockWindow` hosts one block and `floating` in a saved layout is a geometry per
+  block key, so "a tab group in a window of its own" would be a fourth place a
+  block can live plus the schema to carry it. Dragging one tab out is still how a
+  member of a group gets into a window. For the same reason the **strip refuses a
+  group**: it renders a multi-key cell as whichever tab is active and draws no bar,
+  so a group dropped there would arrive with most of itself nowhere. Nothing the app
+  does can write one, but a hand-edited settings file can, so `layout_tree.ungroup`
+  opens any multi-key cell in a *restored* region out into cells of its own — the
+  honest reading of one is "both of these are pinned", where the alternative was a
+  block parented to the panel with nowhere to be, drawn over the strip rather than
+  in it.
+- **`_drag_keys` is what the hit test asks**, not `_drag_key`: one block for a
+  title-bar drag and all of them for a group, so a cell is never offered a place
+  inside itself.
+- **A tab's right-click is its block's own menu** — the whole of `block_menu`,
+  since everything on it still means something for a block in a group — plus *Move
+  out of the group*. The handle's is deliberately short and shares nothing with
+  it: a group is not pinned, popped out or closed *as a thing*, so what is left is
+  the two questions that are only about the cell — *Fit to content*, and *Ungroup*
+  / *Close these blocks*. Screenshot it with `driver.py tab-group`.
+- **Releasing a tab silences the bar.** `QTabBar.removeTab` makes Qt pick another
+  tab and announce it, which the group reports as `activeChanged` —
+  indistinguishable, from the canvas's side, from a user clicking a tab. So
+  dissolving a group raised a second "one gesture finished" and *Ungroup* landed in
+  the layout history twice. Which tab a surviving group shows is the tree's answer
+  (`layout_tree.remove` keeps the user looking at what they were looking at) and is
+  re-read when it is rebuilt, so there was never anything here worth announcing.
+- **The trade, stated plainly.** Two Notes blocks used to merge their *notes* into
+  one tab bar; they now stay two blocks sharing a cell, so you get a tab bar of blocks
+  each with its own tab bar of notes. That is more chrome than the old answer and it
+  is the price of one merge rule instead of a per-block opt-in. What went with it is
+  the Notes block's `accepts_merge` and the canvas's `merge_requested`, which was the
+  seam that asked the *sheet* what merging two blocks meant. Its `adopt`/`release`/
+  `open_refs` stayed, because splitting a *note* out into a new block is a different
+  feature and still needs them.
+- A group of one collapses back into a plain block, so nothing can get stuck in
+  one.
 
 ## The model and cross-section signals
 
@@ -364,34 +765,57 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   reconciler is narrow on purpose: only a key whose `instance_template` differs from
   itself is touched, so an edited settings file can never conjure up or sweep away a base
   block, and a host with no `instance_factory` (the GM window) reconciles nothing.
-  `SCHEMA_VERSION` is 7 for it.
-- **Merge is a drop onto a block, not between two.** `DropSlot` gained `onto`; `_hit_test`
-  checks a central band (`_MERGE_INSET`, the outer bands staying an ordinary insert so a
-  block can always be placed *beside* another) and asks the target *section* through a
-  duck-typed `accepts_merge(other_key)` that defaults absent. That default is why no
-  existing block's drag behaves any differently. The mark is a `DropFeedback` wash over
-  the whole target frame rather than an insert line — a line says "the block lands here",
-  a wash says "the block goes *in* here" — and **`border=False`, `wash=MERGE_WASH`**: a
+  The `instances` section is why `SCHEMA_VERSION` moved to 7; it is 8 now, for the tree.
+- **Merge is a drop into the middle of a block, not between two.** `DropSlot` carries
+  `onto`; `_hit_test` checks a central band (`_MERGE_INSET`), the bands around it
+  meaning "stack above/below" and "sit beside", so a block can always be placed next
+  to another. Every block accepts every merge — see [Tab groups](#tab-groups-several-blocks-in-one-cell)
+  for what the two of them become. The mark is a `DropFeedback` wash over the whole
+  target frame rather than an insert line — a line says "the block lands here", a wash
+  says "the block goes *in* here" — and **`border=False`, `wash=MERGE_WASH`**: a
   stylesheet border would change the frame's box and relayout the page *while the block
   is being dragged over it*, so the target would shift out from under the cursor the
-  instant it lit up, and without an outline the fill has to be heavier to read. The
-  canvas only emits `merge_requested`; what merging *means* is the sheet's, since the
-  sections are.
+  instant it lit up, and without an outline the fill has to be heavier to read.
+- **Three marks, and between them the placements are discoverable.** Over the
+  middle of a block the whole frame washes (*these two become tabs*); over a side,
+  a `DropRegion` washes the half the newcomer would take and the thin
+  `DropIndicator` sits on the seam (*it takes that half, and the split falls
+  here*); over the gap between rows, the line alone, because a new row has no room
+  marked out for it until it exists. Dragging across one block therefore shows all
+  three in turn, which is the only way anybody was going to find the merge. Both
+  overlays share a `_SlidingOverlay` base for the animation and the
+  "don't slide across an axis change" rule, are transparent to the mouse, and read
+  their colours as they appear rather than caching a token at construction. The
+  region is filled from `accent` and outlined in `drop.indicator`, because a wash
+  needs channels to dilute and `drop.indicator` is allowed to be a live palette
+  role. Screenshot them with `driver.py grid-drop-beside` / `grid-drop-merge`, and
+  the close warning with `grid-close`.
 - **`title_bar_released` hit-tests before `_end_drag`, and takes `onto` from
   `_merge_hint`** — what the drag last *showed* — rather than asking again. Both halves
   are one bug: `_end_drag` clears `_drag_key`, which `_merge_target` needs to know whose
   drop it is judging, so re-deriving the merge afterwards made every drop an ordinary
   dock and the merge never fired at all. The drop now does what the highlight promised.
-  Note also that a block scrolled off the page cannot be dropped on — `_hit_test` bounds
-  the gesture to the viewport — which is honest, and is why a test has to scroll first.
-- **Split is the same drag, adopted.** A tab dragged clear of its bar makes
-  `NotesSection` emit `splitRequested`; the sheet builds a new instance holding that one
-  note and calls `BlockCanvas.adopt_drag`, and because the **tab bar still holds the mouse
-  grab** it goes on forwarding moves and the release as `splitMoved`/`splitReleased`.
-  From there the gesture is indistinguishable from one begun on a title bar — dock, pin,
-  merge, or stay floating. Those three signals are connected in `_wire_section`, which
-  both the block built at startup and the copies made later go through; connecting only
-  the copies is exactly the bug where the first block's tabs could not be dragged out.
+  A merge does **not** dock first: the block goes *into* a cell rather than beside one,
+  and doing both would place it and then immediately move it somewhere else — visibly,
+  and (when the dock collapsed the target's row) to the wrong somewhere else. Note also
+  that a block scrolled off the page cannot be dropped on — `_hit_test` bounds the
+  gesture to the viewport — which is honest, and is why a test has to scroll first.
+- **A row that holds one block *is* that block's frame.** `build_node` returns the frame
+  itself for a lone leaf rather than wrapping it, so anything that treats a row as a
+  container it owns is wrong twice over: shedding an old row destroyed a live block until
+  `_relayout` learned to skip frames, and the row stack setting a height on one changed
+  the *block* permanently — which followed it into the pinned strip, where it then
+  refused to be squashed. `_RowHolder` exists so the stack never touches a row's own
+  widget, and `_frame_under` tests "at or under" rather than "under" so a lone-block row
+  can be dropped onto at all.
+- **Split is the same drag, adopted.** A tab dragged clear of its bar — a note in the
+  Notes block, or a whole block in a tab group — goes through
+  `ui/tab_drag.py::TabSplitGesture`, and because the **tab bar still holds the mouse
+  grab** it goes on forwarding moves and the release. From there the gesture is
+  indistinguishable from one begun on a title bar — dock, stack, pin, merge, or stay
+  floating. The Notes half is connected in `_wire_section`, which both the block built at
+  startup and the copies made later go through; connecting only the copies is exactly the
+  bug where the first block's tabs could not be dragged out.
 - The template's own key (`notes`) is never removed — it is the block every sheet has and
   every saved layout names, and closing it is what the View menu's checkbox is for. Only
   a copy the user made is destroyed, by `✕` or by being merged away.

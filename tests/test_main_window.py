@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from mm_companion.core import library, storage
 from mm_companion.core.character import AppliedCondition, Character
 from mm_companion.core.data_loader import load_game_data
+from mm_companion.ui import layout_tree as lt
 from mm_companion.ui.main_window import MainWindow
 from mm_companion.ui.npc_window import NPCWindow
 
@@ -295,7 +296,7 @@ def test_view_menu_hides_and_shows_a_block(qapp: QApplication) -> None:
 
     action.setChecked(False)
     assert win._sheet.is_block_hidden("advantages")
-    assert "advantages" not in [k for row in win._sheet.arrangement()["rows"] for k in row]
+    assert "advantages" not in lt.keys(win._sheet.canvas.page_tree())
 
     action.setChecked(True)
     assert not win._sheet.is_block_hidden("advantages")

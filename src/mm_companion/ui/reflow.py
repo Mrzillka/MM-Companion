@@ -31,6 +31,8 @@ from collections.abc import Sequence
 from PySide6.QtCore import QSize
 from PySide6.QtWidgets import QLayout, QWidget
 
+from mm_companion.ui.widgets import no_reentry
+
 
 def prefers_row(
     available: int,
@@ -66,6 +68,206 @@ def prefers_row(
         return available > row_minimum - hysteresis
     # Currently a column: only become a row once there is the row's width to spare.
     return available >= row_minimum + hysteresis
+
+
+#: How much narrower than a boundary something has to be before it sheds another
+#: part, and how much wider before it takes one back. The same dead-band, for
+#: the same reason, as :func:`~mm_companion.ui.sections.column_flow.column_count`'s
+#: and :func:`~mm_companion.ui.reflow.prefers_row`'s: shedding a column changes
+#: what wraps, which changes the block's height, which can toggle a scrollbar,
+#: which changes the width back over the boundary — an endless relayout otherwise.
+SHED_HYSTERESIS = 24
+
+
+def parts_to_shed(
+    available: int,
+    widths: Sequence[int],
+    shed_order: Sequence[int],
+    *,
+    current: Sequence[int] = (),
+    hysteresis: int = 0,
+) -> tuple[int, ...]:
+    """Which parts to hide so the rest fit in *available* pixels.
+
+    *shed_order* is the parts a widget is willing to give up, **worst first** — the
+    abbreviation before the name, the modifier before the rank, an effect's game
+    terms before the extras that bought them. Everything not named in it is
+    load-bearing and is never hidden, so the widget can always be dragged narrower
+    than it can honestly show and what remains is what was worth keeping. Past that
+    it clips or scrolls; nothing is ever lost, and widening brings it all back.
+
+    Written for a table's *columns* (:meth:`~mm_companion.ui.sections.row_table.
+    AutoHeightTable.sync_shed_columns`, which still calls it ``columns_to_shed``)
+    and used unchanged for a run of *widgets* (:class:`ShedBox`): "which of these,
+    in this order, do I drop to fit" is one question, and a second implementation of
+    it would be a second dead-band to get wrong.
+
+    A non-positive *available* (something that has not been laid out yet) sheds
+    nothing, so the first paint is the whole thing and the real answer arrives on
+    the first ``resizeEvent``.
+
+    *hysteresis* is the dead-band, and it applies from the **first** part onwards.
+    It used to stand down whenever *current* was empty — which is precisely the
+    state anything is in before it sheds anything, so the one transition most worth
+    damping was the one transition that never was.
+    """
+    if available <= 0 or not shed_order:
+        return ()
+    total = sum(widths)
+    shed: list[int] = []
+    for column in shed_order:
+        if total <= available:
+            break
+        if 0 <= column < len(widths):
+            shed.append(column)
+            total -= widths[column]
+
+    if not hysteresis:
+        return tuple(shed)
+
+    def needed(hidden: Sequence[int]) -> int:
+        """What the arrangement with *hidden* dropped actually takes."""
+        gone = set(hidden)
+        return sum(w for i, w in enumerate(widths) if i not in gone)
+
+    # Only change the answer once the width is past the boundary by a full band in
+    # the direction it is moving, or the answer flips back and forth on its own.
+    # Both bands are measured against what the arrangement *in force* needs, which
+    # is what makes them nest: from any state, the width at which another column
+    # goes is a band below that number and the width at which one comes back is a
+    # band above it, so there is no width at which both are true. Measuring the
+    # shedding side against the *post*-shed width instead — which is what this did
+    # — let the two overlap, and a table sitting in the overlap shed and restored
+    # the same column for as long as the layout kept asking.
+    if len(shed) > len(current):
+        return tuple(shed) if available <= needed(current) - hysteresis else tuple(current)
+    if len(shed) < len(current):
+        return tuple(shed) if available >= needed(shed) + hysteresis else tuple(current)
+    return tuple(shed)
+
+
+class ShedBox(QWidget):
+    """A run of parts along one axis, dropping the least useful as it narrows.
+
+    The third answer to "this does not fit", beside :class:`ReflowBox` (put the
+    same parts on the other axis) and
+    :class:`~mm_companion.ui.sections.column_flow.ColumnFlowPanels` (use fewer
+    panels): give a part up entirely. A power card's effect summary is the case —
+    its game terms beside the extras and flaws that bought them, in a block a
+    player may drag to a third of a page — where re-dealing the terms into one
+    column is not enough and stacking them only makes a narrow card a long one.
+
+    The decision is :func:`parts_to_shed`, unchanged from the table blocks, with
+    the same dead-band and for the same reason. What is left never goes, so the
+    part that matters most is simply the one left out of *shed_order*.
+
+    The widget reports the **shed-down** arrangement as its minimum, which is the
+    rule every adaptive widget on the sheet follows: a minimum is a refusal, and
+    refusing the width you know how to reach is how a block ends up clipped
+    instead of adapted. Its ``sizeHint`` is the whole thing, which is a preference
+    and may be content-shaped.
+    """
+
+    def __init__(
+        self,
+        parts: Sequence[QWidget],
+        shed_order: Sequence[int],
+        layout: QLayout,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._parts = list(parts)
+        self._shed_order = tuple(shed_order)
+        self._shed: tuple[int, ...] = ()
+        # What each part measured while it was showing. A hidden widget answers
+        # ``0`` to every size question it is asked, so a part that had been shed
+        # could never be worked out to fit again — the same trap, and the same
+        # answer, as a hidden table column's remembered width.
+        self._natural: dict[int, int] = {}
+        self.setLayout(layout)
+
+    @property
+    def parts(self) -> list[QWidget]:
+        return list(self._parts)
+
+    @property
+    def shed_order(self) -> tuple[int, ...]:
+        """The parts this box is willing to give up, worst first, as indices."""
+        return self._shed_order
+
+    def shed_parts(self) -> tuple[int, ...]:
+        """Which parts are hidden for want of room right now."""
+        return self._shed
+
+    def natural_widths(self) -> list[int]:
+        """What each part would take if it were showing (see :attr:`_natural`)."""
+        widths: list[int] = []
+        for index, part in enumerate(self._parts):
+            if part.isHidden():
+                widths.append(self._natural.get(index, 0))
+                continue
+            natural = max(part.sizeHint().width(), part.minimumSizeHint().width())
+            self._natural[index] = natural
+            widths.append(natural)
+        return widths
+
+    def _available(self) -> int:
+        layout = self.layout()
+        if layout is None:
+            return self.width()
+        margins = layout.contentsMargins()
+        spacing = layout.spacing() if layout.spacing() > 0 else 0
+        showing = max(1, len(self._parts) - len(self._shed))
+        return self.width() - margins.left() - margins.right() - spacing * (showing - 1)
+
+    @no_reentry
+    def sync_shed(self) -> bool:
+        """Hide or restore parts to suit the width. Returns whether it changed."""
+        if not self._shed_order:
+            return False
+        wanted = parts_to_shed(
+            self._available(),
+            self.natural_widths(),
+            self._shed_order,
+            current=self._shed,
+            hysteresis=SHED_HYSTERESIS,
+        )
+        if wanted == self._shed:
+            return False
+        self._shed = wanted
+        hidden = set(wanted)
+        for index in self._shed_order:
+            if 0 <= index < len(self._parts):
+                self._parts[index].setVisible(index not in hidden)
+        self.updateGeometry()
+        return True
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        super().resizeEvent(event)
+        if event.oldSize().width() != event.size().width():
+            self.sync_shed()
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        """Everything in :attr:`_shed_order` gone, whatever is hidden right now.
+
+        Invariant of the current arrangement on purpose: the host hands this widget
+        the larger of the room available and this number, so a minimum that tracked
+        what was shed would be reading a width it had itself just set — the loop
+        that once turned a narrowed table into a stack overflow.
+        """
+        hint = super().minimumSizeHint()
+        sheddable = set(self._shed_order)
+        widths = self.natural_widths()
+        floor = sum(width for index, width in enumerate(widths) if index not in sheddable)
+        layout = self.layout()
+        if layout is not None:
+            margins = layout.contentsMargins()
+            floor += margins.left() + margins.right()
+        # A run every part of which may go asks for nothing, and that is the honest
+        # answer rather than an edge case to dodge: what is left when all of it has
+        # gone is nothing, and a widget that asked for its content's width anyway
+        # would be refusing the one arrangement it is guaranteed to be able to reach.
+        return QSize(min(hint.width(), floor), hint.height())
 
 
 class ReflowBox:

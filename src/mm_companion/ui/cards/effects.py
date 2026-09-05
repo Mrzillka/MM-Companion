@@ -11,7 +11,6 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QGraphicsOpacityEffect,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QVBoxLayout,
@@ -38,7 +37,12 @@ from mm_companion.core.rules import (
     structure_header,
 )
 from mm_companion.ui import theme
-from mm_companion.ui.power_constructor.terms_grid import TermsGridStyle, build_terms_grid
+from mm_companion.ui.power_constructor.terms_grid import (
+    TermsGridBox,
+    TermsGridStyle,
+    build_terms_grid,
+)
+from mm_companion.ui.reflow import ShedBox
 from mm_companion.ui.widgets import BOLD_STYLE, muted_style, tinted_style
 
 # How an effect's row divides between what was bought (extras/flaws) and what it costs
@@ -115,16 +119,7 @@ def effect_summary(
     header.addStretch()
     layout.addLayout(header)
 
-    body = QHBoxLayout()
-    body.setContentsMargins(0, 0, 0, 0)
-    body.setSpacing(10)
-    modifiers = modifiers_column(effect, data)
-    if modifiers is not None:
-        body.addWidget(modifiers, MODIFIER_STRETCH)
-    # An effect with nothing bought onto it has no column to sit beside, so the
-    # terms take the whole width rather than leaving a third of the card blank.
-    body.addLayout(terms_grid(effect, character, data), TERMS_STRETCH)
-    layout.addLayout(body)
+    layout.addWidget(effect_body(effect, character, data))
 
     # An array's other effects are not running — only one is at a time, which is what
     # the array paid for. Their numbers stay on the card (a player choosing between them
@@ -143,6 +138,44 @@ def effect_summary(
         faded.setOpacity(theme.metric("opacity.inactive"))
         box.setGraphicsEffect(faded)
     return box
+
+
+def effect_body(effect: PowerEffectInstance, character: Character, data: GameData) -> ShedBox:
+    """What a player bought, beside what it costs them at the table — until it
+    cannot be both.
+
+    The two sit side by side rather than stacked: the modifiers and the game terms
+    are read together, and a card is a wide, shallow thing. A card on a page the
+    user drags is not always wide, though, and the terms grid re-dealing itself
+    into a single column only gets so far: past that the card was simply cut off
+    down its right-hand edge.
+
+    So it is a :class:`~mm_companion.ui.reflow.ShedBox`, and the order says which
+    of the two the card would rather keep. **The terms go first**: they are the
+    same numbers the Power Constructor prints, they can be read there and on the
+    card's own roll footer, and a rank that has been bought with three extras and a
+    flaw is a fact about the build that appears nowhere else. Past both, the card
+    clips — which is where the sheet's bargain has always ended.
+    """
+    body = QHBoxLayout()
+    body.setContentsMargins(0, 0, 0, 0)
+    body.setSpacing(10)
+    parts: list[QWidget] = []
+    modifiers = modifiers_column(effect, data)
+    if modifiers is not None:
+        body.addWidget(modifiers, MODIFIER_STRETCH)
+        parts.append(modifiers)
+    # An effect with nothing bought onto it has no column to sit beside, so the
+    # terms take the whole width rather than leaving a third of the card blank.
+    terms = terms_grid(effect, character, data)
+    body.addWidget(terms, TERMS_STRETCH)
+    parts.append(terms)
+    # Indices into *parts*, which is why the terms are found by identity rather
+    # than by a constant: an effect with no modifiers has them at index 0.
+    order = [parts.index(terms)]
+    if modifiers is not None:
+        order.append(parts.index(modifiers))
+    return ShedBox(parts, order, body)
 
 
 def modifiers_column(effect: PowerEffectInstance, data: GameData) -> QWidget | None:
@@ -169,7 +202,7 @@ def modifiers_column(effect: PowerEffectInstance, data: GameData) -> QWidget | N
     return column
 
 
-def terms_grid(effect: PowerEffectInstance, character: Character, data: GameData) -> QGridLayout:
+def terms_grid(effect: PowerEffectInstance, character: Character, data: GameData) -> TermsGridBox:
     """The effect's game terms as a compact, always-visible label/value table.
 
     The same rows the Power Constructor's ``PowerTermsView`` shows — Type, Range,
@@ -183,7 +216,8 @@ def terms_grid(effect: PowerEffectInstance, character: Character, data: GameData
     grid = build_terms_grid(rows, terms_style())
     grid.setContentsMargins(0, 1, 0, 0)
     grid.setVerticalSpacing(0)
-    return grid
+    # In a box that re-deals them into one column when the card gets narrow.
+    return TermsGridBox(grid)
 
 
 def effect_title(effect: PowerEffectInstance, character: Character, data: GameData) -> str:

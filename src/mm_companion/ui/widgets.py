@@ -11,12 +11,14 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from functools import wraps
 
 from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QAbstractScrollArea,
     QDoubleSpinBox,
+    QFormLayout,
     QFrame,
     QLabel,
     QPushButton,
@@ -431,22 +433,128 @@ def resurface(window: QWidget) -> None:
     window.activateWindow()
 
 
-def enclosing_scroll_area(widget: QWidget) -> QAbstractScrollArea | None:
-    """The scroll area *widget* is scrolled by, or ``None``.
+def no_reentry(method):
+    """Make a reflow hook a no-op while it is already running on this widget.
 
-    The **nearest** one, unlike :meth:`~mm_companion.ui.wheel_guard.WheelGuard.
-    _page_scroll_area`, which walks all the way to the outermost so a wheel over an
-    inner table still reaches the page. Here the nearest is the right answer wherever
-    a block ends up: the page's scroll area on the page, the strip's when it is
-    pinned, its own window's when it is floated out.
+    Every adaptive decision in the app is called from ``resizeEvent`` and changes
+    something a layout can notice — hiding a column, wrapping a form's rows,
+    re-dealing a grid. Qt is entitled to lay out again *synchronously* in the
+    middle of that, which calls the hook again, which changes something again. The
+    hysteresis dead-bands are what stop the answer oscillating between events;
+    this is what stops one event nesting inside itself, which is not a flicker but
+    a stack overflow and takes the process with it.
+
+    Cheap enough to put on every one of them, and worth it: the failure mode is
+    the single worst one this layer has.
     """
 
+    flag = f"_in_{method.__name__}"
+
+    @wraps(method)
+    def guarded(self, *args, **kwargs):
+        if getattr(self, flag, False):
+            return False
+        setattr(self, flag, True)
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            setattr(self, flag, False)
+
+    return guarded
+
+
+#: Below this, a form stacks its captions above their fields instead of beside
+#: them, and the dead-band that stops it flipping back and forth on its own.
+FORM_WRAP_WIDTH = 260
+FORM_WRAP_HYSTERESIS = 24
+
+
+def wraps_form_rows(available: int, currently_wrapped: bool = False, *, floor: int = 0) -> bool:
+    """Whether a form should stack its captions above its fields at this width.
+
+    A ``QFormLayout``'s caption column does not shrink: it is as wide as the
+    longest label, whatever room the form has, so a narrow form spends most of
+    itself on the words and leaves a sliver for the thing being edited. Wrapping
+    the rows gives the field the whole width and costs one line of height each.
+
+    Pure arithmetic with the same dead-band every other reflow decision in the app
+    carries (:func:`~mm_companion.ui.reflow.prefers_row`,
+    :func:`~mm_companion.ui.sections.column_flow.column_count`) — wrapping changes
+    the form's height, which can toggle a scrollbar, which changes the width back
+    across the boundary.
+    """
+    floor = floor or FORM_WRAP_WIDTH
+    if available <= 0:
+        return False  # not laid out yet; the unwrapped form is the safe first paint
+    if currently_wrapped:
+        return available < floor + FORM_WRAP_HYSTERESIS
+    return available < floor
+
+
+class ReflowingForm(QFormLayout):
+    """A form whose rows wrap their captions on top when there is no room beside.
+
+    The Qt half of :func:`wraps_form_rows`. Install it as a widget's layout and
+    call :meth:`sync_wrap` from that widget's ``resizeEvent``; it flips between
+    ``DontWrapRows`` and ``WrapAllRows`` and nothing else, so every caller keeps
+    its rows, its ``setRowVisible`` calls and its field widgets exactly as they
+    were.
+
+    ``WrapAllRows`` rather than ``WrapLongRows``: the latter decides row by row,
+    so a narrow form ends up with some captions beside their fields and some above
+    them, which reads as a mistake rather than a layout.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._wrapped = False
+        self.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
+
+    @property
+    def wrapped(self) -> bool:
+        return self._wrapped
+
+    @no_reentry
+    def sync_wrap(self, available: int, *, floor: int = 0) -> bool:
+        """Wrap or unwrap to suit *available* px. Returns whether it changed."""
+        wrapped = wraps_form_rows(available, self._wrapped, floor=floor)
+        if wrapped == self._wrapped:
+            return False
+        self._wrapped = wrapped
+        self.setRowWrapPolicy(
+            QFormLayout.RowWrapPolicy.WrapAllRows
+            if wrapped
+            else QFormLayout.RowWrapPolicy.DontWrapRows
+        )
+        return True
+
+
+def enclosing_scroll_areas(widget: QWidget) -> list[QAbstractScrollArea]:
+    """Every scroll area *widget* is scrolled by, nearest first.
+
+    It used to be enough to find the nearest one, because a block had no scroll
+    area of its own and the nearest was therefore whatever the block was sitting
+    in — the page, the strip, or its own window. Every block carries one now (see
+    :class:`~mm_companion.ui.block_frame._InnerScroll`), so the nearest is always
+    the block's own and the page is always further up. Callers that are restoring a
+    position after a rebuild want **both**: the block should stay where it was
+    scrolled to, and so should the page behind it.
+    """
+
+    found: list[QAbstractScrollArea] = []
     parent = widget.parentWidget()
     while parent is not None:
         if isinstance(parent, QAbstractScrollArea):
-            return parent
+            found.append(parent)
         parent = parent.parentWidget()
-    return None
+    return found
+
+
+def enclosing_scroll_area(widget: QWidget) -> QAbstractScrollArea | None:
+    """The nearest scroll area *widget* is scrolled by, or ``None``."""
+
+    areas = enclosing_scroll_areas(widget)
+    return areas[0] if areas else None
 
 
 @contextmanager
@@ -463,8 +571,9 @@ def rebuilding(widget: QWidget) -> Iterator[None]:
     single repaint that follows it. Restored in a ``finally`` so an exception mid-way
     cannot leave a block that never paints again.
 
-    **The scroll position is put back.** Qt clamps the enclosing scroll bar to the
-    smaller maximum *while the block is short*. The cards coming back widen the range
+    **The scroll position is put back — on every bar above the block, not just the
+    nearest.** Qt clamps an enclosing scroll bar to the smaller maximum *while the
+    block is short*. The cards coming back widen the range
     again but not the value, which Qt has already thrown away — so flipping a switch
     on a card near the bottom of a long sheet jumped the page somewhere else entirely.
     Restored **twice**: once now, and once on the next turn of the event loop, because
@@ -474,8 +583,8 @@ def rebuilding(widget: QWidget) -> Iterator[None]:
     widget.
     """
 
-    area = enclosing_scroll_area(widget)
-    bars = [] if area is None else [area.verticalScrollBar(), area.horizontalScrollBar()]
+    areas = enclosing_scroll_areas(widget)
+    bars = [bar for area in areas for bar in (area.verticalScrollBar(), area.horizontalScrollBar())]
     values = [(bar, bar.value()) for bar in bars if bar is not None]
     painted = widget.updatesEnabled()
     widget.setUpdatesEnabled(False)
@@ -485,5 +594,5 @@ def rebuilding(widget: QWidget) -> Iterator[None]:
         widget.setUpdatesEnabled(painted)
         for bar, value in values:
             bar.setValue(value)
-        if area is not None:
-            QTimer.singleShot(0, area, lambda: [bar.setValue(value) for bar, value in values])
+        if areas:
+            QTimer.singleShot(0, areas[0], lambda: [bar.setValue(value) for bar, value in values])

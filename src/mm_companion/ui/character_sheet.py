@@ -134,20 +134,26 @@ class CharacterSheet(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._board)
 
-        # Pin the page's minimum width to the widest docked row so it can never
-        # shrink narrow enough to clip a block (the fixed-width Abilities /
-        # Resistances grids can't compress). Recomputed whenever the arrangement
-        # changes — floating or hiding a block frees up the constraint.
         # The block a tab was just split into, while its drag is still in flight.
         self._split_key: str | None = None
-        self._canvas.merge_requested.connect(self._on_merge_requested)
+        # The page's own minimum width no longer tracks the blocks in it (see
+        # _update_min_width), but it is still recomputed on every arrangement
+        # change, since a preset switch can move the token it does depend on.
         self._canvas.arrangement_changed.connect(self._update_min_width)
         self._update_min_width()
 
         self._wire_sections()
 
     def _update_min_width(self) -> None:
-        """Track the widest docked row as the page's minimum width."""
+        """Hold the page open by the width of one scrollbar and very little else.
+
+        This used to track the widest docked row — the sum of every block's whole
+        content — which is what made the *window* refuse to be made narrower than
+        the blocks it held. Blocks reflow and, past that, scroll inside themselves
+        now, so the page has no width it has to refuse; what is left is a floor
+        small enough to be no constraint and real enough that the page cannot
+        vanish. See :meth:`BlockCanvas.content_minimum_width`.
+        """
         extent = self._scroll.verticalScrollBar().sizeHint().width()
         self._scroll.setMinimumWidth(self._canvas.content_minimum_width() + extent + 2)
 
@@ -372,26 +378,6 @@ class CharacterSheet(QWidget):
         key, self._split_key = self._split_key, None
         if key is not None:
             self._canvas.title_bar_released(key, global_pos)
-
-    def _on_merge_requested(self, source: str, target: str) -> None:
-        """A block was dropped onto another: move its content over and drop it.
-
-        The canvas asks rather than does, because the *sections* are the sheet's:
-        it knows nothing about tabs, and this is the only place that does.
-        """
-        giver = self._sections_by_key.get(source)
-        taker = self._sections_by_key.get(target)
-        if giver is None or taker is None or giver is taker:
-            return
-        refs = list(giver.open_refs())
-        for ref in refs:
-            giver.release(ref)
-        taker.adopt(refs, active=refs[-1] if refs else "")
-        # The template's own key is the block every sheet has and every layout
-        # names, so it stays where the drop put it, now empty; only a copy the
-        # user made is destroyed by being merged away.
-        if instance_template(source) != source:
-            self.remove_block_instance(source)
 
     def _key_of(self, section) -> str | None:
         for key, candidate in self._sections_by_key.items():

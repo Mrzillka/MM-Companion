@@ -13,18 +13,50 @@ through rather than reinvent. When building new sheet widgets, use it:
   and wheel-guarded. Build spin boxes and read-only table cells through these, not
   by hand.
 - `ui/wheel_guard.py` — `guard_wheel(*widgets)` stops nested spin boxes, combo
-  boxes, and inner tables from hijacking the page scroll: a guarded widget only
-  reacts to the wheel once it has keyboard focus, otherwise the wheel is
-  redirected to the enclosing page. `make_spin_box` guards by default. The guard
-  walks up to the **outermost** enclosing scroll area, which is the single page
-  scroll area that `CharacterSheet` owns around the whole canvas (blocks have no
-  inner scroll areas of their own).
+  boxes, and inner tables from hijacking the scroll: a guarded widget only reacts
+  to the wheel once it has keyboard focus, otherwise the wheel is redirected to a
+  scroll area that can use it. `make_spin_box` guards by default.
+  **Which scroll area is the whole of this module's judgement.** It used to be
+  the outermost — the page — and that was right while a block was a plain frame
+  with nothing between it and the page. A block is a scroll area itself now
+  (`BlockFrame._InnerScroll`), so the outermost answer sent every wheel straight
+  past a block the user had squashed: the block sat there with a scrollbar it
+  could not be scrolled by, and the page moved instead. The target is now the
+  **nearest ancestor that has a scroll range on this axis**, and the outermost
+  only when none of them has: *the wheel belongs to the thing it is over, if that
+  thing scrolls at all.*
+  **It deliberately does not chain at the end of a range.** The first attempt did
+  — "scroll the block until it runs out, then the page" — and that reads as a bug
+  from the other side of the screen: nothing about the gesture changed, the
+  pointer never left the block, and yet the whole sheet starts moving underneath
+  it. Chaining is only comfortable where the inner surface is small and
+  incidental, and a block is neither. The page is still reached by wheeling
+  anywhere that is not a scrolling block — the gaps between rows, a title bar, any
+  block short enough to have no bar at all. `has_scroll_range(area, event)` is
+  that test on its own, because `_InnerScroll` asks the identical question about
+  itself before declining a wheel it has no use for, and two spellings of one rule
+  is how they drift apart. Note that *routing* the wheel is only half of it: the
+  surface it lands on has to **accept** it, or Qt walks it up to the page anyway —
+  see the note on `_InnerScroll` in
+  [The character sheet](sheet-and-blocks.md#block-frames-the-canvas-api-and-layout-persistence).
 - `ui/lock.py` — `set_widget_locked(widget, locked)` implements the read-only
   **view** mode. Locking is *not* `setEnabled(False)` (which greys a control
   out); a locked field keeps showing its value but sheds its input chrome
   (frame, spin buttons, dropdown arrow) so it reads like a label. Combo boxes
   have no native read-only mode, so it installs an event-filter interaction
   blocker.
+- `ui/reflow.py` — the three answers to "this does not fit across", and the pure
+  arithmetic each of them is. `prefers_row` / `ReflowBox` put the same parts on the
+  other axis; `parts_to_shed` / `ShedBox` give a part up entirely, worst first;
+  `sections/column_flow.py`'s `column_count` / `ColumnFlowPanels` use fewer panels.
+  All three carry the **same dead-band** and for the same reason, and `parts_to_shed`
+  is the *one* implementation of "which of these, in this order, do I drop to fit" —
+  the table blocks re-export it as `columns_to_shed` and ask it about columns, a
+  power card's effect summary asks it about widgets. A `ShedBox` reports the
+  shed-down arrangement as its **minimum**, invariant of what is hidden right now,
+  which is the rule every adaptive widget on the sheet follows: a minimum is a
+  refusal, and a minimum that moved with the decision would be reading a width it
+  had itself just set. Reach for one of the three rather than inventing a fourth.
 - `ui/flow_layout.py` — a reflowing layout for wrapping widget rows. **Host a
   `FlowLayout` in a `FlowContainer`, never a bare `QWidget`.** The layout answers
   `hasHeightForWidth` with *no*, on purpose: Qt evaluates that at the parent's
@@ -100,11 +132,13 @@ part of it. A locked field sheds its border and its padding, and several blocks 
 their editing entry points outright — so the block's own minimum moves. The window does
 *not* resize itself on a toggle, so a block that grew when unlocked simply clipped
 against a window the user had already sized. The rule is therefore: **only the height may
-change**. Most blocks get that free, their `min_width` floor in `block_sizes.json`
-already covering the unlocked content; the Equipment block did not (three "Add…" buttons
-abreast are 360px against a 240px floor) and wraps them in a `FlowContainer` instead.
-`tests/test_lock_geometry.py` asserts the invariance per block, on the *frame* — the
-floors mask the section-level deltas, so a preset that lowers one would unmask it there.
+change**. That used to be free for most blocks, whose `min_width` floor in
+`block_sizes.json` already covered the unlocked content; those floors are only
+recommendations now, so the rule rests entirely on the blocks themselves — the
+Equipment block wraps its three "Add…" buttons in a `FlowContainer` rather than being
+360px wide unlocked against 240 locked, and any block that grows sideways on a toggle
+has to do the same.
+`tests/test_lock_geometry.py` asserts the invariance per block, on the *frame*.
 `BlockFrame.set_locked` raises the geometry invalidation and `CharacterSheet.set_locked`
 recomputes the page's minimum, since a lock toggle is not an `arrangement_changed` and
 the page's minimum is an explicit number behind a `QScrollArea` — the same link

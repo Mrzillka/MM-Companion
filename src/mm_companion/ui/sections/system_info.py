@@ -25,7 +25,6 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
-    QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -73,7 +72,13 @@ from mm_companion.ui.sections.stat_table import PinMenuState
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.svg_assets import hero_point_pixmap
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import discard_widget, make_spin_box, muted_style, tinted_style
+from mm_companion.ui.widgets import (
+    ReflowingForm,
+    discard_widget,
+    make_spin_box,
+    muted_style,
+    tinted_style,
+)
 
 HERO_POINT_PIPS = 5
 INITIATIVE_TIP = f"Agility (or an Alternate Initiative ability) plus advantages\n{ROLL_TOOLTIP}"
@@ -553,7 +558,7 @@ class SystemInfoSection(QGroupBox):
         # :meth:`set_budget_fixed`).
         self._budget_fixed = False
 
-        form = self._form = QFormLayout(self)
+        form = self._form = ReflowingForm(self)
         form.addRow("Power Level:", self._build_power_level())
         form.addRow("Power Points:", self._build_power_points())
         form.addRow(self._build_cost_notice())
@@ -1152,6 +1157,22 @@ class SystemInfoSection(QGroupBox):
         level = estimated_power_level(self._character, self._data)
         # No "PL" prefix: the row's own caption already says Estimated PL.
         self._estimated_pl.setText(str(level))
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        """Stack the captions above their fields once there is no room beside them.
+
+        A ``QFormLayout``'s caption column never shrinks — it is as wide as
+        "Movement modes:" whatever room the block has — so a narrow System block
+        spent most of itself on the words. Wrapping gives each field the whole
+        width for one line of height. See
+        :func:`~mm_companion.ui.widgets.wraps_form_rows` for the dead-band, which
+        is not optional: wrapping changes this block's height, which can toggle the
+        page's scrollbar, which changes the width back.
+        """
+        super().resizeEvent(event)
+        margins = self._form.contentsMargins()
+        if self._form.sync_wrap(self.width() - margins.left() - margins.right()):
+            self.updateGeometry()
 
     def set_npc_mode(self, npc: bool) -> None:
         """Swap the point budget for an estimated Power Level, or back.

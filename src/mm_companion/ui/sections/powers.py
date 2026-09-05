@@ -153,6 +153,7 @@ from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import (
     BOLD_STYLE,
+    ElidingLabel,
     hline_separator,
     muted_style,
     rebuilding,
@@ -1900,7 +1901,13 @@ class PowersSection(TitledSection):
         layout.addWidget(grip)
         grip.setVisible(not self._locked)
 
-        name = QLabel(power_display_name(power, self._data))
+        # Eliding, not plain: a QLabel reports its whole text as a minimum, so a
+        # card on a page the user drags was held open at the length of whatever the
+        # power was called — and a block narrower than that clipped its own buttons
+        # off rather than letting the card adapt. The name keeps its full text and
+        # offers it on hover, which is the bargain every other clipped label on the
+        # sheet strikes.
+        name = ElidingLabel(power_display_name(power, self._data))
         # The size goes on the QFont, not into the stylesheet: a stylesheet font-size
         # would outrank the card's own font and so sit out the switched-off transition.
         font = name.font()
@@ -1910,7 +1917,7 @@ class PowersSection(TitledSection):
         if power.name and power.name in debilitated_traits(self._character, self._data):
             name.setStyleSheet(tinted_style("tint.worse"))
             font.setStrikeOut(True)
-            name.setToolTip("Debilitated — this power is effectively lost")
+            name.set_hover_text("Debilitated — this power is effectively lost")
         else:
             name.setStyleSheet(BOLD_STYLE)
         name.setFont(font)

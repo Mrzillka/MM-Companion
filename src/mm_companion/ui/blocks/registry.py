@@ -21,7 +21,7 @@ from collections import defaultdict
 
 from mm_companion.core.data_loader import BlockSpec, GameData
 from mm_companion.core.registry import Registry
-from mm_companion.ui.block_sizes import UNBOUNDED, BlockSize, load_block_sizes
+from mm_companion.ui.block_sizes import RecommendedSize, load_block_sizes
 from mm_companion.ui.blocks.base import BlockDescriptor, instance_template
 from mm_companion.ui.blocks.bus import (
     ABILITY_CHANGED,
@@ -480,7 +480,7 @@ def register_base_blocks(*, replace: bool = False) -> None:
                 key,
                 title,
                 factory,
-                sizes.get(instance_template(key), BlockSize()),
+                sizes.get(instance_template(key), RecommendedSize()),
                 row,
                 col,
                 key in _PINNED_BY_DEFAULT,
@@ -515,13 +515,16 @@ def _declarative_factory(spec: BlockSpec):
     return factory
 
 
-def _block_size(spec: BlockSpec) -> BlockSize:
-    return BlockSize(
-        min_width=spec.min_width or 0,
-        min_height=spec.min_height or 0,
-        max_width=spec.max_width or UNBOUNDED,
-        max_height=spec.max_height or UNBOUNDED,
-    )
+def _block_size(spec: BlockSpec) -> RecommendedSize:
+    """A declarative block's recommended size.
+
+    ``BlockSpec`` still carries the old ``min_*``/``max_*`` field names, because a
+    data-only mod's ``blocks.json`` is somebody else's file and the mods repository
+    pins an engine version. The minima are read as the recommendation they always
+    effectively were; the maxima no longer mean anything, since the user sizes
+    every block now, and are ignored rather than removed from the spec.
+    """
+    return RecommendedSize(width=spec.min_width or 0, height=spec.min_height or 0)
 
 
 def sync_declarative_blocks(data: GameData) -> None:

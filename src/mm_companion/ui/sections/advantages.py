@@ -60,6 +60,7 @@ from mm_companion.ui import theme
 from mm_companion.ui.advantage_parameters import parameter_display, parameter_options
 from mm_companion.ui.sections.column_flow import ColumnFlowPanels, even_split
 from mm_companion.ui.sections.row_table import (
+    SHED_HYSTERESIS,
     SORT_MANUAL,
     AutoHeightTable,
     RowIndex,
@@ -226,11 +227,12 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
             lambda source, target, before: self.move_advantage(source.key, target.key, before),
             enabled=lambda: not self._locked and self._sort.reorder_enabled(),
         )
+        # No stretch under the panels: when this block is stretched taller than its
+        # content (sharing a row with the much taller Skills block, say) the extra
+        # height goes into the panels' own row spacing. Which is still not "spread
+        # between the rows above" — the tables share it out deliberately and evenly,
+        # rather than the layout dropping it wherever an item happened to give.
         self._init_flow_panels(outer)
-        # Keep the content packed at the top: when this block is stretched taller than
-        # its content (e.g. sharing a row with the much taller Skills block) the extra
-        # height goes to this stretch instead of being spread between the rows above.
-        outer.addStretch(1)
 
         self._advantage_combo.currentIndexChanged.connect(self._sync_rank_enabled)
         self._sync_rank_enabled()
@@ -297,7 +299,18 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        table.setColumnWidth(0, self._name_col_width())
+        # The Type column, and only the Type column — it is a one-word category and
+        # the advantage's own name carries it well enough when there is no room.
+        #
+        # The Description used to go next, and that was the wrong order of business
+        # for a column of *prose*: prose has a way of getting narrower that a
+        # category does not, so it wraps and the row gets taller (``word_wrap``
+        # above), and only past the point where even that cannot help does the cell
+        # elide. Losing it outright skipped both. So: lose the Type, then break the
+        # lines, then crop. The name never goes either — a list of advantages with
+        # no advantages in it is nothing.
+        table.set_shed_order([1])
+        table.setColumnWidth(0, self._name_column_for(table))
         table.itemSelectionChanged.connect(lambda t=table: self._on_selection_changed(t))
         table.cellDoubleClicked.connect(lambda row, _col, t=table: self._edit_row(t, row))
         # A panel built later by _ensure_tables is wired here too, so every panel is
@@ -366,10 +379,9 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         # straight away, and it can only get that right once the column it wraps
         # inside is at its final width. A panel built earlier may also have been
         # sized for a shorter set of names than the model now holds.
-        name_width = self._name_col_width()
         buckets = even_split([1] * len(entries), count)
         for table, bucket in zip(self._tables, buckets, strict=True):
-            table.setColumnWidth(0, name_width)
+            table.setColumnWidth(0, self._name_column_for(table))
             table.setRowCount(0)
             for index in bucket:
                 self._render_row(table, *entries[index])
@@ -544,6 +556,32 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
             floor=fm.horizontalAdvance("Advantage") + NAME_PADDING,
         )
 
+    def _name_column_for(self, table: AutoHeightTable) -> int:
+        """How wide the Advantage column is *in this panel*, which is not always
+        how wide it would like to be.
+
+        Column 0 is ``Fixed`` at a width measured from the names (see
+        :meth:`_name_col_width`), and in a panel narrower than the block reads well
+        at that is the whole panel: the stretching Description column was left with
+        the remainder and broke one word to a line. So the name gives way once there
+        is not room for both — it wraps, which is what its cap is for — and the
+        description keeps at least its own header's worth.
+
+        The clamp is continuous in the panel's width, which is not the same as being
+        safe: narrowing this column shortens the wrapped rows, which shortens the
+        block, which takes the block's own scrollbar away, which *widens* the panel
+        by the bar's own extent and starts again. Measured going round at exactly
+        twelve pixels a turn, forever. So the resize path applies a dead-band wider
+        than a scrollbar (:meth:`_sync_name_columns`) — the same guard, for the same
+        reason, as a table's shed order carries.
+        """
+        wanted = self._name_col_width()
+        room = table.viewport().width() or table.width()
+        if room <= 0:
+            return wanted
+        keep = self.fontMetrics().horizontalAdvance("Description") + NAME_PADDING
+        return max(min(wanted, room - keep), 0) or wanted
+
     def _min_col_width(self) -> int:
         """Narrowest a panel may get before a row would clip.
 
@@ -559,6 +597,27 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
             types = ", ".join(advantage.types) if advantage else ""
             type_width = max(type_width, fm.horizontalAdvance(types))
         return self._name_col_width() + type_width + TYPE_PADDING + min_desc_width() + FRAME_PADDING
+
+    def _panel_floor_width(self) -> int:
+        """The narrowest a panel knows how to reach: a name and a readable description.
+
+        Not :meth:`_min_col_width`, which is the width a panel *reads well* at — see
+        :meth:`~mm_companion.ui.sections.column_flow.ColumnFlowPanels.minimumSizeHint`.
+        The Type column sheds, the name column wraps past its cap and the description
+        wraps at any width, so the panel really does get here; reporting the
+        comfortable width as the minimum meant it never even shed the Type, and a
+        squeezed block was cut off down its right-hand edge instead.
+
+        Both columns are floored at their own **header caption**, which is the same
+        rule :meth:`_name_col_width` already floors the name at and is the honest
+        answer for a column of prose: ``min_desc_width`` is the width a description
+        *reads well* at, and using a comfort number as a floor is exactly the
+        confusion this method exists to end. A caption moves with neither the lock
+        nor the data, which is what a floor has to promise.
+        """
+        fm = self.fontMetrics()
+        captions = fm.horizontalAdvance("Advantage") + fm.horizontalAdvance("Description")
+        return captions + 2 * NAME_PADDING + FRAME_PADDING
 
     def _apply_picker_mode(self, narrow: bool) -> None:
         """Lay the picker out on one or two rows.
@@ -589,7 +648,28 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802 - Qt override
         super().resizeEvent(event)
         self._apply_picker_mode(self._picker_prefers_narrow())
-        self._sync_column_count()
+        if not self._sync_column_count():
+            # Only when the panel *count* held: a rebuild sets these itself, and
+            # setting them twice would re-measure every wrapped row for nothing.
+            self._sync_name_columns()
+
+    def _sync_name_columns(self) -> None:
+        """Re-apply the Advantage column's width to each panel at this size.
+
+        The width is clamped to the panel (:meth:`_name_column_for`), so unlike the
+        rest of the table it has to be restated whenever the panel changes width and
+        not only when the number of panels changes.
+
+        Past a **dead-band**, and it is load-bearing rather than an optimisation:
+        every write here re-measures the wrapped rows, which changes the block's
+        height, which brings the block's scrollbar out or takes it away, which moves
+        the panel's width by the bar's extent and asks again. The band is the shared
+        one, which is at least a scrollbar wide for exactly this reason.
+        """
+        for table in self._tables:
+            wanted = self._name_column_for(table)
+            if abs(table.columnWidth(0) - wanted) > SHED_HYSTERESIS:
+                table.setColumnWidth(0, wanted)
 
     def _rank_ceiling(self, advantage: Advantage) -> int:
         """The highest rank the picker may offer for *advantage* right now.

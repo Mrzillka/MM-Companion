@@ -35,6 +35,12 @@ TITLE = "Scene"
 class SceneSection(TitledSection):
     """The table's turn order, live from the GM."""
 
+    #: The board is given the block's whole height — its empty-state sentence is
+    #: centred in the room, and a turn order that grows mid-round pushes into space
+    #: the block already has (see
+    #: :meth:`~mm_companion.ui.block_frame._InnerScroll.set_section`).
+    fills_height = True
+
     def __init__(
         self,
         data: GameData,

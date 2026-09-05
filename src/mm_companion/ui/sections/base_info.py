@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QSignalBlocker, Signal
 from PySide6.QtWidgets import (
+    QBoxLayout,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -25,6 +26,7 @@ from mm_companion.core.character import Character
 from mm_companion.core.data_loader import Field, GameData
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
+from mm_companion.ui.widgets import ReflowingForm
 
 
 class BaseInfoSection(QGroupBox):
@@ -67,6 +69,61 @@ class BaseInfoSection(QGroupBox):
         self._character.profile[key] = text
         self._emit_edited()
 
+    def preferred_height(self, width: int) -> int:
+        """The height this block wants: the one it has with Details **shut**.
+
+        Read by :meth:`~mm_companion.ui.block_frame.BlockFrame.content_size_hint`,
+        and the whole of "opening Details does not move the rest of the page".
+        Details is a *disclosure*, not content: a row on the sheet is as tall as
+        what is in it, so an expanding group grew the row, which pushed the
+        Abilities row and everything under it 71px down the page and pulled them
+        back up again when it shut. Adding a skill should move the page; ticking a
+        box to look at a character's eye colour should not.
+
+        So the block goes on asking for the height it asks for shut, and the extra
+        fields use the room it already has — the row is as tall as its tallest
+        block, and this is rarely that block — and scroll inside it past that.
+        Only the *preference* drops the body: what the scroll area measures is the
+        real expanded content, which is what makes the remainder scroll into reach
+        rather than being clipped out of it.
+        """
+        height = self.heightForWidth(width) if width > 0 and self.hasHeightForWidth() else -1
+        if height <= 0:
+            height = self.sizeHint().height()
+        if not self._details_body.isVisible():
+            return height
+        # The group holds the body alone, so the body's own height is exactly what
+        # the group sheds when it shuts — no spacing between one item and nothing.
+        body = self._details_body
+        shed = body.heightForWidth(width) if width > 0 and body.hasHeightForWidth() else -1
+        if shed <= 0:
+            shed = body.sizeHint().height()
+        return max(0, height - shed)
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        """Stack the captions above their fields, and put the details in one column.
+
+        Two reflows on the same measurement. The forms wrap their rows once there
+        is no room for a caption beside a field; below that the Details group's two
+        side-by-side columns become one, because two columns of a wrapped form in a
+        narrow block is two slivers rather than one readable list.
+        """
+        super().resizeEvent(event)
+        margins = self.layout().contentsMargins() if self.layout() else None
+        inset = (margins.left() + margins.right()) if margins is not None else 0
+        available = self.width() - inset
+        changed = False
+        for form in (self._primary_form, self._left_form, self._right_form):
+            changed = form.sync_wrap(available) or changed
+        stacked = self._primary_form.wrapped
+        if stacked != (self._details_body_layout.direction() == QBoxLayout.Direction.TopToBottom):
+            self._details_body_layout.setDirection(
+                QBoxLayout.Direction.TopToBottom if stacked else QBoxLayout.Direction.LeftToRight
+            )
+            changed = True
+        if changed:
+            self.updateGeometry()
+
     def _build_profile_column(self, data: GameData) -> QVBoxLayout:
         column = QVBoxLayout()
 
@@ -74,7 +131,7 @@ class BaseInfoSection(QGroupBox):
         secondary = [f for f in data.profile_fields if not f.primary]
 
         # Always-visible identifying fields.
-        primary_form = QFormLayout()
+        primary_form = self._primary_form = ReflowingForm()
         for f in primary:
             self._add_profile_field(primary_form, f)
         column.addLayout(primary_form)
@@ -89,8 +146,8 @@ class BaseInfoSection(QGroupBox):
         self._details_body = QWidget()
         body_layout = QHBoxLayout(self._details_body)
         body_layout.setContentsMargins(0, 0, 0, 0)
-        left_form = QFormLayout()
-        right_form = QFormLayout()
+        left_form = self._left_form = ReflowingForm()
+        right_form = self._right_form = ReflowingForm()
         body_layout.addLayout(left_form)
         body_layout.addLayout(right_form)
         group_layout.addWidget(self._details_body)
@@ -99,6 +156,7 @@ class BaseInfoSection(QGroupBox):
         for i, f in enumerate(secondary):
             self._add_profile_field(left_form if i < split else right_form, f)
 
+        self._details_body_layout = body_layout
         self._details_group.toggled.connect(self._details_body.setVisible)
         self._details_group.setChecked(False)  # starts collapsed
 

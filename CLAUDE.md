@@ -131,9 +131,29 @@ notes file that owns it.
   constructor that may run before parenting, and shed it with `discard_widget`, which
   hides before it unparents. This has bitten twice; `tests/test_window_flash.py`
   watches for it.
-- **A block shows all of its content and never scrolls on its own** — the page
-  scrolls instead. The only deliberate exceptions are the roll histories and the
-  Notes block.
+- **Width adapts; height scrolls.** The page is a user-resizable grid: any block
+  can be dragged to any size, past the point where its content fits. Across, a
+  block reflows — fewer columns, stacked instead of side by side, tighter chrome —
+  because that is a mechanism we have; down, it scrolls inside its own frame,
+  because that is a mechanism we do not. A block never grows a *horizontal*
+  scrollbar, and one dragged narrower than everything it can shed clips.
+- **Every adaptive decision needs two guards, and both are about the same danger.**
+  A hysteresis dead-band, or a reflow changes a block's height, which toggles a
+  scrollbar, which changes the width back over the boundary, forever; and
+  `@no_reentry`, because these all run from `resizeEvent` and Qt may lay out again
+  *inside* one — which is not a flicker but a stack overflow. Reuse `ReflowBox`,
+  `ColumnFlowPanels` or `FlowLayout` rather than inventing a fourth.
+- **Nothing may report a minimum size that its content decides.** A minimum is a
+  refusal, and on a page the user drags, whether a block is too small to read is the
+  user's call — this is what stops the app resizing its own window. A block's
+  configured size in `ui/block_sizes.json` is a **recommendation**: the size it
+  opens at and the size a divider's detent sticks at, and nothing else. In
+  particular a minimum may never move with an **adaptive decision** — the columns a
+  table has shed, the panels a flow is showing, the axis a box has reflowed to —
+  because a container hands its child the larger of the viewport and that minimum,
+  so the decision would be reading a width it had itself just set. State the
+  narrowest arrangement you know how to reach and put the content-shaped number in
+  `sizeHint`, which is a preference and may be content-shaped.
 - **Read a setting through its accessor in `core.storage`**, never off
   `load_settings()`: that returns the settings file *verbatim* and does not merge
   `DEFAULT_SETTINGS`, so any key added after a workspace was created reads back as

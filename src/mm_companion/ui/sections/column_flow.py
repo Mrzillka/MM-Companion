@@ -19,10 +19,10 @@ and the shrink-to-one-column minimum both blocks were carrying their own copy of
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt
-from PySide6.QtWidgets import QBoxLayout, QHBoxLayout, QWidget
+from PySide6.QtCore import QSize
+from PySide6.QtWidgets import QBoxLayout, QHBoxLayout, QSizePolicy, QWidget
 
-from mm_companion.ui.widgets import discard_widget
+from mm_companion.ui.widgets import discard_widget, no_reentry
 
 
 def column_count(
@@ -123,8 +123,11 @@ class ColumnFlowPanels:
     shrink-to-one-column minimum; the section supplies what varies:
 
     - :meth:`_make_table` — build one empty panel.
-    - :meth:`_min_col_width` — the narrowest a panel may get before content clips
-      (driven by the widest label actually present, so it moves with the data).
+    - :meth:`_min_col_width` — the width a panel *reads well* at, which is what
+      decides how many of them fit (driven by the widest label actually present, so
+      it moves with the data).
+    - :meth:`_panel_floor_width` — the narrowest a panel knows how to *reach*, which
+      is a different question and is what the section reports as its minimum.
     - :meth:`_flow_item_count` — how many items are being laid out, the ceiling on
       the panel count.
     - :meth:`_rebuild` — re-render every panel; called when the count changes.
@@ -147,11 +150,25 @@ class ColumnFlowPanels:
         self._tables: list = []
         self._column_count = 0
         self._tables_container = QWidget()
+        # Expanding down, and no ``AlignTop`` on the row of panels: the block's spare
+        # height has to reach the tables, which share it out over their own rows. An
+        # alignment is a refusal to grow, so the panels sat at their content height
+        # with the surplus as bare widget under them — and a table inside a border
+        # that stops half way down a block is the shape of "it doesn't scale".
+        self._tables_container.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
         self._tables_layout = QHBoxLayout(self._tables_container)
         self._tables_layout.setContentsMargins(0, 0, 0, 0)
         self._tables_layout.setSpacing(self.FLOW_SPACING)
-        self._tables_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         parent_layout.addWidget(self._tables_container)
+        # Release the section from its own layout's minimum, so :meth:`minimumSizeHint`
+        # is actually the answer. A layout otherwise *imposes* ``totalMinimumSize`` on
+        # the widget it manages and that beats any override — which pinned the block at
+        # whatever the picker row happened to need and made the floor below moot. The
+        # same line, for the same reason, as :meth:`~mm_companion.ui.reflow.ReflowBox.
+        # init_reflow`'s.
+        parent_layout.setSizeConstraint(QBoxLayout.SizeConstraint.SetNoConstraint)
 
     # -- supplied by the section ------------------------------------------------
 
@@ -160,6 +177,19 @@ class ColumnFlowPanels:
 
     def _min_col_width(self) -> int:
         raise NotImplementedError
+
+    def _panel_floor_width(self) -> int:
+        """The narrowest one panel knows how to reach — see :meth:`minimumSizeHint`.
+
+        Defaults to :meth:`_min_col_width`, which is what a section that can shed
+        nothing wants. A section that *can* — a table with a
+        :meth:`~mm_companion.ui.sections.row_table.AutoHeightTable.set_shed_order`
+        — states the arrangement with every sheddable column already gone, and it
+        must be a number **no adaptive decision moves**: it is what the block hands
+        the section when the viewport is smaller, so a floor that tracked what is
+        currently shed would be deciding the width the shed decision then reads.
+        """
+        return self._min_col_width()
 
     def _flow_item_count(self) -> int:
         raise NotImplementedError
@@ -204,11 +234,17 @@ class ColumnFlowPanels:
             self.FLOW_HYSTERESIS,
         )
 
+    @no_reentry
     def _sync_column_count(self) -> bool:
         """Rebuild if the width now fits a different number of panels.
 
         Returns whether a rebuild happened. Call from ``resizeEvent``; ``_rebuild``
         settles ``_column_count`` itself, so this only decides *whether* to run.
+
+        Guarded against re-entry, and it is the one here that most needs it: this
+        does not merely change a property, it *destroys and rebuilds* the panel
+        widgets. Qt laying out again inside that would re-enter with the widgets
+        whose event is on the stack already gone.
         """
 
         if self._flow_column_count() == self._column_count:
@@ -217,27 +253,28 @@ class ColumnFlowPanels:
         return True
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
-        """Report *exactly* one column — the block's floor and its ceiling both.
+        """Report **one panel at its floor** — not one panel at its comfortable width.
 
-        A ceiling because the side-by-side tables would otherwise inflate the
-        section's minimum to the full multi-column width, pinning the whole page (and
-        window) wide and forcing at least two columns. One column lets the block
-        narrow; ``resizeEvent`` then rebuilds to as many as fit.
+        Two separate questions, and reporting the same answer to both is what made a
+        narrowed Skills or Advantages block *clip* rather than adapt. How wide a
+        panel reads well (:meth:`_min_col_width`, the widest label present plus every
+        column) is the right divisor for "how many of these fit"; it is the wrong
+        minimum, because a panel is not stuck at it — its table sheds columns, its
+        name column wraps — and a minimum is a refusal. The block hands the section
+        the larger of the viewport and this number, so while this said "a comfortable
+        panel" the section was handed a comfortable panel's width at every size below
+        it, the table never got narrow enough to shed anything, and what the viewport
+        could not show was simply cut off.
 
-        And a **floor**, which it was not: this used to be
-        ``min(hint.width(), self._min_col_width())``, so whenever the section's own
-        layout minimum was the smaller of the two the block asked for less than a
-        panel needs — the frame's ``block_sizes.json`` floor applied instead and the
-        stretching name column silently absorbed the shortfall, which is what cut a
-        long skill name off. It also made the answer depend on the *lock*, since a
-        locked section hides its picker and asks for less (see
-        ``tests/test_lock_geometry.py``, and the standing rule that a lock toggle may
-        change a block's height but never its width).
+        A ceiling it still is: the side-by-side tables would otherwise inflate the
+        minimum to the full multi-column width, pinning the whole page (and window)
+        wide and forcing at least two columns. One panel lets the block narrow;
+        ``resizeEvent`` then rebuilds to as many as fit.
 
-        Asking for a whole panel is only safe because ``_min_col_width`` is now
-        *bounded*: its first column is capped and wraps past the cap (see
-        :func:`~mm_companion.ui.sections.row_table.wrapping_column_width`). While it
-        tracked the widest label without a ceiling, a name a player typed would have
-        held the window open at whatever width printed it on one line.
+        The floor must not move with the lock (a locked section hides its picker) —
+        see ``tests/test_lock_geometry.py`` and the standing rule that a lock toggle
+        may change a block's height but never its width — nor with anything the
+        adaptive decisions themselves change. Both blocks answer with theme metrics
+        and constants for that reason.
         """
-        return QSize(self._min_col_width(), super().minimumSizeHint().height())
+        return QSize(self._panel_floor_width(), super().minimumSizeHint().height())

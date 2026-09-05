@@ -73,8 +73,42 @@ entry). Per window and in memory: closing the sheet discards the history.
   an external `image_path` to a workspace filename, which is the app tidying up
   rather than a step to walk back through.
 - Undo stays available while the sheet is **locked** (conditions and hero points are
-  editable there), and a GM's read-only `gm_view` window gets no controller and no
-  buttons at all. Each action is added to the **window** as well as the bar, because
-  compact mode hides the menu bar and a shortcut is inactive while its widget is.
-  `Ctrl+Z` inside a text field still reaches that field's own undo first, which is
-  what every other app does.
+  editable there), and a GM's read-only `gm_view` window gets no *character*
+  controller — but it keeps the buttons, because its blocks can still be dragged and
+  a mis-drag there wants taking back just as much (see below). Each action is added
+  to the **window** as well as the bar, because compact mode hides the menu bar and a
+  shortcut is inactive while its widget is. `Ctrl+Z` inside a text field still
+  reaches that field's own undo first, which is what every other app does.
+
+## The layout has a history too, and one `Ctrl+Z` serves both
+
+- A page where every divider moves and any two blocks merge is a page you can wreck
+  in one careless drag, and `View › Reset Layout` — which throws the *whole*
+  arrangement away — is a poor answer to "I did not mean that". So `ui/layout_undo.py`
+  gives the arrangement its own history: `LayoutHistory` is the same snapshot idea
+  over `json.dumps(canvas.arrangement())`, recorded **on the canvas's
+  `gesture_finished`** rather than per frame, or a divider dragged across the page
+  would be fifty steps nobody wants.
+- **The character's history is left completely alone.** Its `absorb`/`_rebase`
+  machinery replays edits onto stored entries and is the subtlest code in the window;
+  teaching it a second kind of entry to carry unchanged would be a real risk for no
+  gain. `UndoRouter` sits outside both, holds only the *order* — which history each
+  step went into — and sends `Ctrl+Z` to whichever moved last. One visible history
+  over two stacks, which is what "undo what I last did" means when the two kinds of
+  thing are kept apart.
+- **The order counts steps; it does not watch a flag.** It used to notice a character
+  step by the undo stack becoming *non-empty*, which happens exactly once a session —
+  so every edit after the first went unrecorded and was filed behind whatever layout
+  gesture came between them. `Ctrl+Z` moved a divider back instead of taking back the
+  rank just typed; both eventually came back, in the wrong order, which is the kind of
+  fault nobody reports and everybody notices. `UndoController.undo_depth` (the stack
+  plus one for a step still coalescing) is what the router compares now, and it moves
+  whenever the history does. A `_driving` flag stands the watch down while the router
+  is itself the one moving a stack, since a redo pushes onto the undo stack and looks
+  from the outside exactly like a fresh edit.
+- **Layout is global, not per character** — so undoing a layout step must never mark
+  the sheet dirty. And what a window *opened* with is where undo stops:
+  `_restore_layout` calls `rebase()`, because restoring a saved layout is not
+  something the user just did and `Ctrl+Z` on a fresh window taking the page back to
+  the factory arrangement would be a nasty surprise. Reset Layout **is** recordable;
+  that one is a real gesture and the most worth taking back.

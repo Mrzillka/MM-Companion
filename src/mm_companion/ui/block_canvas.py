@@ -671,6 +671,11 @@ class BlockCanvas(QWidget):
             group.groupMenuRequested.connect(lambda pos, g=group: self.request_group_menu(g, pos))
             self._groups[keys] = group
         else:
+            # A kept group is re-read from the tree like anything else it draws:
+            # which tab is showing is state the tree holds (an undo of a tab click,
+            # a restored layout), and leaving it to the widget meant the group was
+            # the one cell a rebuild could not put back the way it was.
+            group.set_active_index(leaf.active)
             group.refresh_titles()
         return group
 

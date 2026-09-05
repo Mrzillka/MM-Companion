@@ -576,6 +576,15 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   kept across a rebuild, keyed by exactly the blocks in them; rebuilding one every
   relayout would reparent every member twice a drag and throw away which tab was
   showing.
+- **A kept group is still re-read from the tree**, and *which tab is showing* was the
+  one thing it was not. That is state the tree holds — `_on_tab_activated` writes it
+  and a saved layout carries it — so leaving it to the widget made the group the one
+  cell on the page a rebuild could not put back the way it was: undoing a tab click,
+  or applying a saved arrangement over a live page, moved nothing at all.
+  `TabGroupFrame.set_active_index` is deliberately **silent**, like `release`:
+  `setCurrentIndex` makes Qt announce the change, which the canvas cannot tell from a
+  click, so a restore would write itself back into the tree and land in the history as
+  a gesture of its own.
 - Dragging a tab clear of the bar takes that block back out, through the shared
   `ui/tab_drag.py::TabSplitGesture` — the same gesture the Notes block uses to drag a
   *note* out into a new block. The bar keeps the mouse grab through all of it, so

@@ -223,6 +223,31 @@ class TabGroupFrame(QFrame):
             return frame
         return None
 
+    def set_active_index(self, index: int) -> None:
+        """Show tab *index* because the **tree** says so, not because it was clicked.
+
+        A group is kept across a rebuild (it owns its members' frames, and remaking
+        one would take live blocks with it), so the tab it happens to be showing is
+        the only thing about it a rebuild does not re-read. That left the one
+        arrangement the tree records about a group — which tab is active — unable to
+        be restored into a group that already existed: undoing a tab click, or
+        applying a saved layout over a live page, moved nothing at all.
+
+        Silent for the same reason :meth:`release` is. ``setCurrentIndex`` makes Qt
+        announce the change, which this reports as ``activeChanged`` and the canvas
+        cannot tell from a click — so restoring a tab would write itself back into
+        the tree and land in the layout history as a fresh gesture. The stack and
+        the buttons are moved by hand instead, which is all
+        :meth:`_on_current_changed` would have done.
+        """
+        if not 0 <= index < len(self._frames) or index == self._bar.currentIndex():
+            return
+        blocker = QSignalBlocker(self._bar)
+        self._bar.setCurrentIndex(index)
+        del blocker
+        self._stack.setCurrentWidget(self._frames[index])
+        self._buttons.follow(self._frames[index])
+
     def set_locked(self, locked: bool) -> None:
         for frame in self._frames:
             frame.set_locked(locked)

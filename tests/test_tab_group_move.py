@@ -256,3 +256,48 @@ class TestTheMenus:
         qapp.processEvents()
 
         assert canvas.is_hidden("c") and canvas.is_hidden("d")
+
+
+class TestWhichTabIsShowing:
+    """The one thing about a group that a rebuild used not to re-read.
+
+    A group is *kept* across a rebuild — it owns its members' frames, and remaking
+    it would take live blocks with it — so everything else about the cell survives
+    on the widget. Which tab is active does not: it is state the tree holds, and
+    the tree is where an undo or a restored layout puts it back.
+    """
+
+    def test_the_tree_decides_which_tab_a_rebuilt_group_shows(self, canvas, qapp) -> None:
+        group = group_of(canvas)
+        assert group.active_key() == "d"  # the block that was dropped in
+
+        canvas._set_page(lt.set_active(canvas.page_tree(), "c"))
+        canvas._relayout()
+        qapp.processEvents()
+
+        assert group_of(canvas).active_key() == "c"
+
+    def test_restoring_it_is_not_reported_as_a_click(self, canvas, qapp) -> None:
+        """Or the restore would write itself into the tree as a fresh gesture."""
+        steps: list[int] = []
+        canvas.gesture_finished.connect(lambda: steps.append(1))
+
+        canvas._set_page(lt.set_active(canvas.page_tree(), "c"))
+        canvas._relayout()
+        qapp.processEvents()
+
+        assert steps == []
+
+    def test_ctrl_z_puts_the_tab_back(self, canvas, qapp) -> None:
+        from mm_companion.ui.layout_undo import LayoutHistory
+
+        history = LayoutHistory(canvas)
+        group_of(canvas)._bar.setCurrentIndex(0)  # the user clicks tab "c"
+        qapp.processEvents()
+        history.record()
+        assert group_of(canvas).active_key() == "c"
+
+        history.undo()
+        qapp.processEvents()
+
+        assert group_of(canvas).active_key() == "d"

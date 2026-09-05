@@ -111,7 +111,19 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   block drag's `edge_velocity` curve. It extends the drag *before* it scrolls: a
   row dragged past the bottom is usually already at the end of the scroll range,
   so scrolling first would move nothing, and growing the row is what gives the
-  bar somewhere to go.
+  bar somewhere to go. Both ends are self-limiting rather than clamped: growing
+  makes its own scroll range, and shrinking stops when the row reaches its floor
+  and the bar reaches zero, leaving the grip a few pixels off the pointer instead
+  of running away from it.
+- **Zero is a height a drag may not say.** It is `RowStack`'s sentinel for *no
+  stated height* — what an undragged row is in, and what `fit_row` puts a row back
+  to — so `RowGrip._restate_height` clamping to it did not squash the row, it
+  released it: drag the divider up past the top of its own row and the block sprang
+  open to its full content height under the pointer, while the collapse warning
+  went on offering to close what was now the tallest thing on the page. The clamp
+  is 1px. Letting go there still closes the row's blocks, which is the *other*
+  behaviour and the right one — the two were only ever confusable because a drag
+  could reach the sentinel by accident.
 - **A block dragged too small to find closes itself**, past `grid.close-extent`
   (48, against `block.min-extent`'s 24, which is the frame's own floor). The frame
   washes in the reject colour, the cursor carries a "Release to close" naming the

@@ -232,6 +232,45 @@ class TestDraggingARowGrip:
         assert stack.minimumSizeHint().height() > frozen, "the page was frozen against growing"
         assert stack._holders[1].height() == below, "the row below paid for the one being dragged"
 
+    def test_dragging_up_past_the_top_of_the_row_does_not_release_it(self, sheet, qapp) -> None:
+        """Zero is not a height a drag is allowed to say.
+
+        It is ``RowStack``'s sentinel for *no stated height* — the arrangement an
+        undragged row is in, and what ``fit_row`` puts a row back to — so a drag
+        that clamped to it released the row instead of squashing it. Pull the
+        divider up past the top of its own row and the block sprang open to its
+        full content height under the pointer, while the collapse warning went on
+        offering to close what was now the tallest thing on the page.
+
+        Asserted *while the button is held*: letting go this small closes the row's
+        blocks, which is a different behaviour and the right one.
+        """
+        stack = sheet.canvas._stack
+        grip = stack._grips[0]
+        drag(qapp, grip, QPoint(40, 3), QPoint(0, 120))
+        tall = stack.heights()[0]
+
+        anchor = grip.mapToGlobal(QPoint(40, 3))
+        _send(grip, QMouseEvent.Type.MouseButtonPress, QPoint(40, 3), held=True)
+        _send(
+            grip,
+            QMouseEvent.Type.MouseMove,
+            grip.mapFromGlobal(anchor - QPoint(0, tall + 200)),
+            held=True,
+        )
+        _settle(qapp, 2)
+        held, holder, collapsing = (
+            stack.heights()[0],
+            stack._holders[0].height(),
+            stack._collapsing_row,
+        )
+        _send(grip, QMouseEvent.Type.MouseButtonRelease, QPoint(40, 3), held=False)
+        _settle(qapp)
+
+        assert held != 0, f"the row sprang open to its content height ({holder}px)"
+        assert holder < tall, "the row did not shrink"
+        assert collapsing == 0, "a row this small was not offered for closing"
+
     def test_the_freeze_is_released_even_if_the_page_is_rebuilt_under_it(self, sheet, qapp) -> None:
         stack = sheet.canvas._stack
         grip = stack._grips[0]

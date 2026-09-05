@@ -401,9 +401,20 @@ class RowGrip(QWidget):
         self._restate_height()
 
     def _restate_height(self) -> None:
-        """Re-derive the row's height from the press and the pointer, and say so."""
+        """Re-derive the row's height from the press and the pointer, and say so.
+
+        Never zero, and that is not a rounding preference. Zero is
+        :class:`RowStack`'s sentinel for *no stated height* — the arrangement an
+        undragged row is in, and what :meth:`RowStack.fit_row` puts a row back to —
+        so a drag that reached it did not squash the row, it **released** the row to
+        its content height. Drag the divider up past the top of its own row and the
+        block sprang open to full size under the pointer, while the collapse warning
+        under it went on offering to close a row that was now the tallest thing on
+        the page. A drag says how tall the row is; it has no way to say "no opinion",
+        and must not be able to say it by accident.
+        """
         moved = self._last_global.y() - self._press_y
-        wanted = max(0, self._start_height + moved)
+        wanted = max(1, self._start_height + moved)
         settled = snap_to_detent(wanted, self._targets, int(theme.metric("grid.detent")))
         self.heightDragged.emit(settled)
         if settled != wanted:

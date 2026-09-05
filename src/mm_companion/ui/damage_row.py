@@ -117,7 +117,18 @@ class DamageRow(QWidget):
 
         # An empty row would be a caption and nothing else. A ruleset whose damage
         # effect carries no ladder simply has no control.
-        self.setVisible(bool(self._steps))
+        #
+        # ``hide()`` only, never ``setVisible(True)``: the row is built parentless
+        # (``npc_card`` adds it to a layout afterwards) and showing a parentless
+        # widget realizes it as a momentary top-level window — a small window
+        # flashing on screen on Windows, on every NPC card build, which is every
+        # condition the GM applies. The same trap ``2536db9`` fixed for the power
+        # card's header buttons, and the mirror of the one
+        # :func:`~mm_companion.ui.widgets.discard_widget` closes on the way out.
+        # Showing it is not ours to do anyway: a fresh widget is made visible by the
+        # parent it is added to.
+        if not self._steps:
+            self.hide()
         self.refresh()
 
     @property
@@ -140,6 +151,7 @@ class DamageRow(QWidget):
         Cheap and called on every card redraw, because the answer changes as the
         creature does: the same button reads "Hit + Dazed" on a fresh goon and
         "Hit + Stunned — escalated" on one that has already been dazed.
+
         """
         for button, step in zip(self._buttons, self._steps, strict=True):
             button.setToolTip(self._tooltip(step))

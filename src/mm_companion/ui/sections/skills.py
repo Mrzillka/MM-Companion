@@ -1,15 +1,17 @@
 """Section 3: the skills table.
 
 Each skill row lays out its bonus as a sum of columns: the linked ability's
-short code and current rank, the skill's own ranks, and the modifiers imposed
-from outside — bonuses granted by powers and advantages, penalties imposed by
-conditions. The total bonus is their sum. Only the ranks are bought: the "+"
-column is a derived read-out (:func:`skill_modifiers`), never an input, and the
-whole column hides while nothing modifies any row.
+short code and current rank, the skill's own ranks, and the modifiers standing
+on the row from elsewhere — bonuses granted by powers and advantages, penalties
+imposed by conditions, and on a specialized row the parent skill's ranks. The
+total bonus is their sum. Only the ranks column is bought: the "+" column is a
+derived read-out (:func:`skill_modifiers`), never an input, and the whole column
+hides while nothing modifies any row.
 Focused skills (Close Combat, Expertise, Ranged Combat) have no ranks of their
 own — the character instead adds focused instances, each of which becomes its
 own rankable row. Any skill can also carry *specialized* rows: narrow, half-cost
-rank pools rendered as extra indented rows under the skill.
+rank pools rendered as extra indented rows under the skill, whose ranks add to
+the skill's own rather than replacing them.
 
 To save vertical space the skills are laid out across several side-by-side
 tables. The number of panels adapts to the block's width (see
@@ -121,8 +123,12 @@ ROW_MIME = "application/x-mm-rows-skills"
 # read through spin_width()/name_min_width()/name_max_width()/mod_width().
 NAME_PADDING = 16
 FRAME_PADDING = 16
-# The fixed share of the ABL and Total columns, either side of the rank spin box.
-NUMERIC_PADDING = 40 + 24
+# The fixed share of the Total column and of the ABL rank beside it, either side of
+# the rank spin box. Named apart because Total is the one of the two the panel can
+# never shed, and so is the only one in the panel's floor (:meth:`_panel_floor_width`).
+TOTAL_WIDTH = 40
+ABILITY_RANK_WIDTH = 24
+NUMERIC_PADDING = TOTAL_WIDTH + ABILITY_RANK_WIDTH
 #: Cell padding around the Ability column's short code. The column itself is
 #: *measured* (see ``_ability_col_width``) rather than being another constant here:
 #: it is the one near-fixed column whose content comes from the ruleset, so a mod
@@ -311,6 +317,16 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         header.setSectionResizeMode(COL_NAME, QHeaderView.ResizeMode.Stretch)
         for col in (COL_ABILITY, COL_ABILITY_RANK, COL_RANKS, COL_MODS, COL_TOTAL):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        # Worst first. The governing ability's *name* goes before its rank, which
+        # goes before the situational modifier, and **Rank goes last** — what
+        # survives to the end is the skill and the total you roll, which is the
+        # least a skills table can be and still be one. Giving Rank up is a real
+        # loss and is taken deliberately, for the reason the stat tables give it up
+        # (see :func:`~mm_companion.ui.sections.stat_table.build_stat_table`): the
+        # ranks are typed once at a width the player chooses, and the total is read
+        # at whatever width the page has left. Past this the name wraps, then
+        # elides, then the block scrolls; widening it brings the spins back.
+        table.set_shed_order([COL_ABILITY, COL_ABILITY_RANK, COL_MODS, COL_RANKS])
         # The panels fit their content and never scroll, so keep them out of the
         # focus chain; the wheel then always falls through to the page scroll.
         table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -503,6 +519,24 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         mods = mod_width() if self._show_mods else 0
         numeric = NUMERIC_PADDING + spin_width() + self._ability_col_width()
         return name_width + numeric + mods + FRAME_PADDING
+
+    def _panel_floor_width(self) -> int:
+        """The narrowest a panel knows how to reach: a skill name and its total.
+
+        Not :meth:`_min_col_width`, which is the width a panel *reads well* at. The
+        table sheds its way down to those two columns (see ``set_shed_order`` in
+        :meth:`_make_table`) and the name column wraps rather than widening, so the
+        panel can genuinely reach this — and while the section reported the
+        comfortable width as its minimum, the block was handed that width whatever
+        the viewport did, the table never got narrow enough to shed a single column,
+        and a squeezed Skills block simply had its right-hand side cut off.
+
+        Metrics and constants only: this is what the frame hands the section when the
+        viewport is smaller, so a number that moved with the lock, with the widest
+        label present, or with what is currently shed would be answering a question
+        with its own answer.
+        """
+        return name_min_width() + TOTAL_WIDTH + FRAME_PADDING
 
     def _ability_col_width(self) -> int:
         """The Ability column's share: its own header, or the widest short code.

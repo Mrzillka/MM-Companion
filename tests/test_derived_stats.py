@@ -232,6 +232,99 @@ def test_alternate_initiative_swaps_the_ability() -> None:
     assert initiative_modifier(char, data) == 5
 
 
+def test_a_power_granted_improved_initiative_moves_the_number() -> None:
+    """An Enhanced Advantage is an advantage, and advantages move initiative.
+
+    The bonus used to read ``char.advantages``, which is the *bought* list and never
+    holds a granted advantage — so Enhanced Trait: Improved Initiative 2 showed on the
+    Advantages block and changed nothing.
+    """
+    data = load_game_data()
+    char = _char(data)
+    char.abilities["AGL"] = 1
+    char.powers = [
+        Power(
+            name="Quickened",
+            effects=[
+                PowerEffectInstance(
+                    "enhanced_trait",
+                    rank=2,
+                    config={"traits": [{"trait": "Improved Initiative", "ranks": 2}]},
+                )
+            ],
+        )
+    ]
+
+    assert initiative_advantage_bonus(char, data) == 8
+    assert initiative_modifier(char, data) == 1 + 8
+
+
+def test_a_granted_improved_initiative_stops_when_its_power_does() -> None:
+    data = load_game_data()
+    char = _char(data)
+    power = Power(
+        name="Quickened",
+        effects=[
+            PowerEffectInstance(
+                "enhanced_trait",
+                rank=2,
+                config={"traits": [{"trait": "Improved Initiative", "ranks": 2}]},
+            )
+        ],
+    )
+    power.activated = False
+    char.powers = [power]
+
+    assert initiative_advantage_bonus(char, data) == 0
+
+
+def test_a_power_granted_alternate_initiative_swaps_the_ability() -> None:
+    """The granted advantage carries its subject on its own trait key."""
+    data = load_game_data()
+    char = _char(data)
+    char.abilities["AGL"] = 2
+    char.abilities["INT"] = 6
+    char.powers = [
+        Power(
+            name="Tactician",
+            effects=[
+                PowerEffectInstance(
+                    "enhanced_trait",
+                    rank=1,
+                    config={"traits": [{"trait": "Alternate Initiative::INT", "ranks": 1}]},
+                )
+            ],
+        )
+    ]
+
+    assert initiative_ability(char, data) == "INT"
+    assert initiative_modifier(char, data) == 6
+
+
+def test_a_granted_advantage_costs_no_advantage_points_for_initiative() -> None:
+    """Reading granted advantages for initiative must not put them in the budget."""
+    from mm_companion.core.rules import advantage_points_spent, heroic_advantage_ranks
+
+    data = load_game_data()
+    char = _char(data)
+    char.powers = [
+        Power(
+            name="Quickened",
+            effects=[
+                PowerEffectInstance(
+                    "enhanced_trait",
+                    rank=2,
+                    config={"traits": [{"trait": "Improved Initiative", "ranks": 2}]},
+                )
+            ],
+        )
+    ]
+
+    assert initiative_advantage_bonus(char, data) == 8
+    assert advantage_points_spent(char, data) == 0
+    assert heroic_advantage_ranks(char, data) == 0
+
+
 # -- effective size ------------------------------------------------------------
 
 

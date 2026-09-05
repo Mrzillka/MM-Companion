@@ -33,7 +33,7 @@ the layer above this one.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from typing import NamedTuple
 
 from PySide6.QtCore import QMimeData, QPoint, QRect, QSize, Qt, QTimer, Signal
@@ -45,11 +45,20 @@ from PySide6.QtWidgets import (
     QMenu,
     QSizePolicy,
     QTableWidget,
+    QVBoxLayout,
     QWidget,
 )
 
 from mm_companion.ui.drop_feedback import DropFeedback, DropIndicator
+from mm_companion.ui.reflow import SHED_HYSTERESIS, parts_to_shed
 from mm_companion.ui.wheel_guard import guard_wheel
+from mm_companion.ui.widgets import no_reentry
+
+#: The table's own name for :func:`~mm_companion.ui.reflow.parts_to_shed`, which is
+#: the same decision asked about columns rather than about widgets. Re-exported so
+#: the four table blocks (and the tests that pin the dead-band's nesting) go on
+#: naming it in the terms of the thing they are shedding.
+columns_to_shed = parts_to_shed
 
 #: How far the pointer must travel with the button down before a press counts as a
 #: drag rather than a click. Matches the pinned strip's chips, so a row and a chip
@@ -65,8 +74,31 @@ INDICATOR_HEIGHT = 2
 SORT_MANUAL = "manual"
 
 
+class _CentredCell(QWidget):
+    """Holds one cell widget at its own height, centred in whatever the row is.
+
+    See :meth:`AutoHeightTable.setCellWidget`. Deliberately not an alignment on the
+    widget itself: a cell widget's geometry is set by the view to the cell's
+    rectangle, so there is no layout listening to an alignment until one is put
+    here.
+    """
+
+    def __init__(self, widget: QWidget) -> None:
+        super().__init__()
+        self._held = widget
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addStretch(1)
+        layout.addWidget(widget)
+        layout.addStretch(1)
+
+    def held(self) -> QWidget:
+        return self._held
+
+
 class AutoHeightTable(QTableWidget):
-    """A table that reports its full content size, so it never scrolls itself.
+    """A table that reports its content size and then *fills* whatever it is given.
 
     The sheet's rule is that a block shows *all* of its content and the page
     scrolls when the blocks don't all fit. A table honours that by reporting the
@@ -77,12 +109,47 @@ class AutoHeightTable(QTableWidget):
     build time, before the stylesheet had touched a row, which is why the two stat
     blocks needed a hardcoded height with "a little slack" in it.
 
+    **And the surplus goes into the rows.** A page the user drags is the first
+    thing that can hand a table more height than its rows want, and a table given
+    it simply drew bare viewport under the last row — inside its own border, so
+    dragging Abilities taller made the block bigger and the *table* no different,
+    which is the exact shape of "it doesn't scale". :meth:`sync_row_stretch`
+    shares the spare height out evenly over the rows instead, so a taller block is
+    a table with wider line spacing and a shorter one tightens back down to its
+    natural rows before the block starts scrolling. A row spanned across every
+    column is a **rule** rather than a row and sits it out — a 3px line between the
+    bought traits and the derived ones would otherwise grow into a 40px band.
+
+    What the table *reports* stays the natural height throughout
+    (:meth:`row_heights`), and that is load-bearing rather than tidy: were the hint
+    to follow the stretched rows, taller rows would mean a taller hint, which means
+    a taller block, which means taller rows, and the block would walk down the page
+    on its own.
+
     *word_wrap* re-measures wrapped rows on resize (their height depends on the
-    stretched column's width). *fit_width* additionally reports the summed column
-    widths as the minimum width — right for a table that is the whole block, and
-    wrong for one panel of a column flow, whose section caps its own minimum at a
-    single panel and would otherwise be pinned open by the widest of them.
+    stretched column's width). *fit_width* additionally measures the columns
+    across: the **whole** table is the size hint, and the table with everything in
+    :meth:`set_shed_order` dropped is the minimum. Right for a table that is the
+    whole block, and wrong for one panel of a column flow, whose section caps its
+    own minimum at a single panel and would otherwise be pinned open by the widest
+    of them.
+
+    That the minimum leaves the sheddable columns out is not a detail. A block
+    hands its section either the viewport's width or the section's minimum,
+    whichever is larger, so a minimum that moved with what was currently shed made
+    the width the shedding decision reads *a function of that decision*: hiding a
+    column narrowed the block, which made the column fit again, which widened the
+    block, which hid it again — a loop no dead-band can damp, because the swing is
+    the column's own width rather than a scrollbar's. The minimum is now the same
+    number whatever is hidden, so the decision reads a width it cannot move.
     """
+
+    #: The set of hidden columns changed. A block whose *readout* depends on which
+    #: columns are showing listens — the stat tables print a plain total once the
+    #: Rank column beside it has gone, because a row with neither would say nothing
+    #: at all. Emitted from :meth:`sync_shed_columns`, so it fires once per real
+    #: change rather than once per resize.
+    shedChanged = Signal()
 
     def __init__(
         self,
@@ -96,11 +163,25 @@ class AutoHeightTable(QTableWidget):
         super().__init__(rows, columns, parent)
         self._word_wrap = word_wrap
         self._fit_width = fit_width
+        # Columns this table is willing to give up as it narrows, worst first.
+        self._shed_order: tuple[int, ...] = ()
+        self._shed: tuple[int, ...] = ()
+        # What each column measured the last time it was showing — see
+        # :meth:`natural_column_widths` for why a hidden one cannot be measured.
+        self._natural: dict[int, int] = {}
         self._reorder: RowReorder | None = None
         self._press_pos: QPoint | None = None
         self._dragged = False
+        # What each row is tall before any of the block's spare height is shared
+        # out — see :meth:`row_heights`. Empty until the first stretch, and dropped
+        # whenever the rows themselves change.
+        self._row_natural: list[int] = []
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        # ``Expanding`` down, not ``Fixed``: the table takes the height the block
+        # has to give and puts it into its rows (:meth:`sync_row_stretch`). It is
+        # still the *hint* that says what it would like, so nothing here makes a
+        # block open taller than its content.
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         # How tall a wrapped row is depends on the width of the column it wraps in,
         # and that width settles *after* the rows are filled: a ResizeToContents
         # sibling measures the items it was just given, takes its share, and the
@@ -127,30 +208,218 @@ class AutoHeightTable(QTableWidget):
         # block opens a header short.
         if not header.isHidden():
             height += header.height()
-        for row in range(self.rowCount()):
-            height += self.rowHeight(row)
-        return height
+        return height + sum(self.row_heights())
 
-    def _content_width(self) -> int:
-        """The width every visible column needs, header text included."""
+    def _chrome_width(self) -> int:
+        """Everything across the table that is not a column."""
         width = 2 * self.frameWidth()
-        header = self.horizontalHeader()
         vertical = self.verticalHeader()
         if not vertical.isHidden():
             width += vertical.width()
-        for column in range(self.columnCount()):
-            if self.isColumnHidden(column):
-                continue
-            width += max(self.sizeHintForColumn(column), header.sectionSizeHint(column))
         return width
 
+    def _content_width(self) -> int:
+        """The width the whole table needs, header text included and nothing shed."""
+        return self._chrome_width() + sum(self.natural_column_widths())
+
+    def _floor_width(self) -> int:
+        """The width left once every column this table offers has gone.
+
+        The minimum, and deliberately not the same question as
+        :meth:`_content_width`: shedding is *how* this table gets narrower, so a
+        minimum that counted the columns it is willing to shed would be refusing
+        the very width it knows how to reach — and, because the block hands the
+        section its minimum whenever the viewport is smaller, would be deciding
+        the width the shed decision then reads. See the class docstring.
+        """
+        sheddable = set(self._shed_order)
+        widths = self.natural_column_widths()
+        return self._chrome_width() + sum(
+            width
+            for column, width in enumerate(widths)
+            if column not in sheddable and not self.isColumnHidden(column)
+        )
+
     def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
-        return QSize(super().sizeHint().width(), self._content_height())
+        """The whole table across (when it measures its own columns), content down.
+
+        A *preference*, so it may be content-shaped: this is what Abilities and
+        Resistances open at, and it is the number ``block_sizes.json`` means when
+        it says those two state no recommendation because their tables report
+        their real columns. It used to be carried by ``minimumSizeHint``, where
+        being content-shaped made it a refusal.
+        """
+        width = super().sizeHint().width()
+        if self._fit_width:
+            width = max(width, self._content_width())
+        return QSize(width, self._content_height())
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
         hint = super().minimumSizeHint()
-        width = max(hint.width(), self._content_width()) if self._fit_width else hint.width()
+        width = max(hint.width(), self._floor_width()) if self._fit_width else hint.width()
         return QSize(width, self._content_height())
+
+    def set_shed_order(self, columns: Sequence[int]) -> None:
+        """Name the columns this table may hide as it narrows, **worst first**.
+
+        A table that names none never hides anything and simply scrolls when it
+        runs out of room, which is the right answer for one whose every column is
+        load-bearing. Call it once, after the columns exist.
+        """
+        self._shed_order = tuple(columns)
+        self.sync_shed_columns()
+
+    def natural_column_widths(self) -> list[int]:
+        """What each column would take if it were showing, header text included.
+
+        Answered whether or not the column is currently hidden — a hidden one has
+        to be answerable, or the table could never work out that it now fits again
+        and would stay shed forever. It cannot be *measured*, though, and that is
+        the catch this used to walk into: ``QHeaderView.sectionSizeHint`` answers
+        zero for a hidden section and ``sizeHintForColumn`` measures the items
+        without the header's own text, so Qt reported a hidden column at roughly a
+        third of what it really takes — and the table then restored a column into
+        a width that could not hold it, and immediately shed it again.
+
+        So a column is measured while it is showing and *remembered*, and a hidden
+        one answers with the number it last measured. Every column is measured
+        before it can ever be shed, so the memory is always primed.
+        """
+        header = self.horizontalHeader()
+        widths: list[int] = []
+        for column in range(self.columnCount()):
+            if self.isColumnHidden(column):
+                widths.append(self._natural.get(column, 0))
+                continue
+            natural = max(self.sizeHintForColumn(column), header.sectionSizeHint(column))
+            self._natural[column] = natural
+            widths.append(natural)
+        return widths
+
+    def _shed_available_width(self) -> int:
+        width = self.viewport().width() or self.width()
+        vertical = self.verticalHeader()
+        if not vertical.isHidden():
+            width -= vertical.width()
+        return width - 2 * self.frameWidth()
+
+    @no_reentry
+    def sync_shed_columns(self) -> bool:
+        """Hide or restore columns to suit the width. Returns whether it changed."""
+        if not self._shed_order:
+            return False
+        wanted = columns_to_shed(
+            self._shed_available_width(),
+            self.natural_column_widths(),
+            self._shed_order,
+            current=self._shed,
+            hysteresis=SHED_HYSTERESIS,
+        )
+        if wanted == self._shed:
+            return False
+        self._shed = wanted
+        hidden = set(wanted)
+        for column in self._shed_order:
+            if 0 <= column < self.columnCount():
+                self.setColumnHidden(column, column in hidden)
+        self.updateGeometry()
+        self.shedChanged.emit()
+        return True
+
+    def shed_columns(self) -> tuple[int, ...]:
+        """Which columns are hidden for want of room right now."""
+        return self._shed
+
+    # -- filling the height ---------------------------------------------------
+
+    def row_heights(self) -> list[int]:
+        """Each row's height *before* the block's spare height is shared out.
+
+        The natural heights are recorded the moment before a stretch is first
+        applied, at which point every row is still at one — and dropped again by
+        :meth:`setRowCount`, which is the only way rows come and go. Until then the
+        live heights are the natural ones and are read directly, so a table that
+        never gets more room than it wants keeps no state at all.
+        """
+        if len(self._row_natural) == self.rowCount():
+            return list(self._row_natural)
+        return [self.rowHeight(row) for row in range(self.rowCount())]
+
+    def is_rule_row(self, row: int) -> bool:
+        """Whether *row* is chrome drawn across the table rather than a row of data.
+
+        Chrome is spanned across every column — the only way a table has of drawing
+        across itself — which is exactly what tells it apart from a row of data, and
+        is why this needs no register of which rows are which. It catches both of
+        the things that are drawn that way: the rule between the bought traits and
+        the derived ones, and the header a skill's focus buttons sit on.
+        """
+        return self.columnCount() > 1 and self.columnSpan(row, 0) >= self.columnCount()
+
+    def setCellWidget(self, row: int, column: int, widget: QWidget) -> None:  # noqa: N802
+        """Put *widget* in a cell at its own height, centred, however tall the row is.
+
+        A cell widget is given the cell's whole rectangle, which was invisible while
+        every row was exactly as tall as its content and is not once the block shares
+        its spare height out: a stretched Abilities row turned every rank spin box
+        into an 85px pill. Text in a cell is centred in its row; a widget in one
+        should read the same way, so it is held between two stretches.
+
+        Paired with :meth:`cellWidget`, which hands the widget itself back, so no
+        caller has to know the holder is there.
+        """
+        super().setCellWidget(row, column, _CentredCell(widget) if widget is not None else widget)
+
+    def cellWidget(self, row: int, column: int) -> QWidget | None:  # noqa: N802
+        """The widget put in this cell — not the holder :meth:`setCellWidget` wrapped it in."""
+        held = super().cellWidget(row, column)
+        return held.held() if isinstance(held, _CentredCell) else held
+
+    def sync_row_stretch(self) -> None:
+        """Share this table's spare height out evenly over its rows.
+
+        Even, rather than in proportion to what each row already is: the spare
+        height is *line spacing*, and a wrapped two-line row wants the same extra
+        breathing room around it as a one-line row, not twice as much. Rules sit it
+        out (see :meth:`is_rule_row`).
+
+        Nothing here can feed back into the block's size. The stretched heights are
+        written with ``setRowHeight`` and read back by nothing: what this table
+        reports up is built from :meth:`row_heights`, which is the naturals.
+        """
+        rows = self.rowCount()
+        if rows == 0:
+            return
+        natural = self.row_heights()
+        target = list(natural)
+        stretchable = [row for row in range(rows) if not self.is_rule_row(row)]
+        surplus = self.viewport().height() - sum(natural)
+        if surplus > 0 and stretchable:
+            share, extra = divmod(surplus, len(stretchable))
+            for index, row in enumerate(stretchable):
+                target[row] += share + (1 if index < extra else 0)
+        if target == natural and not self._row_natural:
+            return  # nothing to give, and nothing given before: stay stateless
+        self._row_natural = natural
+        for row in range(rows):
+            if self.rowHeight(row) != target[row]:
+                self.setRowHeight(row, target[row])
+
+    def setRowCount(self, rows: int) -> None:  # noqa: N802 - Qt override
+        """Put the rows back to their natural heights before the set of them changes.
+
+        ``setRowCount`` keeps the rows it already has, stretched heights and all, so
+        recording the naturals afresh afterwards would record a *stretched* row as
+        natural — and the table would then grow by that much again on the next pass,
+        and again on the one after. Restoring first means the invariant holds
+        everywhere it is read: a row is at its natural height except between a
+        stretch and the next change to the rows.
+        """
+        for row, height in enumerate(self._row_natural[: self.rowCount()]):
+            if self.rowHeight(row) != height:
+                self.setRowHeight(row, height)
+        self._row_natural = []
+        super().setRowCount(rows)
 
     def remeasure_wrapped_rows(self) -> None:
         """Re-fit every row to its wrapped text (a no-op unless *word_wrap*).
@@ -161,12 +430,20 @@ class AutoHeightTable(QTableWidget):
 
         if not self._word_wrap:
             return
+        # ``resizeRowToContents`` writes the *natural* height, so whatever was
+        # recorded before this describes rows that no longer exist at those sizes.
+        self._row_natural = []
         for row in range(self.rowCount()):
             self.resizeRowToContents(row)
+        self.sync_row_stretch()
         self.updateGeometry()
 
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802 - Qt override
         super().resizeEvent(event)
+        # Before the wrap measurement below: shedding a column changes how much
+        # room the stretching one has, and therefore what wraps in it.
+        if event.oldSize().width() != event.size().width():
+            self.sync_shed_columns()
         # A wider/narrower table re-wraps its text, changing row heights, so
         # re-measure and let the block resize to the new content. Only on a *width*
         # change: wrapping depends on nothing else, and a panel of forty skill rows
@@ -176,6 +453,9 @@ class AutoHeightTable(QTableWidget):
         # measures.
         if event.oldSize().width() != event.size().width():
             self.remeasure_wrapped_rows()
+        # Last, and on a height change as much as a width one: this is the only
+        # thing here that a plain vertical resize has any work to do for.
+        self.sync_row_stretch()
         self.updateGeometry()
 
     # -- drag to reorder -----------------------------------------------------

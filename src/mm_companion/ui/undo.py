@@ -205,6 +205,18 @@ class UndoController(QObject):
         """Whether a state was undone and not yet branched away from."""
         return bool(self._redo)
 
+    @property
+    def undo_depth(self) -> int:
+        """How many steps back this history goes, counting one still coalescing.
+
+        What :class:`~mm_companion.ui.layout_undo.UndoRouter` interleaves against.
+        "Can you undo" cannot tell a *new* step from the one already on the stack,
+        so a router watching only that noticed the first edit of a session and
+        never another — and every character edit after a layout gesture was filed
+        behind it. A count moves whenever the history does.
+        """
+        return len(self._undo) + (1 if self.pending else 0)
+
     def undo(self) -> bool:
         """Step back one state. Returns whether there was one to step back to."""
         self.flush()

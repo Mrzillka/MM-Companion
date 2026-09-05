@@ -25,7 +25,6 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
-    QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -73,7 +72,13 @@ from mm_companion.ui.sections.stat_table import PinMenuState
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.svg_assets import hero_point_pixmap
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import make_spin_box, muted_style, tinted_style
+from mm_companion.ui.widgets import (
+    ReflowingForm,
+    discard_widget,
+    make_spin_box,
+    muted_style,
+    tinted_style,
+)
 
 HERO_POINT_PIPS = 5
 INITIATIVE_TIP = f"Agility (or an Alternate Initiative ability) plus advantages\n{ROLL_TOOLTIP}"
@@ -162,8 +167,7 @@ class HeroPointsWidget(QWidget):
             button = self._buttons.pop()
             self._lit.discard(len(self._buttons))
             self._row.removeWidget(button)
-            button.setParent(None)
-            button.deleteLater()
+            discard_widget(button)
 
     def value(self) -> int:
         return len(self._lit)
@@ -274,8 +278,7 @@ class SpeedWidget(QWidget):
         while layout.count():  # rebuilt wholesale — a speed list is a handful of rows
             widget = layout.takeAt(0).widget()
             if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
+                discard_widget(widget)
         for index, line in enumerate(self._lines):
             # The first line is the ground one, and the only mode with a run column —
             # see :func:`~mm_companion.core.rules.speed_columns`.
@@ -375,8 +378,7 @@ class MovementModesWidget(QWidget):
         while layout.count():  # rebuilt wholesale — a mode list is a handful of rows
             widget = layout.takeAt(0).widget()
             if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
+                discard_widget(widget)
         for line in lines:
             # Read like a SpeedLine — move / dash, no run column — since a specialised
             # mode is a way of moving too, and one row saying "30 ft/round" beside
@@ -432,8 +434,7 @@ class PowerLevelCapsWidget(QWidget):
         while layout.count():  # a handful of rows; rebuilt wholesale like the mode list
             widget = layout.takeAt(0).widget()
             if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
+                discard_widget(widget)
         self._lines = []
         for cap in caps:
             name = f"{cap.short} ({cap.detail})" if cap.detail else cap.short
@@ -557,7 +558,7 @@ class SystemInfoSection(QGroupBox):
         # :meth:`set_budget_fixed`).
         self._budget_fixed = False
 
-        form = self._form = QFormLayout(self)
+        form = self._form = ReflowingForm(self)
         form.addRow("Power Level:", self._build_power_level())
         form.addRow("Power Points:", self._build_power_points())
         form.addRow(self._build_cost_notice())
@@ -1156,6 +1157,22 @@ class SystemInfoSection(QGroupBox):
         level = estimated_power_level(self._character, self._data)
         # No "PL" prefix: the row's own caption already says Estimated PL.
         self._estimated_pl.setText(str(level))
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        """Stack the captions above their fields once there is no room beside them.
+
+        A ``QFormLayout``'s caption column never shrinks — it is as wide as
+        "Movement modes:" whatever room the block has — so a narrow System block
+        spent most of itself on the words. Wrapping gives each field the whole
+        width for one line of height. See
+        :func:`~mm_companion.ui.widgets.wraps_form_rows` for the dead-band, which
+        is not optional: wrapping changes this block's height, which can toggle the
+        page's scrollbar, which changes the width back.
+        """
+        super().resizeEvent(event)
+        margins = self._form.contentsMargins()
+        if self._form.sync_wrap(self.width() - margins.left() - margins.right()):
+            self.updateGeometry()
 
     def set_npc_mode(self, npc: bool) -> None:
         """Swap the point budget for an estimated Power Level, or back.

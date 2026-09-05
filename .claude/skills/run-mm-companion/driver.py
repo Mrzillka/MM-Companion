@@ -117,6 +117,14 @@ The **bank** job went badly.
 _KEEP: list = []
 
 
+def _app_of(widget):
+    """The running application, for a branch that needs to settle a layout early."""
+    from PySide6.QtWidgets import QApplication
+
+    del widget
+    return QApplication.instance()
+
+
 def build(target: str):
     """Construct and show the window for ``target``; return it."""
     from mm_companion.core.storage import ensure_workspace
@@ -306,6 +314,64 @@ def build(target: str):
         sheet.pin_block("resistances")
         if target == "sheet-pinned-bottom":
             sheet.canvas.set_pin_edge("bottom")
+        return win
+    elif target in ("grid-drop-beside", "grid-drop-merge"):
+        # The two marks a block drag puts up, which is the whole of how the
+        # placements are discoverable: over the side of a block, the half it would
+        # take is washed and a line sits on the seam; over the middle, the frame
+        # washes whole, meaning "these two become tabs". Dragging across one block
+        # shows both in turn.
+        from PySide6.QtCore import QPoint
+
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=False)
+        win.show()
+        _pump(_app_of(win))
+        sheet = win._sheet
+        canvas = sheet.canvas
+        # A block near the top of the page: the hit test refuses a drop on one
+        # that is scrolled out of the viewport, which is honest and also means a
+        # screenshot has to aim at something visible.
+        frame = canvas.block_frame("conditions")
+        rect = frame.rect()
+        where = (
+            QPoint(rect.width() // 2, rect.height() // 2)
+            if target == "grid-drop-merge"
+            else QPoint(rect.width() // 12, rect.height() // 2)
+        )
+        # As a real drag would have: the block being moved, then the hit test.
+        canvas._drag_key = "skills"
+        canvas._drag_active = True
+        canvas._show_indicator(canvas._hit_test(frame.mapToGlobal(where)))
+        return win
+    elif target == "grid-close":
+        # A block dragged past `grid.close-extent`: washed in the reject colour,
+        # because letting go here closes it. Ctrl+Z brings it back.
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=False)
+        win.show()
+        _pump(_app_of(win))
+        canvas = win._sheet.canvas
+        row = next(w for w in canvas._row_widgets if hasattr(w, "update_collapse_marks"))
+        sizes = row.sizes()
+        spare = sum(sizes) - 20
+        row.setSizes([20] + [spare // (len(sizes) - 1)] * (len(sizes) - 1))
+        _pump(_app_of(win))
+        row.update_collapse_marks(1)  # the hand is on the first divider
+        return win
+    elif target == "tab-group":
+        # A tab group and its handle: the strip past the last tab, which is what
+        # the whole cell is dragged by and what its own menu hangs off.
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=False)
+        win.show()
+        _pump(_app_of(win))
+        canvas = win._sheet.canvas
+        canvas.merge_blocks("complications", "conditions")
+        _pump(_app_of(win))
         return win
     elif target == "focus":
         # Put keyboard focus on an ability spin box, so the focus ring — the only
@@ -1271,6 +1337,10 @@ def main(argv: list[str] | None = None) -> int:
             "equipment-platforms",
             "sheet-pinned",
             "sheet-pinned-bottom",
+            "grid-drop-beside",
+            "grid-drop-merge",
+            "grid-close",
+            "tab-group",
             "constructor",
             "constructor-extended",
             "constructor-bands",

@@ -49,6 +49,8 @@ from mm_companion.ui.power_constructor.common import (
     CellContext,
     _mime_id,
     _move_item,
+    config_field_options,
+    config_field_shown,
     config_source_options,
     fill_trait_combo,
     is_trait_allocation,
@@ -58,7 +60,7 @@ from mm_companion.ui.power_constructor.common import (
 from mm_companion.ui.power_constructor.modifier_chip import ModifierChip, ModifierGroup
 from mm_companion.ui.power_constructor.sub_build import SubBuildPanel
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import make_spin_box
+from mm_companion.ui.widgets import discard_widget, make_spin_box
 
 
 def _fraction_text(value: Fraction) -> str:
@@ -144,6 +146,8 @@ class EffectCard(QFrame):
         attack_skill_row = self._build_attack_skill_row()
         if attack_skill_row is not None:
             layout.addWidget(attack_skill_row)
+            # Only once it has a parent — see :meth:`_build_attack_skill_row`.
+            self._refresh_attack_skill_visibility()
 
         # The config form is rebuilt on demand: attaching Extra Condition upgrades
         # Affliction's degree pickers from single-select to multiselect.
@@ -254,33 +258,45 @@ class EffectCard(QFrame):
 
     # -- attack-skill link ------------------------------------------------
     def _build_attack_skill_row(self) -> QWidget | None:
-        """A "Use attack skill" checkbox plus focus picker, or ``None`` when the
-        wielder has no Close/Ranged Combat focuses to link to.
+        """A "Use attack skill" checkbox plus focus picker for an attacking effect.
 
         The row is only *shown* for an effect that resolves with an attack roll; a
         Perception-Range flaw (or a base effect that never rolls to hit) hides it via
         :meth:`_refresh_attack_skill_visibility`, since there's no attack to reskill.
+
+        A wielder with **no** Close/Ranged Combat focus gets the row anyway, disabled,
+        saying what to buy. It used to be absent entirely, which made the option look
+        like something only certain attacks have rather than something this character
+        has not bought yet — and left the player with nowhere to read why. There is
+        nothing to link to, so the control cannot be live; what it can do is name the
+        one thing that would make it live.
         """
         self._attack_skill_row = None
-        if not self._focus_options:
-            self._attack_skill_check = None
-            self._attack_skill = None
-            return None
-
         self._attack_skill_check = QCheckBox("Use attack skill")
-        self._attack_skill_check.setToolTip(
-            "Link this effect's attack to a Close/Ranged Combat focus — that focus's "
-            "total replaces the character's Attack for this effect's roll and PL cap."
-        )
         self._attack_skill = QComboBox()
         for display, row_id in self._focus_options:
             self._attack_skill.addItem(display, row_id)
         guard_wheel(self._attack_skill)
+        if self._focus_options:
+            self._attack_skill_check.setToolTip(
+                "Link this effect's attack to a Close/Ranged Combat focus — that focus's "
+                "total replaces the character's Attack for this effect's roll and PL cap."
+            )
+        else:
+            self._attack_skill_check.setEnabled(False)
+            self._attack_skill_check.setToolTip(
+                "This character has no Close or Ranged Combat focus to link to. Add one "
+                "in the Skills block (Close Combat or Ranged Combat, focused on this "
+                "attack) and it will be offered here."
+            )
 
         # Seed from the instance: a stored link ticks the box and selects its focus.
         linked = bool(self.instance.attack_skill)
         self._attack_skill_check.setChecked(linked)
-        self._attack_skill.setVisible(linked)
+        # Hidden, never shown, until it is in a layout: a parentless visible widget is a
+        # top-level window (see CLAUDE.md, tests/test_window_flash.py). Both this and the
+        # host below are put right once they have a parent.
+        self._attack_skill.hide()
         if linked:
             index = self._attack_skill.findData(self.instance.attack_skill)
             self._attack_skill.setCurrentIndex(index if index >= 0 else 0)
@@ -294,8 +310,9 @@ class EffectCard(QFrame):
         row.setSpacing(6)
         row.addWidget(self._attack_skill_check)
         row.addWidget(self._attack_skill, 1)
+        self._attack_skill.setVisible(linked)  # parented now, so this is safe
         self._attack_skill_row = host
-        host.setVisible(effect_makes_attack(self.instance, self._data))
+        host.hide()
         return host
 
     def _refresh_attack_skill_visibility(self) -> None:
@@ -368,7 +385,7 @@ class EffectCard(QFrame):
         if effect is None:
             return False
         return any(
-            f.hidden_with == modifier_id or f.multiselect_with == modifier_id
+            modifier_id in (f.hidden_with, f.multiselect_with, f.shown_with, f.widen_with)
             for f in effect.config_fields
         )
 
@@ -407,8 +424,7 @@ class EffectCard(QFrame):
         while self._config_layout.count():  # clear any previous form
             widget = self._config_layout.takeAt(0).widget()
             if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
+                discard_widget(widget)
         self._alloc_updaters = []  # rebuilt below alongside the fresh widgets
         self._gated_rows = []
         self._config_seeders = {}
@@ -421,6 +437,14 @@ class EffectCard(QFrame):
         form = QFormLayout(form_host)
         form.setContentsMargins(0, 0, 0, 0)
         for field in effect.config_fields:
+            if not config_field_shown(field, self.instance):
+                # The field's ``shown_with`` extra is not attached, so this choice has
+                # nothing to be about yet (Affliction's second resistance without
+                # Alternate Resistance). Not a note in its place, unlike the gates
+                # below: those take away a choice the effect still has, while this one
+                # does not exist until the modifier is bought.
+                self.instance.config.pop(field.key, None)
+                continue
             if field.key in disabled_keys:
                 # A flaw's config (Affliction's Limited Degree) turned this tier off:
                 # drop any stored choice and show a note instead of the picker.
@@ -550,21 +574,43 @@ class EffectCard(QFrame):
         A field naming a ``source`` takes its options from the game data rather than
         listing them itself — Affliction's imposed effect is "whichever effects the
         rules allow", which is a query over ``effects.json`` that would go stale the
-        moment a mod added one. :func:`config_source_options` is the same call the
-        game-terms readout makes, so the picker and the readout cannot disagree about
-        what an id is called.
+        moment a mod added one. :func:`config_field_options` is what the
+        game-terms readout resolves labels through too, so the picker and the readout
+        cannot disagree about what an id is called — and it is where a ``widen_with``
+        extra decides whether the wider list is on offer yet.
         """
         combo = QComboBox()
         combo.addItem("—", "")  # the unset choice
-        for label, value in config_source_options(field, self._data):
+        for label, value in config_field_options(field, self.instance, self._data):
             combo.addItem(label, value)
-        index = combo.findData(self.instance.config.get(field.key, ""))
+        stored = self.instance.config.get(field.key, "")
+        if stored and combo.findData(stored) < 0:
+            # A value the field no longer *offers* but still holds — an Affliction
+            # resisted by Athletics whose Alternate Resistance has just been taken off.
+            # Showing "—" there would have the picker deny a choice the game-terms row
+            # beside it is still printing, so the value stays visible and says what it
+            # is waiting on. Nothing is dropped: only what is offered narrowed.
+            combo.addItem(self._unoffered_label(field, stored), stored)
+        index = combo.findData(stored)
         combo.setCurrentIndex(index if index >= 0 else 0)
         guard_wheel(combo)
         combo.currentIndexChanged.connect(
             lambda _i, c=combo, k=field.key: self._on_config_changed(k, c.currentData())
         )
         return combo
+
+    def _unoffered_label(self, field, value: str) -> str:
+        """How a stored-but-no-longer-offered option reads in its picker.
+
+        Its ordinary label (resolved through ``config_source_options``, which keeps the
+        widened list whatever is attached), plus the modifier that would make it legal
+        again when the field names one.
+        """
+
+        labels = {v: label for label, v in config_source_options(field, self._data)}
+        label = labels.get(value, value)
+        modifier = self._modifier(getattr(field, "widen_with", "") or "")
+        return f"{label} (needs {modifier.name})" if modifier is not None else label
 
     def _multiselect_widget(self, field) -> QWidget:
         """A wrapping row of check boxes — multiple same-category choices at once."""
@@ -575,11 +621,14 @@ class EffectCard(QFrame):
         flow = FlowLayout(container)
         chosen = self.instance.config.get(field.key, [])
         pairs: list[tuple[QCheckBox, str]] = []
-        for option in field.options:
-            box = QCheckBox(option.label)
-            box.setChecked(option.value in chosen)
+        # The same call the single-choice combo makes, so a field that names a
+        # ``source`` — or one an extra has widened — offers the same options whichever
+        # input type it is wearing.
+        for label, value in config_field_options(field, self.instance, self._data):
+            box = QCheckBox(label)
+            box.setChecked(value in chosen)
             flow.addWidget(box)
-            pairs.append((box, option.value))
+            pairs.append((box, value))
         for box, _ in pairs:
             box.toggled.connect(
                 lambda _c, k=field.key, ps=pairs: self._on_config_changed(
@@ -773,8 +822,7 @@ class EffectCard(QFrame):
             def do_remove(_checked: bool = False) -> None:
                 if entry in row_widgets:
                     row_widgets.remove(entry)
-                row.setParent(None)
-                row.deleteLater()
+                discard_widget(row)
                 commit()
 
             remove.clicked.connect(do_remove)

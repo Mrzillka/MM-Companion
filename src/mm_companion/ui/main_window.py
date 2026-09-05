@@ -21,6 +21,7 @@ from mm_companion.core.character import Character
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.compact import CompactController
 from mm_companion.ui.connection_indicator import install_connection_indicator
+from mm_companion.ui.layout_undo import LayoutHistory, UndoRouter
 from mm_companion.ui.undo import UndoController
 
 CHARACTER_FILTER = "Character files (*.json)"
@@ -55,6 +56,12 @@ class MainWindow(QMainWindow):
 
     #: What the window title is prefixed with.
     TITLE = "MM-Companion"
+
+    #: The settings key this window's geometry and block arrangement are remembered
+    #: under. A subclass whose sheet is arranged differently overrides it rather than
+    #: sharing — and overwriting — every character sheet's layout (see
+    #: :meth:`_restore_layout`).
+    LAYOUT_KEY = "layout"
 
     closed = Signal()
     saved = Signal()
@@ -122,6 +129,16 @@ class MainWindow(QMainWindow):
         if not self._gm_view:
             self._undo = UndoController(self._sheet, parent=self)
             self._undo.stateChanged.connect(self._on_undo_state)
+        # And the layout's own, which every window gets — a GM's read-only view of
+        # a player's sheet cannot be edited but its blocks can still be dragged,
+        # and a mis-drag there wants taking back just as much.
+        self._layout_history = LayoutHistory(self._sheet.canvas, parent=self)
+        self._router = UndoRouter(self._undo, self._layout_history, parent=self)
+        self._router.stateChanged.connect(self._on_undo_state)
+        # Only a *finished* gesture is a step: the canvas announces every
+        # intermediate state of a drag, and a divider pulled across the page would
+        # otherwise fill the history with fifty steps nobody wants.
+        self._sheet.canvas.gesture_finished.connect(self._router.note_layout_step)
         self._build_menu_bar(locked)
         # The sheet is a scrolling page in its own right (it owns its scroll area),
         # so the only thing this wrapper is for is having the compact page beside
@@ -257,16 +274,14 @@ class MainWindow(QMainWindow):
         menu bar and a shortcut is inactive while the widget owning it is hidden. An
         action may belong to several widgets; the window is always visible.
         """
-        if self._undo is None:
-            return
         self._undo_action = menu_bar.addAction(UNDO_GLYPH)
         self._undo_action.setShortcut(QKeySequence.StandardKey.Undo)
         self._undo_action.setToolTip("Undo (Ctrl+Z)")
-        self._undo_action.triggered.connect(self._undo.undo)
+        self._undo_action.triggered.connect(self._router.undo)
         self._redo_action = menu_bar.addAction(REDO_GLYPH)
         self._redo_action.setShortcuts([QKeySequence("Ctrl+Shift+Z"), QKeySequence("Ctrl+Y")])
         self._redo_action.setToolTip("Redo (Ctrl+Shift+Z)")
-        self._redo_action.triggered.connect(self._undo.redo)
+        self._redo_action.triggered.connect(self._router.redo)
         for action in (self._undo_action, self._redo_action):
             self.addAction(action)
         self._on_undo_state()
@@ -288,11 +303,11 @@ class MainWindow(QMainWindow):
         sheet before it has anywhere to be clean against. For that sheet
         ``_on_edited`` stays the only setter.
         """
+        if hasattr(self, "_undo_action"):
+            self._undo_action.setEnabled(self._router.can_undo)
+            self._redo_action.setEnabled(self._router.can_redo)
         if self._undo is None:
             return
-        if hasattr(self, "_undo_action"):
-            self._undo_action.setEnabled(self._undo.can_undo)
-            self._redo_action.setEnabled(self._undo.can_redo)
         if not self._undo.has_saved_baseline:
             return
         dirty = not self._undo.at_saved_state()
@@ -470,19 +485,32 @@ class MainWindow(QMainWindow):
 
     # -- layout persistence --------------------------------------------------
 
-    def _restore_layout(self) -> None:
+    def _restore_layout(self) -> bool:
         """Restore the remembered window geometry and block arrangement.
 
         The layout is a global UI preference stored in settings.json; a missing or
         incompatible entry simply leaves the default arrangement in place. The
         ``dock_state`` value is now the sheet's JSON arrangement (see
         ``CharacterSheet.save_layout``); the key name is kept for continuity.
+
+        Under :attr:`LAYOUT_KEY`, so a window kind with a different block set — or a
+        different idea of which blocks start open — keeps its own arrangement
+        instead of overwriting every sheet's. Returns whether a saved arrangement
+        actually applied, which is what lets a subclass seed its own defaults only
+        when there is nothing remembered to honour.
         """
-        layout = storage.load_settings().get("layout") or {}
-        geometry = layout.get("window_geometry")
-        if isinstance(geometry, str) and geometry:
+        layout = storage.sheet_layout(self.LAYOUT_KEY)
+        geometry = layout["window_geometry"]
+        if geometry:
             self.restoreGeometry(QByteArray.fromBase64(geometry.encode("ascii")))
-        self._sheet.restore_layout(layout.get("dock_state"))
+        restored = self._sheet.restore_layout(layout["dock_state"])
+        # Whatever the window opened with is where undo stops. Restoring a saved
+        # layout is not something the user just did, and Ctrl+Z on a fresh window
+        # taking the page back to the factory arrangement would be a nasty
+        # surprise. Reset Layout *is* recordable, since that one is a real
+        # gesture and the most worth taking back.
+        self._layout_history.rebase()
+        return restored
 
     def _persist_layout(self) -> None:
         """Save the window geometry and block arrangement as a global preference.
@@ -495,9 +523,7 @@ class MainWindow(QMainWindow):
         self._compact.remember_size()
         state = self._compact.saved_geometry() or self.saveGeometry()
         geometry = bytes(state.toBase64()).decode("ascii")
-        storage.update_settings(
-            layout={"window_geometry": geometry, "dock_state": self._sheet.save_layout()}
-        )
+        storage.set_sheet_layout(self.LAYOUT_KEY, geometry, self._sheet.save_layout())
 
     def _add_block_action(self, key: str) -> None:
         """Give block *key* its show/hide toggle, above the menu's own actions.

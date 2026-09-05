@@ -66,13 +66,13 @@ def test_reset_drops_a_preview() -> None:
 
 def test_a_previewed_block_override_reaches_the_block_sizes_and_reverts() -> None:
     """The bounds cache is keyed by theme id, which a draft shares with its origin."""
-    baseline = block_sizes.load_block_sizes()["abilities"].min_width
+    baseline = block_sizes.load_block_sizes()["abilities"].width
 
     theme.set_preview(draft_of("classic", blocks={"abilities": {"min_width": 999}}))
-    assert block_sizes.load_block_sizes()["abilities"].min_width == 999
+    assert block_sizes.load_block_sizes()["abilities"].width == 999
 
     theme.set_preview(None)
-    assert block_sizes.load_block_sizes()["abilities"].min_width == baseline
+    assert block_sizes.load_block_sizes()["abilities"].width == baseline
 
 
 def test_previewing_a_styled_draft_dresses_the_app_and_undresses_it_again(qapp) -> None:

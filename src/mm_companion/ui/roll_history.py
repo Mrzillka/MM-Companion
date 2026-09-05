@@ -47,7 +47,7 @@ from mm_companion.core.rules import (
 from mm_companion.core.session.model import KIND_MOD, KIND_NOTE, KIND_REQUEST, KIND_ROLL
 from mm_companion.ui import theme
 from mm_companion.ui.session_bridge import SessionBridge
-from mm_companion.ui.widgets import muted_style, tinted_style
+from mm_companion.ui.widgets import discard_widget, muted_style, tinted_style
 
 #: Marks a roll only the GM can see. Shown on the GM's own history; a player's
 #: copy never receives a hidden roll at all.
@@ -801,8 +801,7 @@ class RollHistoryPanel(QWidget):
         for card in self.cards():
             if card.seq == seq:
                 self._layout.removeWidget(card)
-                card.setParent(None)
-                card.deleteLater()
+                discard_widget(card)
                 break
         self._seen.discard(seq)
         if not self.cards():
@@ -811,8 +810,7 @@ class RollHistoryPanel(QWidget):
     def clear(self) -> None:
         for card in self.cards():
             self._layout.removeWidget(card)
-            card.setParent(None)
-            card.deleteLater()
+            discard_widget(card)
         self._seen.clear()
         self._held.clear()
         self._empty.setVisible(True)
@@ -843,8 +841,7 @@ class RollHistoryPanel(QWidget):
         cards = self.cards()
         for card in cards[MAX_CARDS:]:
             self._layout.removeWidget(card)
-            card.setParent(None)
-            card.deleteLater()
+            discard_widget(card)
 
 
 def escape_rich_text(text: str) -> str:

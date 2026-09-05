@@ -123,16 +123,17 @@ from mm_companion.ui.cards import (
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.platform_editor import PlatformEditorDialog, platform_kind_title
 from mm_companion.ui.power_constructor import PowerConstructorWindow
-from mm_companion.ui.power_constructor.terms_grid import build_terms_grid
+from mm_companion.ui.power_constructor.terms_grid import TermsGridBox, build_terms_grid
 from mm_companion.ui.sections.equipment_picker import EquipmentPickerDialog
 from mm_companion.ui.sections.stat_table import PinMenuState
 from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.widgets import (
     BOLD_STYLE,
+    discard_widget,
     hline_separator,
     make_spin_box,
     muted_style,
-    preserved_scroll,
+    rebuilding,
     tinted_style,
 )
 
@@ -674,7 +675,7 @@ class EquipmentSection(TitledSection):
     def _rebuild_list(self) -> None:
         # Wearing an item rebuilds every card, and the block is momentarily empty while
         # it does — see PowersSection._rebuild_list for what that costs the page.
-        with preserved_scroll(self):
+        with rebuilding(self):
             self._rebuild_cards()
 
     def _rebuild_cards(self) -> None:
@@ -861,9 +862,9 @@ class EquipmentSection(TitledSection):
         return host
 
     def _traits_widget(self, item: EquipmentItem) -> QWidget:
-        inner = QWidget()
-        inner.setLayout(self._traits_grid(platform_trait_rows(item, self._data)))
-        return inner
+        # A TermsGridBox rather than a bare host: it re-deals the pairs into one
+        # column when the card narrows, without remaking a single label.
+        return TermsGridBox(self._traits_grid(platform_trait_rows(item, self._data)))
 
     def _refresh_traits(self, item: EquipmentItem) -> None:
         """Redraw one platform's trait grid in place, after a throttle change."""
@@ -874,8 +875,7 @@ class EquipmentSection(TitledSection):
         while layout.count():
             taken = layout.takeAt(0).widget()
             if taken is not None:
-                taken.setParent(None)
-                taken.deleteLater()
+                discard_widget(taken)
         layout.addWidget(self._traits_widget(item))
 
     def _throttle_row(self, item: EquipmentItem) -> QWidget | None:

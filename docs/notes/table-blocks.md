@@ -5,7 +5,8 @@ Matters when touching Abilities, Resistances, Advantages or Skills.
 Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
 
 Those four blocks are the same thing seen four ways — an ordered list of rows in a
-`QTableWidget` that shows all of its content and never scrolls on its own — and each
+`QTableWidget` that shows all of its content and never scrolls on its own (its
+*block* may, once it has been dragged smaller than the table can reflow to) — and each
 used to answer the three questions a table block asks in its own way. One answer to
 each now lives in **`ui/sections/row_table.py`**, which is the layer *below*
 `stat_table.py` and knows nothing about stats. Build a new table block out of it
@@ -17,12 +18,99 @@ exactly these pieces.
   *Reported live*, which is the point: the old `fit_table_height` did it once with
   `setFixedHeight`, before the stylesheet had touched a row, and the two stat blocks
   carried a hardcoded height "plus a little slack" to cover for it. Two flags:
-  `word_wrap` keeps wrapped rows fitted to their text, and `fit_width` reports the
-  summed column widths too — right for a table that *is* the whole block (the stat
-  grids), wrong for one panel of a column flow, whose section caps its own minimum at
-  a single panel. Height uses `header.isHidden()`, never `isVisible()`: a table that
+  `word_wrap` keeps wrapped rows fitted to their text, and `fit_width` measures the
+  columns across too — right for a table that *is* the whole block (the stat grids),
+  wrong for one panel of a column flow, whose section caps its own minimum at a
+  single panel. Height uses `header.isHidden()`, never `isVisible()`: a table that
   has not been shown has no visible children, and that is exactly when its minimum
   is first asked for.
+- **The spare height goes into the rows, and what the table *reports* does not
+  move.** A page the user drags is the first thing that can hand a table more
+  height than its rows want, and a table given it simply drew bare viewport under
+  the last row — inside its own border, so dragging Abilities taller made the block
+  bigger and the table no different, which is the exact shape of "it doesn't
+  scale". `sync_row_stretch` shares the surplus out **evenly** over the rows
+  instead (spare height is line spacing, and a wrapped two-line row wants the same
+  breathing room as a one-line row, not twice as much), so a taller block reads as
+  wider line spacing and a shorter one tightens back to its natural rows before the
+  block starts scrolling. Abilities and Resistances share a row and therefore a
+  height, and the shorter of the two now spends the difference on its own spacing
+  rather than sitting half empty beside a full one.
+
+  Three things hold it together, and each was a bug on the way:
+  - **`row_heights` is the naturals, and everything reported is built from it.**
+    Were the hint to follow the stretched rows, taller rows would mean a taller
+    hint, which means a taller block, which means taller rows: the block walks down
+    the page on its own. The naturals are recorded the instant before the first
+    stretch — when every row still *is* at one — and `setRowCount` puts the rows
+    back before it drops them, because it keeps the rows it already has and
+    recording a stretched row as natural is the same runaway one step removed.
+  - **A row spanned across every column is chrome, not data**, and sits the stretch
+    out (`is_rule_row`). It catches both things drawn that way: the rule between
+    the bought traits and the derived ones, which would otherwise become a 40px
+    band of nothing, and the header a skill's focus buttons sit on. Spanning is the
+    only way a table has of drawing across itself, so it needs no register.
+  - **A widget in a cell keeps its own height** (`setCellWidget` holds it in a
+    `_CentredCell`, `cellWidget` hands it back). The view gives a cell widget the
+    cell's whole rectangle, which was invisible while every row was exactly as tall
+    as its content: a stretched Abilities row turned every rank spin box into an
+    85px pill. Text in a cell is centred in its row and a widget in one now reads
+    the same way.
+- **The stat tables have no frame of their own.** A table that *is* the whole block
+  is framed by its section already, and the 11px band of section between the two
+  was a border drawn inside a border: `build_stat_table` sets `NoFrame` and
+  Abilities and Resistances zero their layout margins, so the grid runs to the
+  block's own edge. It moved the shedding thresholds — 18px more width is most of a
+  column at that size — which is why `tests/test_adaptive_blocks.py` names the
+  width it narrows to rather than repeating a number.
+- **A `fit_width` table's two widths are different questions.** `sizeHint` is the
+  **whole** table — every column, header text included — and that is what Abilities
+  and Resistances open at, which is what `block_sizes.json` means when it says those
+  two state no recommendation. `minimumSizeHint` is the table with everything in
+  `set_shed_order` *gone*, and it must not move with what is currently hidden.
+  Shedding is how the table gets narrower, so a minimum that counted the columns it
+  is willing to drop is refusing the width it knows how to reach — and worse, it is
+  a **loop**. A block hands its section the viewport's width or the section's
+  minimum, whichever is larger, so while that minimum tracked the shown columns,
+  hiding one narrowed the block, which made the column fit again, which widened the
+  block, which hid it again. No dead-band can damp that: the swing is the column's
+  own width, not a scrollbar's. Each answer is a resize that lays out again inside
+  the one before it, so it ended as a **stack overflow** — the app vanishing, exit
+  code `0xC00000FD`, the moment the Resistances block was dragged past about 230px.
+- **A table narrows by shedding columns, worst first** (`set_shed_order`,
+  `sync_shed_columns` on resize). The decision itself is `reflow.parts_to_shed`,
+  which this module re-exports as `columns_to_shed` because the same question —
+  "which of these, in this order, do I drop to fit" — is asked about a card's
+  widgets too (`reflow.ShedBox`), and a second implementation would be a second
+  dead-band to get wrong.
+  The order names what the block is willing to give up. Column 1 goes first
+  everywhere: it repeats what the row already says (an ability's short code) or
+  restates a number the Total carries anyway (a resistance's base). **Then Rank**,
+  in all four blocks, and that is a real loss taken deliberately: a table squeezed
+  to two columns is a trait and its number, which is what a sheet is *read* for,
+  and the build is typed once at a width the player chooses while the sheet is read
+  at whatever width the page has left. The consequence is that the spin boxes are
+  not there to type into at that width — widen the block and they come straight
+  back. Abilities' Total column stops being an "and here is what changed" while
+  Rank is gone and prints the number outright (`apply_stat_effects(always=…)`,
+  driven by `AutoHeightTable.shedChanged`), or a narrow Abilities block would be a
+  column of blank cells. Past the order the name wraps, then elides, then the block
+  scrolls; nothing is ever lost. Two things the fix above had to get
+  right with it, and both were wrong:
+  - **The dead-band applies from the first column.** It used to stand down whenever
+    nothing was shed yet (`not current`), which is the state every table starts in —
+    so the one transition most worth damping was the one that never was.
+  - **A hidden column still has to report the width it would take**, or the table
+    can never work out that it fits again. Qt cannot answer it: `sectionSizeHint` is
+    zero for a hidden section and `sizeHintForColumn` measures the items without the
+    header's text, so a hidden column reported roughly a *third* of its real width
+    and was restored into a width that could not hold it. `natural_column_widths`
+    measures a column while it is showing and remembers the number; a hidden one
+    answers with that. Every column is measured before it can ever be shed, so the
+    memory is always primed.
+  - Both bands are measured against what the arrangement **in force** needs, which
+    is what makes them nest: another column goes a band *below* that number and one
+    comes back a band *above* it, so there is no width at which both are true.
   **`word_wrap` follows the *header*, not the table's own geometry**, coalesced to
   one `remeasure_wrapped_rows()` a turn on `sectionResized`. How tall a wrapped row
   is depends on the width of the column it wraps in, and that width settles *after*
@@ -51,20 +139,35 @@ exactly these pieces.
   rows. It holds no model: the block supplies `on_move(source, target, before)` and
   an `accepts` predicate. `move_within` is the pop/insert with the downward
   correction a drop position needs.
-- **`ColumnFlowPanels.minimumSizeHint` reports exactly one panel** — its floor *and*
-  its ceiling (`ui/sections/column_flow.py`). A ceiling because the side-by-side
-  tables would otherwise inflate the section's minimum to the full multi-column
-  width, pinning the page wide and forcing at least two columns. A **floor** because
-  it used to be `min(hint.width(), _min_col_width())`, and whenever the section's own
-  layout minimum was the smaller of the two the block asked for *less than a panel
-  needs*: the frame's `block_sizes.json` floor applied instead and the stretching name
-  column silently absorbed the shortfall, which is what cut a long skill name off. It
-  also made the answer depend on the **lock** (a locked section hides its picker and
-  asks for less), which is the standing rule in `tests/test_lock_geometry.py` that a
-  lock toggle may change a block's height but never its width. Asking for a whole
-  panel is only safe because `_min_col_width` is now *bounded* — see the next bullet;
-  while it tracked the widest label without a ceiling, a name a player typed would
-  have held the window open at whatever width printed it on one line.
+- **`ColumnFlowPanels` answers two different width questions, and answering them the
+  same way is what made a narrowed block clip instead of adapt** (`ui/sections/column_flow.py`).
+  `_min_col_width` is what a panel *reads well* at — the widest label present plus
+  every column — and it is the right **divisor** for "how many of these fit". It was
+  also being reported as `minimumSizeHint`, and there it is a refusal: a panel is not
+  stuck at that width, since its table sheds columns and its name column wraps. The
+  block hands its section the larger of the viewport and that minimum, so at every
+  size below a comfortable panel the section was handed a comfortable panel's width,
+  the table never got narrow enough to shed a single column, and whatever the viewport
+  could not show was simply cut off — which is exactly what a squeezed Skills or
+  Advantages block did.
+  `minimumSizeHint` reports **`_panel_floor_width`** instead: the narrowest one panel
+  knows how to *reach*. Skills answers with a name and a total, Advantages with both
+  columns at their own **header captions** (the same rule `_name_col_width` already
+  floors the name at, and the honest floor for a column of prose — `min_desc_width` is
+  a comfort number, and using one as a floor is the confusion this split ends). Both
+  are metrics and constants, because a floor may move with neither the **lock**
+  (`tests/test_lock_geometry.py`: a lock toggle may change a block's height, never its
+  width) nor with anything the adaptive decisions themselves change.
+  It is still a **ceiling**: the side-by-side tables would otherwise inflate the
+  minimum to the full multi-column width, pinning the page wide and forcing at least
+  two columns. Asking for a whole panel at all is only safe because `_min_col_width`
+  is *bounded* — see the next bullet; while it tracked the widest label without a
+  ceiling, a name a player typed would have held the window open at whatever width
+  printed it on one line.
+  `_init_flow_panels` also sets `SetNoConstraint` on the section's layout, for the
+  reason `ReflowBox.init_reflow` does: a layout otherwise *imposes* its
+  `totalMinimumSize` on the widget it manages, which beats any override and pinned the
+  block at whatever the picker row happened to need.
 - **`wrapping_column_width(metrics, texts, *, padding, cap, floor)`** — how wide a
   **first column that wraps** should be. A name column that must not clip has only
   two ways out, grow without limit or break the line, and the two blocks used to
@@ -124,8 +227,44 @@ Three things the blocks add on top:
   never part of the build, and a base a condition had rewritten would read as something
   the character *has*.
 
+- **Advantages** sheds its **Type** column and *only* its Type column. The
+  Description used to go next, and that was the wrong order of business for a column
+  of prose: prose has a way of getting narrower that a one-word category does not, so
+  it wraps and the row gets taller (`word_wrap`), and only past the point where even
+  that cannot help does the cell elide. Losing it outright skipped both. So the order
+  is **lose the Type, then break the lines, then crop**. The Advantage column is
+  `Fixed` at a width measured from the names, and in a panel narrower than the block
+  reads well at that was the whole panel — the stretching Description was left with
+  the remainder and broke one word to a line — so `_name_column_for` clamps it to the
+  panel, keeping the Description at least its own caption. That clamp is applied on
+  every resize (`_sync_name_columns`) past a **dead-band**, and the band is
+  load-bearing: every write there re-measures the wrapped rows, which changes the
+  block's height, which brings the block's scrollbar out or takes it away, which moves
+  the panel's width by the bar's extent and asks again — measured going round at
+  exactly twelve pixels a turn, forever.
 - **Advantages** dropped its ▲/▼ and "Remove" buttons for those gestures. Its picker
   keeps "Add"; removal is a thing done *to a row*, so it is on the row.
+- **A granted advantage is an advantage everywhere except the budget.** An advantage's
+  *mechanics* do not care which currency paid for it, so every resolver that reads an
+  advantage's data fields reads `all_advantage_selections` — the bought list plus
+  `granted_advantage_selections` — rather than `Character.advantages`, which holds only
+  what the player bought. Cost and the Heroic budget are the deliberate exception, since
+  the power already paid (`granted_advantages`). Initiative was the one place that had
+  not been converted: it walked the bought list, so **Enhanced Trait: Improved
+  Initiative** showed on this block, changed no number, and gave the player nothing to
+  tell them why. The skill side (`skill_bonus_per_rank`) had always been folded in, which
+  is exactly why the gap was invisible — those were the only two mechanics an advantage
+  record carries. The same conversion reaches the three subsystems that look an advantage
+  up **by name** rather than by a record field: Extra Effort's Determination, Untapped
+  Potential and Extraordinary Effort (`extra_effort._advantage_ranks`), and Improvised
+  Effect / Prepared Effect (`improvised.py`). **Equipment is deliberately left out** —
+  `equipment_advantage_rank` still reads the bought list alone, because a Sustained or
+  heavily-flawed power granting a *permanent point budget* is a cost loophole the others
+  do not have. `granted_advantages` is `build_scoped` for this: initiative asks the
+  bare two-argument question twice per readout (once for the ability, once for the
+  bonus), and without the memo each of those walked the whole build — inside a scope
+  where every other derived number costs nothing. Measured at 0.34 ms a call before the
+  memo and 0.008 ms after, against a 0.002 ms baseline.
 - **Skills** owns which rows are shown at all. `Character.skill_order` and
   `Character.hidden_skills` are the player's, resolved against `GameData.skills` by
   `_visible_skills()` with the same three-part rule `EquipmentSection._ordered_categories`
@@ -151,6 +290,19 @@ Three things the blocks add on top:
   `refresh_totals` — a row that does not exist cannot have its total refreshed — and that
   method rebuilds only when the granted *set* moved, falling through to `refresh_totals`
   otherwise, so the common signal does not cost the block its selection.
+
+  **A specialized row adds to its skill, and says so.** A narrow half-cost pool is
+  bought *on top of* the skill it narrows — Stealth 10 plus 3 ranks of
+  `Stealth::spec::Hiding` hides at 13 — and `_specialization_base_ranks` expresses
+  those parent ranks as an intrinsic `TraitContribution` on the pool's row rather
+  than as an addend inside `skill_total`. Two reasons, and the first is this block's:
+  the row's columns have to sum to its total, so ten ranks the row never shows would
+  read as a bug, while as a contribution they land in the "+" column tooltipped
+  *"+10 from Stealth ranks"*. The second is the resolver's: `GROUP_INTRINSIC` does
+  not compete, so bought ranks can neither supersede a power's boost nor be
+  superseded by a suit of armour's. Only the `spec::` marker qualifies — a focus of
+  a `focused` skill has no shared pool to add to — and the PL cap follows for free,
+  since it measures `skill_total`.
 
   "Add focus…" is a `getItem`, not a `getText`: a skill with an enumerable set of focuses
   offers them, editably, and one whose focuses cannot be listed shows its `focus_note` as

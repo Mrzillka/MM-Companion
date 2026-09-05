@@ -437,8 +437,12 @@ def test_a_focus_name_too_wide_for_its_column_wraps(qapp: QApplication) -> None:
     nothing to prove — which is how this passed with the wrapping switched off. The
     two focuses are the comparison: same table, same kind of row, so the only thing
     the taller one has is more lines.
+
+    Narrow enough that the shed order cannot rescue it either: a panel that has given
+    up its numeric columns hands the whole width to the stretching name, and 420 was
+    once tight and is now roomy.
     """
-    section = _with_long_focus(420)
+    section = _with_long_focus(300)
     table, row = _row_for(
         section, SkillRowKey("focus", "Expertise", LONG_FOCUS, f"Expertise::{LONG_FOCUS}")
     )
@@ -468,27 +472,33 @@ def test_the_name_column_is_capped_by_its_theme_metric(qapp: QApplication) -> No
     assert wide - narrow <= name_max_width()
 
 
-def test_the_block_asks_for_a_whole_panel_locked_or_not(qapp: QApplication) -> None:
-    """One panel is the floor as well as the ceiling.
+def test_the_block_asks_for_a_panel_floor_rather_than_a_comfortable_one(
+    qapp: QApplication,
+) -> None:
+    """Two different width questions, and one answer to both is what made a squeezed
+    block *clip*.
 
-    ``ColumnFlowPanels.minimumSizeHint`` used to report
-    ``min(layout_minimum, one_panel)``, so whenever the section's own layout minimum was
-    the smaller of the two the block asked for less than a panel needs — and the
-    stretching name column paid the difference. That also made the answer depend on the
-    lock, since a locked section hides controls and asks for less; see
-    ``tests/test_lock_geometry.py`` for the rule that says it must not.
+    ``_min_col_width`` is what a panel reads well at, and it is the right divisor for
+    "how many of these fit". Reported as the section's minimum it is a refusal — the
+    frame hands the section the larger of the viewport and that number, so the table
+    never got narrow enough to shed a column and what would not fit was simply cut
+    off. ``_panel_floor_width`` is the narrowest a panel knows how to *reach*, and it
+    may move with neither the data nor the **lock** (see ``tests/test_lock_geometry.py``
+    for the rule that a lock toggle may change a block's height but never its width).
     """
     data = load_game_data()
     char = Character.new_default(data)
     char.focuses["Expertise"] = ["Interstellar Xenobiology and Comparative Anatomy"]
     section = _shown(SkillsSection(data, char), 1100)
+    floor = section.minimumSizeHint().width()
 
-    assert section.minimumSizeHint().width() == section._min_col_width()
+    assert floor == section._panel_floor_width()
+    assert floor < section._min_col_width(), "the floor is a refusal, not a preference"
 
     section.set_locked(True)
     QApplication.processEvents()
 
-    assert section.minimumSizeHint().width() == section._min_col_width()
+    assert section.minimumSizeHint().width() == floor
 
 
 # -- the "+" column appears only when something modifies a row --------------------

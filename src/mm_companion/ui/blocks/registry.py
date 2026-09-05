@@ -21,7 +21,7 @@ from collections import defaultdict
 
 from mm_companion.core.data_loader import BlockSpec, GameData
 from mm_companion.core.registry import Registry
-from mm_companion.ui.block_sizes import UNBOUNDED, BlockSize, load_block_sizes
+from mm_companion.ui.block_sizes import RecommendedSize, load_block_sizes
 from mm_companion.ui.blocks.base import BlockDescriptor, instance_template
 from mm_companion.ui.blocks.bus import (
     ABILITY_CHANGED,
@@ -211,7 +211,14 @@ _BASE_BLOCKS = [
         1,
         0,
         {
-            "abilityChanged": (ABILITY_CHANGED, DERIVED_CHANGED),
+            # Only ABILITY_CHANGED, though a rank edit does move the derived readouts:
+            # the block emits ``abilityChanged`` and ``changed`` for the same edit (see
+            # AbilitiesSection._on_ability_changed), and ``changed`` already carries
+            # DERIVED_CHANGED. Naming it here too published the topic twice per spin
+            # step, so the System block re-derived twice — and since refresh_derived
+            # calls refresh_limits, which FACTS_CHANGED also calls, the Power Level
+            # caps were computed three times for one tick of an arrow key.
+            "abilityChanged": (ABILITY_CHANGED,),
             "changed": (BUILD_CHANGED, FACTS_CHANGED, DERIVED_CHANGED, EDITED),
         },
         {ENHANCEMENTS_CHANGED: "refresh_enhancements", COST_RATES_CHANGED: "refresh_cost"},
@@ -422,12 +429,46 @@ _BASE_BLOCKS = [
 # through a fight rather than scrolling away under the sheet.
 _PINNED_BY_DEFAULT = frozenset({"dice", "scene"})
 
+# Blocks that start *closed* on a GM's NPC sheet (see ``BlockDescriptor.npc_default``).
+# The four that hold no trait: the GM already rolls from the card and the GM
+# window's own roller, the Scene is the GM window's board rather than this
+# creature's, and Notes and Complications are a hero's prose. What is left is the
+# numbers a mook is written for, on one screen instead of three. Each is one
+# click away on the View menu, and the NPC layout remembers that click.
+_CLOSED_FOR_NPCS = frozenset({"dice", "scene", "notes", "complications"})
+
+
+def npc_hidden_keys() -> list[str]:
+    """Every registered block that starts closed on an NPC sheet.
+
+    Read off the descriptors rather than off the constant above, so a mod block
+    declaring ``npc_default=False`` is closed there too.
+    """
+
+    return [d.key for d in block_descriptors() if not d.npc_default]
+
+
 # How a block the sheet may build more than one of makes its extra instances
 # (see BlockDescriptor.instance_factory): the builder is handed the new block's
 # key and returns a factory closed over it. The View menu offers "New <title>
 # Block" for each block listed here, and an instance beyond the first takes a
 # `notes#2`-style key the registry never sees.
 _INSTANCE_FACTORIES = {"notes": _notes_factory}
+
+
+#: Subscriber methods that may be run once at the end of the turn rather than once
+#: per publish, by block key (see ``BlockDescriptor.coalesces``).
+#:
+#: Only the two card trees. Both rebuild themselves **wholesale** — every card
+#: destroyed and made again — and both answer to ``facts-changed``, which every spin
+#: box on the sheet raises on every step. A rank dragged from 0 to 10 raised ten of
+#: those rebuilds and showed the tenth; now it does one. Nothing else here is
+#: expensive enough to be worth the deferral, and a topic answered immediately is
+#: easier to reason about, so the list stays short on purpose.
+_COALESCED: dict[str, frozenset[str]] = {
+    "powers": frozenset({"refresh"}),
+    "equipment": frozenset({"refresh"}),
+}
 
 
 def register_base_blocks(*, replace: bool = False) -> None:
@@ -439,15 +480,20 @@ def register_base_blocks(*, replace: bool = False) -> None:
                 key,
                 title,
                 factory,
-                sizes.get(instance_template(key), BlockSize()),
+                sizes.get(instance_template(key), RecommendedSize()),
                 row,
                 col,
                 key in _PINNED_BY_DEFAULT,
-                publishes,
-                subscribes,
-                requests,
-                serves,
-                _INSTANCE_FACTORIES.get(key),
+                # Named from here on: the four bus tables and the instance factory are
+                # interchangeable in shape, so a field added between them would
+                # silently shift every later one along by one.
+                publishes=publishes,
+                subscribes=subscribes,
+                coalesces=_COALESCED.get(key, frozenset()),
+                requests=requests,
+                serves=serves,
+                instance_factory=_INSTANCE_FACTORIES.get(key),
+                npc_default=key not in _CLOSED_FOR_NPCS,
             ),
             replace=replace,
         )
@@ -469,13 +515,16 @@ def _declarative_factory(spec: BlockSpec):
     return factory
 
 
-def _block_size(spec: BlockSpec) -> BlockSize:
-    return BlockSize(
-        min_width=spec.min_width or 0,
-        min_height=spec.min_height or 0,
-        max_width=spec.max_width or UNBOUNDED,
-        max_height=spec.max_height or UNBOUNDED,
-    )
+def _block_size(spec: BlockSpec) -> RecommendedSize:
+    """A declarative block's recommended size.
+
+    ``BlockSpec`` still carries the old ``min_*``/``max_*`` field names, because a
+    data-only mod's ``blocks.json`` is somebody else's file and the mods repository
+    pins an engine version. The minima are read as the recommendation they always
+    effectively were; the maxima no longer mean anything, since the user sizes
+    every block now, and are ignored rather than removed from the spec.
+    """
+    return RecommendedSize(width=spec.min_width or 0, height=spec.min_height or 0)
 
 
 def sync_declarative_blocks(data: GameData) -> None:

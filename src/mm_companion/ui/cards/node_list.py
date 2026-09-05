@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QFrame, QVBoxLayout, QWidget
 from mm_companion.ui import theme
 from mm_companion.ui.cards.drag import NODE_MIME
 from mm_companion.ui.drop_feedback import DropFeedback
+from mm_companion.ui.widgets import discard_widget
 
 
 class GroupHeader(QWidget):
@@ -131,8 +132,7 @@ class NodeList(QWidget):
             widget = self._layout.itemAt(index).widget()
             if widget is not None and widget is not self._indicator:
                 self._layout.takeAt(index)
-                widget.setParent(None)
-                widget.deleteLater()
+                discard_widget(widget)
         self._entries = []
         self._clear_hints()
 

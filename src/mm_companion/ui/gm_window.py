@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import re
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -94,7 +95,7 @@ from mm_companion.core.session.protocol import (
 )
 from mm_companion.ui import theme
 from mm_companion.ui.block_canvas import BlockCanvas
-from mm_companion.ui.block_sizes import BlockSize, load_block_sizes
+from mm_companion.ui.block_sizes import RecommendedSize, load_block_sizes
 from mm_companion.ui.blocks.gm_registry import (
     GMBlockDescriptor,
     gm_block_descriptors,
@@ -106,6 +107,7 @@ from mm_companion.ui.card_drop import CardDropFlow
 from mm_companion.ui.compact import CompactController
 from mm_companion.ui.connection_indicator import install_connection_indicator
 from mm_companion.ui.dice_roller import DiceRollerView
+from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.npc_card import NPCCard
 from mm_companion.ui.npc_quick_dialog import QuickNPCDialog
 from mm_companion.ui.npc_window import NPCWindow
@@ -120,7 +122,12 @@ from mm_companion.ui.session_bridge import SessionBridge, last_session, set_acti
 from mm_companion.ui.session_dialogs import HostOptions
 from mm_companion.ui.session_portrait import encode_scene_portrait, shrink_portrait
 from mm_companion.ui.undo import absorbing
-from mm_companion.ui.widgets import ConfirmButton
+from mm_companion.ui.widgets import (
+    ConfirmButton,
+    discard_widget,
+    enclosing_scroll_areas,
+    resurface,
+)
 
 #: What the listening socket binds to. Every interface, so a player on the LAN
 #: reaches it whichever adapter they come in on; a test overrides it to loopback.
@@ -344,6 +351,12 @@ class GMWindow(QMainWindow):
         # knows which ones are new — and it is keyed by the encoded payload rather
         # than by a flag so a player changing their portrait mid-session is caught.
         self._scene_portraits: dict[str, str] = {}
+        # Each entry's *encoded* picture and the input it was made from, by ref — so
+        # an unchanged picture is never re-encoded. See :meth:`_scene_portrait_for`.
+        self._portrait_encodings: dict[str, tuple[str, str]] = {}
+        # Everything the last push said, so a push that would say the same thing again
+        # can do nothing at all. See :meth:`_push_scene` for what is in it and why.
+        self._pushed_scene: object = None
         # Whether joining puts a player on the board by itself. Read once here
         # through its accessor; the Settings page's change reaches an open window
         # on the next roster.
@@ -385,7 +398,7 @@ class GMWindow(QMainWindow):
         # under the last one; let the bottom block (the NPC cards) stretch to fill
         # the page instead.
         self._canvas = BlockCanvas(
-            panels, sizes, default_rows, fill_last=True, default_pinned=gm_default_pin_lines()
+            panels, sizes, default_rows, default_pinned=gm_default_pin_lines()
         )
 
         self._scroll = QScrollArea()
@@ -443,7 +456,13 @@ class GMWindow(QMainWindow):
             self.start_hosting(self._host_options)
 
     def _update_min_width(self) -> None:
-        """Pin the page's min width to the widest docked row (blocks never squash)."""
+        """Hold the board open by a scrollbar's width and very little else.
+
+        This used to track the widest docked row, which is what made the GM window
+        refuse to be narrower than the blocks in it. Its blocks reflow and then
+        scroll inside themselves like every other, so there is no width the board
+        has to refuse — see :meth:`BlockCanvas.content_minimum_width`.
+        """
         bar = self._scroll.verticalScrollBar()
         extra = bar.sizeHint().width() if bar is not None else 0
         self._scroll.setMinimumWidth(self._canvas.content_minimum_width() + extra + 2)
@@ -501,12 +520,12 @@ class GMWindow(QMainWindow):
 
     def _restore_layout(self) -> None:
         """Restore the remembered geometry and block arrangement (its own settings key)."""
-        layout = storage.load_settings().get("gm_layout") or {}
-        geometry = layout.get("window_geometry") if isinstance(layout, dict) else None
-        if isinstance(geometry, str) and geometry:
+        layout = storage.sheet_layout("gm_layout")
+        geometry = layout["window_geometry"]
+        if geometry:
             self.restoreGeometry(QByteArray.fromBase64(geometry.encode("ascii")))
-        state = layout.get("dock_state") if isinstance(layout, dict) else None
-        if isinstance(state, str) and state:
+        state = layout["dock_state"]
+        if state:
             try:
                 self._canvas.apply_arrangement(json.loads(state))
             except (ValueError, TypeError):
@@ -523,12 +542,7 @@ class GMWindow(QMainWindow):
         state = self._compact.saved_geometry() or self.saveGeometry()
         geometry = bytes(state.toBase64()).decode("ascii")
         try:
-            storage.update_settings(
-                gm_layout={
-                    "window_geometry": geometry,
-                    "dock_state": json.dumps(self._canvas.arrangement()),
-                }
-            )
+            storage.set_sheet_layout("gm_layout", geometry, json.dumps(self._canvas.arrangement()))
         except OSError:
             pass
 
@@ -569,7 +583,11 @@ class GMWindow(QMainWindow):
         box = QGroupBox("Scene")
         layout = QVBoxLayout(box)
 
-        buttons = QHBoxLayout()
+        # A wrapping row, for the reason Equipment's three "Add…" buttons wrap:
+        # side by side they are wider than the block ever needs to be, and a row
+        # that cannot wrap is a width the block can never be dragged under.
+        button_row = FlowContainer()
+        buttons = FlowLayout(button_row, spacing=int(theme.metric("space.sm")))
         roll = QPushButton("Roll initiative")
         roll.setToolTip(
             "Roll for every NPC on the Scene, and ask each player for theirs in the "
@@ -584,8 +602,7 @@ class GMWindow(QMainWindow):
         self._new_scene_button.setToolTip("Clear the board and every initiative on it.")
         self._new_scene_button.confirmed.connect(self._new_scene)
         buttons.addWidget(self._new_scene_button)
-        buttons.addStretch()
-        layout.addLayout(buttons)
+        layout.addWidget(button_row)
 
         self._scene_board = SceneBoard(self._data, gm=True)
         self._scene_board.set_placeholder(NO_SCENE_GM)
@@ -615,6 +632,9 @@ class GMWindow(QMainWindow):
         # which is the one thing `DropFeedback` exists to stop a target doing.
         self._cards_container = CardDropFlow("gmPlayerFlow", accepts=_is_player_ref)
         self._cards_flow = self._cards_container.flow
+        # A flow re-wraps on its own; the shared card width has to be re-measured,
+        # since what it may be depends on the room the block has (_sync_card_widths).
+        self._cards_container.widthChanged.connect(self._sync_card_widths)
         layout.addWidget(self._cards_container)
         layout.addStretch()
         return box
@@ -631,7 +651,8 @@ class GMWindow(QMainWindow):
         box = QGroupBox("NPCs")
         layout = QVBoxLayout(box)
 
-        buttons = QHBoxLayout()
+        button_row = FlowContainer()
+        buttons = FlowLayout(button_row, spacing=int(theme.metric("space.sm")))
         quick = QPushButton("Quick NPC…")
         quick.setToolTip("A mook from five numbers — name, attack, effect, defence, toughness.")
         quick.clicked.connect(self._quick_npc)
@@ -642,14 +663,13 @@ class GMWindow(QMainWindow):
         add = QPushButton("Add existing…")
         add.clicked.connect(self._add_existing_npc)
         buttons.addWidget(add)
-        buttons.addStretch()
         # One button rather than two, and its caption is the action it will take —
         # which makes it a readout of the board as well as a control. Shrinking a
         # dozen mooks one caret at a time is the case the collapse exists for.
         self._collapse_all_button = QPushButton(COLLAPSE_ALL)
         self._collapse_all_button.clicked.connect(self._toggle_collapse_all)
         buttons.addWidget(self._collapse_all_button)
-        layout.addLayout(buttons)
+        layout.addWidget(button_row)
 
         self._no_npcs = _wrapped(NO_NPCS)
         self._no_npcs.setEnabled(False)
@@ -664,6 +684,7 @@ class GMWindow(QMainWindow):
         self._npc_container = CardDropFlow("gmNpcFlow", accepts=_is_npc_ref)
         self._npc_flow = self._npc_container.flow
         self._npc_container.dropped.connect(self._drop_on_npcs)
+        self._npc_container.widthChanged.connect(self._sync_card_widths)
         layout.addWidget(self._npc_container)
         layout.addStretch()
         return box
@@ -1380,8 +1401,7 @@ class GMWindow(QMainWindow):
             if item is not None and item.widget() is card:
                 self._cards_flow.takeAt(index)
                 break
-        card.setParent(None)
-        card.deleteLater()
+        discard_widget(card)
         self._forget_pins(_player_key(player_id))
 
     def _clear_cards(self) -> None:
@@ -1482,9 +1502,7 @@ class GMWindow(QMainWindow):
         """
         existing = self._pin_pickers.get(card_key)
         if existing is not None:
-            existing.show()
-            existing.raise_()
-            existing.activateWindow()
+            resurface(existing)
             return
         picker = PinPickerDialog(character, self._data, card.pins.pins, self, title=title)
         picker.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
@@ -1833,15 +1851,44 @@ class GMWindow(QMainWindow):
         Called from every mutation *and* from everywhere a creature's visible state
         can change under it — a condition, a damage step, a snapshot — since those
         are the changes a player is watching the board for.
+
+        **A push that would say nothing does nothing**, and that guard is what makes
+        it affordable to call from all of those places. One player editing a stat
+        arrived here twice — once from their snapshot and once from the roster
+        broadcast the same snapshot triggered — and each time redrew the GM's whole
+        board and sent the whole scene to every client, whose own board redrew in
+        turn. None of that is wrong; almost all of it is about a number the board
+        never showed.
+
+        The signature is everything the guarded half reads: the payload, the GM's own
+        arrangement, and whether there is a table to send to — so a scene built
+        *before* hosting starts is still broadcast when it does. What the cards are
+        told, and what pictures are sent, is settled outside it.
         """
         entries = self._scene_payload()
-        self._scene_board.set_manual_order([e.ref for e in self._scene])
-        self._scene_board.set_scene(entries)
+        order = [e.ref for e in self._scene]
+        signature = (entries, order, self._bridge.in_session)
+        if signature != self._pushed_scene:
+            self._pushed_scene = deepcopy(signature)
+            self._scene_board.set_manual_order(order)
+            self._scene_board.set_scene(entries)
+            if self._bridge.in_session:
+                self._bridge.set_scene(entries, {e.ref: e.wire_source() for e in self._scene})
+            self._warn_if_scene_is_truncated(entries)
+        # Both of these live outside the guard, because neither is about the payload.
+        #
+        # A card is told where it stands every time, because the *cards* can be new
+        # when the scene is not: ``_refresh_npcs`` destroys and rebuilds every NPC
+        # card, a fresh one starts off the board, and a roster brings new player
+        # cards whose 👁 has never been shown or hidden. Behind the guard, a cast
+        # reloaded mid-fight came back with every card claiming its creature was not
+        # in the scene. It is a loop over the cards setting two flags, so it is not
+        # what a push costs.
         self._refresh_scene_state()
-        if self._bridge.in_session:
-            self._bridge.set_scene(entries, {e.ref: e.wire_source() for e in self._scene})
+        # A picture travels on its own message and appears in no payload, so a player
+        # who changed only their portrait moves nothing above. This carries its own
+        # change check.
         self._push_scene_portraits()
-        self._warn_if_scene_is_truncated(entries)
 
     def _push_scene_portraits(self) -> None:
         """Send a thumbnail for anything on the board that has not had one sent.
@@ -1853,6 +1900,8 @@ class GMWindow(QMainWindow):
         live = {entry.ref for entry in self._scene}
         for ref in [r for r in self._scene_portraits if r not in live]:
             del self._scene_portraits[ref]
+        for ref in [r for r in self._portrait_encodings if r not in live]:
+            del self._portrait_encodings[ref]
         for entry in self._scene:
             portrait = self._scene_portrait_for(entry)
             if self._scene_portraits.get(entry.ref) == portrait:
@@ -1870,11 +1919,31 @@ class GMWindow(QMainWindow):
         on: an NPC's picture is a file this app can read, and a player's has already
         been shrunk once for their *sheet* portrait — still big enough that a
         board's worth would be stored per session and replayed to every joiner.
+
+        Encoded at most once per picture. Both roads through here are expensive — a
+        file read or a base64 decode, then a scale and a JPEG re-encode — and this
+        runs for **every** entry on **every** push. ``_scene_portraits`` below only
+        suppresses the *send*, so before this cache a board of a dozen creatures was
+        re-encoded a dozen pictures' worth every time a player touched a spin box.
+        Keyed by the ref and holding the input it was made from, like
+        :meth:`~mm_companion.ui.session_player.SnapshotPusher._portrait_payload`: a
+        player who changes their picture mid-session still gets a new one.
         """
         if entry.kind == SCENE_NPC:
             npc = self._npc_state.get(entry.source)
-            return "" if npc is None else encode_scene_portrait(npc.summary.image_path)
-        return shrink_portrait((self._snapshots.get(entry.source) or {}).get("portrait"))
+            source = "" if npc is None else (npc.summary.image_path or "")
+            encode = encode_scene_portrait
+        else:
+            source = (self._snapshots.get(entry.source) or {}).get("portrait") or ""
+            encode = shrink_portrait
+        cached = self._portrait_encodings.get(entry.ref)
+        if cached is not None and cached[0] == source:
+            return cached[1]
+        # Both encoders answer "" for a falsy input, so the short-circuit changes
+        # nothing but the work not done.
+        encoded = encode(source) if source else ""
+        self._portrait_encodings[entry.ref] = (source, encoded)
+        return encoded
 
     def _refresh_scene_state(self) -> None:
         """Tell every roster card whether its creature is on the board.
@@ -2055,8 +2124,7 @@ class GMWindow(QMainWindow):
             item = self._npc_flow.takeAt(0)
             widget = item.widget() if item is not None else None
             if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
+                discard_widget(widget)
 
         summaries = self._npc_summaries()
         previous = self._npc_state
@@ -2260,9 +2328,7 @@ class GMWindow(QMainWindow):
         path = entry.path
         existing = self._window_for(path)
         if existing is not None:
-            existing.show()
-            existing.raise_()
-            existing.activateWindow()
+            resurface(existing)
             return
         window = NPCWindow(character=library.load_character(path), path=path, pin_target=True)
         if entry.card is not None:
@@ -2345,7 +2411,8 @@ class GMWindow(QMainWindow):
         self._refresh_collapse_all()
 
     def _sync_card_widths(self) -> None:
-        """Give every card in a block the widest width any card in it asked for.
+        """Give every card in a block one width: the widest any card asked for,
+        capped at what the block can actually give it.
 
         A card knows what *it* needs; only the block knows what its columns need.
         The wrapping :class:`~mm_companion.ui.flow_layout.FlowLayout` lays items
@@ -2353,6 +2420,15 @@ class GMWindow(QMainWindow):
         which is why the width used to be a flat 210 + 150 constant, and why a
         card that merely fitted its content would have made the grid ragged and
         re-flowed it every time a pin was added.
+
+        The **cap** is what a resizable board needs. A card's asked-for width used
+        to be the answer outright, so a block dragged narrower than one card simply
+        grew a scrollbar and the GM read their mooks through a letterbox. Now the
+        block's own width is a ceiling: the pinned strip gives up its slack first
+        (down to ``gm.pin-strip.min``, since a narrower strip elides its captions
+        and loses least), and then the body follows. Past what both can give, the
+        cards stay legible and the block scrolls — the same bargain every block on
+        the sheet makes.
 
         Measured per block rather than across both: the NPC grid and the player
         roster are two flows with no columns in common, and a board of pinless
@@ -2363,16 +2439,49 @@ class GMWindow(QMainWindow):
         the widest hint still includes a portrait — but with every card shed of its
         portrait at once, the shared width falls with them.
         """
-        for cards in (
-            [e.card for e in self._npc_state.values() if e.card is not None],
-            list(self._cards.values()),
+        gap = int(theme.metric("space.sm")) * 3
+        strip_floor = int(theme.metric("gm.pin-strip.min"))
+        body_floor = int(theme.metric("gm.card.min"))
+        for container, cards in (
+            (
+                self._npc_container,
+                [e.card for e in self._npc_state.values() if e.card is not None],
+            ),
+            (self._cards_container, list(self._cards.values())),
         ):
             if not cards:
                 continue
             body = max(card.body_width_hint() for card in cards)
             strip = max(card.pin_width_hint() for card in cards)
+            room = self._card_room(container)
+            if room > 0 and body + strip + gap > room:
+                strip = max(strip_floor if strip else 0, min(strip, room - gap - body_floor))
+                body = max(body_floor, min(body, room - gap - strip))
             for card in cards:
                 card.apply_width(body, strip)
+
+    @staticmethod
+    def _card_room(container) -> int:
+        """The width one card may occupy, measured from the **block's viewport**.
+
+        Not from the container, which is the trap: a card is a fixed width, so it
+        sets the flow's minimum, so the block's scroll area gives the flow exactly
+        that — and asking the container how wide it is returns the width the card
+        forced in the first place. The cap would then never bite, which is precisely
+        what it did until this read the viewport instead.
+
+        Zero before the block is realized, which is read as "no cap yet": the first
+        paint uses the cards' own hints and the real answer arrives on the first
+        ``widthChanged``.
+        """
+        areas = enclosing_scroll_areas(container)
+        if not areas:
+            return 0
+        layout = container.layout()
+        margins = layout.contentsMargins() if layout is not None else None
+        inset = (margins.left() + margins.right()) if margins is not None else 0
+        # The innermost is the block's own; anything further out is the page.
+        return max(0, areas[0].viewport().width() - inset)
 
     def _refresh_collapse_all(self) -> None:
         """Restate the button from the board — a caption that lies is worse than none."""
@@ -2749,7 +2858,7 @@ def register_base_gm_blocks(*, replace: bool = False) -> None:
                 # Bound at build time to the window being constructed, which is
                 # what lets a descriptor name an instance method it cannot hold.
                 (lambda name: lambda window: getattr(window, name)())(builder),
-                shipped.get(f"gm_{key}", BlockSize()),
+                shipped.get(f"gm_{key}", RecommendedSize()),
                 row,
                 col,
                 pinned,

@@ -101,6 +101,17 @@
     "float.min-width": 200,
     "float.min-height": 150,
 
+    "_block.min-extent": "How small a docked block may be dragged before it stops shrinking. Small on purpose: the grid is the user's, and a block dragged to a sliver reflows as far as it can and then scrolls inside its own frame rather than refusing. This is the floor of the frame itself, so it wants to be about the height of a title bar — enough that a block squashed to nothing can still be found and dragged back open.",
+    "block.min-extent": 24,
+    "_grid.grab": "How wide the divider between two blocks is to the mouse, in pixels. Every resize on the page happens by grabbing one, so it has to be catchable without aiming; it is also the gutter between two blocks, which is why it is not simply made huge. Painted narrower than this — see grid.handle — so the grab target can grow without the gap between blocks looking like one.",
+    "grid.grab": 10,
+    "_grid.handle": "How much of a divider is painted when the pointer is over it, in pixels, centred in the grab target above. Also the thickness of the line marking where a dragged block will land, which is the same mark answering the same question.",
+    "grid.handle": 6,
+    "_grid.detent": "How much resistance a divider meets at a block's recommended size, in pixels. The handle sticks there and needs a deliberate extra pull to go past, so nobody crosses it by accident and everybody can find their way back to it. Zero turns the detent off.",
+    "grid.detent": 12,
+    "_grid.close-extent": "How small a block has to be dragged for letting go of the divider to close it, in pixels. Bigger than block.min-extent, which is the floor of the frame itself: this is the size at which a block has stopped being something you can read or find, so the honest reading of the drag is that you are getting rid of it. Nothing is destroyed — the block is closed, its View menu entry clears, and Ctrl+Z brings it back where it was. Zero turns the behaviour off and a block can be dragged to a sliver again.",
+    "grid.close-extent": 48,
+
     "card.margins": [8, 6, 8, 6],
     "card.margins.off": [5, 3, 5, 3],
     "card.spacing": 4,

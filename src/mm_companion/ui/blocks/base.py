@@ -29,7 +29,7 @@ from PySide6.QtWidgets import QWidget
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
-from mm_companion.ui.block_sizes import BlockSize
+from mm_companion.ui.block_sizes import RecommendedSize
 
 # A block widget is built from the shared game data + character model. Sections
 # accept an optional parent, but the sheet always constructs them parentless (the
@@ -90,6 +90,12 @@ class BlockDescriptor:
     ``subscribes`` maps a topic to the name of the block method that recomputes
     when it fires. Both default empty (a purely presentational block).
 
+    ``coalesces`` names the subscriber methods that may be run **once at the end of
+    the turn** rather than once per publish — for a handler expensive enough that
+    running it per spin-box step is what makes an edit feel slow. See
+    :meth:`~mm_companion.ui.blocks.bus.SignalBus.subscribe` for what a block owes in
+    exchange.
+
     ``instance_factory`` is what makes a block one the sheet may build *more than
     one of* — today only Notes. Supplying it makes the registered descriptor a
     **template**: further instances take a key of ``"<key>#<n>"``, are built by
@@ -108,12 +114,19 @@ class BlockDescriptor:
     (``rollRequested(object)``) to the request topics it raises, and ``serves`` maps
     a request topic to the block method that answers it, which takes the payload as
     its one argument.
+
+    ``npc_default`` is whether the block is *open* on a GM's NPC sheet the first
+    time one is shown. An NPC sheet is the same sheet with the accounting taken out
+    (:class:`~mm_companion.ui.npc_window.NPCWindow`), and the blocks that carry no
+    trait — the roller, the Scene, the prose — are the ones a GM has to close by
+    hand on every mook before the numbers fit on screen. It is a *default*, not a
+    mode: the View menu reopens any of them and the NPC layout remembers it.
     """
 
     key: str
     title: str
     factory: BlockFactory
-    size: BlockSize = BlockSize()
+    size: RecommendedSize = RecommendedSize()
     default_row: int = 0
     default_col: int = 0
     default_pinned: bool = False
@@ -122,6 +135,14 @@ class BlockDescriptor:
     requests: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     serves: Mapping[str, str] = field(default_factory=dict)
     instance_factory: Callable[[str], BlockFactory] | None = None
+    # Belongs beside ``subscribes``, and is last anyway: a dataclass's field order is
+    # a public signature, and a mod that passes the bus tables positionally would have
+    # had ``requests`` silently land in a field added between them. New fields go on
+    # the end.
+    coalesces: frozenset[str] = frozenset()
+    #: Whether this block starts open on an NPC sheet (see the class docstring).
+    #: On the end with ``coalesces``, and for the same reason.
+    npc_default: bool = True
 
     @property
     def multi(self) -> bool:

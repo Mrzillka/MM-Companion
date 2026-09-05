@@ -40,7 +40,7 @@ from __future__ import annotations
 
 from weakref import WeakSet
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QRect, QTimer
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QRect, Qt, QTimer
 from PySide6.QtWidgets import QFrame, QWidget
 
 from mm_companion.ui import theme
@@ -138,14 +138,35 @@ class DropFeedback:
         self._state = self.ACCEPT
         self._paint(self._highlight("accent"))
 
-    def show_reject(self) -> None:
-        """Mark the target as refusing this payload."""
-        clear_all(except_for=self)
+    def show_reject(self, *, sticky: bool = False, solo: bool = True) -> None:
+        """Mark the target as refusing this payload.
+
+        *sticky* leaves the self-clearing timer alone, and is for a mark that is
+        not part of a Qt drag at all: a block being dragged small enough that
+        letting go would close it is warned by this, and that gesture ends in a
+        mouse release the caller definitely hears about. The timer exists for the
+        case that has no such guarantee (see the module docstring), and a warning
+        that quietly withdraws itself 700ms into a drag somebody is still making
+        is worse than none.
+
+        *solo* is the "only one target at a time" discipline, and it is right for
+        a drag, which has one pointer and therefore one answer. It is wrong for
+        the other caller: a *row* squashed to nothing closes every block in it, so
+        the warning has to stand on all of them at once, and each one lighting up
+        would take the last one's mark down. The caller that turns this off is
+        then responsible for clearing what it lit, which it does on the release
+        either way.
+        """
+        if solo:
+            clear_all(except_for=self)
+        else:
+            self._timer.stop()
         self._state = self.REJECT
         self._paint(self._highlight("drop.reject"))
-        # Qt withholds further drag events from a widget that ignored the enter,
-        # so nothing else is guaranteed to take this outline down.
-        self._timer.start()
+        if not sticky:
+            # Qt withholds further drag events from a widget that ignored the
+            # enter, so nothing else is guaranteed to take this outline down.
+            self._timer.start()
 
     def clear(self) -> None:
         """Return the target to its resting style."""
@@ -169,40 +190,49 @@ class DropFeedback:
         )
 
 
-class DropIndicator(QFrame):
-    """A thin accent line showing where a dragged item will drop.
+class _SlidingOverlay(QFrame):
+    """A mark drawn over a page, which slides between places instead of jumping.
 
-    The insertion-point counterpart to :class:`DropFeedback`: that one dresses the
-    *target*, this one marks the *place* inside it. Shared by the block canvas, the
-    pinned strip, the GM's NPC list and the modifier chips, so an insert line looks
-    and moves the same everywhere.
+    Shared by the two marks a drag puts up — the thin line that says *where* the
+    block lands and the wash that says *how much room* it takes — because sliding
+    and the rule for when not to slide are the same for both, and were written
+    once for the line before there was a second one.
 
-    It slides between drop slots instead of teleporting: :meth:`move_to` animates
-    the geometry over a short hop when the target stays the same orientation, and
-    snaps instantly on first appearance or when it flips between a row-boundary bar
-    (horizontal) and an in-row bar (vertical), where a slide would just morph oddly.
+    Transparent to the mouse: the whole point of a mark is that it appears under
+    the pointer mid-gesture, and a widget there that answers a hit test is a
+    widget the gesture can trip over.
     """
 
     SLIDE_MS = 120
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setObjectName("dropIndicator")
-        self.setStyleSheet(
-            f"#dropIndicator {{ background-color: {theme.color('drop.indicator')}; }}"
-        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self._slide = QPropertyAnimation(self, b"geometry", self)
         self._slide.setDuration(self.SLIDE_MS)
         self._slide.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self.hide()
+        self.hide()  # never visible before it is parented and placed
+
+    def restyle(self) -> None:
+        """Read this mark's colours out of the active theme. Subclasses say how."""
 
     def move_to(self, rect: QRect) -> None:
-        """Show the indicator at *rect*, sliding there when it makes sense."""
+        """Show the mark at *rect*, sliding there when it makes sense.
+
+        Restyled as it appears rather than in the constructor, so a preset
+        switched between two drags is picked up — a token read once at
+        construction is exactly the cached token the theme rules forbid — and not
+        on every frame of a drag, which would re-polish the widget fifty times
+        crossing the page for a colour that cannot have changed in between.
+        """
+        first = not self.isVisible()
+        if first:
+            self.restyle()
         self._slide.stop()
         current = self.geometry()
         # Orientation = which dimension is the thin one; only slide within the same.
         same_axis = (current.width() < current.height()) == (rect.width() < rect.height())
-        if self.isVisible() and same_axis and current != rect:
+        if not first and same_axis and current != rect:
             self._slide.setStartValue(current)
             self._slide.setEndValue(rect)
             self._slide.start()
@@ -214,3 +244,69 @@ class DropIndicator(QFrame):
     def hide_indicator(self) -> None:
         self._slide.stop()
         self.hide()
+
+
+class DropIndicator(_SlidingOverlay):
+    """A thin accent line showing where a dragged item will drop.
+
+    The insertion-point counterpart to :class:`DropFeedback`: that one dresses the
+    *target*, this one marks the *place* inside it. Shared by the block canvas, the
+    pinned strip, the GM's NPC list and the modifier chips, so an insert line looks
+    and moves the same everywhere.
+
+    It slides between drop slots instead of teleporting, and snaps instead when it
+    flips between a row-boundary bar (horizontal) and an in-row bar (vertical),
+    where a slide would just morph oddly.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("dropIndicator")
+
+    def restyle(self) -> None:
+        self.setStyleSheet(
+            f"#dropIndicator {{ background-color: {theme.color('drop.indicator')}; }}"
+        )
+
+
+class DropRegion(_SlidingOverlay):
+    """A translucent wash over the room a dragged block would actually take.
+
+    The line says where the seam falls; this says how much of the target's space
+    goes to the newcomer, which is the half of the answer a 2px line cannot give.
+    It matters most for the gesture it was added for: a block dropped on the left
+    of another takes half of it, and until you can *see* that half, "beside" and
+    "instead of" look the same from under a cursor.
+
+    Outlined as well as filled, which :class:`DropFeedback` deliberately is not.
+    That one restyles the target frame itself, where a border changes the box and
+    relayouts the page mid-drag; this is an overlay of its own and can afford an
+    edge — and needs one, because a wash of this weight over a block full of
+    content has nothing else to give it a shape.
+    """
+
+    #: How heavily the region is filled. Light: it lies over live content that
+    #: still has to be readable through it, or the mark hides what it describes.
+    WASH = 0.18
+
+    #: The fill is taken from ``accent`` and the outline from ``drop.indicator``,
+    #: which is not an inconsistency. A wash needs channels to dilute and
+    #: ``drop.indicator`` is allowed to be a live palette role (Classic makes it
+    #: ``palette(highlight)``), which has none; ``accent`` is the literal every
+    #: other wash in the app is taken from, including the one a block dropped
+    #: *into* another gets. So the two marks a drag puts up stay one family.
+    FILL_TOKEN = "accent"
+    EDGE_TOKEN = "drop.indicator"
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("dropRegion")
+
+    def restyle(self) -> None:
+        radius = int(theme.metric("radius.card"))
+        width = int(theme.metric("border.width.emphasis"))
+        self.setStyleSheet(
+            f"#dropRegion {{ background-color: {theme.wash(self.FILL_TOKEN, self.WASH)};"
+            f" border: {width}px solid {theme.color(self.EDGE_TOKEN)};"
+            f" border-radius: {radius}px; }}"
+        )

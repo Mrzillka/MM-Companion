@@ -98,6 +98,9 @@ class ResistancesSection(TitledSection):
         self._resistance_total: dict[str, QTableWidgetItem] = {}
 
         layout = QVBoxLayout(self)
+        # No margin round the table — the section's border is the table's border.
+        # See :class:`~mm_companion.ui.sections.abilities.AbilitiesSection`.
+        layout.setContentsMargins(0, 0, 0, 0)
         self.table = build_stat_table(
             data.resistances,
             self._resistances,
@@ -115,11 +118,11 @@ class ResistancesSection(TitledSection):
             pins=self._pins,
         )
         layout.addWidget(self.table)
-        # Abilities and Resistances are one fixed size, sized to the taller of the
-        # two, so the shorter one has room left over; give it to the bottom rather
-        # than let the layout centre the table and leave the two blocks' headers on
-        # different lines.
-        layout.addStretch()
+        # Abilities and Resistances share a row and so a height, and this is the
+        # shorter of the two: the room left over goes into this table's own rows
+        # (:meth:`~mm_companion.ui.sections.row_table.AutoHeightTable.sync_row_stretch`)
+        # rather than into a stretch under it, so the two read as one pair of tables
+        # rather than as a full block beside a half-empty one.
 
         self.refresh_ranks()
         self.refresh_readouts()

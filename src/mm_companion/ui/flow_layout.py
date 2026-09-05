@@ -6,7 +6,7 @@ pattern, used here to lay out a variable number of condition chips.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt
+from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import QLayout, QLayoutItem, QSizePolicy, QWidget
 
@@ -36,6 +36,12 @@ class FlowContainer(QWidget):
     ways in — :class:`FlowLayout` calls :meth:`refresh_height` as items come and go,
     and a layout request (a child resizing itself) re-takes it too.
     """
+
+    #: The container was given a different width. For a host that has to re-size
+    #: the *items* to suit — the GM's card grids give every card one shared width,
+    #: and what that width can be depends on how much room the block has. A flow
+    #: re-wraps on its own; anything that has to re-measure cannot.
+    widthChanged = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -74,6 +80,8 @@ class FlowContainer(QWidget):
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         self.refresh_height()
+        if event.oldSize().width() != event.size().width():
+            self.widthChanged.emit()
         super().resizeEvent(event)
 
     def event(self, event: QEvent) -> bool:

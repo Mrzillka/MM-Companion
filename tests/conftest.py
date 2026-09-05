@@ -16,8 +16,8 @@ import threading
 from dataclasses import dataclass
 
 import pytest
-from PySide6.QtCore import QEvent
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QEvent, Qt
+from PySide6.QtWidgets import QApplication, QToolTip
 
 from mm_companion.core import storage
 from mm_companion.core.session.relay import RELAY_SCHEME_PLAIN
@@ -115,7 +115,15 @@ def _close_top_level_widgets():
     app = QApplication.instance()
     if app is None:
         return
+    # Take any tip down first, and then leave its window alone below. Qt keeps
+    # *one* internal label for every tooltip in the process and hands the same one
+    # out again; deleting it here left the next `QToolTip.showText` writing into
+    # freed memory, which is an access violation rather than an exception — the
+    # whole worker dies and the test that happens to be running is blamed for it.
+    QToolTip.hideText()
     for widget in list(app.topLevelWidgets()):
+        if widget.windowType() == Qt.WindowType.ToolTip:
+            continue  # Qt's, not the test's (see above)
         # hide()+deleteLater(), not close(): close() runs closeEvent, and a dirty
         # MainWindow's closeEvent pops a modal Save/Discard/Cancel box that would
         # block the teardown forever. Deleting the widget frees its native window

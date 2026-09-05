@@ -35,7 +35,7 @@ from .runtime import (
     trait_allocation_field,
     trait_display_name,
 )
-from .size import Reach, base_size_rank, character_reach, reach_text
+from .size import Reach, base_size_rank, character_reach, feet_text, reach_text
 
 
 def _effect_name(effect: PowerEffectInstance, game_data: GameData) -> str:
@@ -1225,6 +1225,8 @@ def effect_stat_rows(
             continue  # the Enhances row below already says it, and says it by name
         if not config_field_gate_open(field, effect.config):
             continue  # the card is not showing this field, so neither is its readout
+        if not config_field_shown(field, effect):
+            continue  # its ``shown_with`` extra came off; the choice no longer exists
         value = effect.config.get(field.key)
         if value:
             rows.append(
@@ -1449,6 +1451,73 @@ def _readout_points_per_rank(
     return [EffectStat("pool", readout.label, "", f"{effect.rank * per} points", "")]
 
 
+@READOUT_KINDS.handler("rank_scaled")
+def _readout_rank_scaled(
+    readout, effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+):
+    """A row whose value *is* a rank rather than a measurement of one.
+
+    ``rank * perRank + offset``, dropped into the readout's ``format`` where
+    ``{value}`` stands. Create is what it was written for: the book bounds a created
+    object's Toughness and the total volume the effect can hold at once by the effect
+    rank itself, and those are ranks — printing "2,000 cft." for a Toughness would be
+    a different number entirely. The sentence lives in the data, so the arithmetic
+    here knows nothing about what it is counting.
+    """
+
+    data = readout.data
+    value = effect.rank * int(data.get("perRank", 1)) + int(data.get("offset", 0))
+    template = data.get("format") or "{value}"
+    return [EffectStat("readout", readout.label or "Rank", "", template.format(value=value), "")]
+
+
+@READOUT_KINDS.handler("reach_extension")
+def _readout_reach_extension(
+    readout, effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+):
+    """How far a reach-extending effect stretches, band by band.
+
+    The **extension**, not the wielder's total reach, and deliberately so: the total is
+    the System block's row, and it already counts this effect
+    (:func:`~.size.reach_extension_feet` walks the character's live powers), so a card
+    restating it would double the effect that is standing right there on it. The card
+    answers the question the block cannot — how much of that total *this* power is.
+
+    One rank buys the distance at the effect's own ``reach`` rank
+    (:class:`~..data_loader.EffectReach`), so the same 15-feet-a-rank the sheet
+    stretches by. Each band multiplies that by its ``multiple`` and carries the check
+    penalty the rules put on reaching that far; the bands are data, so a mod's own
+    reach effect states its own.
+    """
+
+    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if base is None or base.reach is None:
+        return []
+    per_rank = game_data.measurements.distance_ft(base.reach.per_rank_distance_rank)
+    # The **dialled** rank, which is the one :func:`~.size.reach_extension_feet` reads
+    # to stretch the sheet's reach. The two are a statement about the same arm, so an
+    # Elongation turned down — or rationed by a Dynamic array's pool — has to shorten
+    # in both places or the card contradicts the block.
+    feet = effect_current_rank(effect, game_data, char) * per_rank
+    if feet <= 0:
+        return []
+    rows = []
+    for band in readout.data.get("bands", []):
+        reached = feet * float(band.get("multiple", 1))
+        note = band.get("note", "")
+        value = f"+{feet_text(reached)} ft."
+        rows.append(
+            EffectStat(
+                "reach",
+                band.get("label") or readout.label or "Reach",
+                "",
+                f"{value} ({note})" if note else value,
+                "better",
+            )
+        )
+    return rows
+
+
 @READOUT_KINDS.handler("capped_rank_bonus")
 def _readout_capped_rank_bonus(
     readout, effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
@@ -1609,17 +1678,116 @@ def _personal_effect_options(game_data: GameData) -> tuple[tuple[str, str], ...]
     return tuple((effect.name, effect.id) for effect in imposable_effects(game_data))
 
 
+#: Everything a resistance check may be made with (p107's "choose which resistance",
+#: widened by Alternate Resistance, p150). Named in ``effects.json`` as
+#: ``"widenSource": "resistance_targets"``.
+OPTION_SOURCE_RESISTANCE_TARGETS = "resistance_targets"
+
+
+@CONFIG_OPTION_SOURCES.handler(OPTION_SOURCE_RESISTANCE_TARGETS)
+def _resistance_target_options(game_data: GameData) -> tuple[tuple[str, str], ...]:
+    """Every trait a resistance check can be rolled with, in one flat list.
+
+    The four resistances, then the abilities, then Damage, then the skills — the order
+    a player looks for them in, commonest first. Derived resistances (Defence itself)
+    are left out: they are a number an attack is made *against*, not a check anyone
+    rolls. Read off the game data rather than listed, so a mod's own ability or skill
+    is offered here the moment it exists.
+    """
+
+    options: list[tuple[str, str]] = [
+        (res.name, res.name) for res in game_data.resistances if not res.derived
+    ]
+    options += [(ability.name, ability.name) for ability in game_data.abilities]
+    # Damage is not a trait on the sheet, but it *is* what the rules roll against in an
+    # opposed-damage contest, and the GM's alternate resistance may name it.
+    options.append(("Damage", "Damage"))
+    options += [(skill.name, skill.name) for skill in game_data.skills]
+    return tuple(options)
+
+
 def config_source_options(field, game_data: GameData | None) -> tuple[tuple[str, str], ...]:
     """A config field's ``(label, value)`` options, from its ``source`` or its own list.
 
     The one place the two are reconciled, so a picker and a readout cannot end up
     offering and naming different things.
+
+    A ``widen_source`` is folded in **unconditionally** here, because this is the map a
+    stored value is read back through: an Affliction saved as resisted by Fortitude
+    should still print "Fortitude" after its Alternate Resistance extra is taken off,
+    rather than falling back to the bare id. Whether the wider options are *offered* is
+    a different question, and :func:`config_field_options` is where it is asked.
     """
 
     source = CONFIG_OPTION_SOURCES.get(field.source or "")
-    if source is not None and game_data is not None:
-        return source(game_data)
-    return tuple((option.label, option.value) for option in field.options)
+    own = (
+        source(game_data)
+        if source is not None and game_data is not None
+        else tuple((option.label, option.value) for option in field.options)
+    )
+    return own + _widen_options(field, game_data, exclude=own)
+
+
+def _widen_options(field, game_data: GameData | None, exclude=()) -> tuple[tuple[str, str], ...]:
+    """The options a field's ``widen_source`` adds, less any it already offers.
+
+    ``getattr``, not attribute access: a field here is anything field-*shaped*, and a
+    mod's own object — or a test's stand-in — predates these two keys. An object that
+    has never heard of widening simply does not widen.
+    """
+
+    widen = CONFIG_OPTION_SOURCES.get(getattr(field, "widen_source", "") or "")
+    if widen is None or game_data is None:
+        return ()
+    already = {value for _label, value in exclude}
+    return tuple((label, value) for label, value in widen(game_data) if value not in already)
+
+
+def config_field_options(
+    field, effect: PowerEffectInstance, game_data: GameData | None
+) -> tuple[tuple[str, str], ...]:
+    """The options a picker should actually **offer** for one config field.
+
+    :func:`config_source_options` less the widened ones, until the extra named by
+    ``widen_with`` is attached. Affliction is the case: the rules give it three
+    defenses to be resisted by, and it is Alternate Resistance that makes any other
+    resistance — or an ability, a skill, Damage — legal. Offering all of them all the
+    time would price a modifier at nothing.
+    """
+
+    source = CONFIG_OPTION_SOURCES.get(field.source or "")
+    own = (
+        source(game_data)
+        if source is not None and game_data is not None
+        else tuple((option.label, option.value) for option in field.options)
+    )
+    widen_with = getattr(field, "widen_with", "")  # see :func:`_widen_options`
+    if not widen_with or not _has_modifier(effect, widen_with):
+        return own
+    return own + _widen_options(field, game_data, exclude=own)
+
+
+def _has_modifier(effect: PowerEffectInstance, modifier_id: str) -> bool:
+    """Whether this effect carries the extra or flaw *modifier_id*."""
+
+    return any(s.modifier_id == modifier_id for s in effect.extras + effect.flaws)
+
+
+def config_field_shown(field, effect: PowerEffectInstance) -> bool:
+    """Whether a field gated on a *modifier* is on the card at all.
+
+    ``hidden_with`` takes it away while its extra is attached; ``shown_with`` is the
+    mirror — the field is only there once that extra is. Both are questions about the
+    effect's modifiers rather than about a sibling field's value, which is what
+    :func:`config_field_gate_open` answers.
+
+    ``hidden_with`` is deliberately **not** folded in here: the constructor's own reading
+    of it is scoped (a Variable Conditions at a lower tier defers only the one degree it
+    names), and collapsing that into a plain "is it attached" would defer all three.
+    """
+
+    shown_with = getattr(field, "shown_with", "")  # see :func:`_widen_options`
+    return not shown_with or _has_modifier(effect, shown_with)
 
 
 def config_field_gate_open(field, config: dict) -> bool:

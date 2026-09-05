@@ -1,17 +1,37 @@
-"""Per-block size constraints for the character-sheet dock panels.
+"""How big each sheet block would *like* to be — a recommendation, not a bound.
 
-The min/max width and height of each block live in ``block_sizes.json`` (loaded as
-package data) so they can be tweaked without touching code. A block with a
-``max_width`` can't be stretched horizontally; one with a ``max_height`` can't be
-stretched vertically. Bounds are in pixels; an omitted, null, or zero bound means
-"no constraint" — 0 for a minimum, Qt's ``QWIDGETSIZE_MAX`` for a maximum.
+These numbers used to be constraints: ``min_width``/``min_height`` were floors a
+layout could not go under, and ``max_width``/``max_height`` pinned a block so it
+could not be stretched. That made sense while the page arranged itself and the
+user had no say — a block was exactly as big as its content, and the window grew
+to fit.
 
-The shipped file is the *baseline*. The active theme may override any bound
-through its ``blocks`` map (see :mod:`mm_companion.ui.theme`), because how much
-room a block needs is a function of the look: a denser preset with tighter
-padding and smaller type fits the same content in less space. Overrides are
-merged per bound, so a preset that only wants Abilities narrower says exactly
-that and inherits the rest.
+The page is user-resizable now, so a floor would be a refusal. What is left is a
+**recommendation**: the size at which a block reads well, which the grid uses for
+exactly three things —
+
+* the size a block opens at, before anyone has dragged anything;
+* the soft detent a divider sticks at on its way past
+  (:mod:`mm_companion.ui.grid_handle`);
+* the mark shown during a drag, and the "fit to content" it snaps back to.
+
+and for **nothing** in any layout minimum. Drag a block to a single pixel if you
+like; it will reflow as far as it can and then scroll inside its own frame.
+
+The numbers live in ``block_sizes.json`` (loaded as package data) so they can be
+retuned without touching code, and the active theme may override any of them
+through its ``blocks`` map — how much room a block needs is a function of the
+look, and a denser preset with tighter padding and smaller type fits the same
+content in less space. Overrides merge per bound, so a preset that only wants
+Abilities narrower says exactly that and inherits the rest.
+
+The old ``min_*``/``max_*`` key names are still read: ``min_*`` as the
+recommendation it always effectively was, ``max_*`` ignored. That is for the mods
+in the sibling repository, which pin an engine version and ship
+``blocks.json`` files written against the old names.
+
+This is UI config, **not** game content, so it lives under ``ui/`` (bundled via
+the ``ui/*.json`` package-data entry) and not the OGL ``data/`` dir.
 """
 
 from __future__ import annotations
@@ -22,26 +42,35 @@ from functools import lru_cache
 from importlib.resources import files
 from typing import Any
 
-# Qt's "no maximum" sentinel (QWIDGETSIZE_MAX). Hardcoded so this stays a plain
-# config loader and does not pull in Qt just for a constant.
+# Qt's "no maximum" sentinel (QWIDGETSIZE_MAX). Nothing here imposes it any more,
+# but the settings editor still needs an upper bound for its spin boxes, and
+# hardcoding it keeps this a plain config loader that does not import Qt.
 UNBOUNDED = 16777215
 
 RESOURCE_PACKAGE = "mm_companion.ui"
 RESOURCE_NAME = "block_sizes.json"
 
+#: The fields a block may state, in the order the settings editor shows them.
+BOUNDS = ("recommended_width", "recommended_height")
+
+#: What each field used to be called. Read for the mods that still write them.
+_ALIASES = {"recommended_width": "min_width", "recommended_height": "min_height"}
+
 
 @dataclass(frozen=True)
-class BlockSize:
-    """Size constraints for one block, in pixels."""
+class RecommendedSize:
+    """The size one block reads well at, in pixels. Zero means "no opinion"."""
 
-    min_width: int = 0
-    min_height: int = 0
-    max_width: int = UNBOUNDED
-    max_height: int = UNBOUNDED
+    width: int = 0
+    height: int = 0
+
+    def __bool__(self) -> bool:
+        """Whether this block states a recommendation at all."""
+        return bool(self.width or self.height)
 
 
 def _baseline() -> dict[str, dict[str, Any]]:
-    """The shipped bounds, keyed by block.
+    """The shipped recommendations, keyed by block.
 
     Keys starting with ``_`` (e.g. ``_comment``) are ignored so the file can carry
     inline documentation.
@@ -50,18 +79,21 @@ def _baseline() -> dict[str, dict[str, Any]]:
     return {key: spec for key, spec in json.loads(text).items() if not key.startswith("_")}
 
 
-def _as_size(spec: dict[str, Any]) -> BlockSize:
-    return BlockSize(
-        min_width=spec.get("min_width") or 0,
-        min_height=spec.get("min_height") or 0,
-        max_width=spec.get("max_width") or UNBOUNDED,
-        max_height=spec.get("max_height") or UNBOUNDED,
-    )
+def _as_size(spec: dict[str, Any]) -> RecommendedSize:
+    """One block's recommendation, accepting the old ``min_*`` names as well."""
+
+    def read(field: str) -> int:
+        value = spec.get(field)
+        if value is None:
+            value = spec.get(_ALIASES[field])
+        return int(value or 0)
+
+    return RecommendedSize(width=read("recommended_width"), height=read("recommended_height"))
 
 
 @lru_cache(maxsize=4)
-def _load_for_theme(theme_id: str) -> dict[str, BlockSize]:
-    """The bounds for one theme id, cached per id.
+def _load_for_theme(theme_id: str) -> dict[str, RecommendedSize]:
+    """The recommendations for one theme id, cached per id.
 
     Keyed on the theme rather than cached outright so switching preset re-reads
     instead of serving the previous look's sizes. Four entries is more than the
@@ -76,13 +108,13 @@ def _load_for_theme(theme_id: str) -> dict[str, BlockSize]:
     return {key: _as_size(spec) for key, spec in merged.items()}
 
 
-def load_block_sizes() -> dict[str, BlockSize]:
-    """A ``BlockSize`` per block key: the shipped bounds under the theme's overrides."""
+def load_block_sizes() -> dict[str, RecommendedSize]:
+    """A :class:`RecommendedSize` per block: the shipped numbers under the theme's."""
     from mm_companion.ui import theme
 
     return _load_for_theme(theme.active_theme().id)
 
 
 def clear_block_size_cache() -> None:
-    """Drop the cached bounds, so the next read picks up a theme change."""
+    """Drop the cached recommendations, so the next read picks up a theme change."""
     _load_for_theme.cache_clear()

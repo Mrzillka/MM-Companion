@@ -133,6 +133,41 @@ def test_determination_and_extraordinary_effort_are_read_off_the_sheet() -> None
     assert has_extraordinary_effort(char, data) is True
 
 
+def test_a_power_granted_effort_advantage_counts_like_a_bought_one() -> None:
+    """Straining is a thing the character can do because of the advantage, and it does
+    not matter which currency paid for it — the same gap the initiative readout had."""
+    data = load_game_data()
+    char, _ = _hero()
+    char.powers.append(
+        Power(
+            name="Second Wind",
+            effects=[
+                PowerEffectInstance(
+                    "enhanced_trait",
+                    rank=4,
+                    config={
+                        "traits": [
+                            {"trait": "Determination", "ranks": 2},
+                            {"trait": "Untapped Potential", "ranks": 1},
+                            {"trait": "Extraordinary Effort", "ranks": 1},
+                        ]
+                    },
+                )
+            ],
+        )
+    )
+
+    assert determination_ranks(char, data) == 2
+    assert has_extraordinary_effort(char, data) is True
+    # The ruleset's own 1, plus a rank for each rank of Untapped Potential.
+    assert extra_effort_rank_increase(char, data) == 2
+
+    char.powers[-1].activated = False
+    assert determination_ranks(char, data) == 0
+    assert has_extraordinary_effort(char, data) is False
+    assert extra_effort_rank_increase(char, data) == 1
+
+
 # -- what it buys ------------------------------------------------------------
 
 

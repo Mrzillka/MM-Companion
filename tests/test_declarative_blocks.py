@@ -126,7 +126,7 @@ def test_sync_registers_a_descriptor_per_spec(_home: Path) -> None:
     assert "campaign_log" in keys
     block = next(d for d in block_descriptors() if d.key == "campaign_log")
     assert block.title == "Campaign Log"
-    assert block.size.min_width == 300
+    assert block.size.width == 300
 
 
 def test_sync_is_idempotent_and_never_clobbers_a_base_block(_home: Path) -> None:

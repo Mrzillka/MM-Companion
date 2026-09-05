@@ -46,169 +46,54 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
     QGridLayout,
-    QHBoxLayout,
     QMenu,
     QScrollArea,
-    QSplitter,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
+from mm_companion.ui import layout_tree as lt
 from mm_companion.ui import theme
 from mm_companion.ui.block_frame import BlockFrame
-from mm_companion.ui.block_sizes import UNBOUNDED
+from mm_companion.ui.block_sizes import UNBOUNDED, RecommendedSize
 from mm_companion.ui.drop_feedback import DropFeedback, DropIndicator
+from mm_companion.ui.grid_handle import handle_thickness
+from mm_companion.ui.grid_view import GridSplitter, build_node
 from mm_companion.ui.pinned import (
-    DEFAULT_ALIGN,
     DEFAULT_EDGE,
     DEFAULT_EXTENT,
-    PIN_ALIGNMENTS,
     PIN_EDGES,
     PinSlot,
     is_vertical_strip,
 )
+from mm_companion.ui.widgets import discard_widget
 
 #: Floor for the strip's thickness while nothing is pinned. The handle's own size
 #: hint wins when it is bigger, so a preset with larger type can't clip its icon.
 EMPTY_EXTENT = 34
-
-#: Band along a line's edge where a drop makes a *new* line instead of joining it.
-LINE_GAP = 10
 
 #: Width of the drop-zone band along each edge of the board while the strip is
 #: being dragged to a new edge.
 EDGE_BAND = 56
 
 #: Fallback for the usable screen size when no screen resolves (headless tests).
-FALLBACK_SCREEN = QSize(1920, 1080)
 
 EDGE_LABELS = {"left": "Left", "right": "Right", "top": "Top", "bottom": "Bottom"}
-ALIGN_LABELS = {"fill": "Fill", "start": "Start", "center": "Center", "end": "End"}
 
 
 class PinHost(Protocol):
     """What the strip needs from its controller (the block canvas)."""
 
     def set_pin_edge(self, edge: str) -> None: ...
-    def set_pin_align(self, align: str) -> None: ...
     def unpin_all(self) -> None: ...
     def pin_edge(self) -> str: ...
-    def pin_align(self) -> str: ...
-
-
-def _cell_alignment(vertical_strip: bool, align: str) -> Qt.AlignmentFlag | None:
-    """The flag placing a block at *align* within its cell (None = fill).
-
-    The axis is the one a *line* runs along — horizontal on a side strip, vertical
-    on a top/bottom one. It only bites when the block cannot fill its cell (a
-    fixed-width block in a wide strip); anything growable fills either way, which
-    is what makes the splitter handles worth dragging.
-    """
-    if align == "fill":
-        return None
-    if vertical_strip:
-        flags = {
-            "start": Qt.AlignmentFlag.AlignLeft,
-            "center": Qt.AlignmentFlag.AlignHCenter,
-            "end": Qt.AlignmentFlag.AlignRight,
-        }
-    else:
-        flags = {
-            "start": Qt.AlignmentFlag.AlignTop,
-            "center": Qt.AlignmentFlag.AlignVCenter,
-            "end": Qt.AlignmentFlag.AlignBottom,
-        }
-    return flags.get(align)
-
-
-def _usable_screen(widget: QWidget) -> QSize:
-    """The screen area a window can occupy, or a generous fallback when headless."""
-    screen = widget.screen()
-    if screen is None:
-        return FALLBACK_SCREEN
-    return screen.availableGeometry().size()
-
-
-class _PinnedSlot(QWidget):
-    """One pinned block, placed within its cell.
-
-    A wrapper rather than putting the frame in the splitter directly: a splitter
-    always stretches its children to the whole cell, which is exactly what the
-    ``fill`` alignment wants and exactly what the other three do not.
-    """
-
-    def __init__(
-        self,
-        frame: BlockFrame,
-        vertical_strip: bool,
-        align: str,
-        parent: QWidget | None = None,
-    ) -> None:
-        super().__init__(parent)
-        self.frame = frame
-        layout = QHBoxLayout(self) if vertical_strip else QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        flags = _cell_alignment(vertical_strip, align) or Qt.AlignmentFlag(0)
-        # A block that pins its own size (Abilities is fixed both ways) can't take
-        # the cell the splitters give it, and a box layout would centre it there —
-        # a block adrift with a gap on either side. Anchor it to the start of the
-        # cell instead, which is what a docked row does with its fixed-width blocks.
-        # Only where the user hasn't asked for something else: an explicit
-        # alignment across the line is theirs to set, "fill" is not.
-        start = Qt.AlignmentFlag.AlignTop if vertical_strip else Qt.AlignmentFlag.AlignLeft
-        across = Qt.AlignmentFlag.AlignLeft if vertical_strip else Qt.AlignmentFlag.AlignTop
-        capped_along = (
-            frame.maximumHeight() if vertical_strip else frame.maximumWidth()
-        ) < UNBOUNDED
-        capped_across = (
-            frame.maximumWidth() if vertical_strip else frame.maximumHeight()
-        ) < UNBOUNDED
-        if capped_along:
-            flags |= start
-        if capped_across and align == "fill":
-            flags |= across
-        if flags:
-            layout.addWidget(frame, alignment=flags)
-        else:
-            layout.addWidget(frame)
-        frame.show()
-
-    def release_frame(self) -> BlockFrame:
-        """Hand the block back before this slot is destroyed.
-
-        Without it the frame is still a child of the slot when the slot is freed,
-        and Qt destroys the block's C++ object along with it — the same rescue the
-        canvas performs when it tears a row down.
-        """
-        layout = self.layout()
-        if layout is not None:
-            layout.removeWidget(self.frame)
-        return self.frame
-
-
-class _PinnedLine(QSplitter):
-    """One line of the strip: blocks side by side across it, each resizable."""
-
-    def __init__(self, vertical_strip: bool, parent: QWidget | None = None) -> None:
-        # A line runs *across* the strip: horizontally on a side strip.
-        super().__init__(
-            Qt.Orientation.Horizontal if vertical_strip else Qt.Orientation.Vertical, parent
-        )
-        self.setObjectName("pinnedLine")
-        self.setChildrenCollapsible(False)
-        self.slots: list[_PinnedSlot] = []
-
-    def add_slot(self, slot: _PinnedSlot) -> None:
-        self.addWidget(slot)
-        self.slots.append(slot)
 
 
 class PinnedHandle(QToolButton):
@@ -290,11 +175,11 @@ class PinnedPanel(QFrame):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._host = host
         self._edge = DEFAULT_EDGE
-        self._align = DEFAULT_ALIGN
         # What is currently rendered, so an unrelated re-render is a no-op. None
         # means "assume nothing": the next render rebuilds (see invalidate).
-        self._keys: list[list[str]] | None = []
-        self._lines: list[_PinnedLine] = []
+        self._rendered: lt.Node | None = None
+        self._root: QWidget | None = None
+        self._frames: dict[str, BlockFrame] = {}
 
         self._handle = PinnedHandle(self)
         self._handle.drag_started.connect(self.edge_drag_started)
@@ -303,34 +188,28 @@ class PinnedPanel(QFrame):
         self._handle.menu_requested.connect(self.open_menu)
         self._handle.clicked.connect(lambda: self.open_menu(self._handle_menu_pos()))
 
-        # The outer splitter runs along the strip and holds the lines.
-        self._splitter = QSplitter(Qt.Orientation.Vertical, self)
-        self._splitter.setObjectName("pinnedSplitter")
-        self._splitter.setChildrenCollapsible(False)
-        # And the strip has to hear when its content's minimum moves, because the
-        # scroll area below sits between the two and a QScrollArea's own minimum
-        # does not depend on its child — so Qt's invalidation stops there and
-        # nothing ever asks :meth:`minimumSizeHint` again. That is not cosmetic:
-        # this widget's answer is what holds the *window* open, so a block that
-        # grew (the roller showing its spec chip) would find the window still at
-        # the minimum computed before it grew, and the strip would answer the
-        # shortfall with the scrollbar it exists to avoid. A LayoutRequest reaches
-        # the splitter whenever a block below it invalidates.
-        self._splitter.installEventFilter(self)
+        # What the strip's blocks are rendered into. One widget, rebuilt from the
+        # region tree by the same build_node the page uses, so a block in the strip
+        # sits in the same kind of splitter with the same dividers and the same
+        # detents as one on the page. The strip used to have its own two container
+        # classes for this; the whole point of the rework is that it does not need
+        # them.
+        self._host_widget = QWidget()
+        self._host_widget.setObjectName("pinnedHost")
+        self._host_layout = QVBoxLayout(self._host_widget)
+        self._host_layout.setContentsMargins(0, 0, 0, 0)
+        self._host_layout.setSpacing(0)
 
-        # The last-resort scroll (see the module docstring): with the strip's
-        # minimum holding the window open, the content fits and no bar ever shows.
-        # Both axes stay on `AsNeeded` — the minimum is capped at the usable screen,
-        # and where the room genuinely is not there a bar beats clipping a block.
-        # What makes a bar rare is that the minimum is re-reported when the content
-        # changes (see :meth:`eventFilter`); it was not, and the Dice block showing
-        # its spec chip was enough to bring one up on a window that had plenty of
-        # room to grow into.
+        # The last-resort scroll. It is genuinely a last resort now: the strip
+        # demands no room of the window, so a strip too short for its blocks
+        # squashes them and they reflow, and only once every one of them is at its
+        # own floor does anything here have somewhere to scroll to. Both axes stay
+        # on `AsNeeded` for that case, where a bar beats clipping a block.
         self._scroll = QScrollArea(self)
         self._scroll.setObjectName("pinnedScroll")
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self._scroll.setWidget(self._splitter)
+        self._scroll.setWidget(self._host_widget)
 
         # A grid rather than a box layout so the edge can be changed by re-placing
         # two widgets: a QWidget's layout can't be swapped out once installed.
@@ -348,78 +227,54 @@ class PinnedPanel(QFrame):
     # -- rendering (driven by the canvas) ------------------------------------
 
     def invalidate(self) -> None:
-        """Force the next render to rebuild even if the blocks look unchanged.
+        """Force the next render to rebuild even if the tree looks unchanged.
 
-        A restored layout carries sizes as well as blocks, and those sizes are only
-        read on a rebuild. Without this, restoring a layout whose strip holds the
-        same blocks it already does would keep the proportions on screen and
-        silently drop the ones being restored.
+        Much less load-bearing than it was: the comparison is the whole tree now,
+        sizes included, so a restore that changes only the proportions is noticed
+        on its own — where the old keys-only comparison would silently keep what
+        was on screen. It stays for the case the comparison genuinely cannot see,
+        which is a *frame* being replaced under an unchanged key.
         """
-        self._keys = None
+        self._rendered = None
 
     def set_blocks(
         self,
-        lines: list[list[BlockFrame]],
+        root: lt.Node | None,
+        frames: dict[str, BlockFrame],
         edge: str,
-        align: str,
-        sizes: list[int],
-        line_sizes: list[list[int]],
     ) -> bool:
-        """Render *lines* along the strip, skipping the rebuild when nothing moved.
+        """Render *root* in the strip, skipping the rebuild when nothing moved.
 
         The canvas re-renders on every structural change, most of which are about
-        the page rather than the strip; rebuilding regardless would throw the
-        proportions the user dragged away each time they reordered a docked row.
+        the page rather than the strip; rebuilding regardless would throw away the
+        proportions the user dragged each time they reordered a docked row.
 
         Answers **whether it rebuilt**, so the board only re-asserts the strip's
-        thickness when the strip itself actually changed (see
-        :meth:`PinnedBoard.set_blocks`).
+        thickness when the strip itself actually changed.
 
-        ``sizes``/``line_sizes`` are deliberately not compared. They move on their
-        own only when a layout is *restored*, and a restore says so by calling
-        :meth:`invalidate` first — see ``BlockCanvas.apply_arrangement``. Everything
-        else that reshuffles the strip changes the key list in the same breath.
+        The tree is compared whole, sizes included, which is simpler than the old
+        keys-only comparison and strictly more correct: a restore that changes only
+        the proportions is a real change, and used to need an explicit
+        :meth:`invalidate` to be noticed at all.
         """
-        keys = [[frame.key for frame in line] for line in lines]
-        if keys == self._keys and edge == self._edge and align == self._align:
+        if root == self._rendered and edge == self._edge and self._root is not None:
             return False
 
         edge_changed = edge != self._edge
-        self._keys = keys
+        self._rendered = root
         self._edge = edge
-        self._align = align
+        self._frames = dict(frames)
         self._clear()
         if edge_changed:
             self._apply_edge()
 
-        vertical = is_vertical_strip(edge)
-        self._splitter.setOrientation(
-            Qt.Orientation.Vertical if vertical else Qt.Orientation.Horizontal
-        )
-        for index, frames in enumerate(lines):
-            line = _PinnedLine(vertical, self._splitter)
-            for frame in frames:
-                line.add_slot(_PinnedSlot(frame, vertical, align, line))
-            # A line whose every block pins its own size along the strip can't use
-            # more room than the longest of them; saying so stops the splitter
-            # handing it a band it would only leave empty, and gives the space to a
-            # line that can grow instead.
-            caps = [
-                (frame.maximumHeight() if vertical else frame.maximumWidth()) for frame in frames
-            ]
-            self._splitter.addWidget(line)
-            # A line whose every block pins its own size along the strip can't use
-            # more room than it asks for, so let the slack go to a line that can
-            # grow. (A maximum on the line itself does not survive: a splitter
-            # manages its children's bounds, and clears what we set.)
-            growable = not caps or any(cap >= UNBOUNDED for cap in caps)
-            self._splitter.setStretchFactor(index, 1 if growable else 0)
-            self._lines.append(line)
-            within = line_sizes[index] if index < len(line_sizes) else []
-            if len(within) == len(frames) and all(size > 0 for size in within):
-                line.setSizes(within)
-        if len(sizes) == len(lines) and all(size > 0 for size in sizes):
-            self._splitter.setSizes(sizes)
+        if root is not None:
+            self._root = build_node(root, self._build_leaf, self._host_widget)
+            self._host_layout.addWidget(self._root)
+            for key in lt.keys(root):
+                frame = self._frames.get(key)
+                if frame is not None:
+                    frame.show()
         self._apply_empty_state()
         # The strip only scrolls when its blocks genuinely don't fit, and its
         # contents have just changed — so start from the top rather than leaving
@@ -429,25 +284,60 @@ class PinnedPanel(QFrame):
         self._scroll.horizontalScrollBar().setValue(0)
         return True
 
+    def _build_leaf(self, leaf: lt.Leaf) -> QWidget:
+        """One cell of the strip. A tab group there is the host's business, not
+        the strip's, so a multi-key leaf shows the tab it has active."""
+        return self._frames[leaf.active_key()]
+
+    def split_paths(self) -> list[tuple[tuple[int, ...], QWidget]]:
+        """Every splitter in the strip, with the tree path that reaches it.
+
+        What the canvas needs to copy the live sizes back into the region tree —
+        the same walk it does over the page, so both sides read their handles home
+        through one function.
+        """
+        found: list[tuple[tuple[int, ...], QWidget]] = []
+
+        def walk(widget: QWidget | None, path: tuple[int, ...]) -> None:
+            if isinstance(widget, GridSplitter):
+                found.append((path, widget))
+                for index in range(widget.count()):
+                    walk(widget.widget(index), path + (index,))
+
+        walk(self._root, ())
+        return found
+
+    def splitters(self) -> list[QWidget]:
+        """Every divider-bearing splitter in the strip, outermost first."""
+        return [widget for _path, widget in self.split_paths()]
+
     def _clear(self) -> None:
         """Empty the strip, handing back every block that is still ours.
 
-        Only the ones still parented to their slot: by the time a re-render gets
+        Only the ones still parented into the strip: by the time a re-render gets
         here, a block being dragged out has *already* been moved into its floating
         window, and taking it back would empty that window out (the canvas guards
-        its own row teardown the same way).
+        its own row teardown the same way). And only the *containers* are shed — a
+        cell holding one block **is** that block's frame, so discarding it would
+        destroy a live block, exactly as it did on the page.
         """
-        for line in self._lines:
-            for slot in line.slots:
-                if slot.frame.parentWidget() is slot:
-                    frame = slot.release_frame()
-                    frame.setParent(self)
-                    frame.hide()
-                slot.setParent(None)
-                slot.deleteLater()
-            line.setParent(None)
-            line.deleteLater()
-        self._lines = []
+        root, self._root = self._root, None
+        if root is None:
+            return
+        # Asked of the widget tree, not of the frame dict this panel was last
+        # handed. That dict is a snapshot, and a block destroyed since it was taken
+        # (a Notes copy closed, say) is a dangling C++ object that raises the
+        # moment anything asks it a question — and an exception here would take the
+        # application down, not merely fail to tidy up.
+        for frame in [root, *root.findChildren(BlockFrame)]:
+            if isinstance(frame, BlockFrame):
+                frame.hide()
+                frame.setParent(self)
+        self._host_layout.removeWidget(root)
+        # A cell holding one block **is** that block's frame, and it has just been
+        # rescued above; anything else is a container we made.
+        if not isinstance(root, BlockFrame):
+            discard_widget(root)
 
     def _apply_edge(self) -> None:
         """Put the handle at the strip's leading corner and the lines beside it."""
@@ -463,7 +353,7 @@ class PinnedPanel(QFrame):
 
     def _apply_empty_state(self) -> None:
         """Collapse to the handle when nothing is pinned, expand when something is."""
-        empty = not self._lines
+        empty = self._root is None
         self._scroll.setVisible(not empty)
         self.setMinimumSize(0, 0)
         self.setMaximumSize(UNBOUNDED, UNBOUNDED)
@@ -476,179 +366,198 @@ class PinnedPanel(QFrame):
                 self.setFixedHeight(self.empty_extent())
         self.updateGeometry()
 
-    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802 - Qt override
-        """Re-report the strip's minimum whenever its content's own changes.
-
-        See the ``installEventFilter`` in ``__init__`` for why this is needed at
-        all: the scroll area between this widget and the blocks breaks Qt's own
-        invalidation chain, so without this the window keeps a minimum computed
-        before the block grew.
-        """
-        if watched is self._splitter and event.type() == QEvent.Type.LayoutRequest:
-            self.updateGeometry()
-        return super().eventFilter(watched, event)
-
     def empty_extent(self) -> int:
         """How thick the strip is with nothing pinned: its handle, and no more."""
         hint = self._handle.sizeHint()
         along_thickness = hint.width() if is_vertical_strip(self._edge) else hint.height()
         return max(EMPTY_EXTENT, along_thickness + 4)
 
-    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
-        """The room the pinned blocks need, so the *window* keeps them whole.
+    def recommended_size(self) -> RecommendedSize:
+        """How thick the strip would like to be, from the blocks that are in it.
 
-        A scroll area's own minimum is tiny — left alone it would answer a window
-        too small for the strip by growing a scrollbar, which is the one thing the
-        strip is not for. Reporting the content's minimum instead pushes back on
-        the window. It is capped at the usable screen so that pinning a very tall
-        block can't demand a window bigger than the display; past that cap the
-        scroll area does take over.
+        The strip's *internal* dividers have always marked their detents — they
+        are the page's own splitters, so they came with them. The handle that sets
+        the strip's **thickness** had none: it is the one divider in the app that
+        was a bare ``QSplitter``, so dragging the strip wider or narrower was the
+        only resize on the sheet with no hint of where the blocks would like to
+        stop. This is the number that fixes that.
+
+        Asked of the region tree rather than of Qt, because the answer is a sum
+        along one axis and a maximum across it, and only the tree knows which is
+        which: two blocks stacked down a strip on the left both want their own
+        *width*, so the strip wants the wider of them; the same two side by side
+        along the bottom want the strip to be as thick as the taller. Duck-typed
+        into the grid exactly like a frame's own, so
+        ``grid_view._recommended_extent`` needs no case for it.
+        """
+        thickness = self._node_extent(self._rendered)
+        if thickness <= 0:
+            return RecommendedSize()
+        thickness += self._chrome()
+        vertical = is_vertical_strip(self._edge)
+        return RecommendedSize(thickness if vertical else 0, 0 if vertical else thickness)
+
+    def _chrome(self) -> int:
+        """What the strip costs around its blocks, across its thickness."""
+        margins = self._grid.contentsMargins()
+        vertical = is_vertical_strip(self._edge)
+        if vertical:
+            return margins.left() + margins.right() + 2 * self._scroll.frameWidth()
+        return margins.top() + margins.bottom() + 2 * self._scroll.frameWidth()
+
+    def _node_extent(self, node: lt.Node | None) -> int:
+        """How much of the strip's thickness *node* wants.
+
+        A run **along** the thickness adds up (and pays for the dividers between);
+        a run across it takes the largest, since its children share the thickness
+        rather than dividing it. A cell is the largest recommendation of the
+        blocks in it — a tab group shows one at a time, so the group wants
+        whatever its roomiest member does.
+        """
+        if node is None:
+            return 0
+        along_thickness = lt.HORIZONTAL if is_vertical_strip(self._edge) else lt.VERTICAL
+        if isinstance(node, lt.Leaf):
+            wanted = 0
+            for key in node.keys:
+                frame = self._frames.get(key)
+                if frame is None:
+                    continue
+                size = frame.recommended_size()
+                stated = size.width if is_vertical_strip(self._edge) else size.height
+                wanted = max(wanted, int(stated))
+            return wanted
+        extents = [self._node_extent(child) for child in node.children]
+        if not extents:
+            return 0
+        if node.orientation == along_thickness:
+            return sum(extents) + handle_thickness() * (len(extents) - 1)
+        return max(extents)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        """Its handle, and nothing about what is pinned in it.
+
+        This used to report the strip's whole content — capped at the usable
+        screen — precisely so that the *window* would be held open rather than the
+        strip growing a scrollbar. That was the right answer while a block's
+        minimum was its content and squashing one meant clipping it. It is the
+        wrong answer now, and the last place in the app where the content could
+        still push the window around: a pinned block reflows and, past that,
+        scrolls inside its own frame, so the strip has no width it has to demand.
+
+        The handle stays, because the strip has to remain findable and droppable
+        however narrow it is dragged.
         """
         base = super().minimumSizeHint()
-        if not self._lines:
-            return base
-        content = self._splitter.minimumSizeHint()
-        handle = self._handle.sizeHint()
-        bars = self._scrollbar_allowance()
+        hint = self._handle.sizeHint()
         vertical = is_vertical_strip(self._edge)
-        width = content.width() + bars.width() + (0 if vertical else handle.width())
-        height = content.height() + bars.height() + (handle.height() if vertical else 0)
-        cap = _usable_screen(self)
         return QSize(
-            max(base.width(), min(width, cap.width())),
-            max(base.height(), min(height, cap.height())),
-        )
-
-    def _scrollbar_allowance(self) -> QSize:
-        """What the strip's own scrollbars take out of its viewport right now.
-
-        A bar along the strip's length eats into its *thickness*, so a strip asked
-        for exactly its content's width comes up a scrollbar short — and Qt covers
-        that by adding a second bar crossways, which is a scrollbar appearing purely
-        because of another scrollbar. Counting the visible bars into the minimum
-        asks for those pixels instead; the crossways bar then only turns up when the
-        window genuinely cannot spare them.
-        """
-        vertical_bar = self._scroll.verticalScrollBar()
-        horizontal_bar = self._scroll.horizontalScrollBar()
-        return QSize(
-            vertical_bar.sizeHint().width() if vertical_bar.isVisible() else 0,
-            horizontal_bar.sizeHint().height() if horizontal_bar.isVisible() else 0,
+            max(base.width(), hint.width() if vertical else 0),
+            max(base.height(), hint.height() if not vertical else 0),
         )
 
     # -- queries the canvas and the board ask ---------------------------------
 
     def is_empty(self) -> bool:
-        return not self._lines
+        return self._root is None
 
     def edge(self) -> str:
         return self._edge
 
-    def align(self) -> str:
-        return self._align
+    def region(self) -> lt.Node | None:
+        """The tree currently rendered."""
+        return self._rendered
 
-    def line_extents(self) -> list[int]:
-        """The outer splitter's sizes — how the lines share the strip's length."""
-        return list(self._splitter.sizes()) if self._lines else []
-
-    def block_sizes(self) -> list[list[int]]:
-        """Each line's own splitter sizes — how its blocks share its thickness."""
-        return [list(line.sizes()) for line in self._lines]
-
-    def frames(self) -> list[list[BlockFrame]]:
-        return [[slot.frame for slot in line.slots] for line in self._lines]
+    def frames(self) -> list[BlockFrame]:
+        """Every block in the strip, in reading order."""
+        return [self._frames[key] for key in lt.keys(self._rendered) if key in self._frames]
 
     # -- drop target ----------------------------------------------------------
+
+    #: How far inside a block's edges a drop has to be to mean "beside" rather
+    #: than "at this end of the strip". The same band the page uses at a row edge,
+    #: and it is what keeps both answers reachable.
+    EDGE_BAND = 12
 
     def drop_slot(self, global_pos: QPoint) -> PinSlot | None:
         """Where a block dropped at *global_pos* would land, or None if off the strip.
 
-        Mirrors the page canvas's hit test: inside a line's core it joins that
-        line beside its blocks, and in the band at either end of a line it makes a
-        new one — so a block goes beside another as easily as under it.
+        The same four-way reading the page makes, minus the merge: a drop names the
+        block it lands beside and which side of it to take. A strip with nothing in
+        it answers with no target at all, which the canvas reads as "you are the
+        first thing here".
         """
         if not self.isVisible():
             return None
         local = self.mapFromGlobal(global_pos)
         if not self.rect().contains(local):
             return None
-        if not self._lines:
-            return PinSlot(True, 0, 0)
+        frame = self._frame_under(global_pos)
+        if frame is None:
+            return PinSlot()
+        return PinSlot(frame.key, self._side_of(frame, global_pos))
 
+    def _frame_under(self, global_pos: QPoint) -> BlockFrame | None:
+        for frame in self.frames():
+            if not frame.isVisible():
+                continue
+            if frame.rect().contains(frame.mapFromGlobal(global_pos)):
+                return frame
+        return None
+
+    def _side_of(self, frame: BlockFrame, global_pos: QPoint) -> str:
+        """Which side of *frame* the pointer is nearest, along the strip first.
+
+        Along the strip is the axis a drop most often means — a strip is a column
+        of blocks, and putting one above or below another is the ordinary gesture —
+        so the bands at either end of the block are checked before the sides.
+        """
+        local = frame.mapFromGlobal(global_pos)
+        rect = frame.rect()
         vertical = is_vertical_strip(self._edge)
-        along = local.y() if vertical else local.x()
-        geoms = [self._line_geometry(line) for line in self._lines]
-        for index, geo in enumerate(geoms):
-            low, high = (geo.top(), geo.bottom()) if vertical else (geo.left(), geo.right())
-            if low + LINE_GAP <= along <= high - LINE_GAP:
-                return PinSlot(False, index, self._slot_in_line(index, local))
-
-        boundaries = self._line_boundaries(geoms)
-        nearest = min(range(len(boundaries)), key=lambda i: abs(along - boundaries[i]))
-        return PinSlot(True, nearest, 0)
-
-    def _line_geometry(self, line: _PinnedLine) -> QRect:
-        return QRect(line.mapTo(self, QPoint(0, 0)), line.size())
-
-    def _line_boundaries(self, geoms: list[QRect]) -> list[int]:
-        """The insert positions between lines, along the strip."""
-        vertical = is_vertical_strip(self._edge)
-        low = [geo.top() if vertical else geo.left() for geo in geoms]
-        high = [geo.bottom() if vertical else geo.right() for geo in geoms]
-        bounds = [low[0]]
-        bounds += [(high[i - 1] + low[i]) // 2 for i in range(1, len(geoms))]
-        bounds.append(high[-1])
-        return bounds
-
-    def _slot_in_line(self, index: int, local: QPoint) -> int:
-        """Which place within line *index* a point falls at (by block midpoints)."""
-        line = self._lines[index]
-        vertical = is_vertical_strip(self._edge)
-        across = local.x() if vertical else local.y()
-        for slot_index, slot in enumerate(line.slots):
-            center = slot.mapTo(self, slot.rect().center())
-            if across < (center.x() if vertical else center.y()):
-                return slot_index
-        return len(line.slots)
+        if vertical:
+            band = min(self.EDGE_BAND * 2, max(1, rect.height() // 3))
+            if local.y() < rect.top() + band:
+                return "top"
+            if local.y() > rect.bottom() - band:
+                return "bottom"
+            return "left" if local.x() < rect.center().x() else "right"
+        band = min(self.EDGE_BAND * 2, max(1, rect.width() // 3))
+        if local.x() < rect.left() + band:
+            return "left"
+        if local.x() > rect.right() - band:
+            return "right"
+        return "top" if local.y() < rect.center().y() else "bottom"
 
     def show_drop(self, slot: PinSlot) -> None:
         """Light the strip up and mark where the block would land."""
         self._drops.show_accept()
-        if not self._lines:
+        rect = self._indicator_rect(slot)
+        if rect is None:
             self._indicator.hide_indicator()
             return
-        self._indicator.move_to(self._indicator_rect(slot))
+        self._indicator.move_to(rect)
 
     def hide_drop(self) -> None:
         self._drops.clear()
         self._indicator.hide_indicator()
 
-    def _indicator_rect(self, slot: PinSlot) -> QRect:
-        """The insert line: across the strip for a new line, along it within one."""
-        vertical = is_vertical_strip(self._edge)
-        geoms = [self._line_geometry(line) for line in self._lines]
-        if slot.new_line:
-            position = self._line_boundaries(geoms)[max(0, min(slot.line, len(geoms)))]
-            if vertical:
-                return QRect(2, position - 1, max(0, self.width() - 4), 3)
-            return QRect(position - 1, 2, 3, max(0, self.height() - 4))
-
-        line = self._lines[max(0, min(slot.line, len(self._lines) - 1))]
-        geo = geoms[self._lines.index(line)]
-        position = self._slot_boundary(line, slot.slot, geo)
-        if vertical:
-            return QRect(position - 1, geo.top(), 3, geo.height())
-        return QRect(geo.left(), position - 1, geo.width(), 3)
-
-    def _slot_boundary(self, line: _PinnedLine, slot: int, geo: QRect) -> int:
-        """Where the insert line sits within *line*, in panel coordinates."""
-        vertical = is_vertical_strip(self._edge)
-        if not line.slots or slot <= 0:
-            return geo.left() if vertical else geo.top()
-        if slot >= len(line.slots):
-            return geo.right() if vertical else geo.bottom()
-        corner = line.slots[slot].mapTo(self, QPoint(0, 0))
-        return corner.x() if vertical else corner.y()
+    def _indicator_rect(self, slot: PinSlot) -> QRect | None:
+        """The insert line, along whichever edge of the target block was named."""
+        if slot.target is None:
+            return None
+        frame = self._frames.get(slot.target)
+        if frame is None or not frame.isVisible():
+            return None
+        geo = QRect(self.mapFromGlobal(frame.mapToGlobal(QPoint(0, 0))), frame.size())
+        thick = 3
+        if slot.side == "left":
+            return QRect(geo.left() - 1, geo.top(), thick, geo.height())
+        if slot.side == "right":
+            return QRect(geo.right() - 1, geo.top(), thick, geo.height())
+        if slot.side == "top":
+            return QRect(geo.left(), geo.top() - 1, geo.width(), thick)
+        return QRect(geo.left(), geo.bottom() - 1, geo.width(), thick)
 
     # -- the menu -------------------------------------------------------------
 
@@ -669,15 +578,9 @@ class PinnedPanel(QFrame):
             action.setCheckable(True)
             action.setChecked(edge == self._host.pin_edge())
             action.triggered.connect(lambda _checked=False, e=edge: self._host.set_pin_edge(e))
-        alignment = menu.addMenu("Alignment")
-        for align in PIN_ALIGNMENTS:
-            action = alignment.addAction(ALIGN_LABELS[align])
-            action.setCheckable(True)
-            action.setChecked(align == self._host.pin_align())
-            action.triggered.connect(lambda _checked=False, a=align: self._host.set_pin_align(a))
         menu.addSeparator()
         unpin = menu.addAction("Unpin all")
-        unpin.setEnabled(bool(self._lines))
+        unpin.setEnabled(self._root is not None)
         unpin.triggered.connect(lambda: self._host.unpin_all())
         return menu
 
@@ -745,6 +648,45 @@ class EdgeZoneOverlay(QWidget):
         self._zones["bottom"].setGeometry(band, height - band, max(0, width - 2 * band), band)
 
 
+class _BoardSplitter(GridSplitter):
+    """The one divider that sets the strip's thickness.
+
+    A ``GridSplitter`` so the strip's edge is dragged by the same handle, drawn
+    the same way and sticking at a recommended size the same way as every other
+    divider on the sheet — it was a bare ``QSplitter`` before, which is why this
+    was the only resize in the app with no detent and no mark.
+
+    It offers **one** target where the class it extends offers two. The other pane is the
+    whole page, whose ``sizeHint`` is a number about a scroll area rather than a
+    width anybody wants the strip to stop at, and a detent there would be a mark
+    on the page side promising something nobody meant.
+    """
+
+    def __init__(self, panel: QWidget, orientation: Qt.Orientation, parent: QWidget) -> None:
+        super().__init__(orientation, parent)
+        self.setObjectName("pinnedBoardSplitter")
+        self._panel = panel
+        # The strip is never collapsed by a drag: its handle *is* the strip when
+        # nothing is pinned, and a collapsed one could not be got back.
+        self.setChildrenCollapsible(False)
+
+    def detent_positions(self, index: int) -> list[int]:
+        sizes = self.sizes()
+        if not 0 < index < len(sizes):
+            return []
+        wanted = self._panel.recommended_size()
+        horizontal = self.orientation() == Qt.Orientation.Horizontal
+        stated = wanted.width if horizontal else wanted.height
+        if stated <= 0:
+            return []
+        total = sum(sizes) + self.handleWidth() * (len(sizes) - 1)
+        # Which side of the handle the strip is on decides which end the target is
+        # measured from — the same sum the page's splitter does, with one target.
+        leading = self.widget(index - 1) is self._panel
+        target = int(stated) if leading else total - self.handleWidth() - int(stated)
+        return [target] if target >= 0 else []
+
+
 class PinnedBoard(QWidget):
     """The page and the pinned strip side by side; the strip's edge *is* the layout.
 
@@ -767,9 +709,7 @@ class PinnedBoard(QWidget):
         self.panel.edge_drag_moved.connect(self._edge_drag_moved)
         self.panel.edge_drag_finished.connect(self._edge_drag_finished)
 
-        self._splitter = QSplitter(Qt.Orientation.Horizontal, self)
-        self._splitter.setObjectName("pinnedBoardSplitter")
-        self._splitter.setChildrenCollapsible(False)
+        self._splitter = _BoardSplitter(self.panel, Qt.Orientation.Horizontal, self)
         # The one place the strip's thickness is *chosen*: this signal fires for a
         # dragged handle and never for setSizes, so content that forces the strip
         # open is not mistaken for a preference (see _remember_dragged_extent).
@@ -803,13 +743,15 @@ class PinnedBoard(QWidget):
 
     def set_blocks(
         self,
-        lines: list[list[BlockFrame]],
+        root: lt.Node | None,
+        frames: dict[str, BlockFrame],
         edge: str,
-        align: str,
-        sizes: list[int],
-        line_sizes: list[list[int]],
-    ) -> None:
+    ) -> bool:
         """Render the strip, re-laying the board out first when the edge changed.
+
+        Answers whether the strip actually rebuilt, which the canvas needs: the
+        dividers are new widgets on a rebuild and it has to follow the new ones,
+        and following the old ones twice would close a block twice.
 
         The thickness is only re-asserted when the strip actually rebuilt. The canvas
         re-renders the strip on every structural change, and most of them are about
@@ -825,9 +767,11 @@ class PinnedBoard(QWidget):
             self._edge = edge
             self._fresh_settle()
             self._apply_edge()  # ends in _apply_extent, as it always has
-        if self.panel.set_blocks(lines, edge, align, sizes, line_sizes):
+        rebuilt = self.panel.set_blocks(root, frames, edge)
+        if rebuilt:
             self._fresh_settle()
             self._apply_extent()
+        return rebuilt
 
     def invalidate(self) -> None:
         """Make the next render rebuild the strip (see :meth:`PinnedPanel.invalidate`)."""
@@ -861,12 +805,6 @@ class PinnedBoard(QWidget):
         once the block that needed the room has moved or gone.
         """
         return self._extent
-
-    def line_extents(self) -> list[int]:
-        return self.panel.line_extents()
-
-    def block_sizes(self) -> list[list[int]]:
-        return self.panel.block_sizes()
 
     def drop_slot(self, global_pos: QPoint) -> PinSlot | None:
         return self.panel.drop_slot(global_pos)

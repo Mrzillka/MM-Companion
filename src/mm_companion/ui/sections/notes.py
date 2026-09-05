@@ -46,12 +46,12 @@ from mm_companion.ui.notes.editor import NoteEditor
 from mm_companion.ui.notes.events import note_events
 from mm_companion.ui.notes.picker import NotePickerDialog
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
-from mm_companion.ui.widgets import muted_style
+from mm_companion.ui.tab_drag import TabSplitGesture
+from mm_companion.ui.widgets import discard_widget, muted_style
 
 #: How far a tab must be dragged *off* its bar before the drag becomes a split.
 #: Generous on purpose: a bar's own left/right reorder is the common gesture and
 #: must not turn into a new block because a hand wobbled.
-SPLIT_THRESHOLD = 24
 
 #: The longest a tab caption gets before it is elided.
 MAX_TAB_CHARS = 22
@@ -80,6 +80,11 @@ class _OpenNote:
 
 class NotesSection(QGroupBox):
     """One Notes block: a tab per open note, over the workspace's ``notes/`` dir."""
+
+    #: An editor grows into whatever height the block is given — see
+    #: :meth:`~mm_companion.ui.block_frame._InnerScroll.set_section`. A note is as
+    #: long as you make it and the room is where you make it longer.
+    fills_height = True
 
     #: A tab was opened, closed or reordered — a character edit, so undoable.
     edited = Signal()
@@ -168,7 +173,12 @@ class NotesSection(QGroupBox):
         self._tabs.tabCloseRequested.connect(self._close_tab)
         self._tabs.currentChanged.connect(self._on_tab_changed)
         self._tabs.tabBar().tabMoved.connect(self._on_tab_moved)
-        self._split = _SplitGesture(self._tabs.tabBar(), self)
+        self._split = TabSplitGesture(
+            self._tabs.tabBar(),
+            begin=self._begin_split,
+            moved=self.splitMoved.emit,
+            released=self.splitReleased.emit,
+        )
         self._stack.addWidget(self._tabs)
 
         self._empty = QWidget()
@@ -263,8 +273,7 @@ class NotesSection(QGroupBox):
             rebuilt.append(item)
             self._tabs.addTab(item.editor, "")
         for orphan in keep.values():
-            orphan.editor.setParent(None)
-            orphan.editor.deleteLater()
+            discard_widget(orphan.editor)
         self._open = rebuilt
         self._refresh_tab_captions()
 
@@ -555,16 +564,18 @@ class NotesSection(QGroupBox):
         self.flush()
         super().hideEvent(event)
 
-    # -- merging -------------------------------------------------------------
+    def _begin_split(self, index: int, global_pos: QPoint) -> bool:
+        """A tab dragged clear of the bar: ask the sheet for a new Notes block.
 
-    def accepts_merge(self, other_key: str) -> bool:
-        """Whether a block dropped on this one would merge into it.
-
-        The seam the canvas asks through, duck-typed and defaulting to ``False``
-        everywhere else, which is what keeps every other block's drag exactly as
-        it was. Notes merge with Notes and with nothing else.
+        Refused for a block's only tab — that tab *is* the block, so splitting it
+        out would leave an empty block behind and a new one holding what the old
+        one held.
         """
-        return other_key.split("#", 1)[0] == self.block_key.split("#", 1)[0]
+        refs = self.open_refs()
+        if not (0 <= index < len(refs)) or len(refs) < 2:
+            return False
+        self.splitRequested.emit(refs[index], global_pos)
+        return True
 
     # -- lock ----------------------------------------------------------------
 
@@ -596,79 +607,6 @@ class _FocusRefresh(QObject):
                     self._section._refresh_from_disk(item)
                     break
         return False
-
-
-class _SplitGesture(QObject):
-    """Turn a tab dragged *off* its bar into a request for a new Notes block.
-
-    A tab bar already owns a left/right drag — that is how tabs reorder — so the
-    two gestures are told apart by direction and distance: moving along the bar
-    stays a reorder and Qt handles it, moving :data:`SPLIT_THRESHOLD` px clear of
-    the bar is a split.
-
-    What makes it feel like one gesture rather than two is that the bar keeps the
-    **mouse grab** through all of it (an implicit grab, from the press it already
-    saw). So once the split is requested this goes on filtering the bar's events
-    and forwards them as :attr:`NotesSection.splitMoved` /
-    :attr:`NotesSection.splitReleased`; the sheet hands those straight to the
-    canvas's ordinary drag controller, and the new block docks, pins, merges or
-    stays floating exactly as one dragged by its title bar would.
-    """
-
-    def __init__(self, tab_bar, section: NotesSection) -> None:
-        super().__init__(tab_bar)
-        self._bar = tab_bar
-        self._section = section
-        self._index = -1
-        self._armed = False
-        self._splitting = False
-        tab_bar.installEventFilter(self)
-
-    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802 - Qt override
-        if watched is not self._bar:
-            return False
-        kind = event.type()
-        if kind == QEvent.Type.MouseButtonPress:
-            if event.button() == Qt.MouseButton.LeftButton:
-                self._index = self._bar.tabAt(event.position().toPoint())
-                self._armed = self._index >= 0
-                self._splitting = False
-        elif kind == QEvent.Type.MouseMove:
-            if self._splitting:
-                self._section.splitMoved.emit(event.globalPosition().toPoint())
-                return True
-            if self._armed and self._off_the_bar(event.position().toPoint()):
-                return self._start_split(event.globalPosition().toPoint())
-        elif kind == QEvent.Type.MouseButtonRelease:
-            splitting, self._splitting = self._splitting, False
-            self._armed = False
-            self._index = -1
-            if splitting:
-                self._section.splitReleased.emit(event.globalPosition().toPoint())
-                return True
-        return False
-
-    def _off_the_bar(self, point: QPoint) -> bool:
-        """Whether the pointer has left the bar far enough to mean a split.
-
-        Vertically only: sideways *is* the reorder gesture, however far it goes.
-        """
-        rect = self._bar.rect()
-        return (
-            point.y() < rect.top() - SPLIT_THRESHOLD or point.y() > rect.bottom() + SPLIT_THRESHOLD
-        )
-
-    def _start_split(self, global_pos: QPoint) -> bool:
-        index, self._armed = self._index, False
-        self._index = -1
-        refs = self._section.open_refs()
-        if not (0 <= index < len(refs)) or len(refs) < 2:
-            # A block's only tab *is* that block: splitting it out would leave an
-            # empty block behind and a new one holding what the old one held.
-            return False
-        self._splitting = True
-        self._section.splitRequested.emit(refs[index], global_pos)
-        return True
 
 
 __all__ = ["NotesSection"]

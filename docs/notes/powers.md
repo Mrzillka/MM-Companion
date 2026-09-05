@@ -310,6 +310,23 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   reason improvising exists: an improvised effect is one nobody has bought, and the
   constructor is the only place an unbought power is ever held. The cost it reckons from is
   `power_gross_cost`, because the rules put Removable out of bounds here.
+- **A card narrows by giving its effect summary up, terms first.** The effect body is
+  a `reflow.ShedBox` (`ui/cards/effects.py::effect_body`) holding what a player bought
+  — the extras and flaws — beside what it costs them at the table — the game terms.
+  They sit side by side because they are read together and a card is a wide, shallow
+  thing; a card on a page the user drags is not always wide, and the terms grid
+  re-dealing itself into a single column only goes so far. Past that the card used to
+  be cut off down its right-hand edge. So: **the terms go first**, because they are the
+  same numbers the Power Constructor prints and the card's own roll footer repeats,
+  while a rank bought with three extras and a flaw is a fact about the build that
+  appears nowhere else; then the modifiers; then it clips. An effect with nothing
+  bought onto it has only the terms in the box, so at the very floor it keeps them and
+  they wrap — dropping them there would leave the body empty rather than shorter.
+  The power's name in the header is an **`ElidingLabel`** for the same reason a skill
+  name is: a plain `QLabel` reports its whole text as a minimum, so the card was held
+  open at the length of whatever the power was called, and a block narrower than that
+  clipped its own buttons off rather than letting the card adapt. Equipment gets all of
+  it for nothing, since an item's card is drawn by the same code.
 - **The constructor forwards rolls; it does not make them.** It is a window, not a sheet
   block, so it is not on the block bus — `PowerConstructorWindow.rollRequested` is
   connected by the `PowersSection` that opened it, which hands the request on exactly as
@@ -400,6 +417,25 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   field may name a `source` instead of listing options: `CONFIG_OPTION_SOURCES` lives in
   **core**, not beside the constructor's widgets, so the picker and the game-terms readout
   resolve an id to a name through the one call (`config_source_options`) and cannot drift.
+- **A field can be gated on a *modifier*, and its options can be widened by one.**
+  `shown_with` is the mirror of `hidden_with`: the field is on the card only while that
+  extra is attached. `widen_with` + `widen_source` add options to a `select` while the
+  named extra is attached. Affliction is what both exist for: the rules give it four
+  defenses to be resisted by (p107 — Toughness included, which the field used to omit),
+  and it is **Alternate Resistance** (p150) that makes any other resistance, any ability,
+  any skill or Damage legal, plus a second one to take the worst or the best of. Offering
+  all thirty-odd of those unconditionally would price the extra at nothing. The split is
+  between what is **offered** and what **renders**: `config_field_options` narrows the
+  picker, while `config_source_options` folds the widened list in unconditionally, so an
+  Affliction saved as resisted by Athletics still prints "Athletics" after the extra comes
+  off rather than falling back to a bare id. `config_field_shown` is asked by the card
+  *and* by `effect_stat_rows`, so a field the card is not showing prints no readout beside
+  it — the same contract `config_field_gate_open` has. And **narrowing never silently
+  drops a value**: a stored option the field no longer offers is added back to its own
+  combo carrying the modifier that would make it legal again
+  (`_unoffered_label` — "Athletics (needs Alternate Resistance)"), because "—" in the
+  picker beside a row still reading "resisted by Athletics" is the card contradicting
+  itself.
 - **The book's ~90 named powers are data, not a catalog.** `configurations.json` holds
   the standard power configurations (Blast, Dazzle, Snare, Force Field, Invisibility, …)
   as ready-made assemblies of records that already exist elsewhere, and
@@ -509,6 +545,16 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   is why `effect_attack_skill_bonus` and `effect_makes_attack` moved down from
   `validation` into `powers_terms`: it is the one layer that reaches both the effective
   rank below it and the modifier impacts it computes itself.
+- **Every attacking effect offers "Use attack skill", whether or not there is one to
+  pick.** The row is gated on `effect_makes_attack` (a Perception-Range flaw drops the
+  roll, so there is nothing to reskill) and on **nothing else**. It used to be built only
+  for a wielder who already had a Close/Ranged Combat focus, which made the option read
+  as something certain attacks have rather than something this character has not bought
+  yet — and a player with no combat focus never saw it at all, with nowhere to learn why.
+  With no focus the checkbox is now there and **disabled**, and its tooltip names the one
+  thing that would make it live. `combat_focus_options` is unchanged: nothing here writes
+  a skill row, because the constructor edits a deep copy of the *power* and the character
+  it is handed is the live one — a focus invented on a cancelled edit would survive it.
 - **Rank as a dial.** `effect_effective_rank` reads `effect_current_rank`, so an effect
   turned down is turned down everywhere its rank resolves — the save DC, the measures,
   the trait boost. `effect_build_rank` is the bought rank beside it, and validation reads
@@ -691,6 +737,24 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   improved (better) or a flaw limited (worse), resolving check/DC phrases to real
   numbers, and appending measures, configured qualities, trait-boost lines, and
   the Tier-5 `effect_readout_rows`.
+- **What a rank *means* is a readout, and the readout is data.** `effect_readouts.json`
+  maps an effect id to entries dispatched by `kind` through the `READOUT_KINDS` registry
+  (`size_table`, `state`, `measure_offsets`, `thresholds`, `config_flag`,
+  `points_per_rank`, `capped_rank_bonus`, `rank_scaled`, `reach_extension`). Several
+  effects had none and so said nothing the book says about them: **Regeneration**'s
+  recovery interval and its resurrection rung (p139), **Create**'s object volume, hollow
+  volume, Toughness and upkeep (p114), **Morph**'s forms (p134), **Quickness**'s time-rank
+  cut (p138), **Lifting** and **Move Object**'s effective Strength (p133/p134),
+  **Elongation**'s reach bands (p117) and **Teleport**'s carried mass (p144). Two of the
+  kinds are new and generic: `rank_scaled` is for a limit that *is* the rank rather than a
+  measurement of one (Create's Toughness — printing "2,000 cft." there would be a
+  different number entirely), and `reach_extension` reads the effect's own
+  `reach` block. `reach_extension` states the **extension**, never the wielder's total:
+  `character_reach` already walks the live powers for exactly this effect, so a card
+  restating the total would double the power standing on it — and it reads
+  `effect_current_rank`, the same dialled rank `reach_extension_feet` reads, so a
+  turned-down Elongation shortens on the card and on the block together. (The older
+  kinds read the bought `effect.rank`; that predates this and is left alone.)
 - **A modifier is taken once unless the ruleset says otherwise.** `repeatable` in
   `modifiers.json` / `effect_modifiers.json` is what `EffectCard.attach_modifier` reads,
   and only six records carry it: **Limited**, **Quirk**, **Feature**, the **Custom** pair,

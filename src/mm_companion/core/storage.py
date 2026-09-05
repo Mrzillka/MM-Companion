@@ -137,6 +137,13 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # key because the GM window has a different block set. See
     # :mod:`mm_companion.ui.gm_window`.
     "gm_layout": {},
+    # The same pair again for a GM's NPC sheet. The blocks are the character
+    # sheet's, but the ones that hold no trait start closed there (see
+    # :mod:`mm_companion.ui.npc_window`) — so an NPC arrangement written under
+    # ``layout`` would close the roller on every hero too. Both are read with an
+    # inline ``or {}`` fallback rather than off a bare ``load_settings``, since a
+    # workspace created before this key has neither.
+    "npc_layout": {},
     # What a GM card's pinned-parameter strip starts with, per card kind. Each
     # entry is a ``PinRef.to_dict()`` (see :mod:`mm_companion.core.rules.pins`).
     # Read through :func:`gm_default_pins`, never straight off ``load_settings``:
@@ -484,6 +491,43 @@ def dice_layout() -> str:
 def set_dice_layout(layout: str) -> None:
     """Choose how the dice roller arranges itself; an unknown value means ``auto``."""
     update_settings(dice_layout=layout if layout in DICE_LAYOUTS else DICE_LAYOUT_AUTO)
+
+
+#: The settings keys a window's block arrangement may be stored under. One per
+#: window kind, because two windows sharing a key would teach each other their
+#: layouts: an NPC's arrangement written under ``layout`` would close the roller on
+#: every hero, and the GM window has a different block set entirely.
+SHEET_LAYOUT_KEYS = ("layout", "npc_layout", "gm_layout")
+
+
+def sheet_layout(key: str) -> dict:
+    """One window's remembered arrangement: ``{"window_geometry", "dock_state"}``.
+
+    The accessor the three windows owed and none of them had — each read its key
+    straight off :func:`load_settings` with an inline ``or {}``, which worked only
+    because they all remembered to write the fallback. ``load_settings`` hands the
+    file back verbatim and does not merge :data:`DEFAULT_SETTINGS`, so a workspace
+    older than a key answers ``None`` and any caller that forgot would have found
+    the setting silently dead.
+
+    Both members are returned as strings, empty when absent, so a caller never has
+    to check a type before handing one to ``restoreGeometry`` or ``json.loads``.
+    """
+    stored = load_settings().get(key) if key in SHEET_LAYOUT_KEYS else None
+    stored = stored if isinstance(stored, dict) else {}
+    geometry = stored.get("window_geometry")
+    state = stored.get("dock_state")
+    return {
+        "window_geometry": geometry if isinstance(geometry, str) else "",
+        "dock_state": state if isinstance(state, str) else "",
+    }
+
+
+def set_sheet_layout(key: str, window_geometry: str, dock_state: str) -> None:
+    """Remember one window's arrangement. An unknown *key* is ignored."""
+    if key not in SHEET_LAYOUT_KEYS:
+        return
+    update_settings(**{key: {"window_geometry": window_geometry, "dock_state": dock_state}})
 
 
 def compact_settings() -> dict:

@@ -36,6 +36,7 @@ from collections.abc import Callable
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
+    QFrame,
     QHeaderView,
     QMenu,
     QSpinBox,
@@ -184,8 +185,15 @@ def build_stat_table(
     # The table never scrolls itself; it reports its rows as its size (see
     # :class:`AutoHeightTable`) and the page scrolls when the blocks don't all fit.
     # ``fit_width`` because this table *is* the whole block, so its columns are
-    # what the block's minimum width should be.
+    # what the block opens at — and what is left of them once the shed order below
+    # has gone is the block's floor.
     table = AutoHeightTable(0, len(HEADERS), fit_width=True)
+    # No frame of its own: this table *is* the whole block, and its section already
+    # draws a border round the block's content. Two borders a hair apart read as a
+    # rendering fault, and the section's is the one that belongs to the block — so
+    # the table gives its up and its grid runs to the block's own edge (the section
+    # zeroes the margin between them; see :class:`AbilitiesSection`).
+    table.setFrameShape(QFrame.Shape.NoFrame)
     table.setHorizontalHeaderLabels(HEADERS if base_store is None else BASE_HEADERS)
     table.verticalHeader().setVisible(False)
     table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -193,6 +201,21 @@ def build_stat_table(
     header.setSectionResizeMode(COL_NAME, QHeaderView.ResizeMode.Stretch)
     for col in (COL_ABBR, COL_RANK, COL_TOTAL):
         header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+    # What this table gives up as it narrows, worst first. Column 1 goes first
+    # because it repeats what the row already says (the ability's own short code)
+    # or restates a number the Total column carries anyway (a resistance's base).
+    #
+    # Then **Rank**, which is a real loss and is taken deliberately. A stat table
+    # squeezed to two columns is a trait and its number — the thing a player reads
+    # off a sheet mid-play — and that is worth more, at that width, than the field
+    # they type a build into: the build is made once, at a width they can choose,
+    # and the sheet is read constantly at whatever width the page has left. The
+    # Total column stops being an "and here is what changed" and prints the number
+    # outright while Rank is gone (:func:`apply_stat_effects`), or a narrow
+    # Abilities block would show a column of blanks. Past this the name elides and
+    # then the block scrolls; nothing is ever lost, and widening it back brings the
+    # spin boxes straight back.
+    table.set_shed_order([COL_ABBR, COL_RANK])
     # Fits its content and never scrolls, so keep it out of the focus chain; the
     # wheel then always falls through to the page.
     table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -357,6 +380,8 @@ def apply_stat_effects(
     totals: dict,
     bonuses: dict,
     cond_effects: dict[str, ConditionEffect] | None = None,
+    *,
+    always: bool = False,
 ) -> None:
     """Fill or clear each trait's Total cell from power bonuses and conditions.
 
@@ -367,18 +392,24 @@ def apply_stat_effects(
     any condition tints it red regardless, struck through when the overlay reports the trait lost
     (``ConditionEffect.trait_lost`` — Disabled/Debilitated in the base data). A trait
     with neither keeps an empty cell, exactly as the Skills table's "+" column does.
+
+    *always* fills every cell with the plain number instead, arrow and all dropped.
+    It is what a table that has **shed its Rank column** asks for: the arrow means
+    "and this is what it became", which needs the thing it became it *from* to be on
+    the row — with Rank gone, an unmodified trait would show nothing whatsoever.
     """
 
     cond_effects = cond_effects or {}
     for key, item in totals.items():
         bonus = bonuses.get(key)
         effect = cond_effects.get(key)
+        total = spins[key].value() + (bonus.amount if bonus else 0)
         if not bonus and not (effect is not None and effect.active):
-            paint_stat_cell(item, "", None, None)
+            paint_stat_cell(item, str(total) if always else "", None, None)
             continue
 
-        total = spins[key].value() + (bonus.amount if bonus else 0)
-        paint_stat_cell(item, f"→ {_overlaid(total, effect)}", bonus, effect)
+        shown = _overlaid(total, effect)
+        paint_stat_cell(item, str(shown) if always else f"→ {shown}", bonus, effect)
 
 
 def apply_value_column(

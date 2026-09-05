@@ -90,7 +90,7 @@ from mm_companion.ui.sections.conditions import (
     condition_display_name,
     condition_tooltip,
 )
-from mm_companion.ui.widgets import ElidingLabel
+from mm_companion.ui.widgets import ElidingLabel, discard_widget
 
 #: How far the pointer must move with the button down to count as a drag rather
 #: than a click, in pixels.
@@ -434,8 +434,7 @@ class NPCCard(QFrame):
             item = self._chip_flow.takeAt(0)
             widget = item.widget() if item is not None else None
             if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
+                discard_widget(widget)
         for applied in self._character.conditions:
             record = self._conditions_by_id.get(applied.condition_id)
             chip = _ConditionChip(

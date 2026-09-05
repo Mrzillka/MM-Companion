@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QWidget,
 )
 
@@ -181,10 +182,21 @@ def test_hiding_a_block_by_its_x_syncs_the_view_menu(window: GMWindow) -> None:
     assert window._block_actions["rolls"].isChecked() is True
 
 
+def _gm_rows(window: GMWindow) -> list[list[str]]:
+    """The GM board's top-level rows, each flattened to a list of block keys."""
+    from mm_companion.ui import layout_tree as lt
+
+    return [lt.keys(child) for child in window._canvas.page_tree().children]
+
+
 def test_the_player_and_npc_blocks_grow_to_fit_more_cards(window: GMWindow) -> None:
-    # A growable (unpinned) width lets the FlowLayout add columns as the block widens.
-    assert window._canvas._is_growable("players") is True
-    assert window._canvas._is_growable("npcs") is True
+    # Every block fills the cell it is given now — how big that cell is, is the
+    # user's business — so what makes the FlowLayout add columns is simply that
+    # nothing caps the block's width any more.
+    for key in ("players", "npcs"):
+        frame = window._canvas.block_frame(key)
+        assert frame.maximumWidth() >= 100_000
+        assert frame.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Expanding
 
 
 def test_the_block_layout_persists_across_a_reopen(qapp: QApplication, window: GMWindow) -> None:
@@ -222,8 +234,8 @@ def test_the_rolls_block_starts_in_the_pinned_strip(qapp: QApplication, window: 
     holds only what is read between rolls.
     """
     assert window._canvas.pinned_keys() == ["rolls"]
-    assert window._board.panel.frames() == [[window._canvas.block_frame("rolls")]]
-    assert all("rolls" not in row for row in window._canvas.arrangement()["rows"])
+    assert window._board.panel.frames() == [window._canvas.block_frame("rolls")]
+    assert all("rolls" not in row for row in _gm_rows(window))
 
 
 def test_a_gm_block_can_be_pinned_beside_the_scrolling_board(
@@ -239,8 +251,8 @@ def test_a_gm_block_can_be_pinned_beside_the_scrolling_board(
     QApplication.processEvents()
 
     assert window._canvas.is_pinned("rolls") is True
-    assert window._board.panel.frames() == [[window._canvas.block_frame("rolls")]]
-    assert all("rolls" not in row for row in window._canvas.arrangement()["rows"])
+    assert window._board.panel.frames() == [window._canvas.block_frame("rolls")]
+    assert all("rolls" not in row for row in _gm_rows(window))
 
     window._persist_layout()
     reopened = GMWindow(bind="127.0.0.1")
@@ -1383,6 +1395,27 @@ def test_opening_the_same_npc_twice_raises_the_one_window(window: GMWindow) -> N
     assert list(window._npc_windows.values()) == [first]
 
 
+def test_reopening_a_minimized_npc_sheet_brings_it_back(window: GMWindow) -> None:
+    """The one case the old show/raise/activate trio could not answer.
+
+    A minimized window is already "shown", so ``show()`` is a no-op and
+    ``activateWindow()`` will not restore it — clicking the card appeared to do
+    nothing, and the GM had to find the sheet on the taskbar.
+    """
+    path = write_npc("Ogre")
+    window._register_npc(path)
+    window._open_npc(path.name)
+    sheet = next(iter(window._npc_windows.values()))
+
+    sheet.showMinimized()
+    assert sheet.windowState() & Qt.WindowState.WindowMinimized
+
+    window._open_npc(path.name)
+
+    assert not sheet.windowState() & Qt.WindowState.WindowMinimized
+    assert list(window._npc_windows.values()) == [sheet]
+
+
 def test_an_npc_added_while_hosting_goes_through_the_server(
     qapp: QApplication, window: GMWindow
 ) -> None:
@@ -2423,10 +2456,49 @@ def test_the_board_is_far_narrower_than_the_constant_it_replaced(
     quick_npc_file(window)
     (card,) = npc_cards(window)
 
-    assert card.width() < 300
-    assert card.width() == card.body_width_hint() + card.pin_width_hint() + (
-        int(theme.metric("space.sm")) * 3
-    )
+    asked = card.body_width_hint() + card.pin_width_hint() + int(theme.metric("space.sm")) * 3
+    assert asked < 300
+    # At most what the card asked for. It may be *less*: the block's own width is
+    # a ceiling now, so a board dragged narrower than one card squeezes the card
+    # rather than growing a scrollbar and showing the GM a letterbox.
+    assert card.width() <= asked
+
+
+def test_a_card_takes_its_full_width_when_the_block_has_the_room(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    quick_npc_file(window)
+    window.resize(1400, 900)
+    window.show()
+    for _ in range(8):
+        qapp.processEvents()
+    (card,) = npc_cards(window)
+
+    asked = card.body_width_hint() + card.pin_width_hint() + int(theme.metric("space.sm")) * 3
+    assert card.width() == asked
+    window.hide()
+
+
+def test_a_narrow_block_squeezes_its_cards_rather_than_clipping_them(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    """The pinned strip gives up its slack first — a narrower strip elides its
+    captions and loses least — and the body follows only after that."""
+    quick_npc_file(window)
+    window.resize(1400, 900)
+    window.show()
+    for _ in range(8):
+        qapp.processEvents()
+    (card,) = npc_cards(window)
+    roomy = card.width()
+
+    window.resize(420, 900)
+    for _ in range(10):
+        qapp.processEvents()
+
+    assert card.width() < roomy
+    assert card.width() >= int(theme.metric("gm.card.min"))
+    window.hide()
 
 
 def test_collapsing_is_remembered_per_card(window: GMWindow) -> None:

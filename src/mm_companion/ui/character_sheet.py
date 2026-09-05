@@ -30,7 +30,7 @@ from PySide6.QtWidgets import QScrollArea, QVBoxLayout, QWidget
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData, load_game_data
-from mm_companion.core.rules import power_points_spent
+from mm_companion.core.rules import power_points_spent, stable_build
 from mm_companion.ui.block_canvas import BlockCanvas
 from mm_companion.ui.block_frame import BlockFrame
 from mm_companion.ui.blocks import (
@@ -52,6 +52,7 @@ from mm_companion.ui.blocks.bus import (
     UNPIN_REQUESTED,
 )
 from mm_companion.ui.pinned_panel import PinnedBoard
+from mm_companion.ui.widgets import discard_widget
 
 
 class CharacterSheet(QWidget):
@@ -133,20 +134,26 @@ class CharacterSheet(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._board)
 
-        # Pin the page's minimum width to the widest docked row so it can never
-        # shrink narrow enough to clip a block (the fixed-width Abilities /
-        # Resistances grids can't compress). Recomputed whenever the arrangement
-        # changes — floating or hiding a block frees up the constraint.
         # The block a tab was just split into, while its drag is still in flight.
         self._split_key: str | None = None
-        self._canvas.merge_requested.connect(self._on_merge_requested)
+        # The page's own minimum width no longer tracks the blocks in it (see
+        # _update_min_width), but it is still recomputed on every arrangement
+        # change, since a preset switch can move the token it does depend on.
         self._canvas.arrangement_changed.connect(self._update_min_width)
         self._update_min_width()
 
         self._wire_sections()
 
     def _update_min_width(self) -> None:
-        """Track the widest docked row as the page's minimum width."""
+        """Hold the page open by the width of one scrollbar and very little else.
+
+        This used to track the widest docked row — the sum of every block's whole
+        content — which is what made the *window* refuse to be made narrower than
+        the blocks it held. Blocks reflow and, past that, scroll inside themselves
+        now, so the page has no width it has to refuse; what is left is a floor
+        small enough to be no constraint and real enough that the page cannot
+        vanish. See :meth:`BlockCanvas.content_minimum_width`.
+        """
         extent = self._scroll.verticalScrollBar().sizeHint().width()
         self._scroll.setMinimumWidth(self._canvas.content_minimum_width() + extent + 2)
 
@@ -279,8 +286,11 @@ class CharacterSheet(QWidget):
         # would be an empty NotesState the next instance to reuse this key would
         # inherit — and `notes#2` is reused as soon as the middle of three closes.
         self.character.notes.pop(key, None)
-        section.setParent(None)
-        section.deleteLater()
+        # Off the bus before it is destroyed, or its handlers stay subscribed as bound
+        # methods of a section whose widget has gone — and a coalescing one could be
+        # armed, so the call would land on a later turn with nothing to trace it to.
+        self._bus.forget(section)
+        discard_widget(section)
         attribute = key.replace(INSTANCE_SEPARATOR, "_")
         if hasattr(self, attribute):
             delattr(self, attribute)
@@ -369,26 +379,6 @@ class CharacterSheet(QWidget):
         if key is not None:
             self._canvas.title_bar_released(key, global_pos)
 
-    def _on_merge_requested(self, source: str, target: str) -> None:
-        """A block was dropped onto another: move its content over and drop it.
-
-        The canvas asks rather than does, because the *sections* are the sheet's:
-        it knows nothing about tabs, and this is the only place that does.
-        """
-        giver = self._sections_by_key.get(source)
-        taker = self._sections_by_key.get(target)
-        if giver is None or taker is None or giver is taker:
-            return
-        refs = list(giver.open_refs())
-        for ref in refs:
-            giver.release(ref)
-        taker.adopt(refs, active=refs[-1] if refs else "")
-        # The template's own key is the block every sheet has and every layout
-        # names, so it stays where the drop put it, now empty; only a copy the
-        # user made is destroyed by being merged away.
-        if instance_template(source) != source:
-            self.remove_block_instance(source)
-
     def _key_of(self, section) -> str | None:
         for key, candidate in self._sections_by_key.items():
             if candidate is section:
@@ -408,7 +398,7 @@ class CharacterSheet(QWidget):
         its own two build-wide concerns. See :mod:`mm_companion.ui.blocks.bus` for
         the topic table and the exact fan-out it reproduces.
         """
-        self._bus = SignalBus()
+        self._bus = SignalBus(self)
         # Sheet-level subscribers: recompute spent power points on any build change,
         # and surface any user edit for unsaved-change tracking. (Toggling a power
         # on/off publishes BUILD_CHANGED but not EDITED, so a runtime toggle
@@ -451,7 +441,11 @@ class CharacterSheet(QWidget):
             for topic in topics:
                 signal.connect(self._bus.make_publisher(topic))
         for topic, method_name in descriptor.subscribes.items():
-            self._bus.subscribe(topic, getattr(section, method_name))
+            self._bus.subscribe(
+                topic,
+                getattr(section, method_name),
+                coalesce=method_name in descriptor.coalesces,
+            )
         # The payload channel: the same two tables, one topic further out.
         for signal_name, topics in descriptor.requests.items():
             signal = getattr(section, signal_name)
@@ -487,12 +481,16 @@ class CharacterSheet(QWidget):
 
         NPCs carry no point budget, so the sheet skips the spent-PP total for them
         and refreshes the System block's estimated Power Level (from traits) instead.
+
+        Scoped like a bus subscriber (:func:`~mm_companion.ui.blocks.bus._refresh`) —
+        it is one, in all but the wiring, and both branches price the whole build.
         """
-        if self._npc:
-            self.system_info.refresh_estimated_pl()
-        else:
-            spent = power_points_spent(self.character, self._data)
-            self.system_info.set_pool_current("power_points", spent)
+        with stable_build():
+            if self._npc:
+                self.system_info.refresh_estimated_pl()
+            else:
+                spent = power_points_spent(self.character, self._data)
+                self.system_info.set_pool_current("power_points", spent)
 
     @property
     def locked(self) -> bool:

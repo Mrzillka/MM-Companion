@@ -14,6 +14,7 @@ from .appliers import (
     CATEGORY_RESISTANCE,
     CATEGORY_SKILL,
     GROUP_EFFORT,
+    GROUP_INTRINSIC,
     GROUP_POWERS,
     SPECIALIZED_ROW_MARKER,
     STACK_SUM,
@@ -24,11 +25,13 @@ from .appliers import (
     skill_for_row,
     split_trait_key,
 )
+from .build_cache import build_scoped
 from .conditions import ConditionEffect, condition_scope_penalty
 from .runtime import equipment_contributions, power_contributions
 from .size import size_contributions
 
 
+@build_scoped
 def granted_advantages(
     char: Character,
     game_data: GameData,
@@ -54,6 +57,13 @@ def granted_advantages(
     in hand — :func:`trait_contributions` does, since every derived total on the sheet
     goes through it and walking the powers twice per lookup would be paid for on every
     skill row.
+
+    :func:`~.build_cache.build_scoped` for callers that have *no* gather in hand and so
+    ask the bare two-argument question — :func:`all_advantage_selections` is one, and it
+    sits under the initiative readout. Without the memo that readout walked the whole
+    build twice per call (once for the ability, once for the bonus), inside a scope
+    where every other derived number costs nothing. The three-argument call passes
+    straight through, as ``build_scoped`` does for any narrower question.
     """
 
     if contributions is None:
@@ -175,6 +185,26 @@ def granted_advantage_selections(
     )
 
 
+def all_advantage_selections(
+    char: Character,
+    game_data: GameData,
+    granted: dict[str, TraitBonus] | None = None,
+) -> tuple[AdvantageSelection, ...]:
+    """Every advantage standing on the sheet — the bought ones and the granted ones.
+
+    An advantage's *mechanics* do not care which currency paid for it: an Enhanced
+    Advantage: Improved Initiative 2 moves the initiative modifier exactly as two
+    bought ranks would. So the resolvers that read an advantage's data fields read
+    this rather than :attr:`Character.advantages`, which holds only what the player
+    bought. Cost and budget math is the deliberate exception — it reads the bought
+    list alone, because the power already paid (see :func:`granted_advantages`).
+    """
+
+    return tuple(char.advantages) + tuple(
+        selection for selection, _source in granted_advantage_selections(char, game_data, granted)
+    )
+
+
 def skill_row_exists(char: Character, game_data: GameData, row_id: str) -> bool:
     """Whether ``row_id`` names a skill row this character actually has.
 
@@ -268,6 +298,7 @@ def effort_contributions(char: Character, game_data: GameData) -> tuple[TraitCon
     )
 
 
+@build_scoped
 def trait_contributions(char: Character, game_data: GameData) -> tuple[TraitContribution, ...]:
     """Every stat contribution standing on the sheet, in the order the sheet grants them.
 
@@ -287,6 +318,12 @@ def trait_contributions(char: Character, game_data: GameData) -> tuple[TraitCont
     exactly what it always did; the gear arrives last in its own group, where the
     resolver takes the better of the two rather than adding them, and a tie goes to
     whichever group was seen first — the powers.
+
+    Gathers the whole build every call, and sits under every derived number the sheet
+    prints — which is why it is :func:`~.build_cache.build_scoped`: inside a
+    :func:`~.build_cache.stable_build` the answer is worked out once and handed to the
+    rest of the pass, and outside one it recomputes exactly as it always did. The
+    returned tuple is shared within a scope, so treat it as read-only.
     """
 
     size = size_contributions(char, game_data)
@@ -309,6 +346,7 @@ def trait_contributions(char: Character, game_data: GameData) -> tuple[TraitCont
     )
 
 
+@build_scoped
 def trait_bonuses(char: Character, game_data: GameData) -> dict[str, dict[str, TraitBonus]]:
     """The net bonus on every trait, grouped ``category -> {key: TraitBonus}``.
 
@@ -316,6 +354,10 @@ def trait_bonuses(char: Character, game_data: GameData) -> dict[str, dict[str, T
     :func:`~.runtime.power_trait_bonuses` (the powers-only view the enhancement columns
     show) this is the sheet-wide number, and it is what every derived total below
     reads.
+
+    Scoped like the gather beneath it, and worth scoping separately: the resolver is
+    not free either, and this is what every ability, resistance and skill lookup goes
+    through. The returned mapping is shared within a scope — read it, don't write it.
     """
 
     return resolve_bonuses(trait_contributions(char, game_data))
@@ -349,21 +391,63 @@ def effective_ability(char: Character, game_data: GameData, key: str) -> int:
     return char.abilities.get(key, 0) + (bonus.amount if bonus else 0)
 
 
+def _specialization_base_ranks(char: Character, row_id: str) -> tuple[TraitContribution, ...]:
+    """A specialized pool's *parent* skill ranks, as a contribution standing on the pool.
+
+    A narrow pool is bought on top of the skill, not instead of it: a hero with Stealth
+    10 who buys 3 ranks of ``Stealth::spec::Hiding`` hides at 13, and the pool is the
+    cheap way to be *better at one thing* than the skill already makes them. Nothing is
+    charged twice — each pool is still its own rank pool at its own rate
+    (:func:`~.trait_rates.skill_row_rate`); only what those ranks are *worth* stacks.
+
+    Expressed as a contribution rather than as an addend in :func:`skill_total` so the
+    Skills block's "+" column can name it: the row's columns sum to its total, and a
+    total that quietly held ten ranks the row never shows is exactly what would read as
+    a bug. It lands in :data:`~.appliers.GROUP_INTRINSIC`, which does not compete —
+    ranks the character bought are not a bonus that a power or a suit of armour can
+    supersede, nor one they should be weighed against.
+
+    A focus is not this: a focused skill has no shared pool for a focus to add to, so
+    only the ``spec::`` marker qualifies, and a skill with no ranks contributes nothing
+    rather than a ``+0`` the column would have to draw.
+    """
+
+    base, qualifier = split_trait_key(row_id)
+    if not qualifier.startswith(SPECIALIZED_ROW_MARKER):
+        return ()
+    ranks = char.skill_ranks.get(base, 0)
+    if not ranks:
+        return ()
+    return (
+        TraitContribution(
+            amount=ranks,
+            stat=row_id,
+            category=CATEGORY_SKILL,
+            source=f"{base} ranks",
+            stacking=STACK_SUM,
+            group=GROUP_INTRINSIC,
+        ),
+    )
+
+
 def skill_bonus(char: Character, game_data: GameData, row_id: str) -> TraitBonus | None:
     """Every *outside* bonus standing on one skill row, or ``None`` when there is none.
 
-    A skill row's bonus is never bought or typed in — it is granted by something else
-    on the sheet, and the sources are summed here so the view can show one number and
-    name what produced it:
+    A skill row's bonus is never typed in — it is granted by something else on the
+    sheet, and the sources are summed here so the view can show one number and name
+    what produced it:
 
     * powers — an active Enhanced-Trait-style boost naming the skill
       (:func:`~.runtime.power_trait_bonuses`), which applies to the skill's every row
       (each focus and specialized pool included);
     * advantages — any advantage carrying a ``skill_bonus_per_rank``, times its bought
       rank, on the skill its ``skill_bonus_target`` names (or, lacking one, the skill
-      the selection's ``parameter`` chose).
+      the selection's ``parameter`` chose);
+    * the parent skill's own ranks, on a *specialized* row — the one contributor the
+      player did buy, since a narrow pool adds to the skill rather than replacing it
+      (:func:`_specialization_base_ranks`).
 
-    Both are data-driven, so a mod adds a new granting advantage or effect without
+    The first two are data-driven, so a mod adds a new granting advantage or effect without
     touching this resolver. Conditions are deliberately *not* folded in here: they are
     display-only, never part of the build. The sheet's "+" column shows both kinds
     netted together — see :func:`skill_modifiers`.
@@ -371,7 +455,8 @@ def skill_bonus(char: Character, game_data: GameData, row_id: str) -> TraitBonus
     A skill's contributions are gathered by *either* name a source may have used —
     the base skill (a power's boost reaches every row of it, focuses and specialized
     pools included) or this exact row (an advantage aimed at one focus) — and then
-    netted by the stacking resolver.
+    netted by the stacking resolver, together with the parent skill's own ranks when
+    the row is a specialized pool (:func:`_specialization_base_ranks`).
     """
 
     skill = skill_for_row(game_data, row_id)
@@ -379,11 +464,12 @@ def skill_bonus(char: Character, game_data: GameData, row_id: str) -> TraitBonus
         return None
 
     names = {skill.name, row_id}
-    return resolve_contributions(
+    gathered = [
         c
         for c in trait_contributions(char, game_data)
         if c.category == CATEGORY_SKILL and c.stat in names
-    )
+    ]
+    return resolve_contributions(gathered + list(_specialization_base_ranks(char, row_id)))
 
 
 def _skill_scope_keys(row_id: str) -> set[str]:
@@ -453,6 +539,10 @@ def skill_total(char: Character, game_data: GameData, row_id: str) -> int:
     The ability value is the *effective* one (:func:`effective_ability`), and the
     bonuses are the granted ones (:func:`skill_bonus`), so an Enhanced-Trait boost to
     either the linked ability or the skill itself shows up in the total.
+
+    On a specialized row the skill's own ranks are among those bonuses
+    (:func:`_specialization_base_ranks`): a narrow pool is bought *on top of* the
+    skill, so Stealth 10 with 3 ranks of ``Stealth::spec::Hiding`` hides at 13.
 
     This is the *build* value. A condition scoped to the skill does not move it — the
     view overlays that on top (:func:`skill_modifiers`), so a penalised roll never
@@ -559,9 +649,12 @@ def initiative_ability(char: Character, game_data: GameData) -> str:
     and whose selection stored a valid choice in its ``parameter`` replaces the
     default with that mental ability. The first such advantage wins; without one,
     initiative uses ``system.json``'s ``default_initiative_ability`` (Agility).
+
+    Reads :func:`all_advantage_selections`, so an Enhanced Advantage granting
+    Alternate Initiative swaps the ability just as a bought one would.
     """
 
-    for selection in char.advantages:
+    for selection in all_advantage_selections(char, game_data):
         advantage = advantage_by_name(game_data, selection.name)
         if (
             advantage
@@ -578,10 +671,15 @@ def initiative_advantage_bonus(char: Character, game_data: GameData) -> int:
     Data-driven: each advantage carrying an ``initiative_bonus_per_rank`` contributes
     that many points times its chosen rank, so the +4/rank number lives in
     ``advantages.json`` rather than here.
+
+    Bought *and* power-granted alike (:func:`all_advantage_selections`): an Enhanced
+    Advantage: Improved Initiative used to be a name on the sheet that moved no
+    number, because this walked ``char.advantages`` and a granted advantage is
+    deliberately never written back to it.
     """
 
     total = 0
-    for selection in char.advantages:
+    for selection in all_advantage_selections(char, game_data):
         advantage = advantage_by_name(game_data, selection.name)
         if advantage and advantage.initiative_bonus_per_rank:
             total += advantage.initiative_bonus_per_rank * selection.rank

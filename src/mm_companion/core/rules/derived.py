@@ -14,6 +14,7 @@ from .appliers import (
     CATEGORY_RESISTANCE,
     CATEGORY_SKILL,
     GROUP_EFFORT,
+    GROUP_INTRINSIC,
     GROUP_POWERS,
     SPECIALIZED_ROW_MARKER,
     STACK_SUM,
@@ -390,21 +391,63 @@ def effective_ability(char: Character, game_data: GameData, key: str) -> int:
     return char.abilities.get(key, 0) + (bonus.amount if bonus else 0)
 
 
+def _specialization_base_ranks(char: Character, row_id: str) -> tuple[TraitContribution, ...]:
+    """A specialized pool's *parent* skill ranks, as a contribution standing on the pool.
+
+    A narrow pool is bought on top of the skill, not instead of it: a hero with Stealth
+    10 who buys 3 ranks of ``Stealth::spec::Hiding`` hides at 13, and the pool is the
+    cheap way to be *better at one thing* than the skill already makes them. Nothing is
+    charged twice — each pool is still its own rank pool at its own rate
+    (:func:`~.trait_rates.skill_row_rate`); only what those ranks are *worth* stacks.
+
+    Expressed as a contribution rather than as an addend in :func:`skill_total` so the
+    Skills block's "+" column can name it: the row's columns sum to its total, and a
+    total that quietly held ten ranks the row never shows is exactly what would read as
+    a bug. It lands in :data:`~.appliers.GROUP_INTRINSIC`, which does not compete —
+    ranks the character bought are not a bonus that a power or a suit of armour can
+    supersede, nor one they should be weighed against.
+
+    A focus is not this: a focused skill has no shared pool for a focus to add to, so
+    only the ``spec::`` marker qualifies, and a skill with no ranks contributes nothing
+    rather than a ``+0`` the column would have to draw.
+    """
+
+    base, qualifier = split_trait_key(row_id)
+    if not qualifier.startswith(SPECIALIZED_ROW_MARKER):
+        return ()
+    ranks = char.skill_ranks.get(base, 0)
+    if not ranks:
+        return ()
+    return (
+        TraitContribution(
+            amount=ranks,
+            stat=row_id,
+            category=CATEGORY_SKILL,
+            source=f"{base} ranks",
+            stacking=STACK_SUM,
+            group=GROUP_INTRINSIC,
+        ),
+    )
+
+
 def skill_bonus(char: Character, game_data: GameData, row_id: str) -> TraitBonus | None:
     """Every *outside* bonus standing on one skill row, or ``None`` when there is none.
 
-    A skill row's bonus is never bought or typed in — it is granted by something else
-    on the sheet, and the sources are summed here so the view can show one number and
-    name what produced it:
+    A skill row's bonus is never typed in — it is granted by something else on the
+    sheet, and the sources are summed here so the view can show one number and name
+    what produced it:
 
     * powers — an active Enhanced-Trait-style boost naming the skill
       (:func:`~.runtime.power_trait_bonuses`), which applies to the skill's every row
       (each focus and specialized pool included);
     * advantages — any advantage carrying a ``skill_bonus_per_rank``, times its bought
       rank, on the skill its ``skill_bonus_target`` names (or, lacking one, the skill
-      the selection's ``parameter`` chose).
+      the selection's ``parameter`` chose);
+    * the parent skill's own ranks, on a *specialized* row — the one contributor the
+      player did buy, since a narrow pool adds to the skill rather than replacing it
+      (:func:`_specialization_base_ranks`).
 
-    Both are data-driven, so a mod adds a new granting advantage or effect without
+    The first two are data-driven, so a mod adds a new granting advantage or effect without
     touching this resolver. Conditions are deliberately *not* folded in here: they are
     display-only, never part of the build. The sheet's "+" column shows both kinds
     netted together — see :func:`skill_modifiers`.
@@ -412,7 +455,8 @@ def skill_bonus(char: Character, game_data: GameData, row_id: str) -> TraitBonus
     A skill's contributions are gathered by *either* name a source may have used —
     the base skill (a power's boost reaches every row of it, focuses and specialized
     pools included) or this exact row (an advantage aimed at one focus) — and then
-    netted by the stacking resolver.
+    netted by the stacking resolver, together with the parent skill's own ranks when
+    the row is a specialized pool (:func:`_specialization_base_ranks`).
     """
 
     skill = skill_for_row(game_data, row_id)
@@ -420,11 +464,12 @@ def skill_bonus(char: Character, game_data: GameData, row_id: str) -> TraitBonus
         return None
 
     names = {skill.name, row_id}
-    return resolve_contributions(
+    gathered = [
         c
         for c in trait_contributions(char, game_data)
         if c.category == CATEGORY_SKILL and c.stat in names
-    )
+    ]
+    return resolve_contributions(gathered + list(_specialization_base_ranks(char, row_id)))
 
 
 def _skill_scope_keys(row_id: str) -> set[str]:
@@ -494,6 +539,10 @@ def skill_total(char: Character, game_data: GameData, row_id: str) -> int:
     The ability value is the *effective* one (:func:`effective_ability`), and the
     bonuses are the granted ones (:func:`skill_bonus`), so an Enhanced-Trait boost to
     either the linked ability or the skill itself shows up in the total.
+
+    On a specialized row the skill's own ranks are among those bonuses
+    (:func:`_specialization_base_ranks`): a narrow pool is bought *on top of* the
+    skill, so Stealth 10 with 3 ranks of ``Stealth::spec::Hiding`` hides at 13.
 
     This is the *build* value. A condition scoped to the skill does not move it — the
     view overlays that on top (:func:`skill_modifiers`), so a penalised roll never

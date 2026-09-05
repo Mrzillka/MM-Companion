@@ -14,7 +14,7 @@ from PySide6.QtWidgets import QApplication
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.ui import layout_tree as lt
 from mm_companion.ui.character_sheet import CharacterSheet
-from mm_companion.ui.layout_undo import LayoutHistory, Step, UndoRouter
+from mm_companion.ui.layout_undo import LayoutHistory, UndoRouter
 from mm_companion.ui.main_window import MainWindow
 from mm_companion.ui.undo import UndoController
 
@@ -142,7 +142,6 @@ class TestTheRouter:
 
         sheet.abilities._abilities["STR"].setValue(4)
         character.flush()
-        router._note(Step.CHARACTER)
         sheet.canvas.merge_blocks("skills", "powers")
         router.note_layout_step()
 
@@ -161,7 +160,6 @@ class TestTheRouter:
         router = UndoRouter(character, history)
         sheet.abilities._abilities["STR"].setValue(4)
         character.flush()
-        router._note(Step.CHARACTER)
         sheet.canvas.merge_blocks("skills", "powers")
         router.note_layout_step()
         router.undo()
@@ -171,6 +169,41 @@ class TestTheRouter:
         assert sheet.abilities._abilities["STR"].value() == 4
         router.redo()
         assert sheet.canvas.group_for("powers") is not None
+
+    def test_an_edit_after_a_layout_gesture_is_still_the_last_thing_done(self, sheet) -> None:
+        """The order has to keep counting, not just notice the first edit.
+
+        Watching "the character can now undo" only ever fires once a session, so
+        every edit after the first was filed behind whatever layout gesture came
+        between them: Ctrl+Z moved a divider back instead of taking back the rank
+        that had just been typed.
+        """
+        character = UndoController(sheet)
+        router = UndoRouter(character, LayoutHistory(sheet.canvas))
+
+        sheet.abilities._abilities["STR"].setValue(4)
+        character.flush()
+        sheet.canvas.merge_blocks("skills", "powers")
+        router.note_layout_step()
+        sheet.abilities._abilities["AGL"].setValue(6)
+        character.flush()
+
+        assert router.undo() is True
+        assert sheet.abilities._abilities["AGL"].value() != 6
+        assert sheet.canvas.group_for("powers") is not None, "the layout went first"
+
+    def test_a_redo_it_drove_itself_is_not_a_new_edit(self, sheet) -> None:
+        """A redo pushes onto the undo stack, which looks exactly like an edit."""
+        character = UndoController(sheet)
+        router = UndoRouter(character, LayoutHistory(sheet.canvas))
+        sheet.abilities._abilities["STR"].setValue(4)
+        character.flush()
+        router.undo()
+        depth = len(router._order)
+
+        router.redo()
+
+        assert len(router._order) == depth + 1, "the redo was counted twice"
 
     def test_a_layout_gesture_alone_is_still_undoable(self, sheet) -> None:
         router = UndoRouter(None, LayoutHistory(sheet.canvas))

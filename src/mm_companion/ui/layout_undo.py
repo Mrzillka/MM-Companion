@@ -157,26 +157,45 @@ class UndoRouter(QObject):
         self._layout = layout
         self._order: deque[Step] = deque(maxlen=LAYOUT_DEPTH * 2)
         self._redo_order: list[Step] = []
+        # Set while this router is the one moving a history, so its own undo and
+        # redo cannot be mistaken for the user making a fresh edit.
+        self._driving = False
         if character is not None:
             character.stateChanged.connect(self._on_character_changed)
         layout.stateChanged.connect(self.stateChanged.emit)
-        self._character_could_undo = self._character_can_undo()
+        self._character_depth = self._character_depth_now()
 
     # -- keeping the order ----------------------------------------------------
 
     def _character_can_undo(self) -> bool:
         return bool(self._character is not None and self._character.can_undo)
 
+    def _character_depth_now(self) -> int:
+        """How many steps the character's history holds (see ``UndoController``)."""
+        if self._character is None:
+            return 0
+        return int(self._character.undo_depth)
+
     def _on_character_changed(self) -> None:
         """Notice a *new* character step, so the order stays true.
 
         The controller announces plenty that is not a new step — a redo, an undo,
-        the saved marker moving — so this watches the one thing that means a step
-        was added: the undo stack becoming non-empty, or growing while nothing
-        here asked it to.
+        the saved marker moving — so this watches the one thing that means one was
+        added: its **depth** growing.
+
+        It used to watch the stack becoming non-empty, which is only the *first*
+        edit of a session. Every one after that went unrecorded, so an edit made
+        after a layout gesture was filed behind it and ``Ctrl+Z`` moved the divider
+        back rather than taking back what the user had just typed. The two came
+        back in the wrong order and both eventually came back, which is exactly the
+        kind of fault nobody reports and everybody notices.
+
+        And nothing is noted while this router is itself driving: a redo pushes a
+        state onto the undo stack, which is a depth the router is about to record
+        in the order on its own.
         """
-        could, self._character_could_undo = self._character_could_undo, self._character_can_undo()
-        if self._character_could_undo and not could:
+        before, self._character_depth = self._character_depth, self._character_depth_now()
+        if not self._driving and self._character_depth > before:
             self._note(Step.CHARACTER)
         self.stateChanged.emit()
 
@@ -214,7 +233,7 @@ class UndoRouter(QObject):
                 return False
             step = other
         self._redo_order.append(step)
-        self._character_could_undo = self._character_can_undo()
+        self._character_depth = self._character_depth_now()
         self.stateChanged.emit()
         return True
 
@@ -228,16 +247,20 @@ class UndoRouter(QObject):
                 return False
             step = other
         self._order.append(step)
-        self._character_could_undo = self._character_can_undo()
+        self._character_depth = self._character_depth_now()
         self.stateChanged.emit()
         return True
 
     def _perform(self, step: Step, *, redo: bool) -> bool:
-        if step is Step.LAYOUT:
-            return self._layout.redo() if redo else self._layout.undo()
-        if self._character is None:
-            return False
-        return self._character.redo() if redo else self._character.undo()
+        self._driving = True
+        try:
+            if step is Step.LAYOUT:
+                return self._layout.redo() if redo else self._layout.undo()
+            if self._character is None:
+                return False
+            return self._character.redo() if redo else self._character.undo()
+        finally:
+            self._driving = False
 
     def _fallback_undo(self) -> Step | None:
         """What to undo when the order is empty but a history is not.

@@ -34,6 +34,7 @@ from mm_companion.ui.roll_history import (
     MAX_QUICK_ROLLS,
     MIN_HISTORY_HEIGHT,
     NoteCard,
+    RollHistoryPanel,
 )
 from mm_companion.ui.session_bridge import SessionBridge, set_active_session
 
@@ -403,18 +404,18 @@ def _extended(qapp: QApplication) -> DiceRollerView:
     return view
 
 
-def test_extended_puts_the_controls_beside_the_history_however_narrow(
+def test_extended_keeps_the_controls_a_column_beside_the_history(
     qapp: QApplication,
 ) -> None:
     """The shape GM Mode was built as, now had by asking for it.
 
-    At this width the auto layout stacks the two (see
-    ``test_a_narrow_tall_roller_stacks_its_parts``) — which is the point: Extended
-    is chosen, not derived from the room, so the room does not get a vote.
+    What Extended pins is the **panel**: controls in a column beside a history,
+    where the same width left to itself would deal them out as one row of four
+    (see ``test_extended_is_the_shape_an_auto_roller_would_not_choose``).
     """
     view = _extended(qapp)
 
-    _settled(qapp, view, 360, 800)
+    _settled(qapp, view, 900, 500)
 
     assert view.is_row is True
     assert view._splitter.orientation() is Qt.Orientation.Horizontal
@@ -423,47 +424,151 @@ def test_extended_puts_the_controls_beside_the_history_however_narrow(
     assert view.panel._box.direction() is QBoxLayout.Direction.TopToBottom
 
 
-def test_extended_survives_the_widths_that_would_reshape_an_auto_roller(
+def test_extended_is_the_shape_an_auto_roller_would_not_choose(
     qapp: QApplication,
 ) -> None:
+    """Wide enough that the room alone would break the panel into a row."""
     view = _extended(qapp)
 
-    for width, height in ((1500, 300), (360, 800), (900, 500)):
+    for width, height in ((1500, 300), (2000, 400), (900, 500)):
         _settled(qapp, view, width, height)
         assert (view.is_row, view.panel.is_row) == (True, False)
 
+    view.set_layout(storage.DICE_LAYOUT_AUTO)
+    _settled(qapp, view, 1500, 300)
+    assert view.panel.is_row is True
 
-def test_extended_reports_the_row_width_it_cannot_narrow_out_of(
-    qapp: QApplication,
-) -> None:
-    """The one rule the reflow's own minimum has to be turned around for.
 
-    An auto roller reports the *column* width whatever axis it is on, because it
-    can always narrow by flipping. A locked row cannot, so it has to hold the block
-    — and through it the strip and the window — open at what it really needs.
+def test_extended_stacks_where_a_row_will_not_fit(qapp: QApplication) -> None:
+    """A preference, not a lock — and the difference is a pinned side strip.
+
+    Extended used to force the row whatever the width, which meant this view had
+    to report the *row's* width as its minimum: a chosen shape cannot narrow out
+    of itself. That held the block, the strip and the window open at close to
+    600px, spent half of a side strip on a controls column with an empty tail
+    under it, and squeezed the history — the one thing here that scrolls — into
+    what was left. Extra room is the history's.
     """
     view = _extended(qapp)
-    _settled(qapp, view, 900, 500)
-    locked = view.minimumSizeHint().width()
 
-    view.set_layout(storage.DICE_LAYOUT_AUTO)
-    _settled(qapp, view, 900, 500)
+    _settled(qapp, view, 360, 800)  # the right-hand pinned strip's shape
 
-    assert locked > view.minimumSizeHint().width()
-    assert locked >= view.panel.column_minimum_width()
+    assert view.is_row is False
+    assert view.panel.is_row is False
+    assert view.minimumSizeHint().width() <= view.panel.column_minimum_width()
+    assert view.minimumSizeHint().width() < view.row_minimum_width()
+
+
+def test_extended_gives_a_taller_strip_to_the_history_alone(
+    qapp: QApplication,
+) -> None:
+    view = _extended(qapp)
+    _settled(qapp, view, 360, 700)
+    panel_height, history_height = view._splitter.sizes()
+
+    _settled(qapp, view, 360, 1300)
+
+    grown_panel, grown_history = view._splitter.sizes()
+    assert grown_panel == panel_height
+    assert grown_history == history_height + 600
 
 
 def test_leaving_extended_hands_the_arrangement_back_to_the_room(
     qapp: QApplication,
 ) -> None:
     view = _extended(qapp)
-    _settled(qapp, view, 360, 800)
-    assert view.is_row is True
+    _settled(qapp, view, 1500, 300)
+    assert (view.is_row, view.panel.is_row) == (True, False)
 
     view.set_layout(storage.DICE_LAYOUT_AUTO)
-    _settled(qapp, view, 360, 800)
+    _settled(qapp, view, 1500, 300)
 
-    assert (view.is_row, view.panel.is_row) == (False, False)
+    assert (view.is_row, view.panel.is_row) == (True, True)
+
+
+# -- extra room is the history's, in every shape ------------------------------
+#
+# The history is the only thing in the Dice block allowed to scroll, so length is
+# worth something to it and nothing to a row of spin boxes. One case per shape the
+# roller can be in, because each divides its space by a different branch of
+# ``_row_sizes`` / ``_column_sizes``.
+
+
+def test_a_taller_strip_is_all_history(qapp: QApplication) -> None:
+    """Stacked, in a side strip: the controls hold their height, the list grows."""
+    view = DiceRollerView()
+    view.show()
+    _settled(qapp, view, 360, 700)
+    panel_height, history_height = view._splitter.sizes()
+    assert view.is_row is False
+
+    _settled(qapp, view, 360, 1300)
+
+    grown_panel, grown_history = view._splitter.sizes()
+    assert grown_panel == panel_height == view.panel.sizeHint().height()
+    assert grown_history == history_height + 600
+
+
+def test_a_wider_strip_is_all_history(qapp: QApplication) -> None:
+    """Side by side, in a bottom strip: the controls take the row they ask for.
+
+    They used to take a quarter of everything past it as well — "a little air" —
+    which on a wide strip was a slab of empty groupbox charged to the history.
+    """
+    view = DiceRollerView()
+    view.show()
+    _settled(qapp, view, 1400, 300)
+    panel_width, history_width = view._splitter.sizes()
+    assert view.is_row is True
+
+    _settled(qapp, view, 1900, 300)
+
+    grown_panel, grown_history = view._splitter.sizes()
+    assert grown_panel == panel_width
+    assert grown_history == history_width + 500
+
+
+def test_a_host_supplied_history_is_given_the_room_too(qapp: QApplication) -> None:
+    """The GM window's Rolls block is this view with its own history handed in.
+
+    So it inherits the rule rather than restating it — which is the point of the
+    ``history=`` seam, and worth a test because it is the surface a GM watches a
+    whole fight through.
+    """
+    view = DiceRollerView(hidden_option=True, history=RollHistoryPanel(gm=True))
+    view.show()
+    _settled(qapp, view, 360, 700)
+    panel_height, history_height = view._splitter.sizes()
+    assert view.is_row is False
+
+    _settled(qapp, view, 360, 1300)
+
+    grown_panel, grown_history = view._splitter.sizes()
+    assert grown_panel == panel_height
+    assert grown_history == history_height + 600
+
+
+def test_the_roller_never_asks_a_block_for_more_than_a_column(
+    qapp: QApplication,
+) -> None:
+    """Whichever shape is chosen, and that is what frees a side strip.
+
+    A minimum is a refusal, and the block's is the strip's thickness: a roller
+    that asked for its row width there held the whole strip open at close to
+    600px whether or not anything was better off for it.
+    """
+    for layout in (
+        storage.DICE_LAYOUT_AUTO,
+        storage.DICE_LAYOUT_EXTENDED,
+        storage.DICE_LAYOUT_COMPACT,
+    ):
+        storage.set_dice_layout(layout)
+        view = DiceRollerView()
+        view.show()
+        view.set_layout(layout)
+        _settled(qapp, view, 900, 500)  # wide enough to be a row before we ask
+
+        assert view.minimumSizeHint().width() <= view.panel.column_minimum_width()
 
 
 def test_a_column_gives_the_space_back_when_a_chip_goes(qapp: QApplication) -> None:

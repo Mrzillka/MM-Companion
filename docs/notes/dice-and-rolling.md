@@ -27,6 +27,25 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   after the block was built, so `CharacterSheet.sync_session()` fans a duck-typed
   `sync_session` out to the blocks and `attach_player_session` calls it at both ends of
   a session.
+- **Deferral is a window, not a flag, and that was a bug first.** The shared history
+  holds one's *own* roll back so the card lands as the die settles rather than the
+  instant the server answers. Only the roller's `sessionRollRevealed` lets a held roll
+  go, so a roll held while no die is in the air is held for the rest of the session —
+  invisible to the one seat that made it, while every other screen shows it. Both
+  flags are therefore load-bearing: `set_defer_own` says *there is a roller to wait
+  for*, `set_awaiting_own` (driven by the panel's `awaitingOwnRoll`) says *it is
+  waiting right now*, and turning the second off **flushes** whatever is still held.
+  Two perfectly ordinary things used to strand a roll. A **reconnect** re-sends the
+  whole log — `Welcome` → `historyReplaced` → `set_rolls` — so every one of that
+  player's own rolls was deferred again at once and their history lost all of them at
+  a stroke, which is why it looked like "some players stop seeing their rolls". And a
+  roll the panel **gave up on** at `SESSION_ROLL_TIMEOUT_MS` still exists: the server
+  rolled it, the record arrives on the history's own feed a moment later, and nothing
+  was left to reveal it. Note what is *not* undone on that second path — the readout
+  goes on saying nobody answered, because that was true of the tumble; only the card
+  comes back. `set_rolls` also re-reads `own_player_id()` before repainting, since
+  `attach` runs once per join and a redial that failed to reclaim the old seat returns
+  under a new `player_id`.
 - **A history holds notes as well as rolls.** A `NoteCard` is a line nobody rolled —
   "spent a hero point — 2 left" — written by the `note-requested` topic (see "Rolling
   from the sheet"). In a session it goes to the server and comes back through the shared

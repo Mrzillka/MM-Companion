@@ -1717,3 +1717,147 @@ def test_mod_state_broadcasts_the_key_it_actually_stored(running_server, connect
     stored_key = next(iter(srv.mod_state()["timers"]))
     assert broadcast["key"] == stored_key
     assert client.mod_state["timers"].keys() == {stored_key}
+
+
+# --------------------------------------------------------------------------
+# Getting the door open again
+# --------------------------------------------------------------------------
+
+
+def test_relisten_leaves_the_table_exactly_where_it_was(running_server, connect) -> None:
+    """The whole reason ``relisten`` exists rather than ``stop`` then ``start``.
+
+    ``stop`` says goodbye to every peer first, and a client takes that as final
+    and will not redial — so the pair would evict the whole table to fix a door.
+    """
+    srv = running_server()
+    client, events = connect(srv, "Ada")
+    seat = client.player_id
+
+    srv.relisten()
+
+    assert srv.running is True
+    assert srv.state.players[seat].connected is True
+    assert "kicked" not in events.kinds()
+    assert "disconnected" not in events.kinds()
+    # ...and the link is still a live one, not merely still in the roster.
+    srv.roll(player_id=seat, label="still here")
+    events.next_of("roll")
+
+
+def test_a_relisten_keeps_the_port_the_join_code_names(running_server) -> None:
+    """Hosting on an automatic port, asking for 0 twice would move the door.
+
+    The join code the GM has already sent everybody carries the *first* port, so
+    a second ephemeral one would break it silently — the failure landing on the
+    players rather than on whoever pressed the button.
+    """
+    srv = running_server()  # port=0: the OS picks
+    first = srv.address
+
+    srv.relisten()
+
+    assert srv.address == first
+
+
+def test_a_new_player_can_join_after_a_relisten(running_server, connect) -> None:
+    srv = running_server()
+    srv.relisten()
+
+    client, _events = connect(srv, "Bo")
+
+    wait_for(lambda: any(slot.display_name == "Bo" for slot in srv.state.players.values()))
+    assert client.connected is True
+
+
+def test_a_lost_listener_starts_trying_to_open_another(running_server) -> None:
+    """The accept loop ending is not the end of hosting, so it says so and retries."""
+    events = Events()
+    srv = running_server(on_event=events)
+    events.next_of(server_mod.EVENT_STARTED)
+
+    srv._listener.close()  # noqa: SLF001 - exactly what a dead relay control link does
+
+    events.next_of(server_mod.EVENT_LISTENER_LOST)
+    payload = events.next_of(server_mod.EVENT_HOST_STATE)
+    assert payload["state"] == server_mod.HOST_STATE_RELISTING
+    wait_for(lambda: srv.host_state == server_mod.HOST_STATE_LISTENING)
+    assert srv.running is True
+
+
+def test_a_relisten_that_keeps_failing_parks_rather_than_ending_the_session(
+    running_server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A host with no listener still has its table; running out of window is not fatal.
+
+    That is the asymmetry with a client, whose retry window running out really
+    does mean the session is over for it.
+    """
+    monkeypatch.setattr(net, "RECONNECT_DELAYS", (0.01,))
+    monkeypatch.setattr(server_mod, "RECONNECT_DELAYS", (0.01,))
+    monkeypatch.setattr(server_mod, "RECONNECT_WINDOW", 0.05)
+    events = Events()
+    srv = running_server(on_event=events)
+    monkeypatch.setattr(
+        srv._transport, "listen", lambda *a, **k: (_ for _ in ()).throw(OSError("no door"))
+    )
+
+    srv._listener.close()  # noqa: SLF001
+
+    wait_for(lambda: srv.host_state == server_mod.HOST_STATE_UNREACHABLE)
+    assert srv.running is True  # the table is still a table
+
+
+def test_reconnect_wakes_a_ladder_that_is_between_attempts(running_server) -> None:
+    """Session ▸ Reconnect must not wait out a thirty-second rung."""
+    events = Events()
+    srv = running_server(on_event=events)
+    srv._relisten_thread = None  # noqa: SLF001 - none is climbing yet
+
+    srv.reconnect()
+
+    wait_for(lambda: srv.host_state == server_mod.HOST_STATE_LISTENING)
+    assert srv.running is True
+
+
+def test_a_relisten_never_resurrects_a_stopped_session() -> None:
+    """``stop`` only *joins* the ladder with a timeout, so it can still be running.
+
+    A relisten that finished afterwards would leave a listening socket — and a
+    ``_running`` server — behind a table everyone was told had closed.
+    """
+    srv = SessionServer(new_session("Table"), host="127.0.0.1", port=0, persist=False)
+    srv.start()
+    srv.stop()
+
+    srv.relisten()
+
+    assert srv.running is False
+    assert srv._listener is None  # noqa: SLF001
+    assert srv.host_state == server_mod.HOST_STATE_UNREACHABLE
+
+
+def test_reconnect_does_nothing_for_a_server_that_is_not_running() -> None:
+    srv = SessionServer(new_session("Quiet"), host="127.0.0.1", port=0, persist=False)
+
+    srv.reconnect()
+
+    assert srv.running is False
+    assert srv.host_state == server_mod.HOST_STATE_UNREACHABLE
+
+
+def test_stopping_cuts_a_climbing_ladder_short(running_server, monkeypatch) -> None:
+    """``stop`` joins its threads, so a ladder parked on a long rung would hang it."""
+    monkeypatch.setattr(server_mod, "RECONNECT_DELAYS", (30.0,))
+    srv = running_server()
+    monkeypatch.setattr(
+        srv._transport, "listen", lambda *a, **k: (_ for _ in ()).throw(OSError("no door"))
+    )
+    srv._listener.close()  # noqa: SLF001
+    wait_for(lambda: srv.host_state == server_mod.HOST_STATE_RELISTING)
+
+    started = time.monotonic()
+    srv.stop()
+
+    assert time.monotonic() - started < 5.0
+    assert srv._relisten_thread is None  # noqa: SLF001

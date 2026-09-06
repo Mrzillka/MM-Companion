@@ -29,6 +29,7 @@ from PySide6.QtGui import QColor, QPainter, QPalette
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QWidget
 
 from mm_companion.core.session import client as session_client
+from mm_companion.core.session import server as session_server
 from mm_companion.ui import theme
 from mm_companion.ui.theme.tokens import is_literal_color
 from mm_companion.ui.widgets import muted_style, tinted_style
@@ -123,6 +124,9 @@ class ConnectionIndicator(QWidget):
         self._kicked_reason = ""
         self._listener_lost = False
         self._retry_detail: dict = {}
+        # The host's side of the same thing: how the attempt to open a new
+        # listener is going. Cleared by ``started``, which a successful one emits.
+        self._relisten_detail: dict = {}
 
         self._dot = _StatusDot(self)
         self._label = QLabel(TEXT_OFFLINE, self)
@@ -174,6 +178,7 @@ class ConnectionIndicator(QWidget):
         self._kicked_reason = ""
         self._listener_lost = False
         self._retry_detail = {}
+        self._relisten_detail = {}
         if bridge is not None:
             for signal, slot in self._wiring(bridge):
                 signal.connect(slot)
@@ -191,6 +196,7 @@ class ConnectionIndicator(QWidget):
             (bridge.stopped, self._on_signal),
             (bridge.published, self._on_signal),
             (bridge.listenerLost, self._on_listener_lost),
+            (bridge.hostStateChanged, self._on_host_state),
             (bridge.connected, self._on_connected),
             (bridge.disconnected, self._on_disconnected),
             (bridge.kicked, self._on_kicked),
@@ -202,7 +208,14 @@ class ConnectionIndicator(QWidget):
         self.refresh()
 
     def _on_started(self, *_args: object) -> None:
+        # A relisten that worked emits this too, which is exactly right: the door
+        # is open again, so whatever the last attempt said is history.
         self._listener_lost = False
+        self._relisten_detail = {}
+        self.refresh()
+
+    def _on_host_state(self, _state: str, detail: object) -> None:
+        self._relisten_detail = detail if isinstance(detail, dict) else {}
         self.refresh()
 
     def _on_listener_lost(self, *_args: object) -> None:
@@ -244,12 +257,15 @@ class ConnectionIndicator(QWidget):
         self._apply(*self._joined_state(bridge))
 
     def _hosting_state(self, bridge) -> tuple[str, str, str]:
+        if bridge.host_state == session_server.HOST_STATE_RELISTING:
+            return (TEXT_RECONNECTING, "tint.warning", self._relisten_tooltip())
         if self._listener_lost:
             return (
                 TEXT_UNREACHABLE,
                 "tint.warning",
                 "The session is still running and everyone already in it is fine, "
-                "but it is no longer reachable — nobody new can join.",
+                "but it is no longer reachable — nobody new can join.\n"
+                "Session ▸ Reconnect tries again.",
             )
         reachability = bridge.reachability
         if reachability is None:
@@ -288,6 +304,20 @@ class ConnectionIndicator(QWidget):
         if client.latency_ms is not None:
             lines.append(f"Round trip {client.latency_ms:.0f} ms.")
         return "\n".join(lines)
+
+    def _relisten_tooltip(self) -> str:
+        """The host's twin of :meth:`_retry_tooltip`, and read the same way."""
+        detail = self._relisten_detail
+        reason = str(detail.get("reason", "")) or "the listener stopped accepting"
+        attempt = int(detail.get("attempt", 0) or 0)
+        retry_in = detail.get("retry_in")
+        line = (
+            f"Nobody new can join ({reason}); trying to reopen the session.\n"
+            "Everyone already at the table is unaffected."
+        )
+        if attempt and isinstance(retry_in, (int, float)):
+            line += f"\nAttempt {attempt}, retrying in {float(retry_in):.0f}s."
+        return line
 
     def _retry_tooltip(self) -> str:
         detail = self._retry_detail

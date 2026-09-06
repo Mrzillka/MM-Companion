@@ -118,6 +118,12 @@ class SessionBridge(QObject):
     #: hosting — a relay whose control link died. Host side only. Nobody already
     #: at the table is affected, but nobody new can get in.
     listenerLost = Signal(object)
+    #: ``(state, detail)`` — the host's twin of :attr:`connectionStateChanged`,
+    #: carrying one of the server's ``HOST_STATE_*`` values and the payload behind
+    #: it (``reason``/``attempt``/``retry_in`` while relisting). Host side only.
+    #: Follow this for "can anyone still get in"; ``listenerLost`` is the moment
+    #: it broke, this is how the repair is going.
+    hostStateChanged = Signal(str, object)
 
     #: ``("apply" | "remove", payload)`` — the GM told this client to change a
     #: condition on its live sheet. Client side only.
@@ -137,6 +143,10 @@ class SessionBridge(QObject):
         self._reachability: discovery.Reachability | None = None
         self._relay: session_relay.RelayTransport | None = None
         self._publish_thread: threading.Thread | None = None
+        # What :meth:`join` was called with, so :meth:`reconnect` can dial the
+        # same session again after the client's own retry window has closed and
+        # taken the client — and everything it knew — with it.
+        self._rejoin: dict | None = None
         # The reachability probe, indirected so a test can swap the network for a
         # canned answer without patching the discovery module globally.
         self._publish_session = discovery.publish_session
@@ -146,6 +156,24 @@ class SessionBridge(QObject):
     @property
     def hosting(self) -> bool:
         return self._server is not None and self._server.running
+
+    @property
+    def host_state(self) -> str:
+        """How this host's own reachability is going, or ``""`` when not hosting.
+
+        One of the server's ``HOST_STATE_*`` values. The host-side counterpart of
+        :attr:`connection_state`, and asked the same way: a widget recomputes its
+        whole state from the bridge rather than mapping signals to states one by
+        one, since several signals can arrive for one transition.
+        """
+        return self._server.host_state if self._server is not None else ""
+
+    @property
+    def can_reconnect(self) -> bool:
+        """Whether :meth:`reconnect` has something to try.
+
+        Hosting always does; a client only once it knows what it joined."""
+        return self._server is not None or self._rejoin is not None
 
     @property
     def joined(self) -> bool:
@@ -652,8 +680,54 @@ class SessionBridge(QObject):
         except Exception:
             self._client = None
             raise
+        # Kept so :meth:`reconnect` can dial the same session again once the
+        # client's own retry window has run out — at which point the client is
+        # gone and there is nothing left to ask what it was connected to. The
+        # seat is taken from the *handshake*, not from the arguments: a first join
+        # presents nothing and is given a chair, and it is that chair a later
+        # redial has to ask for by name, or the reconnect seats us beside
+        # ourselves and leaves our old self in the roster.
+        self._rejoin = {
+            "code": code,
+            "display_name": display_name,
+            "gm_token": gm_token,
+            "player_id": client.player_id,
+            "player_token": client.player_token,
+        }
         _remember_session(client.session_id)
         return client
+
+    def reconnect(self) -> None:
+        """Try to get back to the table, whichever end of it this bridge holds.
+
+        Hosting, that is the listener: the server's own ``reconnect`` wakes or
+        starts the relisten ladder, and nobody at the table is disturbed
+        (which is why it is emphatically **not** ``stop`` then ``host`` — that
+        farewells every peer with a reason their clients treat as final).
+
+        Joined, it is a fresh dial. The client's own ladder covers a blip without
+        anyone asking; this is for after that window has closed, so the old client
+        is stopped and a new one made with the code, name and GM token the first
+        join used. Stopping a *client* costs the table nothing — the session is
+        somebody else's, and it is still there.
+        """
+        server = self._server
+        if server is not None:
+            server.reconnect()
+            return
+        rejoin = self._rejoin
+        if rejoin is None:
+            raise SessionBridgeError("this window is not in a session to get back to")
+        if self._client is not None:
+            self._client.close()
+            self._client = None
+        self.join(
+            rejoin["code"],
+            str(rejoin["display_name"]),
+            player_id=str(rejoin["player_id"]),
+            player_token=str(rejoin["player_token"]),
+            gm_token=str(rejoin["gm_token"]),
+        )
 
     # -- teardown ----------------------------------------------------------
 
@@ -664,6 +738,7 @@ class SessionBridge(QObject):
             thread.join(timeout=_PUBLISH_JOIN_TIMEOUT)
 
         client, self._client = self._client, None
+        self._rejoin = None
         if client is not None:
             client.close()
 
@@ -721,6 +796,8 @@ class SessionBridge(QObject):
             self.refused.emit(payload)
         elif kind == session_server.EVENT_LISTENER_LOST:
             self.listenerLost.emit(payload)
+        elif kind == session_server.EVENT_HOST_STATE:
+            self.hostStateChanged.emit(str(payload.get("state", "")), payload)
         elif kind == session_server.EVENT_ERROR:
             self.error.emit(str(payload.get("code", "")), str(payload.get("message", "")))
 

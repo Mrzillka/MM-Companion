@@ -16,6 +16,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 from mm_companion.core import storage
 from mm_companion.core.session import client as session_client
+from mm_companion.core.session import server as session_server
 from mm_companion.core.session.discovery import METHOD_RELAY, Reachability
 from mm_companion.ui.connection_indicator import (
     ALL_TEXTS,
@@ -57,6 +58,7 @@ class FakeBridge(QWidget):
     stopped = Signal()
     published = Signal(object)
     listenerLost = Signal(object)
+    hostStateChanged = Signal(str, object)
     connected = Signal(object)
     disconnected = Signal(str)
     kicked = Signal(str)
@@ -66,6 +68,7 @@ class FakeBridge(QWidget):
         super().__init__()
         self.hosting = False
         self.connection_state = session_client.STATE_OFFLINE
+        self.host_state = session_server.HOST_STATE_LISTENING
         self.reachability = None
         self.client = None
 
@@ -241,6 +244,61 @@ def test_hosting_nobody_can_reach_is_flagged(pair) -> None:
 
     assert indicator.text == TEXT_UNREACHABLE
     assert indicator.token == "tint.warning"
+
+
+def test_a_host_trying_to_reopen_reads_as_reconnecting(pair) -> None:
+    """The host's twin of a player's blip, and it reads the same way.
+
+    Reconnecting rather than Unreachable, because those say different things to a
+    GM mid-fight: one is being dealt with, the other wants them to do something.
+    """
+    indicator, bridge = pair
+    bridge.hosting = True
+    bridge.listenerLost.emit({"session_id": "s1"})
+    assert indicator.text == TEXT_UNREACHABLE
+
+    bridge.host_state = session_server.HOST_STATE_RELISTING
+    bridge.hostStateChanged.emit(
+        session_server.HOST_STATE_RELISTING,
+        {"state": session_server.HOST_STATE_RELISTING, "attempt": 2, "retry_in": 5},
+    )
+
+    assert indicator.text == TEXT_RECONNECTING
+    assert indicator.token == "tint.warning"
+    assert "Attempt 2" in indicator.toolTip()
+    # ...and the reassurance that matters most to a GM: the table is fine.
+    assert "unaffected" in indicator.toolTip()
+
+
+def test_a_relisten_that_worked_reads_as_hosting_again(pair) -> None:
+    indicator, bridge = pair
+    bridge.hosting = True
+    bridge.listenerLost.emit({"session_id": "s1"})
+    bridge.host_state = session_server.HOST_STATE_RELISTING
+    bridge.hostStateChanged.emit(session_server.HOST_STATE_RELISTING, {"attempt": 1})
+    assert indicator.text == TEXT_RECONNECTING
+
+    bridge.reachability = Reachability(host="relay.example", port=47332, method=METHOD_RELAY)
+    bridge.host_state = session_server.HOST_STATE_LISTENING
+    bridge.started.emit("127.0.0.1", 47331)
+
+    assert indicator.text == TEXT_HOSTING
+
+
+def test_every_state_the_label_can_show_is_reserved_for() -> None:
+    """The widget fixes its width to the widest of these, so a missing one clips.
+
+    A menu bar lays its corner widget out once; a label that grows resizes
+    nothing, so the state that most needs reading becomes the one you cannot.
+    """
+    from mm_companion.ui import connection_indicator
+
+    shown = {
+        value
+        for name, value in vars(connection_indicator).items()
+        if name.startswith("TEXT_") and isinstance(value, str)
+    }
+    assert shown == set(connection_indicator.ALL_TEXTS)
 
 
 def test_hosting_again_clears_a_lost_listener(pair) -> None:

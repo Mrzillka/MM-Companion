@@ -486,12 +486,12 @@ def test_compact_mode_wins_over_the_extended_preference(window: MainWindow) -> N
     window._compact.enter()
 
     assert panel._quick_part.parentWidget() is panel._pair
-    assert view._row_locked() is False  # the parts are the mini window's, not the view's
+    assert view._shape_locked() is False  # the parts are the mini window's, not the view's
 
     window._compact.leave()
 
     assert panel._quick_part.parentWidget() is panel
-    assert view._row_locked() is True
+    assert view._shape_locked() is True
 
 
 def test_the_gm_window_follows_the_layout_preference_too(gm: GMWindow) -> None:
@@ -499,13 +499,12 @@ def test_the_gm_window_follows_the_layout_preference_too(gm: GMWindow) -> None:
     storage.set_dice_layout(storage.DICE_LAYOUT_EXTENDED)
     gm.sync_dice_layout()
 
-    assert gm._view._row_locked() is True
     assert gm._roller._column_locked is True
 
     storage.set_dice_layout(storage.DICE_LAYOUT_COMPACT)
     gm.sync_dice_layout()
 
-    assert gm._view._row_locked() is False
+    assert gm._roller._column_locked is False
     assert gm._roller._quick_part.parentWidget() is gm._roller._pair
 
 
@@ -783,6 +782,24 @@ def test_the_gm_window_lends_its_own_roller_the_same_way(gm: GMWindow) -> None:
     assert gm._view.isAncestorOf(history)
     assert not gm._full.isHidden()
     assert roller._quick_part.parentWidget() is roller
+
+
+def test_the_mini_window_gives_its_room_to_the_history(window: MainWindow) -> None:
+    """The mini roller makes the block's bargain too: length is the list's.
+
+    Asserted as the mechanism rather than as pixels — a frameless always-on-top
+    window is not laid out under the offscreen platform, so measuring it here
+    would measure nothing. The stretch *is* the rule: the controls take the height they
+    ask for and the history takes the rest.
+    """
+    window._compact.enter()
+    _settle(QApplication.instance())
+    view = window.sheet.dice.view
+    box = window._compact.page._body_box
+
+    assert box.indexOf(view.panel) == 0
+    assert box.stretch(box.indexOf(view.panel)) == 0
+    assert box.stretch(box.indexOf(view._history_part)) == 1
 
 
 def test_the_gm_strip_caption_follows_the_window_title(gm: GMWindow) -> None:

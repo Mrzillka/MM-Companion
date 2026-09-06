@@ -95,7 +95,15 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   Note `DiceRollerView._row_sizes`: the panel carries no splitter stretch, so what the
   view hands it decides whether *it* can reflow too — hence the deferred `_divide_row`
   re-run, since the strip converges its thickness over several turns and a division
-  computed mid-flight is stale with no further resize coming.
+  computed mid-flight is stale with no further resize coming. It hands the panel the
+  row it asks for and **not one pixel past it**: every surplus is the history's, since
+  that is the only part of the block that scrolls and length is worth nothing to a row
+  of spin boxes. The panel used to take a quarter of the surplus as well, as "a little
+  air", which on a wide strip was a slab of empty groupbox. Watch the floor there —
+  an empty quick-roll strip asks for 24px against a 170px minimum, so
+  `row_natural_width` under-reports and `row_minimum_width + REFLOW_HYSTERESIS` is
+  what the clamp usually settles on. That is the honest natural width for this panel,
+  not the clamp misfiring.
 - That same zero stretch is why **a change in what the panel contains must re-divide the
   splitter explicitly** (`_redivide`, which handles either axis via `_row_sizes` /
   `_column_sizes`). A splitter child with no stretch keeps the pixels it was given: when
@@ -238,20 +246,30 @@ mini strip, `Esc`, or that same button leaves.
   be, promoted to something you can ask for anywhere. **Compact** is the mini window's,
   and is the **panel's** business (its three parts). **Extended** is the roll controls
   as a column beside a history filling the rest, which is what GM Mode always looked
-  like, and is the **view's** (it pins the splitter's axis). So the preference is set in
-  one place — `DiceRollerView.set_layout` — and reaches both halves from there; the
-  panel's own `set_layout_preference` takes the layout *string*, not a compact flag.
-  Three consequences. A chosen shape stands its reflow down at **both** levels
-  (`_compact` or `_column_locked` on the panel, `_row_locked()` on the view) via
-  `ReflowBox.force_reflow`, which is guarded on the current axis so calling it every
-  resize costs nothing. `_row_sizes` needs an Extended branch: the panel is offered its
-  **column** width, never the row-of-three width the auto branch measures. And the
-  view's `minimumSizeHint` reports the **row** width while locked — the one place
-  `ReflowBox`'s "always report the column, you can always narrow by reflowing" rule has
-  to be turned around, because a chosen shape cannot narrow out of itself, so it holds
-  the block (and through it the strip and the window) open at what it really needs.
-  Compact still wins over Extended: the window shrinking beats the preference, and while
-  the parts are lent the view is not locked at all.
+  like. So the preference is set in one place — `DiceRollerView.set_layout` — and
+  reaches both halves from there; the panel's own `set_layout_preference` takes the
+  layout *string*, not a compact flag. A chosen shape stands the **panel's** reflow
+  down (`_compact` or `_column_locked`) via `ReflowBox.force_reflow`, which is guarded
+  on the current axis so calling it every resize costs nothing, and `_row_sizes` gives
+  a locked panel its **column** width rather than the row-of-three width the auto
+  branch measures. Compact still wins over Extended, and while the parts are lent
+  neither is in force at all.
+- **Extended does not pin the view's axis, and that was a bug.** It used to: the
+  preference forced the splitter into a row whatever the width, which meant
+  `DiceRollerView.minimumSizeHint` had to report the **row's** width — a chosen shape
+  cannot narrow out of itself — turning `ReflowBox`'s "always report the column, you
+  can always narrow by reflowing" rule around in the one place it was allowed to be.
+  The cost landed in the **pinned side strip**. That strip's thickness is the `dice`
+  block's `min_width` of 360, and a roller demanding ~596 held the strip, and through
+  it the window, open at nearly twice that; then `_row_sizes` split the result into
+  ~306 of controls with a long empty tail under them beside a ~286 history. Half a
+  strip spent holding a shape, charged to the one thing in the block that scrolls.
+  So the room decides the axis here exactly as it does for an auto roller (`sync_reflow`
+  is now just the `_lent` guard, and the `minimumSizeHint` override is gone), and
+  Extended keeps what it was actually chosen for: the *panel* stays a column, so a wide
+  roller is controls beside a history rather than auto's one row of four, and
+  `_shape_locked` is what `_row_sizes` asks. Where a row will not fit the parts stack —
+  the arrangement Extended was showing anyway, minus the wasted width.
 - **The GM's roller is the sheet's roller.** GM Mode's Rolls block holds a
   `DiceRollerView(hidden_option=True, history=…)` rather than a hand-built panel beside
   a history in a fixed `QHBoxLayout`, so it reflows, splits and follows the preference

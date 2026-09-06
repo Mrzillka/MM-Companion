@@ -1726,10 +1726,6 @@ class DiceRollerView(ReflowBox, QWidget):
         layout.addWidget(self._splitter)
 
         self.init_reflow()
-        # And then, if the user prefers it, straight into the locked row — the
-        # reflow has to have laid the parts out once before the axis can be pinned.
-        if self._row_locked():
-            self.force_reflow(True)
         self._sync_session()
         self._sync_quick_roll_state()  # the strip may have been restored with chips in it
 
@@ -1777,11 +1773,13 @@ class DiceRollerView(ReflowBox, QWidget):
         That is what produces the one-row-of-four arrangement in a wide bottom strip
         rather than a narrow column of three beside a very wide history.
 
-        So offer the panel its natural row width, and settle for less only as the
-        space runs out: down to the width its row needs plus the reflow's dead-band
-        (at exactly the threshold it would refuse to flip), and below that back to a
-        column, leaving the history its own minimum throughout. The history takes
-        whatever is left, which is the lion's share of a wide strip.
+        So offer the panel the row it asks for and nothing beyond it, settling for
+        less only as the space runs out: down to the width its row needs plus the
+        reflow's dead-band (at exactly the threshold it would refuse to flip), and
+        below that back to a column, leaving the history its own minimum throughout.
+        **Every pixel past what the controls ask for is the history's** — it is the
+        only part of the block that scrolls, so length is worth something to it and
+        nothing to a row of spin boxes.
         """
         available = self.reflow_available_width()
         if self._shape_locked():
@@ -1801,13 +1799,19 @@ class DiceRollerView(ReflowBox, QWidget):
         spare = available - self._history_part.minimumSizeHint().width()
         if spare < floor:
             return [self.panel.column_minimum_width(), max(1, available)]
+        # Exactly what the controls ask for, and not a pixel more: everything past
+        # that is the history's, which is the part that benefits from length. The
+        # panel used to take a quarter of the surplus as well — "a little air" —
+        # which on a wide strip was a slab of empty groupbox charged to the one
+        # thing in the block that scrolls.
+        #
+        # ``floor`` usually wins here, and that is not the clamp misfiring: an empty
+        # quick-roll strip asks for almost nothing (a 24px hint against a 170px
+        # minimum), so ``row_natural_width`` under-reports the row the panel can
+        # actually be laid out as. The floor is that row at its narrowest, which is
+        # the honest natural width for a panel shaped like this one.
         natural = self.panel.row_natural_width()
-        # A quarter of whatever is left over beyond the panel's natural width, so its
-        # controls get a little air (a slider worth dragging, a caption that isn't
-        # elided) while the history — which is what actually benefits from length —
-        # still keeps the greater part of a wide strip.
-        wanted = natural + max(0, spare - natural) // 4
-        wanted = max(floor, min(wanted, spare))
+        wanted = max(floor, min(natural, spare))
         return [wanted, max(1, available - wanted)]
 
     def resizeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
@@ -1834,47 +1838,30 @@ class DiceRollerView(ReflowBox, QWidget):
         """
         return self.panel.shape_locked and not self._lent
 
-    def _row_locked(self) -> bool:
-        """Whether the user has pinned the side-by-side (Extended) arrangement.
-
-        Not while the parts are lent to a compact window: that window lays them out
-        itself, and compact mode wins over the preference the same way it does in
-        the panel.
-        """
-        return self._preference == storage.DICE_LAYOUT_EXTENDED and not self._lent
-
     def sync_reflow(self) -> bool:
-        """Re-run the width-driven reflow — unless the shape is spoken for.
+        """Re-run the width-driven reflow, unless the parts are out on loan.
 
-        Either because the parts are out on loan to a compact window, or because
-        Extended has pinned the axis; a locked row still gets re-divided by the
-        ``resizeEvent`` that follows, since the panel's *share* of it moves with
-        the width even when the axis does not.
+        **Extended does not pin this axis.** It used to: the preference forced the
+        row whatever the width, and :meth:`minimumSizeHint` then had to report the
+        row's width — a chosen shape cannot narrow out of itself — which held the
+        block, the pinned strip and the window open at close to 600px. In a *side*
+        strip, whose thickness is the ``dice`` block's 360, that spent half the
+        strip on a controls column with a long empty tail under it and squeezed the
+        history, the one thing in the block that scrolls, into what was left. Extra
+        room is the history's, and a shape that takes the room away from it to
+        satisfy a preference is answering the wrong question.
+
+        So the room decides the axis here, exactly as it does for an auto roller,
+        and Extended keeps what it was actually chosen for: the **panel** stays a
+        column (``DiceRollerPanel._apply_shape``), so a wide roller is controls
+        beside a history rather than the auto shape's one row of four, and
+        :meth:`_row_sizes` offers that column its own width. Where a row does not
+        fit, the parts stack — which is the same arrangement Extended would have
+        been showing anyway, minus the wasted width.
         """
         if self._lent:
             return False
-        if self._row_locked():
-            return self.force_reflow(True)
         return super().sync_reflow()
-
-    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
-        """The row's width while Extended is locked, the column's otherwise.
-
-        :meth:`ReflowBox.minimumSizeHint` reports the column arrangement's width
-        whatever axis is in use, because a reflowing widget can always narrow by
-        flipping. A locked row cannot — the shape is chosen, not derived — so it
-        has to hold the block open (and through it the pinned strip and the window)
-        at what the two parts really need side by side.
-        """
-        hint = super().minimumSizeHint()
-        if not self._row_locked():
-            return hint
-        row = (
-            self.panel.column_minimum_width()
-            + self.REFLOW_SPACING
-            + self._history_part.minimumSizeHint().width()
-        )
-        return QSize(row, hint.height())
 
     def _divide_row(self) -> None:
         """Re-divide a row between the panel and the history (a no-op otherwise)."""

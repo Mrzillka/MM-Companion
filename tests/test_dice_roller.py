@@ -634,6 +634,82 @@ def test_a_roll_that_cannot_be_sent_says_so(
     assert view.panel._die_button.isEnabled()
 
 
+# -- a roll of one's own must never be held for good --------------------------
+#
+# The shared history holds one's own roll back so the card lands as the die
+# settles rather than the instant the server answers. Only the roller's reveal
+# lets it go again, so anything that holds a roll the roller is *not* waiting for
+# hides it for the rest of the session — from the person who made it, while every
+# other seat sees it. These four cover the ways that used to happen.
+
+
+def test_the_panel_opens_and_closes_the_deferral_window(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch, hosting: SessionBridge
+) -> None:
+    monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
+    view = DiceRollerView()
+    seen: list[bool] = []
+    view.panel.awaitingOwnRoll.connect(seen.append)
+
+    view.panel._start_roll()
+    qapp.processEvents()
+
+    # Open before the request goes out, shut once the number is on screen — a
+    # hosted session answers *during* the request, so the order matters.
+    assert seen == [True, False]
+    assert view._session_history._awaiting_own is False
+
+
+def test_giving_up_on_a_roll_closes_the_window(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch, hosting: SessionBridge
+) -> None:
+    monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
+    monkeypatch.setattr(dice_roller, "SESSION_ROLL_TIMEOUT_MS", 0)
+    monkeypatch.setattr(hosting, "request_roll", lambda **kw: True)
+    view = DiceRollerView()
+
+    view.panel._start_roll()
+
+    assert view._session_history._awaiting_own is False
+
+
+def test_a_roll_that_answers_after_the_die_gave_up_still_lands(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch, hosting: SessionBridge
+) -> None:
+    """The server rolled it; the roller merely stopped waiting.
+
+    The readout goes on saying nobody answered — that was true of the tumble —
+    but the card has to appear, or the roll is lost to the one seat that made it.
+    """
+    monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
+    monkeypatch.setattr(dice_roller, "SESSION_ROLL_TIMEOUT_MS", 0)
+    monkeypatch.setattr(hosting, "request_roll", lambda **kw: True)
+    view = DiceRollerView()
+    view.panel._start_roll()
+    assert dice_roller.NO_ANSWER in view.panel._readout.text()
+
+    # ...and now the answer the roller stopped waiting for turns up.
+    hosting.server.roll(player_id=hosting.own_player_id(), label="late")
+    qapp.processEvents()
+
+    assert len(view._session_history.cards()) == 1
+
+
+def test_a_replayed_log_keeps_ones_own_rolls(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch, hosting: SessionBridge
+) -> None:
+    """What a reconnect does: the fresh Welcome repaints the whole history."""
+    monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
+    view = DiceRollerView()
+    view.panel._start_roll()
+    qapp.processEvents()
+    assert len(view._session_history.cards()) == 1
+
+    view._session_history.set_rolls(hosting.history())
+
+    assert len(view._session_history.cards()) == 1
+
+
 def test_leaving_the_session_brings_the_private_history_back(
     qapp: QApplication, hosting: SessionBridge
 ) -> None:

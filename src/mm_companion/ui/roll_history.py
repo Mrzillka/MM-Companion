@@ -609,6 +609,12 @@ class RollHistoryPanel(QWidget):
         # roll is held here until the die finishes tumbling, so the card lands as
         # the die settles rather than the instant the server resolves it.
         self._defer_own = False
+        # ...but only while that roller actually has a die in the air
+        # (see :meth:`set_awaiting_own`). The two are different questions — "is
+        # there a roller to wait for" and "is it waiting right now" — and holding a
+        # roll when the answer to the second is no is how one's own rolls used to
+        # vanish for good.
+        self._awaiting_own = False
         self._held: dict[int, dict] = {}
 
         layout = QVBoxLayout(self)
@@ -668,8 +674,47 @@ class RollHistoryPanel(QWidget):
         Set on a panel paired with a :class:`~mm_companion.ui.dice_roller.DiceRollerPanel`,
         whose ``sessionRollRevealed`` drives :meth:`release_roll`. Other players'
         rolls — which have no local animation to wait for — still land at once.
+
+        This says only that there *is* a roller to wait for.
+        :meth:`set_awaiting_own` says whether it is waiting, and both have to be
+        true before anything is held.
         """
         self._defer_own = defer
+
+    def set_awaiting_own(self, awaiting: bool) -> None:
+        """Whether the paired roller has a roll of ours in flight right now.
+
+        Driven by that panel's ``awaitingOwnRoll``. Turning it **off** flushes
+        whatever is still held, and that is the point of the method rather than a
+        tidy-up: a held roll is only ever shown again by :meth:`release_roll`, so an
+        own roll that reaches :meth:`add_roll` outside a tumble had nothing to
+        release it and stayed invisible for the rest of the session — to its own
+        roller alone, while every other seat saw it. Two ways that happened, and
+        both are ordinary play:
+
+        * a **reconnect** re-sends the whole log (``Welcome`` → ``historyReplaced``
+          → :meth:`set_rolls`), so every one of that player's own rolls was deferred
+          again at once and their history lost all of them;
+        * a roll the roller **gave up on** after ``SESSION_ROLL_TIMEOUT_MS``, whose
+          record then arrived a moment later on this panel's own feed.
+        """
+        awaiting = bool(awaiting)
+        if awaiting == self._awaiting_own:
+            return
+        self._awaiting_own = awaiting
+        if not awaiting:
+            self.release_held()
+
+    def release_held(self) -> None:
+        """Show every roll still being held, oldest first.
+
+        In ``seq`` order rather than arrival order: the log reads newest-first and
+        the cards are inserted at the top, so flushing them out of a dict's
+        insertion order would put them on screen backwards.
+        """
+        held, self._held = self._held, {}
+        for seq in sorted(held):
+            self._insert(held[seq])
 
     def attach(self, bridge: SessionBridge | None) -> None:
         """Follow *bridge*'s rolls, starting from the history it already has.
@@ -707,7 +752,16 @@ class RollHistoryPanel(QWidget):
     # -- rendering ---------------------------------------------------------
 
     def set_rolls(self, rolls: object) -> None:
-        """Replace everything on screen with *rolls* (oldest first, as stored)."""
+        """Replace everything on screen with *rolls* (oldest first, as stored).
+
+        A replay, not a feed: this is what a reconnect's fresh ``Welcome`` lands
+        on. Which seat is ours is re-read from the bridge first, because
+        :meth:`attach` runs once per join and a redial that failed to reclaim the
+        old slot comes back under a new ``player_id`` — after which every one of
+        our own rolls would be drawn as somebody else's.
+        """
+        if self._bridge is not None:
+            self._own_id = self._bridge.own_player_id()
         self.clear()
         if not isinstance(rolls, list):
             return
@@ -717,18 +771,26 @@ class RollHistoryPanel(QWidget):
     def add_roll(self, roll: object) -> None:
         """Put one entry at the top of the list.
 
-        One's own roll is held (not shown) while :attr:`_defer_own` is set, so a
-        paired roller can release it as the die settles — see :meth:`release_roll`.
-        A note or a request of one's own is *not* held: deferral waits on a die
-        animation, and neither has one to wait for, so holding either would hold it
-        forever. Hence the test is "is this a die roll", not "is this not a note".
+        One's own roll is held (not shown) while a paired roller has a die in the
+        air, so it can release it as the die settles — see :meth:`set_defer_own`,
+        :meth:`set_awaiting_own` and :meth:`release_roll`. Outside that window
+        nothing is held at all, because nothing would ever let it go again.
+        A note or a request of one's own is *not* held either: deferral waits on a
+        die animation, and neither has one to wait for, so holding either would
+        hold it forever. Hence the test is "is this a die roll", not "is this not
+        a note".
         """
         if not isinstance(roll, dict):
             return
         seq = roll.get("seq")
         if isinstance(seq, int) and seq in self._seen:
             return
-        if self._defer_own and roll.get("kind", KIND_ROLL) == KIND_ROLL and self._is_own(roll):
+        if (
+            self._defer_own
+            and self._awaiting_own
+            and roll.get("kind", KIND_ROLL) == KIND_ROLL
+            and self._is_own(roll)
+        ):
             if isinstance(seq, int):
                 self._held[seq] = roll
             return

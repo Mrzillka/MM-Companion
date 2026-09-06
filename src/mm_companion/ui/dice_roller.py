@@ -361,6 +361,16 @@ class DiceRollerPanel(ReflowBox, QWidget):
     #: so one's own card lands as the die settles, not the instant the server answers.
     sessionRollRevealed = Signal(object)
 
+    #: Whether a roll of ours is out with the session *right now*, which is exactly
+    #: as long as a paired history may hold one of our own rolls back. It has to be
+    #: a window rather than a standing flag: a held roll is only ever released by
+    #: :attr:`sessionRollRevealed`, so an own roll reaching a history with no tumble
+    #: waiting for it — a reconnect replaying the log, or a record that arrives
+    #: after :meth:`_abandon_roll` gave up — would be held for the rest of the
+    #: session and the player would watch their own rolls disappear. Raised ``True``
+    #: before the request goes out and ``False`` on **both** ways the roll can end.
+    awaitingOwnRoll = Signal(bool)
+
     #: The quick-roll strip gained, lost or renamed a chip, so a paired history's
     #: stars have to be re-lit. The *space* that costs is :attr:`contentChanged`'s
     #: business, raised alongside it.
@@ -1107,6 +1117,10 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._awaiting = True
         self._pending = None
         bridge.rollAdded.connect(self._on_session_roll)
+        # Before the request, for the same reason the listener above is: a hosted
+        # session resolves in-process and the answer comes back *during* the call,
+        # so a history told afterwards would already have shown the card.
+        self.awaitingOwnRoll.emit(True)
         sent = bridge.request_roll(
             label=self._roll_label(),
             bonus=bonus,
@@ -1223,15 +1237,28 @@ class DiceRollerPanel(ReflowBox, QWidget):
         # The spec is already on the record (the server recorded what we sent and
         # broadcast it), so this is the same dict every other seat is reading.
         self.sessionRollRevealed.emit(roll)
+        # And the window closes *after* the reveal, so the card this roll produced
+        # is placed by the cue above rather than by the flush the close performs.
+        self.awaitingOwnRoll.emit(False)
 
     def _abandon_roll(self, message: str) -> None:
-        """Give up on a session roll that never came back."""
+        """Give up on a session roll that never came back.
+
+        Giving up is about the *die*, not about the roll: the server may well have
+        rolled it and simply been slow to say so, in which case the record turns up
+        on the history's own feed moments later. So the readout keeps saying nobody
+        answered — that was true of the tumble — while
+        :attr:`awaitingOwnRoll` closes the window and lets the card land whenever
+        it arrives. A history that went on deferring here would swallow the roll
+        for good, since nothing would ever reveal it.
+        """
         if not self._rolling and not self._awaiting:
             return
         self._rolling = False
         self._awaiting = False
         self._pending = None
         self._disconnect_session()
+        self.awaitingOwnRoll.emit(False)
         self._face.setText("?")
         self._readout.setText(f"<span style='color:{theme.color('tint.worse')}'>{message}</span>")
         self._unlock_inputs()
@@ -1911,8 +1938,11 @@ class DiceRollerView(ReflowBox, QWidget):
             box_layout.addWidget(self._given_history)
             self._given_history.saveToggled.connect(self.panel.toggle_quick_roll)
             self._given_history.rollFollowUp.connect(self.panel.roll_spec)
-            # Hold this app's own roll until its die stops tumbling; the roller cues it.
+            # Hold this app's own roll until its die stops tumbling; the roller cues
+            # both the window and the release, so a roll it never revealed is
+            # flushed rather than stranded.
             self._given_history.set_defer_own(True)
+            self.panel.awaitingOwnRoll.connect(self._given_history.set_awaiting_own)
             self.panel.sessionRollRevealed.connect(self._given_history.release_roll)
             outer.addWidget(box)
             return holder
@@ -1932,8 +1962,10 @@ class DiceRollerView(ReflowBox, QWidget):
         self._session_history = RollHistoryPanel()
         self._session_history.saveToggled.connect(self.panel.toggle_quick_roll)
         self._session_history.rollFollowUp.connect(self.panel.roll_spec)
-        # Hold this app's own roll until its die stops tumbling; the roller cues it.
+        # Hold this app's own roll until its die stops tumbling; the roller cues
+        # both the window and the release (see the given-history branch above).
         self._session_history.set_defer_own(True)
+        self.panel.awaitingOwnRoll.connect(self._session_history.set_awaiting_own)
         self.panel.sessionRollRevealed.connect(self._session_history.release_roll)
         session_layout.addWidget(self._session_history)
         self._session_box.hide()

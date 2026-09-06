@@ -49,6 +49,7 @@ from mm_companion.core.rules import (
     build_item_from_entry,
 )
 from mm_companion.core.session import discovery, store
+from mm_companion.core.session import server as server_mod
 from mm_companion.core.session.model import new_session
 from mm_companion.core.session.protocol import sanitize_snapshot
 from mm_companion.ui import card_chips, dice_roller, player_card, theme
@@ -116,6 +117,17 @@ def host_options(**overrides) -> HostOptions:
     """Host options with a free port by default, so tests never collide."""
     defaults = {"name": "Session", "port": 0, "tunnel": "", "relay": "", "use_relay": True}
     return HostOptions(**{**defaults, **overrides})
+
+
+def wait_until(qapp: QApplication, predicate, timeout: float = 5.0) -> None:
+    """Pump the event loop until *predicate* holds — background threads do the work."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        qapp.processEvents()
+        time.sleep(0.01)
+    raise AssertionError(f"condition never became true within {timeout}s")
 
 
 def start_hosting(
@@ -315,6 +327,98 @@ def test_stopping_clears_the_code(qapp: QApplication, window: GMWindow) -> None:
     assert window._join_code == ""
     assert window._copy_code_action.isEnabled() is False
     assert "Not hosting" in window._status_label.text()
+
+
+# --------------------------------------------------------------------------
+# Getting back to the table
+# --------------------------------------------------------------------------
+
+
+def test_reconnect_is_offered_only_once_there_is_a_table_to_go_back_to(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    assert window._reconnect_action.isEnabled() is False
+
+    start_hosting(qapp, window, canned())
+
+    assert window._reconnect_action.isEnabled() is True
+
+    window.stop_hosting()
+
+    # Leaving on purpose is not trouble, and there is nothing to go back to.
+    assert window._reconnect_action.isEnabled() is False
+    assert window._trouble.held is False
+
+
+def test_a_lost_listener_puts_a_notice_on_the_board(
+    qapp: QApplication, window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """It used to reach nothing in this window at all — only the menu-bar corner.
+
+    And a corner read-out cannot be clicked, so a GM who saw "Unreachable" had
+    quitting the app as their only move.
+    """
+    # Hold the ladder between rungs so the notice can be read: what it says while
+    # trying is the whole point of it, and a relisten on loopback succeeds at once.
+    monkeypatch.setattr(server_mod, "RECONNECT_DELAYS", (30.0,))
+    start_hosting(qapp, window, canned())
+    assert window._trouble.held is False
+
+    window.bridge.server._listener.close()  # noqa: SLF001 - a dead relay control link
+
+    wait_until(qapp, lambda: window._trouble.held)
+    assert "Nobody new can join" in window._trouble_label.text()
+    # The reassurance that decides whether a GM stops the game.
+    assert "unaffected" in window._trouble_label.text()
+    assert window._trouble_button.isEnabled() is True
+
+
+def test_the_notice_goes_when_the_session_is_reachable_again(
+    qapp: QApplication, window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(server_mod, "RECONNECT_DELAYS", (0.05,))
+    start_hosting(qapp, window, canned())
+
+    window.bridge.server._listener.close()  # noqa: SLF001
+
+    wait_until(qapp, lambda: window._trouble.held)
+    # ...and the ladder gets there on its own, with nobody asked to do anything.
+    wait_until(qapp, lambda: not window._trouble.held)
+    assert window.bridge.hosting is True
+
+
+def test_reconnecting_reopens_the_listener_without_evicting_anyone(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    """The bargain the whole feature turns on.
+
+    ``stop`` farewells every peer with a reason their apps treat as final, so
+    stop-and-host-again would clear the table to fix a door.
+    """
+    start_hosting(qapp, window, canned())
+    server = window.bridge.server
+    door = server._listener  # noqa: SLF001
+    roster_before = dict(server.state.players)
+
+    window.reconnect_session()
+
+    wait_until(qapp, lambda: server._listener not in (None, door))  # noqa: SLF001
+    assert server.running is True
+    assert dict(server.state.players) == roster_before
+    assert window.bridge.hosting is True
+
+
+def test_a_reconnect_that_fails_says_so_rather_than_raising(
+    qapp: QApplication, window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    start_hosting(qapp, window, canned())
+    monkeypatch.setattr(
+        window.bridge, "reconnect", lambda: (_ for _ in ()).throw(OSError("no door"))
+    )
+
+    window.reconnect_session()
+
+    assert "Could not reconnect" in window._notice_label.text()
 
 
 def test_a_port_already_in_use_is_reported_not_raised(

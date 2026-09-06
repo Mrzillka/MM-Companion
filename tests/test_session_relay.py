@@ -20,6 +20,7 @@ import pytest
 from mm_companion.core.session import client as client_mod
 from mm_companion.core.session import discovery
 from mm_companion.core.session import relay as relay_transport
+from mm_companion.core.session import server as server_mod
 from mm_companion.core.session.client import SessionClient
 from mm_companion.core.session.model import new_session
 from mm_companion.core.session.net import Connection, _peer_address
@@ -470,6 +471,55 @@ def test_a_whole_session_runs_over_the_relay(box):
         assert _wait_for(lambda: len(state.rolls) == 1)
         assert state.rolls[0].label == "Perception"
         client.close()
+    finally:
+        server.stop()
+
+
+def test_a_dead_control_link_is_reopened_under_the_same_join_code(box):
+    """The GM's real failure, end to end, and the one this repair is for.
+
+    A relay control link dies. The relay takes the whole registration with it —
+    the host is how it knows the session exists — so every player's stream is cut
+    too, and until now the only way back was to quit the app and host again.
+
+    The two halves of the recovery meet in the middle: the host climbs its ladder
+    and registers again, and each player climbs theirs and redials. Neither needs
+    a new join code, because a ``RelayTransport`` mints its secret **per
+    instance** rather than per ``listen`` — so registering again is registering
+    the *same* session id under the *same* secret, and what the GM already sent
+    everybody goes on working.
+    """
+    state = new_session("Relay table")
+    transport = box.transport(state.id)
+    server = SessionServer(state, transport=transport, persist=False)
+    server.start()
+    door = server._listener  # noqa: SLF001
+    try:
+        player = SessionClient(
+            box.url(state.id),
+            0,
+            token=state.host_token,
+            display_name="Ada",
+            transport=box.transport(state.id),
+        )
+        player.connect()
+        seat = player.player_id
+
+        # Exactly what a relay whose control connection died does.
+        door._control.close()  # noqa: SLF001
+
+        # The host notices and opens a *new* door rather than sitting there
+        # looking healthy.
+        assert _wait_for(lambda: server._listener not in (None, door), timeout=30.0)  # noqa: SLF001
+        assert server.running is True
+        assert server.host_state == server_mod.HOST_STATE_LISTENING
+
+        # And the player's own ladder walks them back into the same seat, with no
+        # new code and nothing for anyone to type.
+        assert _wait_for(lambda: player.connected, timeout=30.0)
+        assert player.player_id == seat
+        assert _wait_for(lambda: state.players[seat].connected, timeout=30.0)
+        player.close()
     finally:
         server.stop()
 

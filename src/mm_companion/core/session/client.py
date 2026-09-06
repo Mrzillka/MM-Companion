@@ -43,6 +43,8 @@ from .net import (
     IO_TIMEOUT,
     KEEPALIVE_INTERVAL,
     PEER_TIMEOUT,
+    RECONNECT_DELAYS,
+    RECONNECT_WINDOW,
     Connection,
     TcpTransport,
     Transport,
@@ -122,16 +124,10 @@ STATE_ONLINE = "online"
 STATE_RECONNECTING = "reconnecting"
 STATE_OFFLINE = "offline"
 
-#: How long to wait before each redial. The last value repeats for as long as
-#: :data:`RECONNECT_WINDOW` allows. No jitter: a table is at most a handful of
-#: clients, so there is no herd to thunder, and a fixed ladder is testable.
-RECONNECT_DELAYS = (1.0, 2.0, 5.0, 10.0, 20.0, 30.0)
-
-#: How long we keep trying before calling the session over. Five minutes covers a
-#: closed lid, a Wi-Fi handover and a router reboot; past that the player has
-#: genuinely left and should rejoin deliberately rather than have an app quietly
-#: dialling an address that may not be theirs any more.
-RECONNECT_WINDOW = 300.0
+# ``RECONNECT_DELAYS`` and ``RECONNECT_WINDOW`` are :mod:`~.net`'s: a host
+# reopening a lost listener climbs the same ladder a client redialling does, and
+# a table whose two ends gave up at different times would be a puzzle. Re-exported
+# here because this is where they were first read from.
 
 #: Refusals there is no point retrying — the answer would be the same in five
 #: minutes. Everything else (a closed socket, an unreachable host, a torn frame,

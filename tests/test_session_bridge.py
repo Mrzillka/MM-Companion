@@ -17,6 +17,7 @@ from PySide6.QtWidgets import QApplication
 from mm_companion.core import storage
 from mm_companion.core.session import client as session_client
 from mm_companion.core.session import discovery, protocol, store
+from mm_companion.core.session import server as server_mod
 from mm_companion.core.session.client import SessionClient, SessionClientError
 from mm_companion.core.session.model import new_session
 from mm_companion.ui import session_bridge
@@ -458,6 +459,73 @@ def test_a_lost_listener_reaches_qt(qapp: QApplication, bridge: SessionBridge) -
         time.sleep(0.01)
 
     assert seen and seen[0]["session_id"] == bridge.server.state.id
+
+
+def test_a_hosts_relisten_reaches_qt(qapp: QApplication, bridge: SessionBridge) -> None:
+    """The host's twin of ``connectionStateChanged``, and the repair behind it."""
+    bridge.host(new_session("Table"), port=0, bind="127.0.0.1")
+    seen: list[str] = []
+    bridge.hostStateChanged.connect(lambda state, _detail: seen.append(state))
+
+    bridge.server._listener.close()
+
+    deadline = time.monotonic() + 10.0
+    while server_mod.HOST_STATE_RELISTING not in seen and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.01)
+
+    assert server_mod.HOST_STATE_RELISTING in seen
+    assert bridge.can_reconnect is True
+
+
+def test_reconnecting_a_host_never_stops_the_server(
+    qapp: QApplication, bridge: SessionBridge
+) -> None:
+    """``stop`` farewells every peer with a reason their apps treat as final."""
+    bridge.host(new_session("Table"), port=0, bind="127.0.0.1")
+    server = bridge.server
+    stopped: list[object] = []
+    bridge.stopped.connect(lambda: stopped.append(True))
+
+    bridge.reconnect()
+
+    deadline = time.monotonic() + 10.0
+    while server._listener is None and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.01)
+    assert bridge.hosting is True
+    assert bridge.server is server
+    assert stopped == []
+
+
+def test_a_client_bridge_redials_what_it_joined(qapp: QApplication) -> None:
+    """After the client's own window closes there is nothing left to ask, so the
+    bridge keeps the code, the name and the GM token the first join used."""
+    host = SessionBridge()
+    host.host(new_session("Table"), port=0, bind="127.0.0.1")
+    address = host.server.address
+    code = discovery.JoinCode(host=address[0], port=address[1], token=host.server.state.host_token)
+    guest = SessionBridge()
+    try:
+        guest.join(code, display_name="Ada")
+        seat = guest.client.player_id
+        assert guest.can_reconnect is True
+
+        guest.reconnect()
+
+        assert guest.joined is True
+        assert guest.client.player_id == seat  # the same chair, not a second one
+    finally:
+        guest.stop()
+        host.stop()
+
+
+def test_a_bridge_that_was_never_in_a_session_has_nothing_to_reconnect_to(
+    bridge: SessionBridge,
+) -> None:
+    assert bridge.can_reconnect is False
+    with pytest.raises(session_bridge.SessionBridgeError):
+        bridge.reconnect()
 
 
 # -- the mod channel -------------------------------------------------------

@@ -37,6 +37,67 @@ The shape:
   A server that stops says so (`REASON_SESSION_CLOSED`), or a deliberate end and
   a sleeping laptop are indistinguishable. Protocol **v7** exists for this: a v6
   client never pings and would be reaped, so it is refused at the door.
+- **And so does the GM's own door.** The client half of that paragraph had no
+  host half: `SessionServer._accept_loop` raised `EVENT_LISTENER_LOST` when its
+  listener gave up — which is exactly what a `RelayListener` whose control link
+  died does — and then returned for good. `_running` stayed True, so the window
+  went on saying "hosting", everyone already at the table was fine, and nobody new
+  could ever join. The only recovery was to quit the app. Now that event starts a
+  ladder: `SessionServer.relisten` opens a **new** listener under a session that is
+  still running, `_relisten_loop` climbs `net.RECONNECT_DELAYS` for
+  `net.RECONNECT_WINDOW`, and the walk is published as `EVENT_HOST_STATE`
+  (`HOST_STATE_*`), the host-side twin of the client's `EVENT_STATE`. Both ladders
+  now read their delays from `net.py` — one cadence for a table, and a host and a
+  player giving up at different times would be a puzzle to reason about.
+- **`relisten` is emphatically not `stop` then `start`, and that is the whole
+  design.** `stop` says goodbye to every peer first
+  (`Kicked(REASON_SESSION_CLOSED)`) precisely so a client can tell a deliberate end
+  from a sleeping laptop and *stops* retrying — so using the pair as a reconnect
+  would clear the whole table to fix a door. `relisten` touches the listener and
+  nothing else: not `_connections`, not `_welcomed`, not `state.players`.
+  `_fall_back_to_relay` still uses the destructive pair and is still right to,
+  because it runs before anyone has joined; its docstring says so.
+- **The join code survives a relisten, and not by luck.** A `RelayTransport` mints
+  its secret **per instance**, not per `listen`, so registering again from the same
+  transport re-registers the same session id under the same secret; a
+  `TcpTransport` rebinds the port it was given. The second half of that is why
+  `_open_listener` pins `_port` to the port it actually *got*: hosting on an
+  **automatic** port and asking for 0 a second time would be handed a different
+  one, and the code the GM had already sent everybody would quietly stop working —
+  the failure landing on the players rather than on whoever pressed the button.
+  It matters most in the relay case, where the relay drops the whole registration
+  when the host's control link dies and cuts every player's stream with it. The
+  two halves of the recovery then meet in the middle: the host climbs its ladder
+  and re-registers, each player climbs theirs and redials, and nobody types
+  anything.
+- **Two ways to ask, because the failure has three shapes.** `Session ▸ Reconnect`
+  is the one that always works — keyboard-reachable, and it cannot fade — and the
+  board's trouble card carries a `Reconnect now` button beside the sentence
+  explaining what is wrong. That card is **held** rather than poked (`_Notice.hold`
+  / `release`): it is a *condition*, not a message, and a condition that fades after
+  ten seconds is one a GM will not see when they look up mid-fight — the same
+  argument that produced `ConnectionIndicator`. The third shape is why the menu
+  entry is never disabled while there is a table: a **UPnP mapping the router
+  quietly dropped raises nothing at all**, because the listener is perfectly happy;
+  `discovery.publish_session` is a one-shot probe and nothing re-checks it. So
+  `SessionServer.reconnect` is also the answer for a break the app cannot detect,
+  and it wakes a ladder that is already climbing rather than starting a second one.
+- **The other seat gets one too.** A GM dialled in to a session hosted on a server
+  is an ordinary `SessionClient` and already had the redial ladder; what it lacked
+  was anything to do once `RECONNECT_WINDOW` had closed and taken the client with
+  it. So `SessionBridge.join` remembers what it was called with and
+  `SessionBridge.reconnect` dials again — and it remembers the `player_id` and
+  `player_token` **from the handshake**, not from its arguments. A first join
+  presents neither and is given a chair; a redial that presented nothing again
+  would be seated *beside* itself, leaving its old self in the roster.
+- **`GMWindow._refresh_trouble` recomputes from the bridge**, like the indicator,
+  rather than mapping one signal to one state: a relisten that works raises
+  `started` *and* a host state, and whichever landed second would win. Note it is
+  called by hand at the end of `_begin_hosting` and `connect_to_server` — the
+  server emits `EVENT_STARTED` from inside its own `start()`, before
+  `SessionBridge.host` has taken ownership of it, so `hosting` and `can_reconnect`
+  are both still False on that signal. `_refresh_rolls` was already there for
+  exactly the same reason.
 - **A returning player gets their own seat back**, three ways. The client's
   redial carries the token; `JoinSessionDialog.reclaim_ids` resolves a saved seat
   from the *code text* (it used to need a click on a history row nobody knew to

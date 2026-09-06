@@ -77,7 +77,9 @@ from mm_companion.core.rules import (
     parse_pins,
     requested_roll_choices,
 )
+from mm_companion.core.session import client as session_client
 from mm_companion.core.session import discovery, store
+from mm_companion.core.session import server as session_server
 from mm_companion.core.session.model import (
     KIND_REQUEST,
     KIND_ROLL,
@@ -422,6 +424,7 @@ class GMWindow(QMainWindow):
         # A persistent strip along the bottom, not a draggable block: the hosting
         # status and the reachability advice, then a transient notice line.
         full_layout.addWidget(self._build_status_strip())
+        full_layout.addWidget(self._build_trouble())
         full_layout.addWidget(self._build_notice())
 
         # The same compact mode a player's sheet has, over the same roller — and
@@ -445,6 +448,7 @@ class GMWindow(QMainWindow):
 
         self._connect_bridge()
         self._refresh_idle_status()
+        self._refresh_trouble()
         self._refresh_rolls()
         self._refresh_npcs()
         # After the cast, so a creature whose file went away is simply not found.
@@ -468,11 +472,20 @@ class GMWindow(QMainWindow):
         self._scroll.setMinimumWidth(self._canvas.content_minimum_width() + extra + 2)
 
     def _build_menu(self) -> None:
-        """Session (copy the join code), Settings, and View (show/hide blocks)."""
+        """Session (copy the join code, reconnect), Settings, View (show/hide blocks)."""
         session_menu = self.menuBar().addMenu("&Session")
         self._copy_code_action = session_menu.addAction("Copy join code")
         self._copy_code_action.setEnabled(False)
         self._copy_code_action.triggered.connect(self._copy_code)
+        # The affordance that always works. The notice below carries a button
+        # too, but a notice can be dismissed and a corner read-out cannot be
+        # clicked — and the failure this answers can also arrive with no cue at
+        # all (a UPnP mapping the router quietly dropped raises nothing, because
+        # the listener is still perfectly happy). So there is always one place to
+        # go, reachable from the keyboard, whether or not the app noticed.
+        self._reconnect_action = session_menu.addAction("Reconnect")
+        self._reconnect_action.setEnabled(False)
+        self._reconnect_action.triggered.connect(self.reconnect_session)
 
         settings_menu = self.menuBar().addMenu("&Settings")
         settings_menu.addAction("Preferences...").triggered.connect(self._open_settings)
@@ -790,6 +803,28 @@ class GMWindow(QMainWindow):
         self._notice.add_widget(self._notice_label)
         return self._notice
 
+    def _build_trouble(self) -> _Notice:
+        """The card that says the table cannot be reached, and offers the way back.
+
+        Held rather than poked (see :class:`_Notice`): this is a condition, not a
+        message, and one that fades after ten seconds is one a GM will not see
+        when they next look up.
+        """
+        self._trouble = _Notice()
+        self._trouble_label = _wrapped("")
+        self._trouble.add_widget(self._trouble_label)
+        self._trouble_button = QPushButton("Reconnect now")
+        self._trouble_button.clicked.connect(self.reconnect_session)
+        # In a row of its own with a stretch after it: the card's body is a
+        # column, and a button added straight to it spans the whole board.
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.addWidget(self._trouble_button)
+        row_layout.addStretch(1)
+        self._trouble.add_widget(row)
+        return self._trouble
+
     def _connect_bridge(self) -> None:
         self._bridge.started.connect(self._on_started)
         self._bridge.stopped.connect(self._on_stopped)
@@ -802,6 +837,16 @@ class GMWindow(QMainWindow):
         self._bridge.playerJoined.connect(self._on_player_joined)
         self._bridge.refused.connect(self._on_refused)
         self._bridge.error.connect(self._on_error)
+        # Whether anybody can still *get in*, which is a different question from
+        # whether the session is running and was previously asked nowhere in this
+        # window — only the menu bar's corner read-out ever heard about it.
+        self._bridge.listenerLost.connect(self._on_trouble)
+        self._bridge.hostStateChanged.connect(self._on_trouble)
+        self._bridge.started.connect(self._on_trouble)
+        self._bridge.stopped.connect(self._on_trouble)
+        # ...and the same question from the other seat, where this app is a
+        # client of a session hosted elsewhere.
+        self._bridge.connectionStateChanged.connect(self._on_trouble)
         # The other way of being in a session: dialled in to one hosted on a
         # server rather than hosting it here.
         self._bridge.connected.connect(self._on_joined)
@@ -845,6 +890,7 @@ class GMWindow(QMainWindow):
             self._show_notice(f"Could not reach the session: {exc}", theme.color("tint.worse"))
             return False
         self._copy_code_action.setEnabled(bool(self._join_code))
+        self._refresh_trouble()
         return True
 
     def _on_joined(self, welcome: dict) -> None:
@@ -967,8 +1013,11 @@ class GMWindow(QMainWindow):
             return False
         # Not on the ``started`` signal: the server emits that from inside its own
         # ``start()``, before the bridge has taken ownership of it, so ``hosting``
-        # is still False there and the history would attach to nothing.
+        # is still False there and the history would attach to nothing. The
+        # reconnect affordance reads ``can_reconnect``, which is the same question
+        # asked of the same half-set bridge, so it comes through here too.
         self._refresh_rolls()
+        self._refresh_trouble()
         return True
 
     def _fall_back_to_relay(self) -> None:
@@ -988,6 +1037,78 @@ class GMWindow(QMainWindow):
             return
         self._bridge.publish()
 
+    def reconnect_session(self) -> None:
+        """Try to reach the table again — Session ▸ Reconnect, and the notice's button.
+
+        Never a stop-and-host-again, whichever end this window holds. Hosting, the
+        listener is reopened underneath a session that is still running, so nobody
+        at the table is disturbed; ``stop`` would farewell every one of them with a
+        reason their apps treat as final. Dialled in to a session on a server, the
+        old client is dropped and a new one made — which costs the table nothing,
+        because the session is not ours and is still there.
+        """
+        try:
+            self._bridge.reconnect()
+        except Exception as exc:  # noqa: BLE001 - every failure is one message
+            self._show_notice(f"Could not reconnect: {exc}", theme.color("tint.worse"))
+            self._refresh_trouble()
+            return
+        self._show_notice("Trying to reach the table again…", theme.color("accent"))
+        self._refresh_trouble()
+
+    def _on_trouble(self, *_args: object) -> None:
+        """Any signal that could change whether the table is reachable."""
+        self._refresh_trouble()
+
+    def _refresh_trouble(self) -> None:
+        """Recompute the whole thing from the bridge, like the corner read-out does.
+
+        One state function rather than a signal per state: several signals arrive
+        for one transition (a relisten that works raises both ``started`` and a
+        host state), and whichever landed second would otherwise win.
+        """
+        text, colour = self._trouble_text()
+        self._reconnect_action.setEnabled(self._bridge.can_reconnect)
+        if not text:
+            self._trouble.release()
+            return
+        self._trouble_label.setText(text)
+        self._trouble_label.setStyleSheet(f"color: {colour};" if colour else "")
+        self._trouble_button.setEnabled(self._bridge.can_reconnect)
+        self._trouble.hold()
+
+    def _trouble_text(self) -> tuple[str, str]:
+        """What is wrong with reaching this table, or ``("", "")`` when nothing is."""
+        if self._bridge.hosting:
+            state = self._bridge.host_state
+            if state == session_server.HOST_STATE_RELISTING:
+                return (
+                    "Nobody new can join — the session is trying to reopen itself. "
+                    "Everyone already at the table is unaffected.",
+                    theme.color("tint.warning"),
+                )
+            if state == session_server.HOST_STATE_UNREACHABLE:
+                return (
+                    "Nobody new can join: the session could not be reopened. "
+                    "Everyone already at the table is unaffected, and the same "
+                    "join code will work again once this succeeds.",
+                    theme.color("tint.worse"),
+                )
+            return ("", "")
+        if self._bridge.in_session:
+            if self._bridge.connection_state == session_client.STATE_RECONNECTING:
+                return (
+                    "Lost the connection to the session — trying to get back in.",
+                    theme.color("tint.warning"),
+                )
+            return ("", "")
+        if self._bridge.can_reconnect:
+            return (
+                "This window is no longer connected to the session.",
+                theme.color("tint.worse"),
+            )
+        return ("", "")
+
     def stop_hosting(self) -> None:
         """Leave the session, clear the join code and cards, and go back to idle.
 
@@ -1003,6 +1124,9 @@ class GMWindow(QMainWindow):
         self._clear_advice()
         self._clear_cards()
         self._refresh_idle_status()
+        # Leaving on purpose is not trouble, and ``stop`` also forgets what there
+        # would be to go back to — so there is nothing left for the card to offer.
+        self._refresh_trouble()
 
     def _refresh_rolls(self) -> None:
         """Point the history at the live session, or at the one on disk.
@@ -2744,6 +2868,14 @@ class _Notice(QFrame):
     out :data:`DWELL_MS` after it was last poked, with a slow tail so it dissolves
     rather than blinks off. Updating its contents and calling :meth:`poke` again
     brings it back to full opacity and restarts the countdown.
+
+    :meth:`hold` is the exception, and it is the same argument that produced
+    :class:`~mm_companion.ui.connection_indicator.ConnectionIndicator`: a card
+    that says the session is unreachable is not a message, it is a *condition*,
+    and a condition that fades after ten seconds is one a GM will not see when
+    they look up mid-fight. A held card stays until :meth:`release` says the
+    condition has passed — the ``✕`` still dismisses it, because a GM who has
+    read it and decided to carry on is entitled to their screen back.
     """
 
     #: How long a message stays fully visible before it starts to fade.
@@ -2785,6 +2917,9 @@ class _Notice(QFrame):
         self._timer.setSingleShot(True)
         self._timer.setInterval(self.DWELL_MS)
         self._timer.timeout.connect(self._begin_fade)
+        # Whether this card is showing a *condition* rather than a message; see
+        # the class docstring and :meth:`hold`.
+        self._held = False
         self.hide()
 
     def add_widget(self, widget: QWidget) -> None:
@@ -2798,10 +2933,31 @@ class _Notice(QFrame):
         self._fade.stop()
         self._effect.setOpacity(1.0)
         self.setVisible(True)
-        self._timer.start()
+        if not self._held:
+            self._timer.start()
+
+    def hold(self) -> None:
+        """Show the card and keep it there until :meth:`release`."""
+        self._held = True
+        self._timer.stop()
+        self._fade.stop()
+        self._effect.setOpacity(1.0)
+        self.setVisible(True)
+
+    def release(self) -> None:
+        """The condition has passed: let the card fade normally again, and go."""
+        if not self._held:
+            return
+        self._held = False
+        self.dismiss()
+
+    @property
+    def held(self) -> bool:
+        return self._held
 
     def dismiss(self) -> None:
         """Retire the card at once — the ✕ button, or a caller clearing it."""
+        self._held = False
         self._timer.stop()
         self._fade.stop()
         self._effect.setOpacity(1.0)

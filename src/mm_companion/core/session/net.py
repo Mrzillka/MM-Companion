@@ -55,6 +55,24 @@ KEEPALIVE_INTERVAL = 30.0
 #: laptop) is invisible forever: ``recv`` simply times out and both loops wait.
 PEER_TIMEOUT = 90.0
 
+#: How long to wait before each attempt at getting a dropped link back. The last
+#: value repeats for as long as :data:`RECONNECT_WINDOW` allows. No jitter: a
+#: table is at most a handful of peers, so there is no herd to thunder, and a
+#: fixed ladder is testable.
+#:
+#: Shared by **both** ends, which is why it lives here rather than in
+#: :mod:`~.client`. A client redials a lost connection; a host reopens a lost
+#: listener (:meth:`~.server.SessionServer.relisten`). The two are the same
+#: problem seen from opposite sides, and a table where one end gave up after ten
+#: seconds and the other after five minutes would be a puzzle to reason about.
+RECONNECT_DELAYS = (1.0, 2.0, 5.0, 10.0, 20.0, 30.0)
+
+#: How long either end keeps trying before calling it. Five minutes covers a
+#: closed lid, a Wi-Fi handover and a router reboot; past that the link has
+#: genuinely gone and the person in front of the app should say so deliberately
+#: — a player by rejoining, a GM by asking for a reconnect (Session ▸ Reconnect).
+RECONNECT_WINDOW = 300.0
+
 #: Bytes pulled from the socket per ``recv``. Large enough that a character
 #: snapshot arrives in a few reads, small enough to stay a cheap allocation.
 READ_CHUNK = 64 * 1024

@@ -84,6 +84,25 @@ def _sheet() -> CharacterSheet:
     return CharacterSheet(data, _hero(data))
 
 
+class _Rolled:
+    """What the panel actually threw, captured off ``localRoll``.
+
+    The chip a roll loaded is dropped again once the die settles, so the panel is
+    no longer where you read back what the roll was made of. This is — and it is
+    the better witness anyway: it is the number that reached the history and the
+    wire, not a leftover.
+    """
+
+    def __init__(self, panel) -> None:
+        self.payloads: list[dict] = []
+        panel.localRoll.connect(self.payloads.append)
+
+    @property
+    def last(self) -> dict:
+        assert self.payloads, "nothing was rolled"
+        return self.payloads[-1]
+
+
 def _mouse(widget, kind: QMouseEvent.Type) -> None:
     """Send *kind* as a real left-button event at the widget's centre."""
     point = QPointF(widget.width() / 2, widget.height() / 2)
@@ -119,11 +138,15 @@ def _release(widget) -> None:
 
 def test_a_stat_blocks_request_reaches_the_dice_block(qapp: QApplication) -> None:
     sheet = _sheet()
+    panel = sheet.dice.panel
+    rolled = _Rolled(panel)
+
     sheet.abilities.rollRequested.emit(ability_roll(sheet.character, sheet.abilities._data, "STR"))
 
-    panel = sheet.dice.panel
-    assert panel.current_spec().label == "Strength"
+    assert rolled.last["label"] == "Strength"
     assert "Strength" in panel._readout.text()
+    # And the roller is not left armed with it — see the chip tests below.
+    assert panel.current_spec() is None
 
 
 def test_the_request_travels_without_either_block_naming_the_other(qapp: QApplication) -> None:
@@ -134,26 +157,30 @@ def test_the_request_travels_without_either_block_naming_the_other(qapp: QApplic
     from mm_companion.ui.blocks.bus import ROLL_REQUESTED
 
     sheet = _sheet()
+    rolled = _Rolled(sheet.dice.panel)
     sheet.bus.publish_request(ROLL_REQUESTED, RollSpec(label="Improvised", modifier=3))
 
-    assert sheet.dice.panel.current_spec().label == "Improvised"
+    assert rolled.last["label"] == "Improvised"
 
 
 def test_a_bad_payload_costs_a_roll_not_the_sheet(qapp: QApplication) -> None:
     sheet = _sheet()
+    rolled = _Rolled(sheet.dice.panel)
     sheet.abilities.rollRequested.emit("not a spec")  # must not raise
     assert sheet.dice.panel.current_spec() is None
+    assert rolled.payloads == []
 
 
 def test_a_closed_dice_block_is_reopened_rather_than_rolling_unseen(qapp: QApplication) -> None:
     sheet = _sheet()
     sheet.hide_block("dice")
     assert sheet.is_block_hidden("dice")
+    rolled = _Rolled(sheet.dice.panel)
 
     sheet.abilities.rollRequested.emit(RollSpec(label="Strength", modifier=4))
 
     assert not sheet.is_block_hidden("dice")
-    assert sheet.dice.panel.current_spec().label == "Strength"
+    assert rolled.last["label"] == "Strength"
 
 
 # -- one click loads, two roll -----------------------------------------------
@@ -166,8 +193,10 @@ def test_a_load_request_shows_the_spec_without_throwing_the_die(qapp: QApplicati
     sheet.abilities.loadRequested.emit(RollSpec(label="Strength", modifier=4))
 
     assert panel.current_spec().label == "Strength"
-    # The chip is there, but nothing was rolled — the readout still says nothing.
-    assert "Strength" not in panel._readout.text()
+    # The chip is there and the readout names what it will throw, but nothing has
+    # been thrown: the die is still showing its resting face.
+    assert "Rolling Strength" in panel._readout.text()
+    assert panel._face.text() == "?"
 
 
 def test_a_closed_dice_block_is_reopened_for_a_load_too(qapp: QApplication) -> None:
@@ -192,13 +221,16 @@ def test_clicking_a_stat_row_loads_it_and_double_clicking_rolls_it(qapp: QApplic
 
     table.cellClicked.emit(row, COL_NAME)
     assert panel.current_spec().label == "Strength"
-    assert "Strength" not in panel._readout.text()  # loaded, not rolled
+    assert panel._face.text() == "?"  # loaded, not rolled
 
     # A real double-click fires the single first; that is harmless, since rolling
     # loads the same spec anyway.
     table.cellClicked.emit(row, COL_NAME)
     table.cellDoubleClicked.emit(row, COL_NAME)
     assert "Strength" in panel._readout.text()
+    # And it takes the chip away with it: the player asked for one throw, not for a
+    # roller left armed with Strength.
+    assert panel.current_spec() is None
 
 
 def test_clicking_a_skill_row_loads_it(qapp: QApplication) -> None:
@@ -418,9 +450,10 @@ def test_an_equipment_card_rolls_through_the_same_channel(qapp: QApplication) ->
     lines = sheet.equipment.findChildren(_RollLine)
     rollable = [line for line in lines if line.is_rollable()]
     assert len(rollable) == 1
+    rolled = _Rolled(sheet.dice.panel)
     _click(rollable[0])
 
-    spec = sheet.dice.panel.current_spec()
+    spec = rolled.last["spec"]
     assert spec is not None and spec.follow_up is not None  # the attack, forcing a save
     assert char.equipment[0].worn is True
 
@@ -474,19 +507,67 @@ def test_a_trait_check_uses_the_dc_box_because_it_has_none_of_its_own(
     assert panel._roll_parameters()[2] == 15
 
 
-def test_the_chip_stays_so_the_same_trait_can_be_rolled_again(qapp: QApplication) -> None:
+def test_a_loaded_chip_stays_so_the_same_trait_can_be_rolled_again(qapp: QApplication) -> None:
+    """A *load* is the sticky gesture: name the trait, dial the extras, then throw."""
     sheet = _sheet()
     panel = sheet.dice.panel
-    panel.roll_spec(RollSpec(label="Athletics", modifier=9))
+    panel.load_spec(RollSpec(label="Athletics", modifier=9))
+
+    panel._start_roll()
     panel._finish_roll()
 
     assert panel.current_spec().label == "Athletics"
-    assert panel._spec_label.text() == "Athletics +9"
+    assert panel._spec_label.text() == f"{dice_roller.CHIP_PREFIX}Athletics +9"
+    assert panel._roll_parameters()[:2] == (9, 0)  # still folded into the next throw
 
     # And clearing it puts the panel back to a plain manual roll.
     panel.load_spec(None)
     assert panel.current_spec() is None
     assert panel._roll_parameters()[:2] == (0, 0)
+
+
+def test_a_rolled_chip_goes_once_the_die_has_settled(qapp: QApplication) -> None:
+    """A *roll* is not sticky, or a double-clicked stat would leave the die armed.
+
+    The double-click fires the single click first, so the pair is load → (load +
+    roll) on one spec; without this the roller kept a trait the player had only
+    asked to throw once, and every later click of the die quietly folded it in.
+    """
+    sheet = _sheet()
+    panel = sheet.dice.panel
+    rolled = _Rolled(panel)
+
+    panel.roll_spec(RollSpec(label="Athletics", modifier=9, dc=15))
+
+    # The roll was made of it — it is only afterwards that it is let go.
+    assert rolled.last["label"] == "Athletics"
+    assert (rolled.last["bonus"], rolled.last["dc"]) == (9, 15)
+
+    assert panel.current_spec() is None
+    assert not panel._spec_chip.isVisibleTo(panel)
+    assert not panel._dc_check.isChecked()  # the DC it brought went with it
+    assert panel._roll_parameters()[:2] == (0, 0)
+    # ...and the number it produced is still on screen; the clear must not eat it.
+    assert "Athletics" in panel._readout.text()
+
+
+def test_a_roll_the_session_never_answered_keeps_its_chip(qapp: QApplication) -> None:
+    """Giving up on the die is not giving up on the trait.
+
+    The player will want to throw it again, and sending them back to the sheet to
+    click the stat a second time is the wrong end of a failure that was not theirs.
+    """
+    sheet = _sheet()
+    panel = sheet.dice.panel
+    # A roll in flight: loaded by roll_spec, waiting on a session that goes quiet.
+    panel.load_spec(RollSpec(label="Athletics", modifier=9))
+    panel._transient = True
+    panel._rolling = True
+
+    panel._abandon_roll(dice_roller.NO_ANSWER)
+
+    assert panel.current_spec().label == "Athletics"
+    assert panel._spec_chip.isVisibleTo(panel)
 
 
 def test_the_table_is_told_what_was_rolled(qapp: QApplication, hosting: SessionBridge) -> None:
@@ -527,10 +608,14 @@ def test_a_hit_offers_the_save_it_forced(qapp: QApplication) -> None:
     assert len(chain) == 1
     assert chain[0].text() == "🎲 Toughness vs. 18"
 
-    # Pressing it primes the save with its own DC already filled in.
+    # Pressing it rolls the save against its own DC.
+    rolled = _Rolled(panel)
     chain[0].click()
-    assert panel.current_spec().label == "Toughness vs. 18"
-    assert panel._dc_spin.value() == 18
+    assert rolled.last["label"] == "Toughness vs. 18"
+    assert rolled.last["dc"] == 18
+    # And the chip goes with the roll it was made for, taking its DC back off.
+    assert panel.current_spec() is None
+    assert not panel._dc_check.isChecked()
 
 
 def test_a_failed_save_says_what_it_did_to_the_target(qapp: QApplication) -> None:
@@ -615,8 +700,9 @@ def test_a_natural_20_raises_the_dc_of_the_save_it_forces(qapp: QApplication) ->
 
     # 18 + the system's critical_effect_bonus, and the chip says why.
     assert chain[0].text() == "🎲 Toughness vs. 18 — critical hit, DC 23"
+    rolled = _Rolled(sheet.dice.panel)
     chain[0].click()
-    assert sheet.dice.panel._dc_spin.value() == 23
+    assert rolled.last["dc"] == 23
 
 
 def test_a_natural_1_that_still_hits_helps_the_target_resist(qapp: QApplication) -> None:
@@ -626,9 +712,10 @@ def test_a_natural_1_that_still_hits_helps_the_target_resist(qapp: QApplication)
     chain = _chain_buttons(_attack_with_die(sheet, 1, dc=3))
 
     assert chain[0].text() == "🎲 Toughness vs. 18 — natural 1, +5 to resist"
+    rolled = _Rolled(sheet.dice.panel)
     chain[0].click()
-    assert sheet.dice.panel.current_spec().modifier == 5
-    assert sheet.dice.panel._dc_spin.value() == 18  # the DC is untouched
+    assert rolled.last["bonus"] == 5  # the target's help, not a cut to the DC
+    assert rolled.last["dc"] == 18  # the DC is untouched
 
 
 def test_a_natural_1_that_misses_forces_no_save_at_all(qapp: QApplication) -> None:
@@ -681,15 +768,16 @@ def test_another_players_card_offers_the_save_with_their_own_toughness(
     chain = _chain_buttons(history.cards()[0])
     assert chain[0].text() == "🎲 Toughness vs. 18"
 
+    rolled = _Rolled(sheet.dice.panel)
     chain[0].click()
-    assert sheet.dice.panel.current_spec().modifier == 5
-    assert sheet.dice.panel._dc_spin.value() == 18
+    assert rolled.last["bonus"] == 5  # their own Toughness, filled in for them
+    assert rolled.last["dc"] == 18
 
 
 def test_your_own_card_does_not_fill_in_your_own_toughness(qapp: QApplication) -> None:
     """You are not the target of your own attack.
 
-    The chip is still there — a GM running both sides needs it — but quietly using
+    The button is still there — a GM running both sides needs it — but quietly using
     the attacker's Toughness for the defender would be a confident wrong number.
     """
     sheet = _sheet()
@@ -709,8 +797,9 @@ def test_your_own_card_does_not_fill_in_your_own_toughness(qapp: QApplication) -
     # One's own roll is held until the die settles, then released — the real path.
     history.release_roll(mine)
 
+    rolled = _Rolled(sheet.dice.panel)
     _chain_buttons(history.cards()[0])[0].click()
-    assert sheet.dice.panel.current_spec().modifier == 0
+    assert rolled.last["bonus"] == 0
 
 
 # -- pinning a row to a GM card ----------------------------------------------

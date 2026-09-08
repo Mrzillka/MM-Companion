@@ -35,6 +35,7 @@ from mm_companion.ui.roll_history import (
     MIN_HISTORY_HEIGHT,
     NoteCard,
     RollHistoryPanel,
+    roll_parameters,
 )
 from mm_companion.ui.session_bridge import SessionBridge, set_active_session
 
@@ -116,7 +117,7 @@ def test_roll_without_dc_shows_total_and_records_history(
 
     cards = view._local_history.cards()
     assert len(cards) == 1
-    assert cards[0]._params == {"bonus": 4, "penalty": 1, "dc": None}
+    assert cards[0]._params == {"name": "", "bonus": 4, "penalty": 1}
     text = view.panel._readout.text()
     assert "15" in text  # die 12 + net modifier 3
     assert "Success" not in text and "Failure" not in text  # no DC → no degree
@@ -141,30 +142,82 @@ def test_roll_with_dc_shows_degree_of_success(
 def test_saving_a_roll_adds_a_persisted_quick_roll(qapp: QApplication) -> None:
     view = DiceRollerView()
 
-    view.panel._add_quick_roll({"bonus": 4, "penalty": 1, "dc": None})
+    view.panel._add_quick_roll({"bonus": 4, "penalty": 1})
 
     assert view.panel._quick_flow.count() == 1
-    assert storage.load_settings()["quick_rolls"] == [{"bonus": 4, "penalty": 1, "dc": None}]
+    assert storage.load_settings()["quick_rolls"] == [{"bonus": 4, "penalty": 1}]
 
-    # De-duplicated by the numbers alone, so a *name* doesn't make a second chip of
-    # the same roll — which is what lets one star answer for both.
-    view.panel._add_quick_roll({"bonus": 4, "penalty": 1, "dc": None})
-    view.panel._add_quick_roll({"bonus": 4, "penalty": 1, "dc": None}, name="Attack")
+    # De-duplicated by name *and* numbers: the same roll twice is one chip, but the
+    # same numbers under another name is a different roll and gets its own.
+    view.panel._add_quick_roll({"bonus": 4, "penalty": 1})
     assert view.panel._quick_flow.count() == 1
+
+    view.panel._add_quick_roll({"bonus": 4, "penalty": 1}, name="Attack")
+    assert view.panel._quick_flow.count() == 2
+
+
+def test_a_saved_roll_keeps_the_name_it_was_rolled_under(qapp: QApplication) -> None:
+    """A strip of chips reading +6, +4, +4 is a puzzle a few rolls later."""
+    view = DiceRollerView()
+
+    view.panel.toggle_quick_roll(roll_parameters({"label": "Athletics", "bonus": 9, "dc": 15}))
+
+    # The name came with the roll — no dialog, and no DC.
+    assert view.panel._quick_rolls == [{"bonus": 9, "penalty": 0, "name": "Athletics"}]
+    labels = {b.text() for b in view.panel._quick_container.findChildren(QPushButton)}
+    assert "Athletics" in labels
+
+
+def test_a_quick_roll_leaves_the_dc_box_alone(qapp: QApplication) -> None:
+    """The difficulty belongs to the situation in front of you, not to the chip."""
+    view = DiceRollerView()
+    view.panel._add_quick_roll({"bonus": 9, "penalty": 0}, name="Athletics")
+    view.panel._dc_check.setChecked(True)
+    view.panel._dc_spin.setValue(21)
+
+    view.panel._apply_quick_roll(view.panel._quick_rolls[0])
+
+    assert view.panel._dc_check.isChecked() is True
+    assert view.panel._dc_spin.value() == 21
+    assert view.panel._bonus_spin.value() == 9
+    assert view.panel.current_spec().label == "Athletics"
 
 
 def test_quick_rolls_persist_across_windows(qapp: QApplication) -> None:
     first = DiceRollerView()
-    first.panel._add_quick_roll({"bonus": 2, "penalty": 0, "dc": 15})
+    first.panel._add_quick_roll({"bonus": 2, "penalty": 0}, name="Stealth")
 
     second = DiceRollerView()
     assert second.panel._quick_flow.count() == 1
-    assert second.panel._quick_rolls == [{"bonus": 2, "penalty": 0, "dc": 15}]
+    assert second.panel._quick_rolls == [{"bonus": 2, "penalty": 0, "name": "Stealth"}]
+
+
+def test_a_strip_saved_with_dcs_is_read_back_without_them(qapp: QApplication) -> None:
+    """A workspace written before a quick roll dropped its DC still has to open.
+
+    And the two chips that differed *only* by their DC are now one roll, so the
+    read has to collapse them — two identical chips of which only the first ever
+    answers a click is worse than the migration.
+    """
+    storage.update_settings(
+        quick_rolls=[
+            {"bonus": 3, "penalty": 0, "dc": 15},
+            {"bonus": 3, "penalty": 0, "dc": None},
+            {"bonus": 3, "penalty": 0, "dc": 20, "name": "Athletics"},
+        ]
+    )
+
+    view = DiceRollerView()
+
+    assert view.panel._quick_rolls == [
+        {"bonus": 3, "penalty": 0},
+        {"bonus": 3, "penalty": 0, "name": "Athletics"},
+    ]
 
 
 def test_removing_a_quick_roll_persists(qapp: QApplication) -> None:
     view = DiceRollerView()
-    entry = {"bonus": 3, "penalty": 0, "dc": None}
+    entry = {"bonus": 3, "penalty": 0}
     view.panel._add_quick_roll(entry)
 
     view.panel._remove_quick_roll(entry)
@@ -176,17 +229,17 @@ def test_removing_a_quick_roll_persists(qapp: QApplication) -> None:
 def test_named_quick_roll_shows_its_name(qapp: QApplication) -> None:
     view = DiceRollerView()
 
-    view.panel._add_quick_roll({"bonus": 1, "penalty": 0, "dc": None}, name="Perception")
+    view.panel._add_quick_roll({"bonus": 1, "penalty": 0}, name="Perception")
 
-    assert view.panel._quick_rolls == [{"bonus": 1, "penalty": 0, "dc": None, "name": "Perception"}]
+    assert view.panel._quick_rolls == [{"bonus": 1, "penalty": 0, "name": "Perception"}]
     labels = {b.text() for b in view.panel._quick_container.findChildren(QPushButton)}
     assert "Perception" in labels
 
 
 def test_reordering_moves_and_persists(qapp: QApplication) -> None:
     view = DiceRollerView()
-    first = {"bonus": 1, "penalty": 0, "dc": None}
-    second = {"bonus": 2, "penalty": 0, "dc": None}
+    first = {"bonus": 1, "penalty": 0}
+    second = {"bonus": 2, "penalty": 0}
     view.panel._add_quick_roll(first)
     view.panel._add_quick_roll(second)
 
@@ -203,7 +256,7 @@ def test_the_strip_holds_no_more_than_the_cap(qapp: QApplication) -> None:
     view = DiceRollerView()
 
     for bonus in range(MAX_QUICK_ROLLS + 3):
-        view.panel._add_quick_roll({"bonus": bonus, "penalty": 0, "dc": None})
+        view.panel._add_quick_roll({"bonus": bonus, "penalty": 0})
 
     assert view.panel._quick_flow.count() == MAX_QUICK_ROLLS
     assert view.panel.quick_rolls_full() is True
@@ -213,7 +266,7 @@ def test_the_strip_holds_no_more_than_the_cap(qapp: QApplication) -> None:
 def test_a_settings_file_over_the_cap_is_truncated_on_load(qapp: QApplication) -> None:
     # Written before there was a cap, or by hand — either way it must not hold the
     # strip open past it.
-    stored = [{"bonus": b, "penalty": 0, "dc": None} for b in range(MAX_QUICK_ROLLS + 4)]
+    stored = [{"bonus": b, "penalty": 0} for b in range(MAX_QUICK_ROLLS + 4)]
     storage.update_settings(quick_rolls=stored)
 
     view = DiceRollerView()
@@ -224,7 +277,7 @@ def test_a_settings_file_over_the_cap_is_truncated_on_load(qapp: QApplication) -
 
 def test_a_star_saves_then_unsaves_the_same_roll(qapp: QApplication) -> None:
     view = DiceRollerView()
-    params = {"bonus": 3, "penalty": 0, "dc": 15}
+    params = {"bonus": 3, "penalty": 0, "name": "Athletics"}
 
     view.panel.toggle_quick_roll(params)
     assert view.panel._quick_flow.count() == 1
@@ -234,15 +287,33 @@ def test_a_star_saves_then_unsaves_the_same_roll(qapp: QApplication) -> None:
     assert storage.load_settings()["quick_rolls"] == []
 
 
-def test_a_stars_click_takes_out_the_chip_however_it_was_renamed(qapp: QApplication) -> None:
+def test_a_stars_click_takes_out_the_chip_it_saved(qapp: QApplication) -> None:
     view = DiceRollerView()
-    entry = {"bonus": 3, "penalty": 0, "dc": None}
-    view.panel._add_quick_roll(entry, name="Perception")
+    view.panel._add_quick_roll({"bonus": 3, "penalty": 0}, name="Perception")
 
-    # The card knows only its numbers; the name came later, on the chip.
-    view.panel.toggle_quick_roll({"bonus": 3, "penalty": 0, "dc": None})
+    # A card saving the same numbers under no name is a *different* quick roll now,
+    # so its star must not take Perception away.
+    view.panel.toggle_quick_roll({"bonus": 3, "penalty": 0})
+    assert len(view.panel._quick_rolls) == 2
 
-    assert view.panel._quick_rolls == []
+    view.panel.toggle_quick_roll({"bonus": 3, "penalty": 0, "name": "Perception"})
+    assert view.panel._quick_rolls == [{"bonus": 3, "penalty": 0}]
+
+
+def test_a_rename_that_would_collide_is_refused(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two chips with one identity would leave the second unreachable by any star."""
+    view = DiceRollerView()
+    view.panel._add_quick_roll({"bonus": 1, "penalty": 0}, name="Perception")
+    view.panel._add_quick_roll({"bonus": 1, "penalty": 0}, name="Insight")
+    monkeypatch.setattr(
+        dice_roller.QInputDialog, "getText", staticmethod(lambda *a, **k: ("Perception", True))
+    )
+
+    view.panel._rename_quick_roll(view.panel._quick_rolls[1])
+
+    assert view.panel._quick_rolls[1]["name"] == "Insight"
 
 
 def test_a_history_cards_star_follows_the_strip(
@@ -257,10 +328,10 @@ def test_a_history_cards_star_follows_the_strip(
     assert star.is_saved() is False
 
     # Saving that roll lights its card, with no rebuild of the card in between.
-    view.panel.toggle_quick_roll({"bonus": 2, "penalty": 0, "dc": None})
+    view.panel.toggle_quick_roll({"bonus": 2, "penalty": 0})
     assert star.is_saved() is True
 
-    view.panel.toggle_quick_roll({"bonus": 2, "penalty": 0, "dc": None})
+    view.panel.toggle_quick_roll({"bonus": 2, "penalty": 0})
     assert star.is_saved() is False
 
 
@@ -273,7 +344,7 @@ def test_a_full_strip_disables_an_unsaved_cards_star(
     view.panel._finish_roll()
 
     for bonus in range(MAX_QUICK_ROLLS):
-        view.panel._add_quick_roll({"bonus": bonus, "penalty": 0, "dc": None})
+        view.panel._add_quick_roll({"bonus": bonus, "penalty": 0})
 
     star = view._local_history.cards()[0].star
     assert star.is_saved() is False
@@ -284,7 +355,7 @@ def test_renaming_a_chip_persists_and_recaptions_it(
     qapp: QApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     view = DiceRollerView()
-    entry = {"bonus": 1, "penalty": 0, "dc": None}
+    entry = {"bonus": 1, "penalty": 0}
     view.panel._add_quick_roll(entry)
     monkeypatch.setattr(
         dice_roller.QInputDialog, "getText", staticmethod(lambda *a, **k: ("Perception", True))
@@ -578,7 +649,7 @@ def test_a_column_gives_the_space_back_when_a_chip_goes(qapp: QApplication) -> N
     view = DiceRollerView()
     view.show()
     for bonus in range(MAX_QUICK_ROLLS):
-        view.panel._add_quick_roll({"bonus": bonus, "penalty": 0, "dc": None})
+        view.panel._add_quick_roll({"bonus": bonus, "penalty": 0})
     _settled(qapp, view, 360, 800)
 
     full_panel, full_history = view._splitter.sizes()

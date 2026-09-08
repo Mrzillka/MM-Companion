@@ -119,7 +119,17 @@ def test_degree_label_is_empty_without_a_grade() -> None:
 
 
 def test_roll_parameters_are_what_a_quick_roll_needs() -> None:
-    assert roll_parameters(roll()) == {"bonus": 6, "penalty": 0, "dc": 15}
+    """Its name and its numbers — and deliberately not its DC.
+
+    The name because a strip of chips reading +6, +4, +4 is a puzzle a few rolls
+    later; not the DC because the difficulty belongs to the situation in front of
+    the player, not to a roll they make often.
+    """
+    assert roll_parameters(roll(label="Athletics")) == {
+        "name": "Athletics",
+        "bonus": 6,
+        "penalty": 0,
+    }
 
 
 # -- rendering --------------------------------------------------------------
@@ -211,7 +221,7 @@ def test_saving_reports_the_parameters(panel: RollHistoryPanel) -> None:
 
     panel.cards()[0].star.click()
 
-    assert seen == [{"bonus": 6, "penalty": 0, "dc": 15}]
+    assert seen == [{"name": "", "bonus": 6, "penalty": 0}]
 
 
 def test_a_saved_rolls_star_is_lit_and_a_full_strip_disables_the_rest(
@@ -225,11 +235,11 @@ def test_a_saved_rolls_star_is_lit_and_a_full_strip_disables_the_rest(
     assert star.isEnabled() is True
 
     # That roll is now in the strip, so its star lights up...
-    panel.set_quick_roll_state({quick_roll_key({"bonus": 6, "penalty": 0, "dc": 15})}, True)
+    panel.set_quick_roll_state({quick_roll_key({"bonus": 6, "penalty": 0})}, True)
     assert star.is_saved() is True
 
     # ...and with the strip full, a card that is *not* in it cannot be saved.
-    panel.set_quick_roll_state({quick_roll_key({"bonus": 1, "penalty": 0, "dc": None})}, False)
+    panel.set_quick_roll_state({quick_roll_key({"bonus": 1, "penalty": 0})}, False)
     assert star.is_saved() is False
     assert star.isEnabled() is False
 
@@ -238,7 +248,7 @@ def test_a_card_built_after_the_strip_was_told_starts_out_lit(panel: RollHistory
     # The state is remembered, not just applied: a roll arriving later has to agree
     # with the chips already in the strip.
     panel._own_id = "p1"
-    panel.set_quick_roll_state({quick_roll_key({"bonus": 6, "penalty": 0, "dc": 15})}, True)
+    panel.set_quick_roll_state({quick_roll_key({"bonus": 6, "penalty": 0})}, True)
 
     panel.add_roll(roll(seq=1, player_id="p1"))
 

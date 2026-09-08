@@ -69,14 +69,25 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   `☆` disabled (the strip is full). Three consequences worth knowing. The star is a
   **two-way switch**, so a card reports the click on `saveToggled` and the panel —
   which owns the strip — decides whether that was a save or an unsave
-  (`toggle_quick_roll`). Identity is `quick_roll_key` (`bonus`/`penalty`/`dc` alone,
-  **ignoring `name`**), so one star answers for a chip however it was later renamed;
-  comparing whole entries is the old bug where a named chip and its unnamed twin were
-  two rolls. And because a card cannot reach the panel (`roll_history` is the *lower*
-  module — `dice_roller` imports it, never the reverse), the state is **pushed down**:
-  `quickRollsChanged` → `set_quick_roll_state(keys, room)`, which both histories
-  remember so a card built later starts out agreeing. Naming moved off the save path
-  onto the chip's own right-click ▸ Rename… — saving is one click with no dialog.
+  (`toggle_quick_roll`). **A chip is saved with the name the roll was made under** and
+  identity is `quick_roll_key` — `name`/`bonus`/`penalty` — so "Strength +4" and
+  "Dodge +4" are two chips and each card's star lights its own. Saving is still one
+  click with no dialog: the name is the one the roll already had (`roll_parameters`
+  reads it off `label`), and the chip's right-click ▸ Rename… is for changing it
+  afterwards. The price of putting the name in the key is that a rename
+  *re-identifies* the chip, so the star on the card it came from goes dark — honest,
+  since the chip is not that roll any more, and why `_rename_quick_roll` **refuses a
+  name that would collide** with another chip (two chips on one key leaves the second
+  unreachable by any star). **No DC is saved**, and `_apply_quick_roll` leaves the DC
+  box exactly as it finds it: a quick roll is one you make often, the difficulty is
+  the situation's rather than the roll's, and a chip that silently re-armed the box
+  graded everything after it against a number nobody had chosen. `_load_quick_rolls`
+  therefore migrates — it drops a stored `dc` and **de-duplicates**, since two chips
+  that differed only by their DC collapse onto one key. And because a card cannot
+  reach the panel (`roll_history` is the *lower* module — `dice_roller` imports it,
+  never the reverse), the state is **pushed down**: `quickRollsChanged` →
+  `set_quick_roll_state(keys, room)`, which both histories remember so a card built
+  later starts out agreeing.
 - The Dice block **reflows to the shape of the space it is given** (`ui/reflow.py`),
   which is what lets one block work both in the tall narrow right-hand strip and in a
   short wide **bottom** one. Two nested levels, each deciding from its own width:
@@ -361,6 +372,38 @@ the pair is load → (load + roll) on one spec, and deferring would make a plain
 feel a beat late. A power card's roll line is the deliberate exception: it is an
 explicit "roll this" affordance rather than a number being read off the sheet.
 
+**A load is sticky; a roll is not.** That leading single click is exactly why: the
+chip used to survive the roll it started, so a double-clicked stat left the roller
+*armed* with a trait the player had asked to throw once, and every later click of the
+die quietly folded its modifier — and its DC — into a roll nobody had asked for.
+`roll_spec` therefore marks what it loads **transient** and drops it again
+(`_settle_spec`) at the very end of both paths that produce a number. It has to load
+it at all because the roll is made out of it: `_roll_parameters` folds in the modifier
+and the DC, `_roll_label` is the name it travels under, and `localRoll` hands the spec
+to the history card — hence "at the very end", after the readout and the history have
+had their look. Three things fall out of it:
+- **`load_spec` cancels transience** (it is set `False` at the top). An explicit load
+  is always a deliberate one, so a spec arriving over the bus mid-tumble is not swept
+  away when the die settles.
+- **`_abandon_roll` does not settle it.** A session roll that never came back is one
+  the player will want to throw again; taking the trait away would send them back to
+  the sheet to click the stat a second time.
+- **A named quick roll keeps its chip**, because it does not go through `roll_spec`:
+  its chip is the caption for slider values that stay set, so the panel genuinely
+  still *is* that quick roll once the die has settled. (Its DC is not part of that —
+  see the quick-roll notes above.)
+
+The other half of the same guard is that a loaded chip is **loud** — an `accent.dice`
+fill inside an `accent.dice` border (`#specChip`, scoped to the object name, since a
+bare rule on a widget reaches the `✕` button inside it), a caption worded as a state
+(`🎲 Rolling: Athletics +9`), a matching ring on the die (`_apply_die_style`, drawn
+inside the button's existing `die.padding` so its fixed size never moves and
+`contentChanged` is not dragged in for a highlight), and a readout that says
+`Rolling Athletics — click the die.` in place of the resting prompt. `_showing_result`
+is what keeps that prompt from eating a number: `load_spec` writes it whenever a spec
+is loaded, but on a *clear* only while the readout is not holding a result — and
+clearing is precisely what `_settle_spec` does one line after the roll wrote one there.
+
 - `core/rules/rolls.py` is the layer that answers "what does rolling X look like":
   a frozen `RollSpec` (`label`, `modifier`, `dc`, `kind`, `hint`, `follow_up`,
   `outcomes`) plus one builder per trait — `ability_roll`, `resistance_roll`,
@@ -407,9 +450,10 @@ explicit "roll this" affordance rather than a number being read off the sheet.
   dropped. It is **not** quiet, for `load-requested`'s reason: a player who has just paid
   a rung of fatigue for it is about to roll, and putting it into a Dice block they cannot
   see would charge them for something they never got.
-- `DiceRollerPanel.roll_spec(spec)` / `load_spec(spec)` are the public way in. The
-  loaded trait is **sticky**: it shows as a chip above the sliders and survives the
-  roll, so the sliders can be nudged and the die thrown again. The sliders always
+- `DiceRollerPanel.roll_spec(spec)` / `load_spec(spec)` are the public way in. A
+  trait that was **loaded** is sticky: it shows as a chip above the sliders and
+  survives the roll, so the sliders can be nudged and the die thrown again; one that
+  arrived through `roll_spec` is let go once the die settles (above). The sliders always
   **add on top** (`net = spec.modifier + bonus − penalty`, split back into a
   non-negative pair for the wire) rather than being overwritten — they are the
   situational extras, and a trait bonus can exceed their 0-20 range anyway.

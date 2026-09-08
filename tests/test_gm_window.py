@@ -1959,6 +1959,13 @@ def test_clicking_a_chip_loads_it_and_double_clicking_rolls_it(window: GMWindow)
     attack.rollRequested.emit(attack.value.spec)
 
     assert window._roller._rolling is True
+    assert window._roller._spec.label == "Attack"  # the roll is made of it...
+
+    window._roller._finish_roll()
+
+    # ...and let go of once the die settles, so the GM's next click of the die is
+    # a plain one rather than another Attack nobody asked for.
+    assert window._roller._spec is None
 
 
 def test_a_forced_save_chip_is_read_rather_than_rolled(window: GMWindow) -> None:

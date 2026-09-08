@@ -122,7 +122,7 @@ def test_the_mini_roller_is_the_same_roller(window: MainWindow) -> None:
     """The whole point: state carries across because the widgets do."""
     panel = window.sheet.dice.panel
     panel.load_spec(RollSpec(label="Athletics", modifier=9))
-    panel.toggle_quick_roll({"bonus": 3, "penalty": 0, "dc": 15})
+    panel.toggle_quick_roll({"name": "Athletics", "bonus": 3, "penalty": 0})
 
     window._compact.enter()
 

@@ -139,29 +139,42 @@ def degree_label(degree: int | None, critical: bool, die: int) -> str:
 
 
 def roll_parameters(roll: dict) -> dict:
-    """The quick-roll parameters behind a shared roll — what its star saves."""
-    dc = roll.get("dc")
+    """The quick-roll parameters behind a shared roll — what its star saves.
+
+    Its **name** as well as its numbers: a roll travels named (``label``), and a
+    strip of chips reading ``+6``, ``+4``, ``+4`` is a puzzle a few rolls later.
+    Saving is still one click with no dialog — the name is simply the one the roll
+    already had, and the chip's own ▸ Rename… is for changing it afterwards.
+
+    The **DC is deliberately not saved.** A quick roll is a roll you make often;
+    the difficulty it is made against belongs to the situation in front of you, not
+    to the roll, and a chip that silently re-armed the DC box with a number from
+    last session graded everything after it against a difficulty nobody had chosen.
+    """
     return {
+        "name": str(roll.get("label", "")),
         "bonus": int(roll.get("bonus", 0)),
         "penalty": int(roll.get("penalty", 0)),
-        "dc": None if dc is None else int(dc),
     }
 
 
-def quick_roll_key(params: dict) -> tuple[int, int, int | None]:
-    """A quick roll's identity: its numbers, **ignoring any name** it was given.
+def quick_roll_key(params: dict) -> tuple[str, int, int]:
+    """A quick roll's identity: what it is called, and the numbers it loads.
 
-    Two quick rolls are the same roll when they load the same inputs, whatever they
-    are called — so this is what de-duplicates the strip, and what a card's star
-    matches itself against to know whether it is already saved. Comparing whole
-    entries instead would make "+3 vs DC 15" and the same numbers named "Attack"
-    two different rolls, and the star could then glow for one and not the other.
+    The name counts because it is no longer decoration typed on afterwards — it is
+    saved from the roll, so "Strength +4" and "Dodge +4" are two different quick
+    rolls, and a card's star must light for its own. This is what de-duplicates the
+    strip and what a card matches itself against.
+
+    The consequence to know: renaming a chip re-identifies it, so the star on the
+    card it was saved from goes dark. That is the honest reading — the chip is not
+    that roll any more — but it is why :meth:`DiceRollerPanel._rename_quick_roll`
+    refuses a name that would collide with another chip.
     """
-    dc = params.get("dc")
     return (
+        str(params.get("name", "")),
         int(params.get("bonus", 0)),
         int(params.get("penalty", 0)),
-        None if dc is None else int(dc),
     )
 
 
@@ -222,7 +235,7 @@ class QuickRollStar(QPushButton):
         self.setText("☆")
         self.setEnabled(room)
         if room:
-            self.setToolTip("Save these parameters to the quick rolls")
+            self.setToolTip("Save this roll to the quick rolls")
         else:
             self.setToolTip(
                 f"The quick rolls are full ({MAX_QUICK_ROLLS}) — take one out to save this"

@@ -9,7 +9,7 @@
     "rankedNote": "ranked: true means the modifier is bought in its own ranks (chosen independently of the effect's rank), so its total contribution is costValue x its rank. These are the flat modifiers whose costFormula reads 'per rank'. Absent/false means it is applied once (rank 1).",
     "overridesNote": "overrides maps a base-effect game-term field (range, action, duration, resistance, check, effectType) to the value this modifier forces it to, for the generated game-terms summary (not the point cost). Later modifiers win. Example: Ranged sets range to 'Ranged', replacing a Close or Perception base. Keys are camelCase here; the loader normalizes effectType to the effect_type the stat rows use. Overriding effectType changes only this instance's Type row — the effect's own effectType stays its catalog taxonomy and still groups the constructor's palette.",
     "costValueNote": "costValue is the canonical numeric cost magnitude used for automatic point-cost calculation; its sign is implied by category (extra adds, flaw subtracts) and flat decides whether it applies once or per rank. The costFormula string carries the full nuance (ranges, tiers) for cases costValue simplifies.",
-    "impactNote": "Beyond 'overrides' (a literal field replacement), a modifier may declare other game-term impacts read by core.rules.effect_stat_rows for the summary (never the point cost): 'grantsAttack' marks the modifier that GIVES the effect its attack roll — it is what core.rules.effect_makes_attack reads, rather than sniffing the check prose, and 'dropsCheck' cancels it (the 'attack' extra carries it; an attacking effect lists that extra in its implicitModifiers); 'checkBonus' is a SIGNED adjustment to the effect's attack-roll number, multiplied by the modifier's rank (Accurate +2, Inaccurate -2); 'dropsCheck' removes the attack roll entirely (Perception Range); 'checkNote' is a parenthetical appended to the check row (Area keeps its attack roll but notes Dodge-for-half); 'stepField'+'stepBy' move a field that many steps along its gameTermLadders ordering (Increased Duration steps duration +1, Increased Action steps action +1 toward slower)."
+    "impactNote": "Beyond 'overrides' (a literal field replacement), a modifier may declare other game-term impacts read by core.rules.effect_stat_rows for the summary (never the point cost): 'grantsAttack' marks the modifier that GIVES the effect its attack roll — it is what core.rules.effect_makes_attack reads, rather than sniffing the check prose, and 'dropsCheck' cancels it (the 'attack' extra carries it; an attacking effect lists that extra in its implicitModifiers); 'checkBonus' is a SIGNED adjustment to the effect's attack-roll number, multiplied by the modifier's rank (Accurate +2, Inaccurate -2); 'dropsCheck' removes the attack roll entirely (Perception Range); 'checkNote' is a parenthetical appended to the check row (Area keeps its attack roll but notes Dodge-for-half); 'stepField'+'stepBy' move a field that many steps along its gameTermLadders ordering, multiplied by the modifier's rank when it is 'ranked' (Increased Duration steps duration +1 per rank, Increased Action steps action +1 per rank toward slower); a step that would run off either end of the ladder is clamped to it."
   },
   "gameTermLadders": {
     "duration": ["Instant", "Concentration", "Sustained", "Continuous", "Permanent"],
@@ -327,12 +327,14 @@
       "id": "increased_duration",
       "name": "Increased Duration",
       "category": "extra",
-      "costFormula": "+1 point per rank",
+      "costFormula": "+1 point per rank, per step",
       "costValue": 1,
       "flat": false,
+      "ranked": true,
+      "maxRank": 4,
       "stepField": "duration",
       "stepBy": 1,
-      "description": "Moves an effect's duration up a step (e.g. Instant to Concentration)."
+      "description": "Moves an effect's duration up one step per rank (e.g. Instant to Concentration, two ranks to Sustained)."
     },
     {
       "id": "increased_mass",
@@ -744,12 +746,14 @@
       "id": "increased_action",
       "name": "Increased Action",
       "category": "flaw",
-      "costFormula": "-1 point per rank",
+      "costFormula": "-1 point per rank, per step",
       "costValue": 1,
       "flat": false,
+      "ranked": true,
+      "maxRank": 4,
       "stepField": "action",
       "stepBy": 1,
-      "description": "Using the effect requires a slower action type than normal."
+      "description": "Using the effect requires a slower action type than normal, one step slower per rank (e.g. move to standard, two ranks to full round)."
     },
     {
       "id": "independent",

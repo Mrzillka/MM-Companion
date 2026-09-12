@@ -139,29 +139,42 @@ def degree_label(degree: int | None, critical: bool, die: int) -> str:
 
 
 def roll_parameters(roll: dict) -> dict:
-    """The quick-roll parameters behind a shared roll — what its star saves."""
-    dc = roll.get("dc")
+    """The quick-roll parameters behind a shared roll — what its star saves.
+
+    Its **name** as well as its numbers: a roll travels named (``label``), and a
+    strip of chips reading ``+6``, ``+4``, ``+4`` is a puzzle a few rolls later.
+    Saving is still one click with no dialog — the name is simply the one the roll
+    already had, and the chip's own ▸ Rename… is for changing it afterwards.
+
+    The **DC is deliberately not saved.** A quick roll is a roll you make often;
+    the difficulty it is made against belongs to the situation in front of you, not
+    to the roll, and a chip that silently re-armed the DC box with a number from
+    last session graded everything after it against a difficulty nobody had chosen.
+    """
     return {
+        "name": str(roll.get("label", "")),
         "bonus": int(roll.get("bonus", 0)),
         "penalty": int(roll.get("penalty", 0)),
-        "dc": None if dc is None else int(dc),
     }
 
 
-def quick_roll_key(params: dict) -> tuple[int, int, int | None]:
-    """A quick roll's identity: its numbers, **ignoring any name** it was given.
+def quick_roll_key(params: dict) -> tuple[str, int, int]:
+    """A quick roll's identity: what it is called, and the numbers it loads.
 
-    Two quick rolls are the same roll when they load the same inputs, whatever they
-    are called — so this is what de-duplicates the strip, and what a card's star
-    matches itself against to know whether it is already saved. Comparing whole
-    entries instead would make "+3 vs DC 15" and the same numbers named "Attack"
-    two different rolls, and the star could then glow for one and not the other.
+    The name counts because it is no longer decoration typed on afterwards — it is
+    saved from the roll, so "Strength +4" and "Dodge +4" are two different quick
+    rolls, and a card's star must light for its own. This is what de-duplicates the
+    strip and what a card matches itself against.
+
+    The consequence to know: renaming a chip re-identifies it, so the star on the
+    card it was saved from goes dark. That is the honest reading — the chip is not
+    that roll any more — but it is why :meth:`DiceRollerPanel._rename_quick_roll`
+    refuses a name that would collide with another chip.
     """
-    dc = params.get("dc")
     return (
+        str(params.get("name", "")),
         int(params.get("bonus", 0)),
         int(params.get("penalty", 0)),
-        None if dc is None else int(dc),
     )
 
 
@@ -222,7 +235,7 @@ class QuickRollStar(QPushButton):
         self.setText("☆")
         self.setEnabled(room)
         if room:
-            self.setToolTip("Save these parameters to the quick rolls")
+            self.setToolTip("Save this roll to the quick rolls")
         else:
             self.setToolTip(
                 f"The quick rolls are full ({MAX_QUICK_ROLLS}) — take one out to save this"
@@ -609,6 +622,12 @@ class RollHistoryPanel(QWidget):
         # roll is held here until the die finishes tumbling, so the card lands as
         # the die settles rather than the instant the server resolves it.
         self._defer_own = False
+        # ...but only while that roller actually has a die in the air
+        # (see :meth:`set_awaiting_own`). The two are different questions — "is
+        # there a roller to wait for" and "is it waiting right now" — and holding a
+        # roll when the answer to the second is no is how one's own rolls used to
+        # vanish for good.
+        self._awaiting_own = False
         self._held: dict[int, dict] = {}
 
         layout = QVBoxLayout(self)
@@ -668,8 +687,47 @@ class RollHistoryPanel(QWidget):
         Set on a panel paired with a :class:`~mm_companion.ui.dice_roller.DiceRollerPanel`,
         whose ``sessionRollRevealed`` drives :meth:`release_roll`. Other players'
         rolls — which have no local animation to wait for — still land at once.
+
+        This says only that there *is* a roller to wait for.
+        :meth:`set_awaiting_own` says whether it is waiting, and both have to be
+        true before anything is held.
         """
         self._defer_own = defer
+
+    def set_awaiting_own(self, awaiting: bool) -> None:
+        """Whether the paired roller has a roll of ours in flight right now.
+
+        Driven by that panel's ``awaitingOwnRoll``. Turning it **off** flushes
+        whatever is still held, and that is the point of the method rather than a
+        tidy-up: a held roll is only ever shown again by :meth:`release_roll`, so an
+        own roll that reaches :meth:`add_roll` outside a tumble had nothing to
+        release it and stayed invisible for the rest of the session — to its own
+        roller alone, while every other seat saw it. Two ways that happened, and
+        both are ordinary play:
+
+        * a **reconnect** re-sends the whole log (``Welcome`` → ``historyReplaced``
+          → :meth:`set_rolls`), so every one of that player's own rolls was deferred
+          again at once and their history lost all of them;
+        * a roll the roller **gave up on** after ``SESSION_ROLL_TIMEOUT_MS``, whose
+          record then arrived a moment later on this panel's own feed.
+        """
+        awaiting = bool(awaiting)
+        if awaiting == self._awaiting_own:
+            return
+        self._awaiting_own = awaiting
+        if not awaiting:
+            self.release_held()
+
+    def release_held(self) -> None:
+        """Show every roll still being held, oldest first.
+
+        In ``seq`` order rather than arrival order: the log reads newest-first and
+        the cards are inserted at the top, so flushing them out of a dict's
+        insertion order would put them on screen backwards.
+        """
+        held, self._held = self._held, {}
+        for seq in sorted(held):
+            self._insert(held[seq])
 
     def attach(self, bridge: SessionBridge | None) -> None:
         """Follow *bridge*'s rolls, starting from the history it already has.
@@ -707,7 +765,16 @@ class RollHistoryPanel(QWidget):
     # -- rendering ---------------------------------------------------------
 
     def set_rolls(self, rolls: object) -> None:
-        """Replace everything on screen with *rolls* (oldest first, as stored)."""
+        """Replace everything on screen with *rolls* (oldest first, as stored).
+
+        A replay, not a feed: this is what a reconnect's fresh ``Welcome`` lands
+        on. Which seat is ours is re-read from the bridge first, because
+        :meth:`attach` runs once per join and a redial that failed to reclaim the
+        old slot comes back under a new ``player_id`` — after which every one of
+        our own rolls would be drawn as somebody else's.
+        """
+        if self._bridge is not None:
+            self._own_id = self._bridge.own_player_id()
         self.clear()
         if not isinstance(rolls, list):
             return
@@ -717,18 +784,26 @@ class RollHistoryPanel(QWidget):
     def add_roll(self, roll: object) -> None:
         """Put one entry at the top of the list.
 
-        One's own roll is held (not shown) while :attr:`_defer_own` is set, so a
-        paired roller can release it as the die settles — see :meth:`release_roll`.
-        A note or a request of one's own is *not* held: deferral waits on a die
-        animation, and neither has one to wait for, so holding either would hold it
-        forever. Hence the test is "is this a die roll", not "is this not a note".
+        One's own roll is held (not shown) while a paired roller has a die in the
+        air, so it can release it as the die settles — see :meth:`set_defer_own`,
+        :meth:`set_awaiting_own` and :meth:`release_roll`. Outside that window
+        nothing is held at all, because nothing would ever let it go again.
+        A note or a request of one's own is *not* held either: deferral waits on a
+        die animation, and neither has one to wait for, so holding either would
+        hold it forever. Hence the test is "is this a die roll", not "is this not
+        a note".
         """
         if not isinstance(roll, dict):
             return
         seq = roll.get("seq")
         if isinstance(seq, int) and seq in self._seen:
             return
-        if self._defer_own and roll.get("kind", KIND_ROLL) == KIND_ROLL and self._is_own(roll):
+        if (
+            self._defer_own
+            and self._awaiting_own
+            and roll.get("kind", KIND_ROLL) == KIND_ROLL
+            and self._is_own(roll)
+        ):
             if isinstance(seq, int):
                 self._held[seq] = roll
             return

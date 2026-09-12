@@ -119,7 +119,17 @@ def test_degree_label_is_empty_without_a_grade() -> None:
 
 
 def test_roll_parameters_are_what_a_quick_roll_needs() -> None:
-    assert roll_parameters(roll()) == {"bonus": 6, "penalty": 0, "dc": 15}
+    """Its name and its numbers — and deliberately not its DC.
+
+    The name because a strip of chips reading +6, +4, +4 is a puzzle a few rolls
+    later; not the DC because the difficulty belongs to the situation in front of
+    the player, not to a roll they make often.
+    """
+    assert roll_parameters(roll(label="Athletics")) == {
+        "name": "Athletics",
+        "bonus": 6,
+        "penalty": 0,
+    }
 
 
 # -- rendering --------------------------------------------------------------
@@ -211,7 +221,7 @@ def test_saving_reports_the_parameters(panel: RollHistoryPanel) -> None:
 
     panel.cards()[0].star.click()
 
-    assert seen == [{"bonus": 6, "penalty": 0, "dc": 15}]
+    assert seen == [{"name": "", "bonus": 6, "penalty": 0}]
 
 
 def test_a_saved_rolls_star_is_lit_and_a_full_strip_disables_the_rest(
@@ -225,11 +235,11 @@ def test_a_saved_rolls_star_is_lit_and_a_full_strip_disables_the_rest(
     assert star.isEnabled() is True
 
     # That roll is now in the strip, so its star lights up...
-    panel.set_quick_roll_state({quick_roll_key({"bonus": 6, "penalty": 0, "dc": 15})}, True)
+    panel.set_quick_roll_state({quick_roll_key({"bonus": 6, "penalty": 0})}, True)
     assert star.is_saved() is True
 
     # ...and with the strip full, a card that is *not* in it cannot be saved.
-    panel.set_quick_roll_state({quick_roll_key({"bonus": 1, "penalty": 0, "dc": None})}, False)
+    panel.set_quick_roll_state({quick_roll_key({"bonus": 1, "penalty": 0})}, False)
     assert star.is_saved() is False
     assert star.isEnabled() is False
 
@@ -238,7 +248,7 @@ def test_a_card_built_after_the_strip_was_told_starts_out_lit(panel: RollHistory
     # The state is remembered, not just applied: a roll arriving later has to agree
     # with the chips already in the strip.
     panel._own_id = "p1"
-    panel.set_quick_roll_state({quick_roll_key({"bonus": 6, "penalty": 0, "dc": 15})}, True)
+    panel.set_quick_roll_state({quick_roll_key({"bonus": 6, "penalty": 0})}, True)
 
     panel.add_roll(roll(seq=1, player_id="p1"))
 
@@ -261,9 +271,15 @@ def test_the_history_asks_for_two_cards_and_settles_for_one(panel: RollHistoryPa
 # -- deferring one's own roll until the die settles -------------------------
 
 
-def test_a_deferred_own_roll_is_held_until_released(panel: RollHistoryPanel) -> None:
-    panel._own_id = "p1"
+def _awaiting(panel: RollHistoryPanel, player_id: str = "p1") -> None:
+    """Put *panel* in the state it is in while its roller's die is in the air."""
+    panel._own_id = player_id
     panel.set_defer_own(True)
+    panel.set_awaiting_own(True)
+
+
+def test_a_deferred_own_roll_is_held_until_released(panel: RollHistoryPanel) -> None:
+    _awaiting(panel)
 
     # Our own roll is held back...
     panel.add_roll(roll(seq=1, player_id="p1"))
@@ -278,14 +294,70 @@ def test_a_deferred_own_roll_is_held_until_released(panel: RollHistoryPanel) -> 
 
 
 def test_a_released_roll_is_not_shown_twice(panel: RollHistoryPanel) -> None:
-    panel._own_id = "p1"
-    panel.set_defer_own(True)
+    _awaiting(panel)
     panel.add_roll(roll(seq=1, player_id="p1"))
 
     panel.release_roll(roll(seq=1, player_id="p1"))
     panel.release_roll(roll(seq=1, player_id="p1"))  # a second cue must not double it
 
     assert len(panel.cards()) == 1
+
+
+def test_an_own_roll_is_not_held_when_no_die_is_in_the_air(panel: RollHistoryPanel) -> None:
+    """The whole bug: only a roll something is waiting for may be held.
+
+    Nothing but the roller's reveal releases a held roll, so one held outside a
+    tumble would never be shown to the person who made it.
+    """
+    panel._own_id = "p1"
+    panel.set_defer_own(True)  # paired with a roller, but it is not rolling
+
+    panel.add_roll(roll(seq=1, player_id="p1"))
+
+    assert len(panel.cards()) == 1
+
+
+def test_a_reconnects_replayed_log_still_shows_ones_own_rolls(panel: RollHistoryPanel) -> None:
+    """A redial re-sends the whole log; our own rolls must survive the repaint.
+
+    This is what took a player's rolls away for the rest of the evening: the
+    ``Welcome`` after a blip replays the log, and every own roll in it used to be
+    deferred again with no die left to release any of them.
+    """
+    _awaiting(panel)
+    panel.add_roll(roll(seq=1, player_id="p1"))
+    panel.release_roll(roll(seq=1, player_id="p1"))
+    panel.set_awaiting_own(False)
+
+    panel.set_rolls([roll(seq=1, player_id="p1"), roll(seq=2, player_id="p2")])
+
+    assert len(panel.cards()) == 2
+
+
+def test_giving_up_on_a_roll_flushes_what_was_held(panel: RollHistoryPanel) -> None:
+    """A record that lands after the roller gave up still has to appear.
+
+    The roller stops waiting at ``SESSION_ROLL_TIMEOUT_MS`` and never reveals that
+    roll, so closing the window is the only thing left to show it.
+    """
+    _awaiting(panel)
+    panel.add_roll(roll(seq=1, player_id="p1"))
+    assert panel.cards() == []
+
+    panel.set_awaiting_own(False)  # the roller abandoned it
+
+    assert len(panel.cards()) == 1
+
+
+def test_a_flush_shows_held_rolls_oldest_first(panel: RollHistoryPanel) -> None:
+    """Cards go in at the top, so a flush out of seq order would read backwards."""
+    _awaiting(panel)
+    panel.add_roll(roll(seq=2, player_id="p1"))
+    panel.add_roll(roll(seq=1, player_id="p1"))
+
+    panel.set_awaiting_own(False)
+
+    assert [card.seq for card in panel.cards()] == [2, 1]
 
 
 # -- the remove button (GM only) --------------------------------------------

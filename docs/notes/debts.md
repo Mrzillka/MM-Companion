@@ -7,23 +7,6 @@ touching the area rather than after.
 
 Take one off this list by doing it, and delete its entry in the same commit.
 
-## Increased Action should be takeable more than once
-
-`increased_action` in `src/mm_companion/data/modifiers.json` carries
-`"stepField": "action"`, `"stepBy": 1` and is **not** `ranked`, so it can only ever move
-an effect's action one step along the `gameTermLadders` ordering. The rules let a flaw
-like this be taken repeatedly — a standard action to a move action to a full action —
-and the build has no way to say so.
-
-It wants `"ranked": true` with a sensible `maxRank`, `stepBy` multiplied by the chip's
-rank where the step is applied, and nothing else: the modifier chip already grows a `×N`
-spin box for a ranked modifier (`ui/power_constructor/modifier_chip.py`), so the control
-arrives for free once the data says it is ranked. **Check `increased_duration` beside
-it** — it has exactly the same shape and the same limitation.
-
-Watch the cost: `costValue` is per rank already, so a ranked version prices itself, but
-the step has to multiply or two ranks would cost twice and move once.
-
 ## The Powers and Equipment cards should be restated, not rebuilt
 
 `PowersSection._rebuild_list` and `EquipmentSection._rebuild_cards` still destroy

@@ -35,7 +35,15 @@ from mm_companion.core.dice import CheckResult, resolve_check, roll_d20
 
 from . import store
 from .model import PlayerSlot, RollRecord, SessionState, tokens_match, utc_now
-from .net import IO_TIMEOUT, PEER_TIMEOUT, Connection, TcpTransport, Transport
+from .net import (
+    IO_TIMEOUT,
+    PEER_TIMEOUT,
+    RECONNECT_DELAYS,
+    RECONNECT_WINDOW,
+    Connection,
+    TcpTransport,
+    Transport,
+)
 from .protocol import (
     ERROR_BAD_TOKEN,
     ERROR_MALFORMED,
@@ -143,6 +151,18 @@ EVENT_ERROR = "error"  # {"code", "message"}
 #: can get in, and without this the GM's window would go on saying "hosting"
 #: forever. See :meth:`SessionServer._accept_loop`.
 EVENT_LISTENER_LOST = "listener_lost"  # {"session_id"}
+#: How the *host's* own reachability is going, the twin of the client's
+#: ``EVENT_STATE``: ``{"state", "reason", "attempt", "retry_in"}``. Raised for
+#: every transition of the relisten ladder, so a window can render one state
+#: function rather than reassemble it from a pile of separate signals.
+EVENT_HOST_STATE = "host_state"
+
+#: The three states a host's listener can be in. ``relisting`` is the one that
+#: matters to a caller: the table is perfectly alive and everyone in it is
+#: unaffected, but the door is shut and we are trying to reopen it.
+HOST_STATE_LISTENING = "listening"
+HOST_STATE_RELISTING = "relisting"
+HOST_STATE_UNREACHABLE = "unreachable"
 
 
 class SessionServer:
@@ -207,6 +227,12 @@ class SessionServer:
         self._welcomed: set[str] = set()
         self._running = False
         self._address: tuple[str, int] = (host, port)
+        #: Where our own reachability stands — see :data:`EVENT_HOST_STATE`.
+        self.host_state = HOST_STATE_UNREACHABLE
+        self._relisten_thread: threading.Thread | None = None
+        # Woken by ``stop`` and by a hand-driven :meth:`reconnect`, so neither
+        # has to wait out a thirty-second rung of the backoff.
+        self._relisten_wake = threading.Event()
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -223,11 +249,99 @@ class SessionServer:
         """Bind, start accepting, and return the real address."""
         if self._running:
             return self._address
-        self._listener = self._transport.listen(self._host, self._port)
-        self._address = self._listener.address
+        self._open_listener()
         self._running = True
         self.gm_slot()  # the GM has a roster seat from the start
         self._persist()
+        self._start_accepting()
+        return self._address
+
+    def relisten(self) -> tuple[str, int]:
+        """Open a **new** listener for a session that is still running.
+
+        The repair for :data:`EVENT_LISTENER_LOST`: the accept loop has ended and
+        nobody new can join, while the table itself is perfectly alive. So this
+        touches the listener and nothing else — not ``_connections``, not
+        ``_welcomed``, not ``state.players``. Everyone already here goes on
+        without noticing, which is what makes it different from ``stop`` +
+        ``start``: :meth:`stop` says goodbye to every peer first
+        (``Kicked(REASON_SESSION_CLOSED)``), and a client takes that as final and
+        will not redial. Using the pair as a reconnect would evict the whole table
+        to fix a door.
+
+        The join code survives too, and not by luck. A ``RelayTransport`` mints
+        its secret **per instance**, not per ``listen``, so registering again from
+        the same transport re-registers the same session id under the same secret;
+        a ``TcpTransport`` rebinds the port it was given. Either way what the GM
+        already sent their players goes on working.
+
+        Raises whatever the transport raises — the caller is either the retry
+        ladder below, which catches it, or a GM who pressed a button and is owed
+        the reason. A server that is not running has nothing to repair, and
+        deliberately does not start one: :meth:`start` is how a session begins.
+        """
+        if not self._running:
+            return self._address
+        listener, self._listener = self._listener, None
+        if listener is not None:
+            try:
+                listener.close()
+            except OSError:
+                pass  # already dead; that is why we are here
+        self._join_accept_thread()
+        self._open_listener()
+        if not self._running:
+            # ``stop`` ran while we were dialling, and its own listener close
+            # found nothing to close. Put the door we just opened back rather
+            # than resurrecting a table that has been shut: this runs on the
+            # relisten thread, which ``stop`` only *joins with a timeout*, so it
+            # can genuinely still be here afterwards.
+            self._close_listener()
+            self.host_state = HOST_STATE_UNREACHABLE
+            return self._address
+        self._start_accepting()
+        return self._address
+
+    def _close_listener(self) -> None:
+        listener, self._listener = self._listener, None
+        if listener is not None:
+            try:
+                listener.close()
+            except OSError:
+                pass
+
+    def reconnect(self) -> None:
+        """Try the listener again right now, without waiting out the backoff.
+
+        What **Session ▸ Reconnect** calls. If the ladder is already climbing it
+        is simply woken; otherwise a fresh one is started, which is what makes
+        this the answer for a break the app cannot detect at all — a UPnP mapping
+        the router quietly dropped, where nothing raised
+        :data:`EVENT_LISTENER_LOST` because the listener is still perfectly happy.
+        """
+        if not self._running:
+            return
+        if self._relisten_thread is not None and self._relisten_thread.is_alive():
+            self._relisten_wake.set()
+            return
+        self._begin_relistening("asked to reconnect")
+
+    def _open_listener(self) -> None:
+        """Bind, and record where we ended up — including *which port*.
+
+        Pinning ``_port`` to what we actually got is what makes :meth:`relisten`
+        safe on an automatic port. Asked for 0 a second time the OS would hand out
+        a *different* ephemeral port, and the join code the GM had already sent
+        everybody — which carries the first one — would quietly stop working. So
+        the second bind asks for the port the first one was given;
+        ``SO_REUSEADDR`` is set, so reclaiming it straight after closing it works.
+        """
+        self._listener = self._transport.listen(self._host, self._port)
+        self._address = self._listener.address
+        self._port = self._address[1]
+        self._set_host_state(HOST_STATE_LISTENING)
+
+    def _start_accepting(self) -> None:
         self._accept_thread = threading.Thread(
             target=self._accept_loop, name="session-accept", daemon=True
         )
@@ -240,7 +354,76 @@ class SessionServer:
                 "port": self._address[1],
             },
         )
-        return self._address
+
+    def _join_accept_thread(self) -> None:
+        thread, self._accept_thread = self._accept_thread, None
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=_JOIN_TIMEOUT)
+
+    # -- getting the door open again ---------------------------------------
+
+    def _begin_relistening(self, reason: str) -> None:
+        """Start the retry ladder, unless one is already climbing."""
+        if not self._running:
+            return
+        if self._relisten_thread is not None and self._relisten_thread.is_alive():
+            return
+        self._relisten_wake.clear()
+        self._relisten_thread = threading.Thread(
+            target=self._relisten_loop, args=(reason,), name="session-relisten", daemon=True
+        )
+        self._relisten_thread.start()
+
+    def _relisten_loop(self, reason: str) -> None:
+        """Reopen the listener, backing off, for as long as it is worth trying.
+
+        The host's half of :meth:`~.client.SessionClient._reconnect`, climbing the
+        same :data:`~.net.RECONNECT_DELAYS` ladder for the same
+        :data:`~.net.RECONNECT_WINDOW`, and for the same reason: the two ends of a
+        table giving up at different times would be a puzzle to reason about.
+
+        Where it differs is what a failure costs. A client with no socket is out
+        of the session; a host with no listener still *has* its session and every
+        peer in it, so running out of window is not the end of anything — it parks
+        at :data:`HOST_STATE_UNREACHABLE` and waits to be asked again.
+        """
+        deadline = time.monotonic() + RECONNECT_WINDOW
+        attempt = 0
+        while self._running:
+            delay = RECONNECT_DELAYS[min(attempt, len(RECONNECT_DELAYS) - 1)]
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            attempt += 1
+            self._set_host_state(
+                HOST_STATE_RELISTING,
+                reason=reason,
+                attempt=attempt,
+                retry_in=min(delay, remaining),
+            )
+            # Waiting on the event rather than sleeping is what lets ``stop`` and a
+            # hand-driven ``reconnect`` cut a thirty-second rung short.
+            woken = self._relisten_wake.wait(min(delay, remaining))
+            if not self._running:
+                return
+            if woken:
+                # Somebody asked for this by hand: start the patience over rather
+                # than expiring the window they were trying to use.
+                self._relisten_wake.clear()
+                deadline = time.monotonic() + RECONNECT_WINDOW
+                attempt = 0
+            try:
+                self.relisten()
+            except Exception as exc:  # noqa: BLE001 - a transport may raise anything
+                reason = str(exc) or exc.__class__.__name__
+                continue
+            return  # relisten put us back to LISTENING and said so
+        if self._running:
+            self._set_host_state(HOST_STATE_UNREACHABLE, reason=reason)
+
+    def _set_host_state(self, state: str, **detail: object) -> None:
+        self.host_state = state
+        self._emit(EVENT_HOST_STATE, {"state": state, "session_id": self.state.id, **detail})
 
     def stop(self) -> None:
         """Stop listening, drop every connection, and persist the final roster."""
@@ -262,6 +445,10 @@ class SessionServer:
             self._send_quietly(connection, Kicked(reason=REASON_SESSION_CLOSED))
 
         self._running = False
+        # Before anything else waits on a thread: the ladder parks on this event
+        # for up to thirty seconds at a time, and ``_running`` alone would not
+        # wake it.
+        self._relisten_wake.set()
         if self._listener is not None:
             self._listener.close()
         with self._lock:
@@ -274,12 +461,14 @@ class SessionServer:
             # The bytes above are already with the kernel, and a graceful close
             # still delivers them before the FIN.
             connection.close()
-        for thread in [self._accept_thread, *self._threads]:
+        for thread in [self._accept_thread, self._relisten_thread, *self._threads]:
             if thread is not None and thread is not threading.current_thread():
                 thread.join(timeout=_JOIN_TIMEOUT)
         self._threads.clear()
         self._accept_thread = None
+        self._relisten_thread = None
         self._listener = None
+        self.host_state = HOST_STATE_UNREACHABLE
         self._emit(EVENT_STOPPED, {"session_id": self.state.id})
 
     def __enter__(self) -> SessionServer:
@@ -693,8 +882,11 @@ class SessionServer:
                     # Not our own ``stop`` — the listener gave up under us. A
                     # relay whose control link died does exactly this, and the
                     # session then looks perfectly healthy while nobody on earth
-                    # can join it. Say so rather than letting it go quiet.
+                    # can join it. Say so rather than letting it go quiet, and
+                    # then go and try to open a new one: nobody at the table is
+                    # affected, so there is nothing to ask anybody about first.
                     self._emit(EVENT_LISTENER_LOST, {"session_id": self.state.id})
+                    self._begin_relistening("the listener stopped accepting")
                 return
             if not self._running:
                 connection.close()

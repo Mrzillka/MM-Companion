@@ -27,6 +27,25 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   after the block was built, so `CharacterSheet.sync_session()` fans a duck-typed
   `sync_session` out to the blocks and `attach_player_session` calls it at both ends of
   a session.
+- **Deferral is a window, not a flag, and that was a bug first.** The shared history
+  holds one's *own* roll back so the card lands as the die settles rather than the
+  instant the server answers. Only the roller's `sessionRollRevealed` lets a held roll
+  go, so a roll held while no die is in the air is held for the rest of the session —
+  invisible to the one seat that made it, while every other screen shows it. Both
+  flags are therefore load-bearing: `set_defer_own` says *there is a roller to wait
+  for*, `set_awaiting_own` (driven by the panel's `awaitingOwnRoll`) says *it is
+  waiting right now*, and turning the second off **flushes** whatever is still held.
+  Two perfectly ordinary things used to strand a roll. A **reconnect** re-sends the
+  whole log — `Welcome` → `historyReplaced` → `set_rolls` — so every one of that
+  player's own rolls was deferred again at once and their history lost all of them at
+  a stroke, which is why it looked like "some players stop seeing their rolls". And a
+  roll the panel **gave up on** at `SESSION_ROLL_TIMEOUT_MS` still exists: the server
+  rolled it, the record arrives on the history's own feed a moment later, and nothing
+  was left to reveal it. Note what is *not* undone on that second path — the readout
+  goes on saying nobody answered, because that was true of the tumble; only the card
+  comes back. `set_rolls` also re-reads `own_player_id()` before repainting, since
+  `attach` runs once per join and a redial that failed to reclaim the old seat returns
+  under a new `player_id`.
 - **A history holds notes as well as rolls.** A `NoteCard` is a line nobody rolled —
   "spent a hero point — 2 left" — written by the `note-requested` topic (see "Rolling
   from the sheet"). In a session it goes to the server and comes back through the shared
@@ -50,14 +69,25 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   `☆` disabled (the strip is full). Three consequences worth knowing. The star is a
   **two-way switch**, so a card reports the click on `saveToggled` and the panel —
   which owns the strip — decides whether that was a save or an unsave
-  (`toggle_quick_roll`). Identity is `quick_roll_key` (`bonus`/`penalty`/`dc` alone,
-  **ignoring `name`**), so one star answers for a chip however it was later renamed;
-  comparing whole entries is the old bug where a named chip and its unnamed twin were
-  two rolls. And because a card cannot reach the panel (`roll_history` is the *lower*
-  module — `dice_roller` imports it, never the reverse), the state is **pushed down**:
-  `quickRollsChanged` → `set_quick_roll_state(keys, room)`, which both histories
-  remember so a card built later starts out agreeing. Naming moved off the save path
-  onto the chip's own right-click ▸ Rename… — saving is one click with no dialog.
+  (`toggle_quick_roll`). **A chip is saved with the name the roll was made under** and
+  identity is `quick_roll_key` — `name`/`bonus`/`penalty` — so "Strength +4" and
+  "Dodge +4" are two chips and each card's star lights its own. Saving is still one
+  click with no dialog: the name is the one the roll already had (`roll_parameters`
+  reads it off `label`), and the chip's right-click ▸ Rename… is for changing it
+  afterwards. The price of putting the name in the key is that a rename
+  *re-identifies* the chip, so the star on the card it came from goes dark — honest,
+  since the chip is not that roll any more, and why `_rename_quick_roll` **refuses a
+  name that would collide** with another chip (two chips on one key leaves the second
+  unreachable by any star). **No DC is saved**, and `_apply_quick_roll` leaves the DC
+  box exactly as it finds it: a quick roll is one you make often, the difficulty is
+  the situation's rather than the roll's, and a chip that silently re-armed the box
+  graded everything after it against a number nobody had chosen. `_load_quick_rolls`
+  therefore migrates — it drops a stored `dc` and **de-duplicates**, since two chips
+  that differed only by their DC collapse onto one key. And because a card cannot
+  reach the panel (`roll_history` is the *lower* module — `dice_roller` imports it,
+  never the reverse), the state is **pushed down**: `quickRollsChanged` →
+  `set_quick_roll_state(keys, room)`, which both histories remember so a card built
+  later starts out agreeing.
 - The Dice block **reflows to the shape of the space it is given** (`ui/reflow.py`),
   which is what lets one block work both in the tall narrow right-hand strip and in a
   short wide **bottom** one. Two nested levels, each deciding from its own width:
@@ -76,7 +106,15 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   Note `DiceRollerView._row_sizes`: the panel carries no splitter stretch, so what the
   view hands it decides whether *it* can reflow too — hence the deferred `_divide_row`
   re-run, since the strip converges its thickness over several turns and a division
-  computed mid-flight is stale with no further resize coming.
+  computed mid-flight is stale with no further resize coming. It hands the panel the
+  row it asks for and **not one pixel past it**: every surplus is the history's, since
+  that is the only part of the block that scrolls and length is worth nothing to a row
+  of spin boxes. The panel used to take a quarter of the surplus as well, as "a little
+  air", which on a wide strip was a slab of empty groupbox. Watch the floor there —
+  an empty quick-roll strip asks for 24px against a 170px minimum, so
+  `row_natural_width` under-reports and `row_minimum_width + REFLOW_HYSTERESIS` is
+  what the clamp usually settles on. That is the honest natural width for this panel,
+  not the clamp misfiring.
 - That same zero stretch is why **a change in what the panel contains must re-divide the
   splitter explicitly** (`_redivide`, which handles either axis via `_row_sizes` /
   `_column_sizes`). A splitter child with no stretch keeps the pixels it was given: when
@@ -219,20 +257,30 @@ mini strip, `Esc`, or that same button leaves.
   be, promoted to something you can ask for anywhere. **Compact** is the mini window's,
   and is the **panel's** business (its three parts). **Extended** is the roll controls
   as a column beside a history filling the rest, which is what GM Mode always looked
-  like, and is the **view's** (it pins the splitter's axis). So the preference is set in
-  one place — `DiceRollerView.set_layout` — and reaches both halves from there; the
-  panel's own `set_layout_preference` takes the layout *string*, not a compact flag.
-  Three consequences. A chosen shape stands its reflow down at **both** levels
-  (`_compact` or `_column_locked` on the panel, `_row_locked()` on the view) via
-  `ReflowBox.force_reflow`, which is guarded on the current axis so calling it every
-  resize costs nothing. `_row_sizes` needs an Extended branch: the panel is offered its
-  **column** width, never the row-of-three width the auto branch measures. And the
-  view's `minimumSizeHint` reports the **row** width while locked — the one place
-  `ReflowBox`'s "always report the column, you can always narrow by reflowing" rule has
-  to be turned around, because a chosen shape cannot narrow out of itself, so it holds
-  the block (and through it the strip and the window) open at what it really needs.
-  Compact still wins over Extended: the window shrinking beats the preference, and while
-  the parts are lent the view is not locked at all.
+  like. So the preference is set in one place — `DiceRollerView.set_layout` — and
+  reaches both halves from there; the panel's own `set_layout_preference` takes the
+  layout *string*, not a compact flag. A chosen shape stands the **panel's** reflow
+  down (`_compact` or `_column_locked`) via `ReflowBox.force_reflow`, which is guarded
+  on the current axis so calling it every resize costs nothing, and `_row_sizes` gives
+  a locked panel its **column** width rather than the row-of-three width the auto
+  branch measures. Compact still wins over Extended, and while the parts are lent
+  neither is in force at all.
+- **Extended does not pin the view's axis, and that was a bug.** It used to: the
+  preference forced the splitter into a row whatever the width, which meant
+  `DiceRollerView.minimumSizeHint` had to report the **row's** width — a chosen shape
+  cannot narrow out of itself — turning `ReflowBox`'s "always report the column, you
+  can always narrow by reflowing" rule around in the one place it was allowed to be.
+  The cost landed in the **pinned side strip**. That strip's thickness is the `dice`
+  block's `min_width` of 360, and a roller demanding ~596 held the strip, and through
+  it the window, open at nearly twice that; then `_row_sizes` split the result into
+  ~306 of controls with a long empty tail under them beside a ~286 history. Half a
+  strip spent holding a shape, charged to the one thing in the block that scrolls.
+  So the room decides the axis here exactly as it does for an auto roller (`sync_reflow`
+  is now just the `_lent` guard, and the `minimumSizeHint` override is gone), and
+  Extended keeps what it was actually chosen for: the *panel* stays a column, so a wide
+  roller is controls beside a history rather than auto's one row of four, and
+  `_shape_locked` is what `_row_sizes` asks. Where a row will not fit the parts stack —
+  the arrangement Extended was showing anyway, minus the wasted width.
 - **The GM's roller is the sheet's roller.** GM Mode's Rolls block holds a
   `DiceRollerView(hidden_option=True, history=…)` rather than a hand-built panel beside
   a history in a fixed `QHBoxLayout`, so it reflows, splits and follows the preference
@@ -324,6 +372,38 @@ the pair is load → (load + roll) on one spec, and deferring would make a plain
 feel a beat late. A power card's roll line is the deliberate exception: it is an
 explicit "roll this" affordance rather than a number being read off the sheet.
 
+**A load is sticky; a roll is not.** That leading single click is exactly why: the
+chip used to survive the roll it started, so a double-clicked stat left the roller
+*armed* with a trait the player had asked to throw once, and every later click of the
+die quietly folded its modifier — and its DC — into a roll nobody had asked for.
+`roll_spec` therefore marks what it loads **transient** and drops it again
+(`_settle_spec`) at the very end of both paths that produce a number. It has to load
+it at all because the roll is made out of it: `_roll_parameters` folds in the modifier
+and the DC, `_roll_label` is the name it travels under, and `localRoll` hands the spec
+to the history card — hence "at the very end", after the readout and the history have
+had their look. Three things fall out of it:
+- **`load_spec` cancels transience** (it is set `False` at the top). An explicit load
+  is always a deliberate one, so a spec arriving over the bus mid-tumble is not swept
+  away when the die settles.
+- **`_abandon_roll` does not settle it.** A session roll that never came back is one
+  the player will want to throw again; taking the trait away would send them back to
+  the sheet to click the stat a second time.
+- **A named quick roll keeps its chip**, because it does not go through `roll_spec`:
+  its chip is the caption for slider values that stay set, so the panel genuinely
+  still *is* that quick roll once the die has settled. (Its DC is not part of that —
+  see the quick-roll notes above.)
+
+The other half of the same guard is that a loaded chip is **loud** — an `accent.dice`
+fill inside an `accent.dice` border (`#specChip`, scoped to the object name, since a
+bare rule on a widget reaches the `✕` button inside it), a caption worded as a state
+(`🎲 Rolling: Athletics +9`), a matching ring on the die (`_apply_die_style`, drawn
+inside the button's existing `die.padding` so its fixed size never moves and
+`contentChanged` is not dragged in for a highlight), and a readout that says
+`Rolling Athletics — click the die.` in place of the resting prompt. `_showing_result`
+is what keeps that prompt from eating a number: `load_spec` writes it whenever a spec
+is loaded, but on a *clear* only while the readout is not holding a result — and
+clearing is precisely what `_settle_spec` does one line after the roll wrote one there.
+
 - `core/rules/rolls.py` is the layer that answers "what does rolling X look like":
   a frozen `RollSpec` (`label`, `modifier`, `dc`, `kind`, `hint`, `follow_up`,
   `outcomes`) plus one builder per trait — `ability_roll`, `resistance_roll`,
@@ -370,9 +450,10 @@ explicit "roll this" affordance rather than a number being read off the sheet.
   dropped. It is **not** quiet, for `load-requested`'s reason: a player who has just paid
   a rung of fatigue for it is about to roll, and putting it into a Dice block they cannot
   see would charge them for something they never got.
-- `DiceRollerPanel.roll_spec(spec)` / `load_spec(spec)` are the public way in. The
-  loaded trait is **sticky**: it shows as a chip above the sliders and survives the
-  roll, so the sliders can be nudged and the die thrown again. The sliders always
+- `DiceRollerPanel.roll_spec(spec)` / `load_spec(spec)` are the public way in. A
+  trait that was **loaded** is sticky: it shows as a chip above the sliders and
+  survives the roll, so the sliders can be nudged and the die thrown again; one that
+  arrived through `roll_spec` is let go once the die settles (above). The sliders always
   **add on top** (`net = spec.modifier + bonus − penalty`, split back into a
   non-negative pair for the wire) rather than being overwritten — they are the
   situational extras, and a trait bonus can exceed their 0-20 range anyway.

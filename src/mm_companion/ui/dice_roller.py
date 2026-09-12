@@ -119,6 +119,11 @@ SESSION_ROLL_TIMEOUT_MS = 8000
 NO_ANSWER = "The session did not answer, so nothing was rolled."
 NOT_SENT = "The roll could not be sent to the session."
 
+# What the chip and the readout say while a trait is loaded. Both are part of the
+# same guard: a loaded chip arms the die, so the panel has to be obvious about it.
+CHIP_PREFIX = "🎲 Rolling: "
+IDLE_PROMPT = "Click the die to roll."
+
 
 def d20_pixmap(ratio: float = 1.0, size: int | None = None) -> QPixmap:
     """The theme's d20 drawing, *size* pixels square, for a screen of *ratio*.
@@ -158,18 +163,24 @@ def spec_caption(spec: RollSpec) -> str:
     A spec carrying no modifier of its own — a save (the target's resistance goes in
     the Bonus slider) or a named quick roll — reads as just its name rather than a
     bare ``+0``. Its DC, if it set one, is already visible in the DC box.
+
+    It is worded as a **state** rather than a label, because that is what it is: the
+    die is armed until the chip is cleared, and every later click of it quietly folds
+    this modifier in. A caption reading only "Athletics +9" was easy to skim past.
     """
 
-    return f"{spec.label} {spec.modifier:+d}" if spec.modifier else spec.label
+    trait = f"{spec.label} {spec.modifier:+d}" if spec.modifier else spec.label
+    return f"{CHIP_PREFIX}{trait}"
 
 
 def _params_label(params: dict) -> str:
-    """The parameters of a quick roll as text, e.g. ``"+3 vs DC 15"``."""
+    """The numbers a quick roll loads, as text, e.g. ``"+3"``.
+
+    Only the numbers it *has*: a quick roll carries no DC (see
+    :func:`~mm_companion.ui.roll_history.roll_parameters`).
+    """
     modifier = params["bonus"] - params["penalty"]
-    label = f"{modifier:+d}"
-    if params.get("dc") is not None:
-        label += f" vs DC {params['dc']}"
-    return label
+    return f"{modifier:+d}"
 
 
 def _quick_label(params: dict) -> str:
@@ -268,7 +279,10 @@ class RollCard(QFrame):
     ) -> None:
         super().__init__(parent)
         self.setFrameShape(QFrame.Shape.StyledPanel)
-        self._params = {"bonus": bonus, "penalty": penalty, "dc": dc}
+        # What this card's star would save — its name and its numbers, not its DC.
+        # The shared history's card says the same thing through
+        # :func:`~mm_companion.ui.roll_history.roll_parameters`.
+        self._params = {"name": label, "bonus": bonus, "penalty": penalty}
 
         modifier = bonus - penalty
         total = die + modifier
@@ -361,6 +375,16 @@ class DiceRollerPanel(ReflowBox, QWidget):
     #: so one's own card lands as the die settles, not the instant the server answers.
     sessionRollRevealed = Signal(object)
 
+    #: Whether a roll of ours is out with the session *right now*, which is exactly
+    #: as long as a paired history may hold one of our own rolls back. It has to be
+    #: a window rather than a standing flag: a held roll is only ever released by
+    #: :attr:`sessionRollRevealed`, so an own roll reaching a history with no tumble
+    #: waiting for it — a reconnect replaying the log, or a record that arrives
+    #: after :meth:`_abandon_roll` gave up — would be held for the rest of the
+    #: session and the player would watch their own rolls disappear. Raised ``True``
+    #: before the request goes out and ``False`` on **both** ways the roll can end.
+    awaitingOwnRoll = Signal(bool)
+
     #: The quick-roll strip gained, lost or renamed a chip, so a paired history's
     #: stars have to be re-lit. The *space* that costs is :attr:`contentChanged`'s
     #: business, raised alongside it.
@@ -396,9 +420,17 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._own_id = ""
         # Wall-clock for the tumble; drives the flicker's ease-out deceleration.
         self._roll_clock = QElapsedTimer()
-        # What the sheet asked to roll, if anything — see :meth:`load_spec`. Sticky:
-        # it survives the roll so the sliders can be nudged and the die thrown again.
+        # What the sheet asked to roll, if anything — see :meth:`load_spec`. A spec
+        # that was *loaded* is sticky: it survives the roll so the sliders can be
+        # nudged and the die thrown again.
         self._spec: RollSpec | None = None
+        # ...but one that arrived through :meth:`roll_spec` is not — see
+        # :meth:`_settle_spec`.
+        self._transient = False
+        # Whether the readout holds a rolled number rather than the resting prompt,
+        # which is what stops the prompt from overwriting a result — see
+        # :meth:`_prompt_readout`.
+        self._showing_result = False
         # Last chance to adjust a spec before it is loaded — see :meth:`set_localizer`.
         self._localizer: Callable[[RollSpec], RollSpec] | None = None
         # The traits the Request row offers, pushed in by the host (the panel reads
@@ -751,10 +783,28 @@ class DiceRollerPanel(ReflowBox, QWidget):
         It sits *above* the sliders because it is what they now modify: the loaded
         stat supplies the base number and the sliders are the situational extras on
         top of it. The ``✕`` puts the panel back to a plain manual roll.
+
+        It is drawn **loudly** — an accent fill inside an accent border — rather than
+        as the plain framed strip it was, and the die wears a ring to match
+        (:meth:`_apply_die_style`). Both are the same guard: a chip left loaded arms
+        every later click of the die with a modifier and possibly a DC, so it has to
+        be the most obvious thing in the panel. Its own frame is dropped, since the
+        platform's ``StyledPanel`` edge would sit just inside the new border.
+
+        The stylesheet is scoped to the object name: a bare rule on a widget reaches
+        its children too, and the ``✕`` inside would have grown the border as well.
         """
 
         chip = QFrame()
-        chip.setFrameShape(QFrame.Shape.StyledPanel)
+        chip.setObjectName("specChip")
+        chip.setStyleSheet(
+            "#specChip {"
+            f" background: {theme.wash('accent.dice', 0.15)};"
+            f" border: {int(theme.metric('border.width.emphasis'))}px solid"
+            f" {theme.color('accent.dice')};"
+            f" border-radius: {int(theme.metric('radius.chip'))}px;"
+            "}"
+        )
         chip.setVisible(False)
         layout = QHBoxLayout(chip)
         margin = int(theme.metric("space.sm"))
@@ -798,6 +848,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
         grid.setContentsMargins(0, 0, 0, 0)
 
         self._die_button = QPushButton()
+        self._die_button.setObjectName("dieButton")
         self._die_button.setFlat(True)
         self._die_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self._die_button.setToolTip("Click to roll")
@@ -813,7 +864,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
         grid.addWidget(self._face, 0, 0, alignment=Qt.AlignmentFlag.AlignCenter)
         column.addWidget(container, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        self._readout = QLabel("Click the die to roll.")
+        self._readout = QLabel(IDLE_PROMPT)
         self._readout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._readout.setWordWrap(True)
         self._readout.setTextFormat(Qt.TextFormat.RichText)
@@ -844,11 +895,41 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._die_button.setIcon(QIcon(d20_pixmap(self.devicePixelRatioF(), size)))
         self._die_button.setIconSize(QSize(size, size))
         self._die_button.setFixedSize(size + padding, size + padding)
+        # The ring goes back on afterwards: a stylesheet set before the resize is
+        # not lost, but this method is the one place the die is (re)dressed, and
+        # compact mode calls it while a trait may well be loaded.
+        self._apply_die_style()
 
         font = QFont()
         font.setPointSizeF(theme.font_size(face_token))
         font.setBold(True)
         self._face.setFont(font)
+
+    def _apply_die_style(self) -> None:
+        """Ring the die while a trait is loaded, and leave it bare when none is.
+
+        The other half of the loud chip: the chip says what is loaded, and the thing
+        you are about to click says it is loaded with *something*. The ring is drawn
+        inside the button's existing ``die.padding`` chrome, so the button's fixed
+        size never moves — a size change here would ripple out through
+        :attr:`contentChanged` into the splitter for what is only a highlight.
+        """
+        if self._spec is None:
+            # An *empty* sheet rather than "no border": a rule of our own would take
+            # the flat button's hover painting away from the style with it.
+            self._die_button.setStyleSheet("")
+            return
+        border = (
+            f"border: {int(theme.metric('border.width.emphasis'))}px solid"
+            f" {theme.color('accent.dice')};"
+            f" border-radius: {int(theme.metric('radius.card'))}px;"
+        )
+        self._die_button.setStyleSheet(
+            f"#dieButton {{ {border} background: {theme.wash('accent.dice', 0.10)}; }}"
+            # Hover has to be restated for the same reason: a background of ours
+            # outranks the one the style would have painted under the cursor.
+            f"#dieButton:hover {{ {border} background: {theme.wash('accent.dice', 0.20)}; }}"
+        )
 
     def _build_quick_rolls(self) -> QGroupBox:
         group = QGroupBox("Quick rolls")
@@ -995,11 +1076,14 @@ class DiceRollerPanel(ReflowBox, QWidget):
     def load_spec(self, spec: RollSpec | None) -> None:
         """Load *spec* as the thing this panel rolls, or ``None`` to go back to manual.
 
-        Sticky on purpose: the chip stays after the roll so the sliders can be
-        adjusted and the die thrown again for the same trait. A spec that names its
-        own DC (a power's save) ticks the DC box and fills it in, so the number it
-        will roll against is visible rather than implied; a spec without one leaves
-        the box exactly as the player left it.
+        Sticky on purpose: a *loaded* chip stays after the roll so the sliders can be
+        adjusted and the die thrown again for the same trait. That is what a single
+        click on a stat line asks for, and it is why this is not the method a roll
+        goes through — see :meth:`roll_spec`, which drops what it loaded again.
+
+        A spec that names its own DC (a power's save) ticks the DC box and fills it
+        in, so the number it will roll against is visible rather than implied; a spec
+        without one leaves the box exactly as the player left it.
 
         Clearing the chip takes that DC back off again. It was left ticked, so every
         later manual roll went on being graded against a difficulty belonging to a
@@ -1009,6 +1093,10 @@ class DiceRollerPanel(ReflowBox, QWidget):
         """
         if spec is not None and self._localizer is not None:
             spec = self._localizer(spec)
+        # An explicit load is always a deliberate one, whatever a roll in flight had
+        # in mind: it cancels the transience :meth:`roll_spec` asked for, so a spec
+        # arriving over the bus mid-tumble is not swept away when the die settles.
+        self._transient = False
         had_own_dc = self._spec is not None and self._spec.dc is not None
         self._spec = spec
         if spec is not None and spec.dc is not None:
@@ -1021,10 +1109,29 @@ class DiceRollerPanel(ReflowBox, QWidget):
         if spec is not None:
             self._spec_label.setText(spec_caption(spec))
             self._spec_chip.setToolTip(spec.hint)
+        self._apply_die_style()
+        self._prompt_readout(replace_result=spec is not None)
         self.updateGeometry()
         # Showing the chip makes this panel taller — the bug this used to cause is
         # written up on :attr:`contentChanged`.
         self.contentChanged.emit()
+
+    def _prompt_readout(self, *, replace_result: bool) -> None:
+        """Say what the die will throw, under it, where the result appears.
+
+        *replace_result* is what keeps this from eating a number: loading a trait
+        replaces a result the player has already read (they have just said what they
+        want to roll next, and the card is in the history either way), but *clearing*
+        one must not — and clearing is exactly what :meth:`_settle_spec` does one
+        line after the roll wrote its result there.
+        """
+        if self._showing_result and not replace_result:
+            return
+        self._showing_result = False
+        if self._spec is None:
+            self._readout.setText(IDLE_PROMPT)
+            return
+        self._readout.setText(f"Rolling {escape_rich_text(self._spec.label)} — click the die.")
 
     def add_bonus(self, amount: int) -> None:
         """Add *amount* to the bonus slider, clamped to the range it offers.
@@ -1040,16 +1147,41 @@ class DiceRollerPanel(ReflowBox, QWidget):
         )
 
     def roll_spec(self, spec: RollSpec | None) -> bool:
-        """Load *spec* and roll it at once. ``False`` if a die is already tumbling.
+        """Load *spec*, roll it at once, and let it go again. ``False`` if a die is
+        already tumbling.
 
         The one public way in for the sheet: a double-clicked stat line, a power's
         🎲, or a follow-up chip on a history card all land here.
+
+        What it loads is **transient** — the chip is gone once the die settles
+        (:meth:`_settle_spec`). It has to be loaded at all because the roll is made
+        out of it: :meth:`_roll_parameters` folds in its modifier and its DC,
+        :meth:`_roll_label` is the name it travels under, and :attr:`localRoll`
+        hands it to the history card. But it must not *stay*, because a double-click
+        fires the single click first — so the pair is load → (load + roll) on one
+        spec, and the roller was left armed with a trait the player had only asked to
+        throw once. Loading is the sticky gesture; rolling is not.
         """
         if self._rolling:
             return False
         self.load_spec(spec)
+        self._transient = spec is not None
         self._start_roll()
         return True
+
+    def _settle_spec(self) -> None:
+        """Drop a spec that was only loaded to be rolled, now that it has been.
+
+        Called at the very end of both paths that produce a number, after the readout
+        and the history have had their look at :attr:`_spec`. Not from
+        :meth:`_abandon_roll`: a roll the session never answered is one the player
+        will want to throw again, and taking the trait away would send them back to
+        the sheet to click it a second time.
+        """
+        if not self._transient:
+            return
+        self._transient = False
+        self.load_spec(None)
 
     def _roll_parameters(self) -> tuple[int, int, int | None, bool]:
         """What the inputs currently ask for: bonus, penalty, DC, hidden.
@@ -1107,6 +1239,10 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._awaiting = True
         self._pending = None
         bridge.rollAdded.connect(self._on_session_roll)
+        # Before the request, for the same reason the listener above is: a hosted
+        # session resolves in-process and the answer comes back *during* the call,
+        # so a history told afterwards would already have shown the card.
+        self.awaitingOwnRoll.emit(True)
         sent = bridge.request_roll(
             label=self._roll_label(),
             bonus=bonus,
@@ -1196,6 +1332,8 @@ class DiceRollerPanel(ReflowBox, QWidget):
             }
         )
         self._unlock_inputs()
+        # Last, so everything above still sees what was rolled.
+        self._settle_spec()
 
     def _reveal_session_roll(self, roll: dict) -> None:
         """Show the number the session rolled for us and let go of the inputs."""
@@ -1223,17 +1361,35 @@ class DiceRollerPanel(ReflowBox, QWidget):
         # The spec is already on the record (the server recorded what we sent and
         # broadcast it), so this is the same dict every other seat is reading.
         self.sessionRollRevealed.emit(roll)
+        # And the window closes *after* the reveal, so the card this roll produced
+        # is placed by the cue above rather than by the flush the close performs.
+        self.awaitingOwnRoll.emit(False)
+        self._settle_spec()
 
     def _abandon_roll(self, message: str) -> None:
-        """Give up on a session roll that never came back."""
+        """Give up on a session roll that never came back.
+
+        Giving up is about the *die*, not about the roll: the server may well have
+        rolled it and simply been slow to say so, in which case the record turns up
+        on the history's own feed moments later. So the readout keeps saying nobody
+        answered — that was true of the tumble — while
+        :attr:`awaitingOwnRoll` closes the window and lets the card land whenever
+        it arrives. A history that went on deferring here would swallow the roll
+        for good, since nothing would ever reveal it.
+        """
         if not self._rolling and not self._awaiting:
             return
         self._rolling = False
         self._awaiting = False
         self._pending = None
         self._disconnect_session()
+        self.awaitingOwnRoll.emit(False)
         self._face.setText("?")
         self._readout.setText(f"<span style='color:{theme.color('tint.worse')}'>{message}</span>")
+        self._showing_result = True  # not a number, but not the prompt either
+        # The chip stays (see :meth:`_settle_spec`); only its transience goes, so the
+        # trait is still loaded and the die can simply be clicked again.
+        self._transient = False
         self._unlock_inputs()
 
     def _disconnect_session(self) -> None:
@@ -1266,6 +1422,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
         *,
         hidden: bool = False,
     ) -> None:
+        self._showing_result = True
         total = die + modifier
         muted = theme.color("text.muted.rich")
         html = ""
@@ -1293,15 +1450,37 @@ class DiceRollerPanel(ReflowBox, QWidget):
     # -- quick rolls ---------------------------------------------------------
 
     def _load_quick_rolls(self) -> list[dict]:
+        """The saved strip, normalised to what a quick roll is *now*.
+
+        A workspace written before this carries a ``dc`` on every entry, and two
+        chips that differed only by their DC collapse onto one key once it is
+        dropped — so the read de-duplicates as well as truncating, or the strip
+        would hold two chips that look and behave identically and only the first
+        would ever answer a click.
+        """
         stored = storage.load_settings().get(QUICK_ROLLS_KEY) or []
-        # Truncated to the cap, so a settings file written before there was one (or
-        # by hand) cannot hold the strip open past it.
-        return [dict(entry) for entry in stored[:MAX_QUICK_ROLLS]]
+        rolls: list[dict] = []
+        seen: set[tuple[str, int, int]] = set()
+        for entry in stored:
+            name = str(entry.get("name", "")).strip()
+            clean = {"bonus": int(entry.get("bonus", 0)), "penalty": int(entry.get("penalty", 0))}
+            if name:
+                clean["name"] = name
+            key = quick_roll_key(clean)
+            if key in seen:
+                continue
+            seen.add(key)
+            rolls.append(clean)
+            # Capped here rather than by slicing the file, so a settings file written
+            # before there was a cap (or by hand) cannot hold the strip open past it.
+            if len(rolls) == MAX_QUICK_ROLLS:
+                break
+        return rolls
 
     def _persist_quick_rolls(self) -> None:
         storage.update_settings(**{QUICK_ROLLS_KEY: self._quick_rolls})
 
-    def quick_roll_keys(self) -> set[tuple[int, int, int | None]]:
+    def quick_roll_keys(self) -> set[tuple[str, int, int]]:
         """What the strip holds, as :func:`quick_roll_key` tuples — for the stars."""
         return {quick_roll_key(entry) for entry in self._quick_rolls}
 
@@ -1318,7 +1497,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
         reports the click and the panel, which owns the strip, decides which it was.
 
         A saved roll is matched by :func:`quick_roll_key`, so a click takes out the
-        chip with these numbers whatever it has since been renamed to.
+        chip this card's roll saved and no other.
         """
         saved = self._find_quick_roll(params)
         if saved is None:
@@ -1327,15 +1506,18 @@ class DiceRollerPanel(ReflowBox, QWidget):
             self._remove_quick_roll(saved)
 
     def _add_quick_roll(self, params: dict, name: str | None = None) -> None:
-        """Save a roll's parameters (optionally named) as a quick roll.
+        """Save a roll's name and numbers as a quick roll.
 
-        Refused when the strip already holds the same numbers — by
-        :func:`quick_roll_key`, so a name does not make a second chip of one roll —
-        or when it is full.
+        The name comes with *params* (a roll travels named); *name* overrides it,
+        which is how a caller with a better one says so. Refused when the strip
+        already holds this exact roll — by :func:`quick_roll_key` — or when it is
+        full. No DC is stored: see
+        :func:`~mm_companion.ui.roll_history.roll_parameters` for why.
         """
-        entry = {"bonus": params["bonus"], "penalty": params["penalty"], "dc": params.get("dc")}
-        if name:
-            entry["name"] = name
+        entry = {"bonus": int(params["bonus"]), "penalty": int(params["penalty"])}
+        chosen = str(name if name is not None else params.get("name", "")).strip()
+        if chosen:
+            entry["name"] = chosen
         if self._find_quick_roll(entry) is not None or self.quick_rolls_full():
             return
         self._quick_rolls.append(entry)
@@ -1370,6 +1552,14 @@ class DiceRollerPanel(ReflowBox, QWidget):
         if not ok:
             return
         name = name.strip()
+        renamed = (
+            dict(stored, name=name) if name else {k: v for k, v in stored.items() if k != "name"}
+        )
+        clash = self._find_quick_roll(renamed)
+        if clash is not None and clash is not stored:
+            # The name is part of a chip's identity now, so this would make two
+            # chips one roll — and only the first would ever answer a click.
+            return
         if name:
             stored["name"] = name
         else:
@@ -1406,13 +1596,14 @@ class DiceRollerPanel(ReflowBox, QWidget):
         table under that name instead of anonymously. Its numbers stay in the
         sliders where they have always been, so the spec carries no modifier of its
         own — the chip is a caption, not a second bonus.
+
+        **The DC box is left exactly as it is.** A quick roll does not carry one
+        (:func:`~mm_companion.ui.roll_history.roll_parameters`), and the difficulty
+        in front of the player right now is a better answer than one saved with the
+        chip weeks ago — including the answer "none".
         """
         self._bonus_spin.setValue(entry["bonus"])
         self._penalty_spin.setValue(entry["penalty"])
-        has_dc = entry.get("dc") is not None
-        self._dc_check.setChecked(has_dc)
-        if has_dc:
-            self._dc_spin.setValue(entry["dc"])
         name = str(entry.get("name", "")).strip()
         self.load_spec(RollSpec(label=name) if name else None)
         self._start_roll()
@@ -1699,10 +1890,6 @@ class DiceRollerView(ReflowBox, QWidget):
         layout.addWidget(self._splitter)
 
         self.init_reflow()
-        # And then, if the user prefers it, straight into the locked row — the
-        # reflow has to have laid the parts out once before the axis can be pinned.
-        if self._row_locked():
-            self.force_reflow(True)
         self._sync_session()
         self._sync_quick_roll_state()  # the strip may have been restored with chips in it
 
@@ -1750,11 +1937,13 @@ class DiceRollerView(ReflowBox, QWidget):
         That is what produces the one-row-of-four arrangement in a wide bottom strip
         rather than a narrow column of three beside a very wide history.
 
-        So offer the panel its natural row width, and settle for less only as the
-        space runs out: down to the width its row needs plus the reflow's dead-band
-        (at exactly the threshold it would refuse to flip), and below that back to a
-        column, leaving the history its own minimum throughout. The history takes
-        whatever is left, which is the lion's share of a wide strip.
+        So offer the panel the row it asks for and nothing beyond it, settling for
+        less only as the space runs out: down to the width its row needs plus the
+        reflow's dead-band (at exactly the threshold it would refuse to flip), and
+        below that back to a column, leaving the history its own minimum throughout.
+        **Every pixel past what the controls ask for is the history's** — it is the
+        only part of the block that scrolls, so length is worth something to it and
+        nothing to a row of spin boxes.
         """
         available = self.reflow_available_width()
         if self._shape_locked():
@@ -1774,13 +1963,19 @@ class DiceRollerView(ReflowBox, QWidget):
         spare = available - self._history_part.minimumSizeHint().width()
         if spare < floor:
             return [self.panel.column_minimum_width(), max(1, available)]
+        # Exactly what the controls ask for, and not a pixel more: everything past
+        # that is the history's, which is the part that benefits from length. The
+        # panel used to take a quarter of the surplus as well — "a little air" —
+        # which on a wide strip was a slab of empty groupbox charged to the one
+        # thing in the block that scrolls.
+        #
+        # ``floor`` usually wins here, and that is not the clamp misfiring: an empty
+        # quick-roll strip asks for almost nothing (a 24px hint against a 170px
+        # minimum), so ``row_natural_width`` under-reports the row the panel can
+        # actually be laid out as. The floor is that row at its narrowest, which is
+        # the honest natural width for a panel shaped like this one.
         natural = self.panel.row_natural_width()
-        # A quarter of whatever is left over beyond the panel's natural width, so its
-        # controls get a little air (a slider worth dragging, a caption that isn't
-        # elided) while the history — which is what actually benefits from length —
-        # still keeps the greater part of a wide strip.
-        wanted = natural + max(0, spare - natural) // 4
-        wanted = max(floor, min(wanted, spare))
+        wanted = max(floor, min(natural, spare))
         return [wanted, max(1, available - wanted)]
 
     def resizeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
@@ -1807,47 +2002,30 @@ class DiceRollerView(ReflowBox, QWidget):
         """
         return self.panel.shape_locked and not self._lent
 
-    def _row_locked(self) -> bool:
-        """Whether the user has pinned the side-by-side (Extended) arrangement.
-
-        Not while the parts are lent to a compact window: that window lays them out
-        itself, and compact mode wins over the preference the same way it does in
-        the panel.
-        """
-        return self._preference == storage.DICE_LAYOUT_EXTENDED and not self._lent
-
     def sync_reflow(self) -> bool:
-        """Re-run the width-driven reflow — unless the shape is spoken for.
+        """Re-run the width-driven reflow, unless the parts are out on loan.
 
-        Either because the parts are out on loan to a compact window, or because
-        Extended has pinned the axis; a locked row still gets re-divided by the
-        ``resizeEvent`` that follows, since the panel's *share* of it moves with
-        the width even when the axis does not.
+        **Extended does not pin this axis.** It used to: the preference forced the
+        row whatever the width, and :meth:`minimumSizeHint` then had to report the
+        row's width — a chosen shape cannot narrow out of itself — which held the
+        block, the pinned strip and the window open at close to 600px. In a *side*
+        strip, whose thickness is the ``dice`` block's 360, that spent half the
+        strip on a controls column with a long empty tail under it and squeezed the
+        history, the one thing in the block that scrolls, into what was left. Extra
+        room is the history's, and a shape that takes the room away from it to
+        satisfy a preference is answering the wrong question.
+
+        So the room decides the axis here, exactly as it does for an auto roller,
+        and Extended keeps what it was actually chosen for: the **panel** stays a
+        column (``DiceRollerPanel._apply_shape``), so a wide roller is controls
+        beside a history rather than the auto shape's one row of four, and
+        :meth:`_row_sizes` offers that column its own width. Where a row does not
+        fit, the parts stack — which is the same arrangement Extended would have
+        been showing anyway, minus the wasted width.
         """
         if self._lent:
             return False
-        if self._row_locked():
-            return self.force_reflow(True)
         return super().sync_reflow()
-
-    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
-        """The row's width while Extended is locked, the column's otherwise.
-
-        :meth:`ReflowBox.minimumSizeHint` reports the column arrangement's width
-        whatever axis is in use, because a reflowing widget can always narrow by
-        flipping. A locked row cannot — the shape is chosen, not derived — so it
-        has to hold the block open (and through it the pinned strip and the window)
-        at what the two parts really need side by side.
-        """
-        hint = super().minimumSizeHint()
-        if not self._row_locked():
-            return hint
-        row = (
-            self.panel.column_minimum_width()
-            + self.REFLOW_SPACING
-            + self._history_part.minimumSizeHint().width()
-        )
-        return QSize(row, hint.height())
 
     def _divide_row(self) -> None:
         """Re-divide a row between the panel and the history (a no-op otherwise)."""
@@ -1911,8 +2089,11 @@ class DiceRollerView(ReflowBox, QWidget):
             box_layout.addWidget(self._given_history)
             self._given_history.saveToggled.connect(self.panel.toggle_quick_roll)
             self._given_history.rollFollowUp.connect(self.panel.roll_spec)
-            # Hold this app's own roll until its die stops tumbling; the roller cues it.
+            # Hold this app's own roll until its die stops tumbling; the roller cues
+            # both the window and the release, so a roll it never revealed is
+            # flushed rather than stranded.
             self._given_history.set_defer_own(True)
+            self.panel.awaitingOwnRoll.connect(self._given_history.set_awaiting_own)
             self.panel.sessionRollRevealed.connect(self._given_history.release_roll)
             outer.addWidget(box)
             return holder
@@ -1932,8 +2113,10 @@ class DiceRollerView(ReflowBox, QWidget):
         self._session_history = RollHistoryPanel()
         self._session_history.saveToggled.connect(self.panel.toggle_quick_roll)
         self._session_history.rollFollowUp.connect(self.panel.roll_spec)
-        # Hold this app's own roll until its die stops tumbling; the roller cues it.
+        # Hold this app's own roll until its die stops tumbling; the roller cues
+        # both the window and the release (see the given-history branch above).
         self._session_history.set_defer_own(True)
+        self.panel.awaitingOwnRoll.connect(self._session_history.set_awaiting_own)
         self.panel.sessionRollRevealed.connect(self._session_history.release_roll)
         session_layout.addWidget(self._session_history)
         self._session_box.hide()

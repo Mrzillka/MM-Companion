@@ -1171,6 +1171,29 @@ def test_the_gm_roller_offers_hidden_rolls(window: GMWindow) -> None:
     assert window._roller._hidden_check.isVisibleTo(window._roller) is True
 
 
+def test_the_gm_roller_fills_the_block_it_is_given(qapp: QApplication, window: GMWindow) -> None:
+    """A tall Rolls block is a tall history, not a gap under a stopped roller.
+
+    The block is pinned to the strip by default, so it is handed the strip's whole
+    height — and a section with nothing expanding in its layout is held at its hint
+    over a trailing stretch (:meth:`_InnerScroll.set_section`). That left the roller
+    stopping two-thirds of the way down a full-height strip with bare block under
+    it. The box states ``fills_height`` for the reason the sheet's Dice block does:
+    it is the history *inside* it that wants the room.
+    """
+    window.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+    window.resize(1200, 900)
+    window.show()
+    for _ in range(8):
+        qapp.processEvents()
+
+    box = window._rolls_box
+    assert box.height() > box.sizeHint().height(), "the strip did not stretch the block"
+    assert box.height() - window._view.height() <= 4, "the roller was held at its hint"
+    # And the height lands where it is worth something: the one part that scrolls.
+    assert window._history.height() > window._history.sizeHint().height()
+
+
 def test_a_gm_roll_lands_in_the_session_and_the_history(
     qapp: QApplication, window: GMWindow, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -294,6 +294,18 @@ mini strip, `Esc`, or that same button leaves.
   history carries **no `setMinimumHeight`** any more: that fought the view's history
   discipline (`HISTORY_FLOOR_HEIGHT` as the hard floor, a capped `sizeHint`), which is
   what stops a block's minimum climbing with every roll — see "The Dice block's height".
+- **And it takes the height the same way too** — `_build_rolls_box` states
+  `fills_height` on its `QGroupBox`, which is the one thing `DiceSection` declares that
+  a hand-built box does not get for free. Without it `_InnerScroll.set_section` reads a
+  box layout with nothing expanding in it and gives the block's surplus to a trailing
+  stretch, so the block the GM window pins to the strip *by default* — and therefore
+  the tallest one in the app — stopped its roller at ~650px and left the rest of the
+  strip bare under it. It cannot be derived from the box: a `QGroupBox` is `Preferred`,
+  and it is the history *inside* it that wants the room (see [the sheet
+  notes](sheet-and-blocks.md)). Where the height lands once it arrives is the panel's
+  own column rule: the trailing stretch holds the quick-roll strip at the bottom, so a
+  tall roller is controls and die at the top, quick rolls at the foot, and the history
+  beside them taking every pixel of it.
 - Three things the window has to get right. **Hiding the outgoing content is what frees
   it to shrink** — a hidden widget is left out of its layout's minimum, and both
   `CharacterSheet._update_min_width` and `PinnedPanel.minimumSizeHint` otherwise hold it

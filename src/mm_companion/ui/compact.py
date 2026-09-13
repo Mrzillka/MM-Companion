@@ -396,7 +396,16 @@ class CompactPage(QWidget):
         return self._scroll
 
     def adopt(self, panel: QWidget, history: QWidget) -> None:
-        """Take the roller in: the controls above, the history filling the rest."""
+        """Take the roller in: the controls above, the history filling the rest.
+
+        These two ``addWidget`` calls are **the** re-parent of the whole transition,
+        and the surface hands its parts over still sitting in their old layout
+        (hidden) for exactly that reason: Qt re-polishes every descendant of a
+        re-parented widget against the application stylesheet, and a history a few
+        hundred rolls long is over a thousand of them, so each extra re-parent is
+        hundreds of milliseconds of frozen window. See
+        :meth:`~mm_companion.ui.dice_roller.DiceRollerView.release_roller`.
+        """
         self._body_box.addWidget(panel)
         self._body_box.addWidget(history, stretch=1)
         panel.show()

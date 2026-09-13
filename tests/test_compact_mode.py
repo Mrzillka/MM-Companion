@@ -17,7 +17,15 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QAbstractAnimation, QPoint, QPropertyAnimation, QRect, Qt
+from PySide6.QtCore import (
+    QAbstractAnimation,
+    QEvent,
+    QObject,
+    QPoint,
+    QPropertyAnimation,
+    QRect,
+    Qt,
+)
 from PySide6.QtWidgets import QApplication
 
 from mm_companion.core import storage
@@ -136,6 +144,46 @@ def test_the_mini_roller_is_the_same_roller(window: MainWindow) -> None:
     assert window.sheet.dice.panel is panel
     assert panel.current_spec().label == "Athletics"
     assert len(panel.quick_roll_keys()) == 1
+
+
+def test_the_roller_changes_parent_exactly_once_on_the_way_in(window: MainWindow) -> None:
+    """The transition's whole cost is re-parenting, so it may only do it once.
+
+    Qt re-polishes every descendant of a re-parented widget against the
+    application stylesheet, and a used roll history is *thousands* of them — a
+    thousand widgets at the 200-card cap. ``release_roller`` used to park its parts
+    on the view before handing them over, and ``adopt`` then re-parented them
+    again, which charged that walk twice and put ~200 ms of frozen window on the
+    way into compact mode for a parent nothing was ever laid out under. One
+    ``ParentChange`` each is the property worth pinning; where they land is the
+    test above.
+    """
+
+    class Counter(QObject):
+        def __init__(self) -> None:
+            super().__init__()
+            self.seen = 0
+
+        def eventFilter(self, watched, event) -> bool:  # noqa: N802 (Qt override)
+            if event.type() == QEvent.Type.ParentChange:
+                self.seen += 1
+            return False
+
+    view = window.sheet.dice.view
+    counters = [Counter(), Counter()]
+    parts = (view.panel, view._history_part)
+    for part, counter in zip(parts, counters, strict=True):
+        part.installEventFilter(counter)
+
+    window._compact.enter()
+
+    assert [counter.seen for counter in counters] == [1, 1]
+
+    for counter in counters:
+        counter.seen = 0
+    window._compact.leave()
+
+    assert [counter.seen for counter in counters] == [1, 1]
 
 
 def test_the_sheet_still_reaches_the_roller_while_it_is_away(window: MainWindow) -> None:

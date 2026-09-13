@@ -723,6 +723,15 @@ class GMWindow(QMainWindow):
         # shrink button has something to float over; see :meth:`release_roller`
         # and :meth:`compact_anchor`.
         self._rolls_box = box = QGroupBox("Rolls")
+        # The same declaration the sheet's Dice block makes, and for the same
+        # reason: the history grows into whatever height the block is given, so the
+        # roller takes it all rather than being held at its hint over a trailing
+        # stretch (see :meth:`~mm_companion.ui.block_frame._InnerScroll.set_section`).
+        # It cannot be derived — this box is a ``QGroupBox``, so ``Preferred``, and
+        # it is the history *inside* it that wants the room. Without it the block
+        # this window pins to the strip by default showed a roller stopped at ~650px
+        # with the rest of a full-height strip empty under it.
+        box.fills_height = True
         layout = QVBoxLayout(box)
         layout.setContentsMargins(0, 0, 0, 0)
 

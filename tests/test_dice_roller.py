@@ -526,7 +526,10 @@ def test_extended_stacks_where_a_row_will_not_fit(qapp: QApplication) -> None:
 
     assert view.is_row is False
     assert view.panel.is_row is False
-    assert view.minimumSizeHint().width() <= view.panel.column_minimum_width()
+    # The *stacked* arrangement's width — the wider of the controls and the history
+    # — not the controls' alone: the history keeps its own floor
+    # (``MIN_HISTORY_WIDTH``), and which of the two is wider is down to the fonts.
+    assert view.minimumSizeHint().width() <= view.column_minimum_width()
     assert view.minimumSizeHint().width() < view.row_minimum_width()
 
 
@@ -639,7 +642,10 @@ def test_the_roller_never_asks_a_block_for_more_than_a_column(
         view.set_layout(layout)
         _settled(qapp, view, 900, 500)  # wide enough to be a row before we ask
 
-        assert view.minimumSizeHint().width() <= view.panel.column_minimum_width()
+        # A column is the controls stacked over the history, so its width is the
+        # wider of the two — see ``test_extended_stacks_where_a_row_will_not_fit``.
+        assert view.minimumSizeHint().width() <= view.column_minimum_width()
+        assert view.minimumSizeHint().width() < view.row_minimum_width()
 
 
 def test_a_column_gives_the_space_back_when_a_chip_goes(qapp: QApplication) -> None:

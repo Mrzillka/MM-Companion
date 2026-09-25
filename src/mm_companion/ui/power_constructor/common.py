@@ -223,11 +223,14 @@ def repeatable_cell_kind(column) -> RepeatableCellKind:
 
 
 def combat_focus_options(character: Character | None, game_data: GameData) -> list[tuple[str, str]]:
-    """``(display, row_id)`` for each Close/Ranged Combat focus the wielder has.
+    """``(display, row_id)`` for each Close/Ranged Combat row the wielder has.
 
     Combat skills are the focused ones linked to the Attack ability, so they're
-    found data-driven (no hardcoded names); a focus row id matches the skills
-    section's ``"<Skill>::<focus>"`` scheme. Empty without a character.
+    found data-driven (no hardcoded names). Both kinds of row a combat skill can
+    carry are offered — its focuses and its specialized (half-cost) pools — with
+    the skills section's row ids and labels (``"<Skill>::<focus>"`` and
+    ``"<Skill>::spec::<name>"``), so a linked row reads the same in both places.
+    Empty without a character.
     """
     if character is None:
         return []
@@ -237,6 +240,8 @@ def combat_focus_options(character: Character | None, game_data: GameData) -> li
             continue
         for focus in character.focuses.get(skill.name, []):
             options.append((f"{skill.name}: {focus}", f"{skill.name}::{focus}"))
+        for spec in character.specializations.get(skill.name, []):
+            options.append((f"{skill.name}: {spec} (specialized)", f"{skill.name}::spec::{spec}"))
     return options
 
 

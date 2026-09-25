@@ -279,15 +279,16 @@ class EffectCard(QFrame):
         guard_wheel(self._attack_skill)
         if self._focus_options:
             self._attack_skill_check.setToolTip(
-                "Link this effect's attack to a Close/Ranged Combat focus — that focus's "
-                "total replaces the character's Attack for this effect's roll and PL cap."
+                "Link this effect's attack to a Close/Ranged Combat focus or specialization "
+                "— that row's total replaces the character's Attack for this effect's roll "
+                "and PL cap."
             )
         else:
             self._attack_skill_check.setEnabled(False)
             self._attack_skill_check.setToolTip(
-                "This character has no Close or Ranged Combat focus to link to. Add one "
-                "in the Skills block (Close Combat or Ranged Combat, focused on this "
-                "attack) and it will be offered here."
+                "This character has no Close or Ranged Combat focus or specialization to "
+                "link to. Add one in the Skills block (Close Combat or Ranged Combat, "
+                "focused or specialized on this attack) and it will be offered here."
             )
 
         # Seed from the instance: a stored link ticks the box and selects its focus.

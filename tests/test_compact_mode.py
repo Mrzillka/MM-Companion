@@ -24,6 +24,7 @@ from PySide6.QtCore import (
     QPoint,
     QPropertyAnimation,
     QRect,
+    QSize,
     Qt,
 )
 from PySide6.QtWidgets import QApplication
@@ -82,6 +83,27 @@ def _running_animation(win) -> QPropertyAnimation:
     ]
     assert len(running) == 1
     return running[0]
+
+
+def _roller_rect(win) -> QRect:
+    """Where the roller sits on screen right now, as ``enter`` captures it."""
+    anchor = win._compact._anchor()
+    return QRect(anchor.mapToGlobal(QPoint(0, 0)), anchor.size())
+
+
+def _mini_size(win) -> QSize:
+    """The size the mini window opens at from an un-maximized window.
+
+    The roller's own size grown by the page's chrome, so the roller lands back on
+    the rectangle it came from — and never below the page's floor.
+    """
+    roller = _roller_rect(win)
+    chrome = win._compact.page.chrome()
+    size = QSize(
+        roller.width() + chrome.left() + chrome.right(),
+        roller.height() + chrome.top() + chrome.bottom(),
+    )
+    return size.expandedTo(win._compact.page.floor())
 
 
 def _on_screen(qapp: QApplication, win) -> None:
@@ -336,9 +358,10 @@ def test_the_pin_is_remembered_between_sessions(window: MainWindow) -> None:
 def test_the_window_goes_back_to_the_size_it_came_from(window: MainWindow) -> None:
     window.setGeometry(QRect(60, 70, 900, 700))
     before = QRect(window.geometry())
+    mini = _mini_size(window)
 
     window._compact.enter()
-    assert window.geometry().width() == int(theme.metric("compact.width"))
+    assert window.geometry().size() == mini
 
     window._compact.leave()
     assert window.geometry() == before
@@ -735,6 +758,7 @@ def test_the_window_eases_between_the_two_sizes(qapp: QApplication, window: Main
     # Not the width asked for: a shown sheet holds the window open at its own
     # minimum, which is exactly the width the animation has to start from.
     full = window.width()
+    mini = _mini_size(window)
 
     window._compact.enter()
 
@@ -744,7 +768,53 @@ def test_the_window_eases_between_the_two_sizes(qapp: QApplication, window: Main
     assert window.geometry().width() == full
 
     ease.setCurrentTime(ease.duration())
-    assert window.geometry().width() == int(theme.metric("compact.width"))
+    assert window.geometry().size() == mini
+
+
+def test_the_mini_window_opens_over_the_roller_in_place(
+    qapp: QApplication, window: MainWindow
+) -> None:
+    """The roller stays where it was on screen; only everything around it goes."""
+    _on_screen(qapp, window)
+    roller = _roller_rect(window)
+    chrome = window._compact.page.chrome()
+    mini = _mini_size(window)
+
+    window._compact.enter()
+
+    assert window.geometry().topLeft() == roller.topLeft() - QPoint(chrome.left(), chrome.top())
+    assert window.geometry().size() == mini
+
+
+def test_a_maximized_window_keeps_the_remembered_size(
+    qapp: QApplication, window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A roller the height of the screen is no mini window: only the position follows it."""
+    _on_screen(qapp, window)
+    monkeypatch.setattr(window, "isMaximized", lambda: True)
+
+    window._compact.enter()
+
+    assert window.geometry().size() == QSize(
+        int(theme.metric("compact.width")), int(theme.metric("compact.height"))
+    )
+
+
+def test_the_page_is_shown_only_once_the_window_has_shrunk(
+    qapp: QApplication, window: MainWindow
+) -> None:
+    """Nothing is laid out at the sizes in between."""
+    window._compact.ANIMATION_MS = 400
+    _on_screen(qapp, window)
+
+    window._compact.enter()
+
+    ease = _running_animation(window)
+    ease.setCurrentTime(ease.duration() // 2)
+    assert window._compact.page.isHidden()
+
+    ease.setCurrentTime(ease.duration())
+    assert not window._compact.page.isHidden()
 
 
 def test_the_roller_is_handed_back_only_once_the_window_has_grown(
@@ -782,18 +852,19 @@ def test_toggling_mid_ease_never_records_a_half_size(
     window._compact.ANIMATION_MS = 400
     _on_screen(qapp, window)
     full = QRect(window.geometry())
+    mini = _mini_size(window)
 
     window._compact.enter()
     _running_animation(window).setCurrentTime(120)  # half-shrunk, and no size at all
     assert window.width() != full.width()
-    assert window.width() != int(theme.metric("compact.width"))
+    assert window.width() != mini.width()
 
     window._compact.leave()
 
     # What the mini window is remembered at is what it was asked to be, not the
     # frame it happened to be showing.
-    assert storage.compact_settings()["width"] == int(theme.metric("compact.width"))
-    assert storage.compact_settings()["height"] == int(theme.metric("compact.height"))
+    assert storage.compact_settings()["width"] == mini.width()
+    assert storage.compact_settings()["height"] == mini.height()
 
     _running_animation(window).setCurrentTime(120)  # and now half-*grown*
     window._compact.enter()

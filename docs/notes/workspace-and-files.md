@@ -90,7 +90,7 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   The relaunched app reads the note (`StartWindow.run_startup_checks`, from
   `__main__`): coming back as the expected version is a success (the badge says
   "updated from …" and the installer is deleted), anything else a failure, shown
-  with the installer's log — `logs/update-<from>-to-<to>.log`, the newest ten
+  with the installer's log — `logs/update-<from>-to-<to>-<time>.log`, the newest ten
   kept. `installer/mm_companion.iss` reads all those switches: the app and the
   script are one contract, and the update path only works from a release whose
   installer knows them. The check itself can be turned off (Settings → General,

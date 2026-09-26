@@ -360,12 +360,14 @@ def clear_downloads(keep: str = "", folder: Path | None = None) -> None:
     """Delete downloaded installers (and half-downloads) except the one named *keep*.
 
     Each is ~90 MB, so one is kept at most: the one about to be run, or — once an
-    update is known to have worked — none.
+    update is known to have worked — none. The handshake files an earlier run left
+    (``installer.ready``, ``installer.cancel``) go too.
     """
     folder = folder or download_dir()
     if not folder.is_dir():
         return
-    for path in folder.glob("MM-Companion-Setup-*"):
+    leftovers = [*folder.glob("MM-Companion-Setup-*"), *folder.glob("installer.*")]
+    for path in leftovers:
         if path.name != keep:
             try:
                 path.unlink()
@@ -563,8 +565,14 @@ class UpdateResult:
 
 
 def update_log_file(to_version: str, from_version: str = __version__) -> Path:
-    """Where the installer should log the update from *from_version* to *to_version*."""
-    return storage.get_workspace().logs_dir / f"update-{from_version}-to-{to_version}.log"
+    """Where the installer should log this attempt at updating to *to_version*.
+
+    Stamped with the time, so each attempt keeps its own log: a failed one is the
+    log worth reading, and it must not be overwritten by the retry that follows.
+    """
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    name = f"update-{from_version}-to-{to_version}-{stamp}.log"
+    return storage.get_workspace().logs_dir / name
 
 
 def _pending_file() -> Path:

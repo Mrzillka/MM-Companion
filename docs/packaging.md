@@ -70,7 +70,7 @@ General), and an installed build updates itself: it downloads the release's
 publishes, and runs it with
 
 ```
-/SILENT /NOCANCEL /SUPPRESSMSGBOXES /NORESTART /LOG=<workspace>\logs\update-<from>-to-<to>.log
+/SILENT /NOCANCEL /SUPPRESSMSGBOXES /NORESTART /LOG=<workspace>\logs\update-<from>-to-<to>-<time>.log
 /READYFILE=<path> /CANCELFILE=<path> /WAITPID=<pid>[,<pid>] /RELAUNCH=1
 ```
 

@@ -490,6 +490,21 @@ def test_downloading_clears_older_installers(
     assert sorted(path.name for path in folder.iterdir()) == ["MM-Companion-Setup-9.0.0.exe"]
 
 
+def test_each_attempt_gets_its_own_log(monkeypatch: pytest.MonkeyPatch) -> None:
+    stamps = iter(["20260926-175712", "20260926-182401"])
+    monkeypatch.setattr(updates.time, "strftime", lambda fmt: next(stamps))
+    first, retry = updates.update_log_file("9.0.0"), updates.update_log_file("9.0.0")
+    assert first != retry
+    assert first.name == f"update-{__version__}-to-9.0.0-20260926-175712.log"
+
+
+def test_clearing_downloads_takes_the_handshake_leftovers_too(tmp_path: Path) -> None:
+    for name in ("MM-Companion-Setup-9.0.0.exe", "installer.ready", "installer.cancel"):
+        (tmp_path / name).write_text("x")
+    updates.clear_downloads(folder=tmp_path)
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_no_note_means_no_result() -> None:
     assert updates.take_update_result() is None
 
@@ -514,11 +529,12 @@ def test_coming_back_as_the_new_version_is_a_success(
 
 
 def test_coming_back_as_the_old_version_is_a_failure() -> None:
-    updates.record_pending_update("9.0.0", updates.update_log_file("9.0.0"))
+    log = updates.update_log_file("9.0.0")
+    updates.record_pending_update("9.0.0", log)
     result = updates.take_update_result(current=__version__)
     assert result is not None
     assert result.succeeded is False
-    assert result.log_file == updates.update_log_file("9.0.0")
+    assert result.log_file == log
 
 
 def test_a_withdrawn_update_leaves_no_note() -> None:
@@ -603,7 +619,9 @@ def test_dialog_downloads_launches_and_quits_once_the_installer_is_ready(
     _wait_for(qapp, lambda: launched)
 
     # The installer logs into the workspace, where the next launch will look.
-    assert launched == [(installer, updates.update_log_file("99.0.0"))]
+    assert launched == [(installer, dialog._log_file)]
+    assert dialog._log_file.parent == storage.get_workspace().logs_dir
+    assert dialog._log_file.name.startswith(f"update-{__version__}-to-99.0.0-")
     assert "permission" in dialog._detail.text()
 
     launch.ready_file.write_text("ready")

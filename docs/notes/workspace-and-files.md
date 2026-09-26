@@ -33,6 +33,70 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   opens the `GMWindow` it configured — kept in `_gm_window`, since that window
   owns the hosted session, so a second click raises it rather than building a
   second one (skipping the dialog).
+- **The version lives under the launcher's buttons, not in its title.** A
+  `VersionBadge` (`ui/version_badge.py`) shows `v<version>` in muted small print
+  (`size.version`). Once the launcher is up, `__main__` calls
+  `StartWindow.check_for_update()`, which runs `core.updates.check_for_update` on a
+  daemon thread: one request to GitHub's `releases/latest` for this repo (which
+  already skips drafts and pre-releases), its `v`-prefixed tag compared
+  numerically against `__version__`. When the tag is newer, the badge says
+  `v<new> available` and shows an **Update** button. Every failure — offline,
+  rate-limited, a garbled reply — is silently `None`, the same as being up to date.
+  The check is started from `__main__` and **never from the constructor**, so the
+  many tests that build a `StartWindow` never touch the network.
+- **Update installs in place** when `core.updates.can_self_update()`: a frozen
+  Windows build with Inno's `unins*.exe` beside it, in the folder the registry
+  records as *the* install. The installer always upgrades the registered folder, so
+  anything else (a source checkout, a second install, a portable exe carried off
+  somewhere) just opens the release page. The `UpdateDialog`
+  (`ui/update_dialog.py`) then:
+  1. downloads `MM-Companion-Setup-<ver>.exe` to `%TEMP%\MM-Companion-update\`,
+     showing the app's own bar, and keeps it only if its size and SHA-256 match the
+     `size`/`digest` GitHub publishes for the asset (an intact copy is reused, any
+     older one deleted). Any error at all lands in the dialog — a worker that dies
+     on an exception nobody named would leave the bar frozen;
+  2. checks it is safe to close: a running session (GM Mode) is only ended with a
+     yes, and **another copy of the app** — found by exe path in the process list,
+     `core.updates.other_instances` — stops the update before anything is closed,
+     because the installer only waits for the copy that asked;
+  3. closes every other **parentless** window through its own `close()`, so an
+     unsaved sheet prompts as usual — a Cancel there stops the update, it does not
+     lose the work. Owned windows are left to their owners: a block popped out of a
+     sheet is a window, and closing it directly takes the block *off the sheet*
+     and refuses the close. Refusal is read as "still visible afterwards", and
+     sheets go first so an unsaved NPC sheet is not asked about twice (GM Mode
+     closes its NPC sheets itself and swallows their refusal). A restart a closing
+     window asks for (Settings, after a theme change) is suppressed — it would
+     start a second copy holding the files;
+  4. starts the installer with `/SILENT /NOCANCEL /LOG=… /READYFILE=… /CANCELFILE=…
+     /WAITPID=… /RELAUNCH=1` and waits. The installer's manifest is `asInvoker`
+     and Inno elevates itself, so the process started here is the unelevated one,
+     alive for the whole install: the ready file appearing means the permission
+     prompt was accepted, the process ending without it that it was declined — the
+     app stays open and says so. Cancel still works while Windows asks: it writes
+     the cancel file, which the installer checks *before* writing the ready file,
+     so a ready file turning up within a second of it means the installer was
+     already past the check, and the app hands over after all;
+  5. leaves `logs/pending-update.json` in the workspace (the version it expects to
+     come back as, and the log's path) and quits with `QApplication.exit` — not
+     `quit`, which in Qt 6 asks every window first. The installer waits out the
+     listed processes (for a one-file portable build that includes PyInstaller's
+     bootloader, the parent that holds the exe open) and replaces nothing if one
+     outlives its 30 seconds; shows Inno's own progress window, without a Cancel
+     button, since a cancelled install is a half-replaced one; and **relaunches the
+     app whether or not the install worked**, as the *original* user, not the
+     elevated one.
+
+  The relaunched app reads the note (`StartWindow.run_startup_checks`, from
+  `__main__`): coming back as the expected version is a success (the badge says
+  "updated from …" and the installer is deleted), anything else a failure, shown
+  with the installer's log — `logs/update-<from>-to-<to>-<time>.log`, the newest ten
+  kept. `installer/mm_companion.iss` reads all those switches: the app and the
+  script are one contract, and the update path only works from a release whose
+  installer knows them. The check itself can be turned off (Settings → General,
+  `storage.check_for_updates`). `MM_COMPANION_UPDATE_FEED` points the check at
+  another "latest release" JSON, which is how the whole path is tried without
+  publishing (see `docs/packaging.md`).
 - Persistence lives in `core.library` (pure Python, no Qt): `save_character`
   writes a `Character.to_dict()` as JSON into the workspace `characters/` dir —
   overwriting an explicit `path` for a plain "Save", or deriving a non-colliding

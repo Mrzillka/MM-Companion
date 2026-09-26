@@ -75,6 +75,7 @@ def main() -> int:
     window = StartWindow()
     window.show()
     splash.finish(window)
+    window.check_for_update()
     return app.exec()
 
 

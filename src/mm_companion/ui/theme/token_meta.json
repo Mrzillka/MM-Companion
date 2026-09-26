@@ -232,6 +232,7 @@
     },
     "size.card-name": {"label": "Power name"},
     "size.terms": {"label": "Game terms", "hint": "The small print under a power's effects."},
+    "size.version": {"label": "Version line", "hint": "The app version under the launcher's buttons."},
     "size.cost-total": {"label": "Cost total"},
     "size.dice-face": {"label": "Die face"},
     "size.dice-face.compact": {"label": "Die face (compact mode)", "hint": "On the smaller die."},

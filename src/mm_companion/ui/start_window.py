@@ -30,13 +30,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from mm_companion import __version__
 from mm_companion.core import library, storage
 from mm_companion.core.library import CharacterSummary, list_saved_characters
 from mm_companion.core.session.client import SessionClientError
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.main_window import MainWindow
 from mm_companion.ui.session_bridge import SessionBridge
+from mm_companion.ui.version_badge import VersionBadge
 
 CARD_IMAGE_SIZE = 120
 CHARACTER_FILTER = "Character files (*.json)"
@@ -121,7 +121,8 @@ class StartWindow(QMainWindow):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle(f"MM-Companion {__version__}")
+        # The version lives in the badge under the buttons, not in the title.
+        self.setWindowTitle("MM-Companion")
         self.resize(720, 480)
         # Sheet windows opened from here are kept referenced so they aren't
         # garbage-collected (and thus closed) the moment the handler returns.
@@ -181,7 +182,18 @@ class StartWindow(QMainWindow):
         column.addWidget(exit_button)
 
         column.addStretch()
+
+        self._version_badge = VersionBadge()
+        column.addWidget(self._version_badge)
         return column
+
+    def check_for_update(self) -> None:
+        """Look for a newer release in the background; the badge shows what it finds.
+
+        Called by ``__main__`` once the launcher is up, not from the constructor,
+        so building a launcher (as every test does) never reaches the network.
+        """
+        self._version_badge.check_for_update()
 
     def _build_library(self) -> QScrollArea:
         """The right-hand scroll area holding one card per saved character."""

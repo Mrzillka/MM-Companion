@@ -33,6 +33,18 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   opens the `GMWindow` it configured — kept in `_gm_window`, since that window
   owns the hosted session, so a second click raises it rather than building a
   second one (skipping the dialog).
+- **The version lives under the launcher's buttons, not in its title.** A
+  `VersionBadge` (`ui/version_badge.py`) shows `v<version>` in muted small print
+  (`size.version`). Once the launcher is up, `__main__` calls
+  `StartWindow.check_for_update()`, which runs `core.updates.check_for_update` on a
+  daemon thread: one request to GitHub's `releases/latest` for this repo (which
+  already skips drafts and pre-releases), its `v`-prefixed tag compared
+  numerically against `__version__`. When the tag is newer, the badge says
+  `v<new> available` and shows an **Update** button, which for now only opens the
+  release page. Every failure — offline, rate-limited, a garbled reply — is
+  silently `None`, the same as being up to date. The check is started from
+  `__main__` and **never from the constructor**, so the many tests that build a
+  `StartWindow` never touch the network.
 - Persistence lives in `core.library` (pure Python, no Qt): `save_character`
   writes a `Character.to_dict()` as JSON into the workspace `characters/` dir —
   overwriting an explicit `path` for a plain "Save", or deriving a non-colliding

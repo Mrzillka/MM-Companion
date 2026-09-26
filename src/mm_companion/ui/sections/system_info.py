@@ -298,6 +298,10 @@ class SpeedWidget(QWidget):
             label = QLabel(text)
             if line.rank_mod:
                 label.setStyleSheet(tinted_style("tint.worse"))
+        # Wraps, as a movement row does: an unwrapped label's minimum is its whole
+        # line, and that one number held the System block's form open past the width
+        # at which it stacks its captions.
+        label.setWordWrap(True)
         if line.sources:
             # A line is a mode, so its own caption cannot say what granted it — two
             # Flight powers and a worn glider all land on one "Flight" row.

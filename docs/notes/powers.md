@@ -555,6 +555,9 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   thing that would make it live. `combat_focus_options` is unchanged: nothing here writes
   a skill row, because the constructor edits a deep copy of the *power* and the character
   it is handed is the live one — a focus invented on a cancelled edit would survive it.
+  It offers a combat skill's **specialized** pools (`Close Combat::spec::Swords`) as well
+  as its focuses: it used to list focuses only, so a hero whose combat ranks were all
+  specialized had the option disabled. `skill_total` already resolved both kinds of row.
 - **Rank as a dial.** `effect_effective_rank` reads `effect_current_rank`, so an effect
   turned down is turned down everywhere its rank resolves — the save DC, the measures,
   the trait boost. `effect_build_rank` is the bought rank beside it, and validation reads

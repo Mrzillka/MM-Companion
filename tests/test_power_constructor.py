@@ -104,6 +104,29 @@ def test_the_attack_skill_option_goes_live_once_there_is_a_focus(qapp: QApplicat
     assert card._attack_skill.count() == 1
 
 
+def test_a_specialized_combat_skill_can_be_linked_to_an_attack(qapp: QApplication) -> None:
+    # A combat skill's specialized (half-cost) pool is as much an attack skill as a
+    # focus is; the picker used to offer focuses only, so a hero whose combat ranks
+    # were all specialized had the option disabled.
+    char = _pl10_character()
+    char.abilities["ATK"] = 3
+    char.specializations["Close Combat"] = ["Swords"]
+    char.skill_ranks["Close Combat::spec::Swords"] = 4  # pool total = ATK 3 + 4 = 7
+    window = PowerConstructorWindow(load_game_data(), character=char)
+    card = window.canvas.add_effect("damage")
+
+    assert card._attack_skill_check.isEnabled()
+    index = card._attack_skill.findData("Close Combat::spec::Swords")
+    assert index >= 0
+    assert card._attack_skill.itemText(index) == "Close Combat: Swords (specialized)"
+
+    card._attack_skill_check.setChecked(True)
+    card._attack_skill.setCurrentIndex(index)
+    assert card.instance.attack_skill == "Close Combat::spec::Swords"
+    rows = {r.key: r for r in window._terms.effect_rows[0]}
+    assert rows["check"].value == "7 vs. Defense"
+
+
 def test_attack_skill_row_hidden_for_a_non_attack_effect(qapp: QApplication) -> None:
     # Protection resolves with no attack roll, so there's nothing to reskill — the
     # row is built (the wielder has a focus) but stays hidden.

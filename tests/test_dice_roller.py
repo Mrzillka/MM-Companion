@@ -31,6 +31,7 @@ from mm_companion.ui import dice_roller
 from mm_companion.ui.dice_roller import DiceRollerPanel, DiceRollerView, degree_text
 from mm_companion.ui.roll_history import (
     HISTORY_FLOOR_HEIGHT,
+    MAX_CARDS,
     MAX_QUICK_ROLLS,
     MIN_HISTORY_HEIGHT,
     NoteCard,
@@ -526,7 +527,10 @@ def test_extended_stacks_where_a_row_will_not_fit(qapp: QApplication) -> None:
 
     assert view.is_row is False
     assert view.panel.is_row is False
-    assert view.minimumSizeHint().width() <= view.panel.column_minimum_width()
+    # The *stacked* arrangement's width — the wider of the controls and the history
+    # — not the controls' alone: the history keeps its own floor
+    # (``MIN_HISTORY_WIDTH``), and which of the two is wider is down to the fonts.
+    assert view.minimumSizeHint().width() <= view.column_minimum_width()
     assert view.minimumSizeHint().width() < view.row_minimum_width()
 
 
@@ -639,7 +643,10 @@ def test_the_roller_never_asks_a_block_for_more_than_a_column(
         view.set_layout(layout)
         _settled(qapp, view, 900, 500)  # wide enough to be a row before we ask
 
-        assert view.minimumSizeHint().width() <= view.panel.column_minimum_width()
+        # A column is the controls stacked over the history, so its width is the
+        # wider of the two — see ``test_extended_stacks_where_a_row_will_not_fit``.
+        assert view.minimumSizeHint().width() <= view.column_minimum_width()
+        assert view.minimumSizeHint().width() < view.row_minimum_width()
 
 
 def test_a_column_gives_the_space_back_when_a_chip_goes(qapp: QApplication) -> None:
@@ -697,6 +704,40 @@ def test_a_history_does_not_grow_taller_as_the_log_gets_longer(qapp: QApplicatio
 
     assert len(view._local_history.cards()) == 20
     assert view._local_history.sizeHint() == before
+
+
+def test_the_private_history_is_capped_like_the_shared_one(qapp: QApplication) -> None:
+    """It went uncapped for a long time, and the cost was not only memory.
+
+    Every card is ~5 widgets, and Qt walks all of them whenever the history changes
+    width or parent — so an evening's rolling made compact mode take seconds to
+    shrink and grow again (see ``test_compact_mode``). The shared history has always
+    capped itself at :data:`MAX_CARDS`; this list reads the same constant so the two
+    can never drift on how long a history is.
+    """
+    view = DiceRollerView()
+
+    for _ in range(MAX_CARDS + 25):
+        view._local_history.add_roll(
+            {"die": 11, "bonus": 0, "penalty": 0, "dc": None, "result": None}
+        )
+
+    assert len(view._local_history.cards()) == MAX_CARDS
+
+
+def test_the_cap_counts_notes_and_requests_too(qapp: QApplication) -> None:
+    """Everything in the list is a card, so everything in it is trimmed.
+
+    A private history holds notes and parked requests beside its rolls, and counting
+    only the rolls would have let either of those grow without limit — which is the
+    same leak again, wearing a different card.
+    """
+    view = DiceRollerView()
+
+    for index in range(MAX_CARDS + 25):
+        view._local_history.add_note(f"extra effort {index}")
+
+    assert len(view._local_history._entries()) == MAX_CARDS
 
 
 def test_a_dragged_split_is_left_alone_until_the_axis_flips(qapp: QApplication) -> None:

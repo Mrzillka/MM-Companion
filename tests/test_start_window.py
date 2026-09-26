@@ -33,7 +33,7 @@ def test_list_saved_characters_is_empty_when_none_saved() -> None:
 
 def test_start_window_shows_the_action_buttons(qapp: QApplication) -> None:
     window = StartWindow()
-    labels = {b.text() for b in window.findChildren(QPushButton)}
+    labels = {b.text() for b in window.findChildren(QPushButton) if not b.isHidden()}
     assert labels == {
         "Create New Character",
         "Open Existing",

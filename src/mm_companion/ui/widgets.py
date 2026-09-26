@@ -514,6 +514,28 @@ class ReflowingForm(QFormLayout):
     def wrapped(self) -> bool:
         return self._wrapped
 
+    def minimumSize(self) -> QSize:  # noqa: N802 - Qt override
+        """The *wrapped* form's minimum width, whichever way the rows are laid out.
+
+        Unwrapped, Qt's minimum is the caption column plus the widest field — and a
+        minimum is what the block's scroll area hands the form when the viewport is
+        narrower, so the form was never shown a width below it, never reached
+        :data:`FORM_WRAP_WIDTH`, and never wrapped: the decision was reading a width
+        its own minimum had set. Wrapped, a row needs only its widest single part,
+        which is the narrowest arrangement this layout can reach.
+        """
+        size = super().minimumSize()
+        if self._wrapped:
+            return size
+        widest = 0
+        for index in range(self.count()):
+            item = self.itemAt(index)
+            if item is not None and not item.isEmpty():
+                widest = max(widest, item.minimumSize().width())
+        margins = self.contentsMargins()
+        width = widest + margins.left() + margins.right()
+        return QSize(min(size.width(), width), size.height())
+
     @no_reentry
     def sync_wrap(self, available: int, *, floor: int = 0) -> bool:
         """Wrap or unwrap to suit *available* px. Returns whether it changed."""

@@ -77,6 +77,7 @@ from mm_companion.ui.reflow import ReflowBox
 from mm_companion.ui.roll_history import (
     HIDDEN_MARK,
     HISTORY_SIZE_HINT,
+    MAX_CARDS,
     MAX_QUICK_ROLLS,
     MIN_HISTORY_WIDTH,
     NoteCard,
@@ -1673,6 +1674,16 @@ class LocalRollHistory(QWidget):
     that one is a view of a log the whole table shares, this one is a scratch list
     of one's own rolls that only exists while there is no session. Each card can
     be thrown away or saved to the quick-roll strip.
+
+    And it keeps the same :data:`~mm_companion.ui.roll_history.MAX_CARDS` cap that
+    one does, which it went without for far too long. The shared history is a
+    *view* of a log the server holds, so capping it only decides how far back you
+    can scroll; this list is the log, so a cap here does lose the oldest rolls —
+    but the alternative was unbounded, and it was the compact-mode transition that
+    showed why (see :meth:`~DiceRollerView.release_roller`). Every card is ~5
+    widgets that Qt re-polishes and re-lays-out whenever the history changes
+    parent or width, so an evening's play turned the roller into something that
+    took seconds to move.
     """
 
     #: A card's star — the roll's parameters, for the roller to save or unsave.
@@ -1745,6 +1756,7 @@ class LocalRollHistory(QWidget):
         card.removeRequested.connect(lambda c=card: self._remove_card(c))
         # Newest on top: insert above every existing card (the stretch is last).
         self._layout.insertWidget(0, card)
+        self._trim()
 
     def add_note(self, text: str) -> None:
         """Write a line that nobody rolled — the off-air twin of a session note.
@@ -1755,6 +1767,7 @@ class LocalRollHistory(QWidget):
         """
         card = NoteCard({"text": text}, show_author=False)
         self._layout.insertWidget(0, card)
+        self._trim()
 
     def add_request(self, spec: object) -> None:
         """Write a requested roll that reached nobody — the off-air twin of one.
@@ -1783,6 +1796,7 @@ class LocalRollHistory(QWidget):
         card.rollRequested.connect(self.rollFollowUp)
         card.removeRequested.connect(lambda _seq, c=card: self._remove_card(c))
         self._layout.insertWidget(0, card)
+        self._trim()
 
     def cards(self) -> list[RollCard]:
         """The roll cards on screen, newest first (notes carry no parameters)."""
@@ -1793,6 +1807,34 @@ class LocalRollHistory(QWidget):
             if isinstance(widget, RollCard):
                 found.append(widget)
         return found
+
+    def _entries(self) -> list[QWidget]:
+        """Every card in the list, newest first — rolls, notes and requests alike.
+
+        Wider than :meth:`cards` on purpose: that one answers "what could be saved
+        to the quick-roll strip", this one answers "what is in the list", which is
+        the question :meth:`_trim` has to ask. The layout holds nothing but cards
+        and its trailing stretch, so every widget item is one.
+        """
+        found = []
+        for index in range(self._layout.count()):
+            item = self._layout.itemAt(index)
+            widget = item.widget() if item is not None else None
+            if widget is not None:
+                found.append(widget)
+        return found
+
+    def _trim(self) -> None:
+        """Drop the oldest cards past :data:`MAX_CARDS`, the shared history's cap.
+
+        Called from every one of the three ways a card gets here. The shared
+        history's :meth:`~mm_companion.ui.roll_history.RollHistoryPanel._trim` is
+        the same rule, and it reads the same constant so the two lists can never
+        drift apart on how long a history is.
+        """
+        for widget in self._entries()[MAX_CARDS:]:
+            self._layout.removeWidget(widget)
+            discard_widget(widget)
 
     def _remove_card(self, card: QWidget) -> None:
         """Drop one card from the list — a roll's ``−`` or a request's ``✕``."""
@@ -2215,13 +2257,21 @@ class DiceRollerView(ReflowBox, QWidget):
         because the widgets themselves carry on. A second view would have meant a
         second attachment to the table and the same rolls listed twice.
 
-        The two are taken out of the splitter and handed back bare, in the order
-        they belong in; the caller owns them until :meth:`restore_roller`. Reversed
-        exactly by that method, so the splitter is left empty rather than rebuilt.
+        The two are **hidden, not re-parented**, and handed back in the order they
+        belong in; the caller owns them until :meth:`restore_roller`, and it is the
+        caller's own ``adopt`` that takes them out of the splitter by putting them
+        in its layout. That is the whole reason this does not tidy them onto itself
+        first: a re-parent is the expensive half of the whole transition, because Qt
+        re-polishes every descendant against the application stylesheet, and a used
+        history is where the descendants are — ~5 widgets a card, so ~1000 of them at
+        the :data:`~mm_companion.ui.roll_history.MAX_CARDS` cap. Doing it here and
+        again in ``adopt`` charged that walk twice and put ~150 ms of frozen window on
+        the way in, for a parent nothing was ever laid out under. Hiding them is
+        what stands them out of the splitter's layout in the meantime, and keeps the
+        rule that a widget is never visible with no parent: they always have one.
         """
         self._lent = True
         for part in self.reflow_parts():
-            part.setParent(self)
             part.hide()
         return (self.panel, self._history_part)
 

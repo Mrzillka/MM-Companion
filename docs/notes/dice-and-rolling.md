@@ -228,6 +228,37 @@ mini strip, `Esc`, or that same button leaves.
   twice. Same borrow-and-return the canvas performs moving a block between the page, the
   strip and a floating window, including the rule that a widget still parented to a
   container Qt is about to free goes with it.
+- **What the transition costs is re-parenting, so it re-parents once.** The freeze
+  anyone actually complains about is not the ease, the flags or the window: it is the
+  two `addWidget` calls in `CompactPage.adopt` and the `insertWidget` that puts the
+  parts back, because Qt re-polishes **every descendant** of a re-parented widget
+  against the application stylesheet, and a roll history is where the descendants
+  are — ~5 widgets a card, so ~1000 of them at the 200-card cap. Measured on a real
+  sheet: a 400-roll history took 978 ms to shrink and 483 ms to grow back; at 800
+  rolls, 1.9 s and 0.9 s. Two fixes, and they are independent. `release_roller` now
+  **hides** its parts rather than parking them on the view first — that park was a
+  second re-parent per part, for a parent nothing was ever laid out under, and it
+  was a third of the cost of going in. Hiding is what stands them out of the
+  splitter's layout meanwhile, and they never go parentless, so the no-visible-
+  orphan rule still holds; the caller's own `adopt` is the one re-parent, which is
+  why `adopt` and `release_roller` each carry half of this note.
+  `tests/test_compact_mode.py` counts `ParentChange` events and insists on exactly
+  one per part per direction — the property, not the arrangement, which the tests
+  either side of it already pin.
+- **And the private history is capped, at last.** `LocalRollHistory` had no cap at
+  all while `RollHistoryPanel` has always trimmed to `MAX_CARDS`, so an evening's
+  play grew the list — and every parent change and every width change over it —
+  without bound, which is what turned the paragraph above from 300 ms into seconds.
+  Both now read the one constant, and the local trim counts **every** card (notes
+  and parked requests included, via `_entries`, not just `cards()`), or the same
+  leak comes back wearing a different card. The two caps do not mean quite the same
+  thing and that is worth knowing: the shared history is a *view* of a log the
+  server holds, so its cap only decides how far back you can scroll, while this
+  list **is** the log and its cap does lose the oldest rolls. Unbounded was the
+  worse of the two. With both fixes a round trip is ~0.6 s whatever the history
+  length; the rest of that is the same re-parent, once, and it is bounded now
+  rather than growing all evening. Below it the only lever left is fewer live
+  cards — a smaller cap, or building only the cards near the viewport.
 - A **surface** is anything with `release_roller()` (the panel and the history widget,
   or `None`), `restore_roller()`, and `compact_anchor()` (the widget the round button
   floats over). `CharacterSheet` duck-types over its blocks for all three like
@@ -294,6 +325,18 @@ mini strip, `Esc`, or that same button leaves.
   history carries **no `setMinimumHeight`** any more: that fought the view's history
   discipline (`HISTORY_FLOOR_HEIGHT` as the hard floor, a capped `sizeHint`), which is
   what stops a block's minimum climbing with every roll — see "The Dice block's height".
+- **And it takes the height the same way too** — `_build_rolls_box` states
+  `fills_height` on its `QGroupBox`, which is the one thing `DiceSection` declares that
+  a hand-built box does not get for free. Without it `_InnerScroll.set_section` reads a
+  box layout with nothing expanding in it and gives the block's surplus to a trailing
+  stretch, so the block the GM window pins to the strip *by default* — and therefore
+  the tallest one in the app — stopped its roller at ~650px and left the rest of the
+  strip bare under it. It cannot be derived from the box: a `QGroupBox` is `Preferred`,
+  and it is the history *inside* it that wants the room (see [the sheet
+  notes](sheet-and-blocks.md)). Where the height lands once it arrives is the panel's
+  own column rule: the trailing stretch holds the quick-roll strip at the bottom, so a
+  tall roller is controls and die at the top, quick rolls at the foot, and the history
+  beside them taking every pixel of it.
 - Three things the window has to get right. **Hiding the outgoing content is what frees
   it to shrink** — a hidden widget is left out of its layout's minimum, and both
   `CharacterSheet._update_min_width` and `PinnedPanel.minimumSizeHint` otherwise hold it

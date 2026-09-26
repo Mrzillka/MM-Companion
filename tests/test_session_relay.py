@@ -505,7 +505,12 @@ def test_a_dead_control_link_is_reopened_under_the_same_join_code(box):
         player.connect()
         seat = player.player_id
 
-        # Exactly what a relay whose control connection died does.
+        # Exactly what a relay whose control connection died does: the link reads
+        # end-of-stream. Shut down before closing, because a bare close() from this
+        # thread does not wake the reader blocked in recv() on Linux — it would sit
+        # there until its 30 s ping timeout and lose the race against the wait below,
+        # while Windows wakes it at once, so the test passed there and failed on CI.
+        door._control.shutdown(socket.SHUT_RDWR)  # noqa: SLF001
         door._control.close()  # noqa: SLF001
 
         # The host notices and opens a *new* door rather than sitting there

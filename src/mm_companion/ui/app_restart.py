@@ -14,6 +14,17 @@ import sys
 from PySide6.QtCore import QProcess
 from PySide6.QtWidgets import QApplication
 
+#: Set by the in-app update once it is closing windows: a restart a window asks for
+#: on its way out (Settings, after a theme change) would start a second copy of the
+#: app that holds the files the installer is about to replace.
+_suppressed = False
+
+
+def suppress_restart() -> None:
+    """From now on :func:`restart_app` does nothing — the app is about to be updated."""
+    global _suppressed
+    _suppressed = True
+
 
 def restart_app() -> None:
     """Relaunch the app; abort if a window won't close.
@@ -26,7 +37,7 @@ def restart_app() -> None:
     the app was started) and this one quits.
     """
     app = QApplication.instance()
-    if app is None:
+    if app is None or _suppressed:
         return
     app.closeAllWindows()
     if any(w.isVisible() and w.isWindow() for w in app.topLevelWidgets()):

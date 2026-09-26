@@ -58,6 +58,7 @@ from PySide6.QtCore import (
     QByteArray,
     QEasingCurve,
     QEvent,
+    QMargins,
     QObject,
     QPoint,
     QPropertyAnimation,
@@ -383,7 +384,46 @@ class CompactPage(QWidget):
 
         # A frameless window has no resize border, so this is the only way to
         # resize it with the mouse.
-        layout.addWidget(size_grip_row())
+        self._grip_row = size_grip_row()
+        layout.addWidget(self._grip_row)
+
+    def chrome(self) -> QMargins:
+        """What this page puts *around* the borrowed roller, in pixels.
+
+        The strip and the body's top margin above it, the body's margins either
+        side, and the body's bottom margin plus the size-grip row below. Which is
+        exactly what the controller has to subtract to open the mini window over
+        the roller's own place on screen rather than somewhere else (see
+        :meth:`CompactController._compact_target`) — the roller is *not* the mini
+        window, it is the mini window minus its chrome, and getting that wrong is
+        how a "stay where you are" ends up a few dozen pixels adrift.
+
+        Measured from size hints rather than written down, so it stays true under a
+        preset with a taller strip or a wider gap. Both are available before the
+        page has ever been shown: the strip is built in the constructor and the
+        grip row is a plain widget.
+        """
+        gap = int(theme.metric("space.sm"))
+        return QMargins(
+            gap,
+            self.strip.sizeHint().height() + gap,
+            gap,
+            gap + self._grip_row.sizeHint().height(),
+        )
+
+    def floor(self) -> QSize:
+        """The smallest the mini window can actually be, chrome included.
+
+        The scroll area's own ``compact.min-*`` floor is stated in *content*, so a
+        target computed from a small roller has to be raised by the chrome or the
+        animation ends somewhere Qt will not put the window — and the ease then
+        lands a frame short of the geometry the controller believes it set.
+        """
+        chrome = self.chrome()
+        return QSize(
+            int(theme.metric("compact.min-width")) + chrome.left() + chrome.right(),
+            int(theme.metric("compact.min-height")) + chrome.top() + chrome.bottom(),
+        )
 
     @property
     def overlay_host(self) -> QWidget:
@@ -396,7 +436,16 @@ class CompactPage(QWidget):
         return self._scroll
 
     def adopt(self, panel: QWidget, history: QWidget) -> None:
-        """Take the roller in: the controls above, the history filling the rest."""
+        """Take the roller in: the controls above, the history filling the rest.
+
+        These two ``addWidget`` calls are **the** re-parent of the whole transition,
+        and the surface hands its parts over still sitting in their old layout
+        (hidden) for exactly that reason: Qt re-polishes every descendant of a
+        re-parented widget against the application stylesheet, and a history a few
+        hundred rolls long is over a thousand of them, so each extra re-parent is
+        hundreds of milliseconds of frozen window. See
+        :meth:`~mm_companion.ui.dice_roller.DiceRollerView.release_roller`.
+        """
         self._body_box.addWidget(panel)
         self._body_box.addWidget(history, stretch=1)
         panel.show()
@@ -557,6 +606,11 @@ class CompactController(QObject):
         anchor = self._anchor()
         if anchor is None or not anchor.isVisibleTo(self._window):
             return
+        # Where the roller is on screen *right now*, which is where the mini window
+        # has to open so that nothing moves (see :meth:`_compact_target`). Taken
+        # before the first thing that would invalidate it — the un-maximize below
+        # moves the block with the window, and the loan hides it outright.
+        roller_rect = QRect(anchor.mapToGlobal(QPoint(0, 0)), anchor.size())
         roller = self._surface.release_roller()
         if roller is None:
             return
@@ -581,7 +635,6 @@ class CompactController(QObject):
         # widget is left out of its layout's minimum, and the sheet's page and
         # pinned strip both report minimums far wider than the mini window.
         self._content.hide()
-        self.page.show()
         self._window.menuBar().hide()
         # Loose block windows are separate top-level windows, so hiding the content
         # never touched them — and a scatter of them left on screen is exactly what
@@ -592,7 +645,10 @@ class CompactController(QObject):
         self.page.strip.set_on_top(preferences["on_top"])
         self._apply_flags(frameless=True, on_top=bool(preferences["on_top"]))
         self._escape.setEnabled(True)
-        self._animate_to(self._compact_target(preferences))
+        # The page is revealed when the window *lands*, never during the ease — see
+        # :meth:`_animate_to`. Everything else about being compact is true from
+        # this moment; only the picture waits.
+        self._animate_to(self._compact_target(preferences, roller_rect), on_finished=self.page.show)
         self.compactChanged.emit(True)
 
     def leave(self) -> None:
@@ -603,17 +659,28 @@ class CompactController(QObject):
         self.remember_size()
         self._compact = False
         self._escape.setEnabled(False)
+        # Out of sight before the first frame, and that is the whole point: a
+        # widget laid out at every size between the two is a widget nobody ever
+        # asked for. The mini roller used to be stretched across the growing
+        # window — full-width sliders, a lone die, an empty history the size of a
+        # page — and then swapped for the sheet in one jump at the end. See
+        # :meth:`_animate_to`.
+        self.page.hide()
         # Flags first, then the animation — never the other way round, and never
         # both at once (see the module docstring).
         self._apply_flags(frameless=False, on_top=False)
-        self._window.menuBar().show()
         target = self._normal_geometry or QRect(self._window.geometry())
-        # The mini roller stays on screen while the window grows around it and is
-        # handed back at the end, so the transition never shows an empty window.
         self._animate_to(target, on_finished=self._finish_leave)
         self.compactChanged.emit(False)
 
     def _finish_leave(self) -> None:
+        """The window has landed: give the roller back and put the sheet on screen.
+
+        Everything visible happens here, in one turn, at the size it is meant to be
+        seen at — the menu bar included, which used to come back before the ease
+        and spend it sitting above an empty window beside the mini strip, two title
+        bars deep.
+        """
         if self._roller is None:
             return
         panel, _history = self._roller
@@ -623,6 +690,7 @@ class CompactController(QObject):
         self.button.attach(self._anchor())
         panel.set_compact(False)
         self.page.hide()
+        self._window.menuBar().show()
         self._content.show()
         self._suspend_windows(False)
         if self._was_maximized:
@@ -657,18 +725,52 @@ class CompactController(QObject):
         """
         apply_window_flags(self._window, frameless=frameless, on_top=on_top)
 
-    def _compact_target(self, preferences: dict) -> QRect:
-        """Where and how big the mini window goes.
+    def _compact_target(self, preferences: dict, roller: QRect | None) -> QRect:
+        """Where and how big the mini window goes: **over the roller, in place**.
 
-        The size the user last left it at, or the theme's if they never have; the
-        position is the full window's own top-left, so the roller appears where
-        the window already was rather than flying off to a corner. Clamped onto
-        the screen, since the full window's corner can be off it when maximized.
+        *roller* is where the roller was on screen a moment ago, captured before
+        anything moved (see :meth:`enter`). The mini window opens so that the
+        roller lands back on exactly that rectangle — the rect grown by the page's
+        :meth:`~CompactPage.chrome`, since the roller is the mini window minus its
+        strip, margins and grip row. Nothing jumps: what compact mode looks like is
+        everything *except* the roller going away, which is what it always meant.
+
+        It used to open at the **window's** top-left at a remembered size, and that
+        was wrong twice over. The Dice block is pinned to the right-hand strip by
+        default, so the one thing the user was looking at was flung a thousand
+        pixels across the screen to a corner and resized on the way — from a block
+        that is however wide the strip is to a window that is however wide it was
+        last left. Neither number had anything to do with the other.
+
+        The **maximized** window is the one exception, and it has to be: a roller
+        the height of a full screen is not a mini window by any reading, so there
+        the remembered size (or the theme's) is kept and only the *position*
+        follows the roller. Which is also why *roller* is captured before
+        ``showNormal`` rather than read here — by the time this runs the window has
+        already been dropped out of maximized and the block has moved with it.
+
+        The result is clamped onto the screen (a corner of a maximized window can
+        be off it) and never smaller than :meth:`~CompactPage.floor`, since a
+        target Qt would refuse leaves the ease landing somewhere else.
         """
-        width = int(preferences.get("width") or theme.metric("compact.width"))
-        height = int(preferences.get("height") or theme.metric("compact.height"))
-        origin = (self._normal_geometry or self._window.geometry()).topLeft()
-        rect = QRect(origin, QSize(width, height))
+        chrome = self.page.chrome()
+        if roller is not None and not self._was_maximized:
+            size = QSize(
+                roller.width() + chrome.left() + chrome.right(),
+                roller.height() + chrome.top() + chrome.bottom(),
+            )
+        else:
+            size = QSize(
+                int(preferences.get("width") or theme.metric("compact.width")),
+                int(preferences.get("height") or theme.metric("compact.height")),
+            )
+        floor = self.page.floor()
+        size = size.expandedTo(floor)
+        if roller is not None:
+            origin = QPoint(roller.left() - chrome.left(), roller.top() - chrome.top())
+        else:
+            origin = (self._normal_geometry or self._window.geometry()).topLeft()
+        rect = QRect(origin, size)
         screen = self._window.screen()
         if screen is not None:
             rect = _clamped(rect, screen.availableGeometry())

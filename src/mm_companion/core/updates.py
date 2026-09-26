@@ -462,14 +462,26 @@ class InstallerLaunch:
     process: subprocess.Popen
     ready_file: Path
     cancel_file: Path
+    #: Where the installer was told to log — worth offering when it ends early.
+    log_file: Path | None = None
 
     def is_ready(self) -> bool:
         """Windows let the installer elevate: the app should get out of its way."""
         return self.ready_file.exists()
 
     def has_given_up(self) -> bool:
-        """The installer ended before it was ready — the permission prompt was declined."""
+        """The installer ended before it was ready.
+
+        Usually the permission prompt was declined — but Setup failing before it
+        got that far (a log it could not create, say) ends the same way, which is
+        why :attr:`exit_code` and :attr:`log_file` are kept to tell them apart.
+        """
         return self.process.poll() is not None and not self.is_ready()
+
+    @property
+    def exit_code(self) -> int | None:
+        """The installer's exit code once it has ended, else ``None``."""
+        return self.process.poll()
 
     def withdraw(self, grace: float = WITHDRAW_GRACE) -> bool:
         """Ask the installer to stand down; ``False`` if it is already past asking.
@@ -507,13 +519,20 @@ def launch_installer(
     cancel_file = installer.with_name("installer.cancel")
     for stale in (ready_file, cancel_file):
         stale.unlink(missing_ok=True)
+    log_file = log_file or installer.with_name("install.log")
+    try:
+        # Inno Setup does not create the folder of its /LOG, and gives up at once —
+        # before its ready file — when it cannot open it.
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise UpdateError(f"The installer's log could not be created: {exc}") from exc
     args = [
         str(installer),
         "/SILENT",
         "/NOCANCEL",
         "/SUPPRESSMSGBOXES",
         "/NORESTART",
-        f"/LOG={log_file or installer.with_name('install.log')}",
+        f"/LOG={log_file}",
         f"/READYFILE={ready_file}",
         f"/CANCELFILE={cancel_file}",
         "/WAITPID=" + ",".join(str(pid) for pid in _processes_to_wait_for()),
@@ -525,7 +544,9 @@ def launch_installer(
         process = subprocess.Popen(args, cwd=installer.parent, close_fds=True)
     except OSError as exc:
         raise UpdateError(f"The installer could not be started: {exc}") from exc
-    return InstallerLaunch(process=process, ready_file=ready_file, cancel_file=cancel_file)
+    return InstallerLaunch(
+        process=process, ready_file=ready_file, cancel_file=cancel_file, log_file=log_file
+    )
 
 
 # -- reporting back ------------------------------------------------------------------

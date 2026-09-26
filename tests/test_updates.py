@@ -400,6 +400,18 @@ def _launch(tmp_path: Path, process: _FakeProcess | None = None) -> updates.Inst
     )
 
 
+def test_launch_installer_creates_the_folder_its_log_goes_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Inno Setup gives up at once when it cannot open its /LOG, and a fresh
+    # workspace has no logs folder: the first real update failed exactly so.
+    monkeypatch.setattr(updates.subprocess, "Popen", lambda args, **kwargs: _FakeProcess())
+    log = tmp_path / "workspace" / "logs" / "update.log"
+    launch = updates.launch_installer(tmp_path / "setup.exe", log_file=log)
+    assert log.parent.is_dir()
+    assert launch.log_file == log
+
+
 def test_launch_installer_runs_it_silently_and_asks_for_a_restart(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -658,6 +670,32 @@ def test_dialog_reports_a_declined_permission_prompt(
     _wait_for(qapp, lambda: not dialog._page_button.isHidden())
 
     assert "cancelled" in dialog._status.text()
+    assert "exit code 1" in dialog._status.text()
+    assert dialog._log_button.isHidden()
+    assert quits == []
+
+
+def test_dialog_offers_the_log_of_an_installer_that_failed_before_installing(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, quits: list[bool]
+) -> None:
+    _fake_download(monkeypatch, tmp_path / "setup.exe")
+    process = _FakeProcess()
+    log = tmp_path / "update.log"
+    launch = _launch(tmp_path, process)
+    launch.log_file = log
+    _fake_launch(monkeypatch, launch)
+    monkeypatch.setattr(UpdateDialog, "_close_other_windows", lambda self: True)
+
+    dialog = _dialog()
+    dialog.start()
+    _wait_for(qapp, lambda: dialog._poll.isActive())
+    log.write_text("Setup ran elevated, then stopped.")
+    process.returncode = 3
+    _wait_for(qapp, lambda: not dialog._page_button.isHidden())
+
+    assert "stopped before installing" in dialog._status.text()
+    assert "exit code 3" in dialog._status.text()
+    assert not dialog._log_button.isHidden()
     assert quits == []
 
 

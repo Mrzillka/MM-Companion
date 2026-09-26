@@ -123,6 +123,10 @@ class UpdateDialog(QDialog):
 
         buttons = QHBoxLayout()
         buttons.addStretch()
+        self._log_button = QPushButton("Open log")
+        self._log_button.clicked.connect(self._open_log)
+        buttons.addWidget(self._log_button)
+        self._log_button.hide()
         self._page_button = QPushButton("Open download page")
         self._page_button.clicked.connect(self._open_page)
         buttons.addWidget(self._page_button)
@@ -264,7 +268,28 @@ class UpdateDialog(QDialog):
         elif launch.has_given_up():
             self._poll.stop()
             self._launch = None
-            self._show_failure("The update was cancelled before it could install.")
+            self._show_early_end(launch)
+
+    def _show_early_end(self, launch: InstallerLaunch) -> None:
+        """The installer ended before it was ready — declined, or failed to start.
+
+        A declined permission prompt means Setup never ran elevated, so it never
+        opened its log; a log with something in it means Setup ran and stopped, and
+        says why.
+        """
+        code = launch.exit_code
+        log = launch.log_file
+        if log is not None and log.is_file() and log.stat().st_size > 0:
+            self._show_failure(
+                f"The installer stopped before installing anything (exit code {code})."
+            )
+            self._detail.setText("Its log says why.")
+            self._log_button.show()
+        else:
+            self._show_failure(
+                "The update was cancelled before it could install — the permission "
+                f"prompt was declined, or the installer could not start (exit code {code})."
+            )
 
     def _hand_over(self) -> None:
         """Stage 5: the installer is running and waiting for us to go."""
@@ -285,6 +310,10 @@ class UpdateDialog(QDialog):
         self._page_button.show()
         self._cancel_button.setText("Close")
         self._cancel_button.setEnabled(True)
+
+    def _open_log(self) -> None:
+        if self._log_file.is_file():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(os.fspath(self._log_file)))
 
     def _open_page(self) -> None:
         QDesktopServices.openUrl(QUrl(self._release.page_url))

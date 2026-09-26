@@ -11,6 +11,12 @@
 ;                       appears when the installed version is older than this one.
 ;   * Remove         -> runs the app's uninstaller; a checkbox additionally wipes
 ;                       the user workspace at %APPDATA%\MM-Companion.
+;   * In-app update  -> the app runs this silently (core/updates.py) with three
+;                       extra switches: /READYFILE=<path> is created once Setup
+;                       is running elevated, which is the app's cue to quit;
+;                       /WAITPID=<pid>[,<pid>] are waited out before any file is
+;                       touched, since the running app holds its exe open; and
+;                       /RELAUNCH=1 starts the app again when Setup is done.
 ;
 ; The version is supplied by the build script:  ISCC /DAppVersion=0.1.0 ...
 
@@ -62,9 +68,15 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: deskto
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
+; The in-app update's restart. As the user who started Setup, not the elevated
+; account - that may be a different user, with a different workspace.
+Filename: "{app}\{#AppExeName}"; Flags: nowait runasoriginaluser; Check: ShouldRelaunch
 
 [Code]
 const
+  SYNCHRONIZE      = $00100000;
+  WAIT_PID_TIMEOUT = 30000;  { ms per process; the app quits in well under that }
+
   ACTION_INSTALL   = 0;  { no prior install }
   ACTION_UPGRADE   = 1;
   ACTION_REINSTALL = 2;
@@ -79,6 +91,40 @@ var
   ActionPage: TInputOptionWizardPage;
   DelDataCheck: TNewCheckBox;
   AllowSilentCancel: Boolean;
+
+function OpenProcess(dwDesiredAccess: DWORD; bInheritHandle: BOOL; dwProcessId: DWORD): THandle;
+  external 'OpenProcess@kernel32.dll stdcall';
+function WaitForSingleObject(hHandle: THandle; dwMilliseconds: DWORD): DWORD;
+  external 'WaitForSingleObject@kernel32.dll stdcall';
+function CloseHandle(hObject: THandle): BOOL;
+  external 'CloseHandle@kernel32.dll stdcall';
+
+function ShouldRelaunch(): Boolean;
+begin
+  Result := ExpandConstant('{param:RELAUNCH|0}') = '1';
+end;
+
+{ Wait for each process in the comma-separated /WAITPID list to exit. One that
+  has already gone (or never existed) opens as 0 and is skipped. }
+procedure WaitForProcesses(pids: String);
+var
+  p: Integer;
+  pid: String;
+  handle: THandle;
+begin
+  while pids <> '' do
+  begin
+    p := Pos(',', pids);
+    if p > 0 then begin pid := Copy(pids, 1, p - 1); Delete(pids, 1, p); end
+    else begin pid := pids; pids := ''; end;
+    handle := OpenProcess(SYNCHRONIZE, False, StrToIntDef(Trim(pid), 0));
+    if handle <> 0 then
+    begin
+      WaitForSingleObject(handle, WAIT_PID_TIMEOUT);
+      CloseHandle(handle);
+    end;
+  end;
+end;
 
 function UninstallKey(): String;
 begin
@@ -111,9 +157,19 @@ begin
 end;
 
 function InitializeSetup(): Boolean;
+var
+  readyFile: String;
 begin
   Result := True;
   PrevInstalled := False;
+
+  { An in-app update: say we are running (and so elevated), then let the app
+    finish quitting before anything tries to replace its files. }
+  readyFile := ExpandConstant('{param:READYFILE|}');
+  if readyFile <> '' then
+    SaveStringToFile(readyFile, 'ready', False);
+  WaitForProcesses(ExpandConstant('{param:WAITPID|}'));
+
   { Admin install records the uninstall key under HKLM (64-bit view in 64-bit
     install mode); fall back to HKCU so an older per-user install is still
     detected for upgrade. }

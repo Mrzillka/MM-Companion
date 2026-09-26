@@ -61,6 +61,60 @@ versions on its own cadence, and one that arrived with an upgrade would be one t
 user never chose. A mod's own saved state lives beside them in `mod_state\`, and
 survives the mod being removed and reinstalled.
 
+## In-app updates
+
+The app checks GitHub's latest release at startup, and an installed build updates
+itself: it downloads the release's `MM-Companion-Setup-<version>.exe`, verifies it
+against the SHA-256 GitHub publishes, and runs it with
+
+```
+/SILENT /SUPPRESSMSGBOXES /NORESTART /LOG=… /READYFILE=<path> /WAITPID=<pid>[,<pid>] /RELAUNCH=1
+```
+
+The last three are this project's own switches, read in `mm_companion.iss`:
+`/READYFILE` is written once Setup is running elevated (the app's cue to quit),
+`/WAITPID` processes are waited out before any file is replaced, and `/RELAUNCH=1`
+starts the app again, as the original user, when Setup finishes. The silent run
+takes the existing Upgrade path, so it keeps the install folder and the tasks
+(desktop shortcut, portable) chosen the first time. The log lands next to the
+download, in `%TEMP%\MM-Companion-update\install.log`.
+
+So a release must keep: **the asset name** `MM-Companion-Setup-<version>.exe`, the
+**`v<version>` tag**, and those three switches in the script. See
+[the launcher notes](notes/workspace-and-files.md) for the app side.
+
+**Trying it without publishing.** The app doing the updating must already have
+this code, so it takes two builds of the branch: install one, then offer it the
+other. Keep both versions just above the latest real release (say `0.7.90` and
+`0.7.91`) — a test build installed as `9.9.9` would outrank every real release,
+and the next real installer would only offer to Reinstall.
+
+1. Set `__version__` to `0.7.90`, run `build.ps1`, and install that.
+2. Set it to `0.7.91`, run `build.ps1` again, and serve the result with a
+   hand-written release document:
+
+   ```powershell
+   cd installer\output
+   $exe = "MM-Companion-Setup-0.7.91.exe"
+   $sha = (Get-FileHash $exe).Hash.ToLower()
+   $size = (Get-Item $exe).Length
+   @"
+   {"tag_name": "v0.7.91", "html_url": "http://127.0.0.1:8000/",
+    "assets": [{"name": "$exe", "size": $size, "digest": "sha256:$sha",
+                "browser_download_url": "http://127.0.0.1:8000/$exe"}]}
+   "@ | Set-Content latest.json
+   python -m http.server 8000
+   ```
+3. In another shell, start the *installed* app pointed at it:
+
+   ```powershell
+   $env:MM_COMPANION_UPDATE_FEED = "http://127.0.0.1:8000/latest.json"
+   & "C:\Program Files\MM-Companion\MM-Companion.exe"
+   ```
+
+   The badge should offer v0.7.91; Update downloads it, asks for permission, and
+   the app comes back as 0.7.91. Put `__version__` back before committing.
+
 ## Cutting a release
 
 1. Bump `__version__` in `src/mm_companion/__init__.py` (this is the single

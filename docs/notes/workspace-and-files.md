@@ -40,11 +40,36 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   daemon thread: one request to GitHub's `releases/latest` for this repo (which
   already skips drafts and pre-releases), its `v`-prefixed tag compared
   numerically against `__version__`. When the tag is newer, the badge says
-  `v<new> available` and shows an **Update** button, which for now only opens the
-  release page. Every failure — offline, rate-limited, a garbled reply — is
-  silently `None`, the same as being up to date. The check is started from
-  `__main__` and **never from the constructor**, so the many tests that build a
-  `StartWindow` never touch the network.
+  `v<new> available` and shows an **Update** button. Every failure — offline,
+  rate-limited, a garbled reply — is silently `None`, the same as being up to date.
+  The check is started from `__main__` and **never from the constructor**, so the
+  many tests that build a `StartWindow` never touch the network.
+- **Update installs in place** when `core.updates.can_self_update()` — a frozen
+  Windows build with Inno's `unins*.exe` beside it. Anything else (a source
+  checkout, a portable exe carried off somewhere, which the installer would not be
+  upgrading) just opens the release page. The `UpdateDialog`
+  (`ui/update_dialog.py`) then:
+  1. downloads `MM-Companion-Setup-<ver>.exe` to `%TEMP%\MM-Companion-update\`,
+     showing the app's own bar, and keeps it only if its size and SHA-256 match the
+     `size`/`digest` GitHub publishes for the asset (an intact copy is reused);
+  2. closes every other window through its own `close()`, so an unsaved sheet
+     prompts as usual — a Cancel there stops the update, it does not lose the work;
+  3. starts the installer with `/SILENT /READYFILE=… /WAITPID=… /RELAUNCH=1` and
+     waits. The installer's manifest is `asInvoker` and Inno elevates itself, so the
+     process started here is the unelevated one, alive for the whole install: the
+     ready file appearing means the permission prompt was accepted, and the
+     process ending without it means it was declined — the app stays open and says
+     so;
+  4. quits. The installer waits out the listed processes (for a one-file portable
+     build that includes PyInstaller's bootloader, the parent that holds the exe
+     open), shows Inno's own progress window, and relaunches the app as the
+     *original* user, not the elevated one.
+
+  `installer/mm_companion.iss` reads those three switches — the app and the script
+  are one contract, and the update path only works from a release whose installer
+  knows them. `MM_COMPANION_UPDATE_FEED` points the check at another "latest
+  release" JSON, which is how the whole path is tried without publishing (see
+  `docs/packaging.md`).
 - Persistence lives in `core.library` (pure Python, no Qt): `save_character`
   writes a `Character.to_dict()` as JSON into the workspace `characters/` dir —
   overwriting an explicit `path` for a plain "Save", or deriving a non-colliding

@@ -4,6 +4,9 @@ Shows the running version in small muted print. :meth:`VersionBadge.check_for_up
 asks :mod:`mm_companion.core.updates` on a worker thread — the request can take
 seconds on a bad connection and the launcher must not freeze for it — and when a
 newer release exists the line says so and an Update button appears beside it.
+On an installed build that button opens the :class:`~mm_companion.ui.update_dialog.UpdateDialog`,
+which downloads the installer and runs it; anywhere else (a checkout run from
+source, a portable exe carried off somewhere) it opens the release page.
 
 The check is started by whoever shows the launcher (``__main__``), never by the
 constructor, so a test that builds a ``StartWindow`` never touches the network.
@@ -13,7 +16,7 @@ from __future__ import annotations
 
 import threading
 
-from PySide6.QtCore import QUrl, Signal
+from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
@@ -34,6 +37,8 @@ class VersionBadge(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._release: ReleaseInfo | None = None
+        # The open update dialog, kept referenced while it works.
+        self._dialog: QWidget | None = None
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -46,7 +51,7 @@ class VersionBadge(QWidget):
         layout.addWidget(self._label)
 
         self._update_button = QPushButton("Update")
-        self._update_button.setToolTip("Open the download page for the new version")
+        self._update_button.setToolTip("Download and install the new version")
         self._update_button.clicked.connect(self._open_update)
         layout.addWidget(self._update_button)
         # Parented by the layout above before it is hidden, so it never flashes.
@@ -84,5 +89,16 @@ class VersionBadge(QWidget):
         self._update_button.show()
 
     def _open_update(self) -> None:
-        if self._release is not None:
-            QDesktopServices.openUrl(QUrl(self._release.page_url))
+        release = self._release
+        if release is None:
+            return
+        if not updates.can_self_update() or release.installer is None:
+            QDesktopServices.openUrl(QUrl(release.page_url))
+            return
+        from mm_companion.ui.update_dialog import UpdateDialog
+
+        dialog = UpdateDialog(release, self.window())
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self._dialog = dialog
+        dialog.open()
+        dialog.start()

@@ -36,6 +36,9 @@ MOD_STATE_DIRNAME = "mod_state"
 NOTES_DIRNAME = "notes"
 SESSIONS_DIRNAME = "sessions"
 THEMES_DIRNAME = "themes"
+# Written by the in-app update: the installer's log per attempt, and the note that
+# lets the next launch say whether it worked. Created on first use.
+LOGS_DIRNAME = "logs"
 
 # How the builder reacts to a power that breaks a Power Level cap. ``warn`` flags
 # it but still lets it through; ``block`` refuses the save. There is no settings UI
@@ -228,6 +231,9 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # only a way to fit a mini window, the second only what GM Mode happened to be
     # built as.
     "dice_layout": DICE_LAYOUT_AUTO,
+    # Whether the launcher asks GitHub for a newer release when the app starts. See
+    # :mod:`mm_companion.core.updates`.
+    "check_for_updates": True,
 }
 
 
@@ -272,6 +278,10 @@ class Workspace:
     @property
     def themes_dir(self) -> Path:
         return self.root / THEMES_DIRNAME
+
+    @property
+    def logs_dir(self) -> Path:
+        return self.root / LOGS_DIRNAME
 
 
 def _platform_data_root() -> Path:
@@ -474,6 +484,24 @@ def clear_gm_card_pins() -> None:
     GM asks for it outright, from the GM Mode settings page.
     """
     update_settings(gm_pins={})
+
+
+def check_for_updates() -> bool:
+    """Whether to look for a newer release at startup; on unless turned off.
+
+    Through an accessor for the usual reason: a workspace older than this key reads
+    ``None`` off the file, which is falsy and would switch the check off for every
+    existing user.
+    """
+    stored = load_settings().get("check_for_updates")
+    if stored is None:
+        return bool(DEFAULT_SETTINGS["check_for_updates"])
+    return bool(stored)
+
+
+def set_check_for_updates(enabled: bool) -> None:
+    """Record whether to look for a newer release at startup."""
+    update_settings(check_for_updates=bool(enabled))
 
 
 def dice_layout() -> str:

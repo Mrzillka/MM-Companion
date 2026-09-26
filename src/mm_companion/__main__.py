@@ -9,7 +9,7 @@ import os
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import QApplication, QSplashScreen
 
@@ -75,7 +75,9 @@ def main() -> int:
     window = StartWindow()
     window.show()
     splash.finish(window)
-    window.check_for_update()
+    # Once the event loop runs, so a report of a failed update opens over a
+    # launcher that has already painted.
+    QTimer.singleShot(0, window.run_startup_checks)
     return app.exec()
 
 

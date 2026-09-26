@@ -187,12 +187,23 @@ class StartWindow(QMainWindow):
         column.addWidget(self._version_badge)
         return column
 
-    def check_for_update(self) -> None:
-        """Look for a newer release in the background; the badge shows what it finds.
+    def run_startup_checks(self) -> None:
+        """Say how a just-finished update went, then look for a newer release.
 
         Called by ``__main__`` once the launcher is up, not from the constructor,
-        so building a launcher (as every test does) never reaches the network.
+        so building a launcher (as every test does) neither reads the update note
+        nor reaches the network.
         """
+        from mm_companion.ui.update_dialog import report_update_result
+
+        result = report_update_result(self)
+        if result is not None and result.succeeded:
+            self._version_badge.show_updated(result.from_version)
+        if storage.check_for_updates():
+            self.check_for_update()
+
+    def check_for_update(self) -> None:
+        """Look for a newer release in the background; the badge shows what it finds."""
         self._version_badge.check_for_update()
 
     def _build_library(self) -> QScrollArea:

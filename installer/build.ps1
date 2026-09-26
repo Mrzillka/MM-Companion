@@ -11,7 +11,7 @@
 
     Run from the repo root inside the project's virtualenv:
         pwsh installer\build.ps1
-    Requires: pip install pyinstaller ; and Inno Setup 6 (ISCC.exe) installed.
+    Requires: pip install "pyinstaller>=6,<7" ; and Inno Setup 6 (ISCC.exe) installed.
 #>
 [CmdletBinding()]
 param(

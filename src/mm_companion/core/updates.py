@@ -12,11 +12,26 @@ the Inno Setup installer ``MM-Companion-Setup-<version>.exe``. So:
   someone opening the app, and neither is worth an error dialog.
 - **Updating** downloads that installer (checked against the size and SHA-256
   GitHub publishes for it) and runs it silently over the install this app was
-  started from. The installer is told three things on its command line, all read by
-  ``installer/mm_companion.iss``: ``/READYFILE`` — a file to create once Windows
-  has let it elevate, which is the app's cue to quit; ``/WAITPID`` — the processes
-  to wait out before it touches a file, since the running app holds its own exe
-  open; and ``/RELAUNCH=1`` — start the app again when it is done.
+  started from. The installer and ``installer/mm_companion.iss`` share a small
+  handshake on its command line:
+
+  ``/READYFILE``
+      created once Windows has let the installer elevate — the app's cue to quit;
+  ``/CANCELFILE``
+      created by the app if the user gives up while Windows is still asking; an
+      installer that finds it on starting leaves without touching anything;
+  ``/WAITPID``
+      the processes to wait out before a file is replaced, since the running app
+      holds its own exe open;
+  ``/RELAUNCH=1``
+      start the app again when done — *whether or not the install worked*, so a
+      failure is reported by the app rather than by the app silently vanishing.
+
+- **Reporting**: before quitting, the app leaves a note in the workspace
+  ``logs/`` folder naming the version it expects to come back as and the
+  installer's log. The next launch reads it (:func:`take_update_result`): the
+  running version says whether the install worked, and a failure points at the
+  log.
 
 Pure Python and stdlib only, like the rest of ``core``: the launcher runs these on
 worker threads and renders the answers.
@@ -25,6 +40,7 @@ worker threads and renders the answers.
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -32,17 +48,23 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from mm_companion import __version__
+from mm_companion.core import storage
 
 #: The repository whose releases are this app's releases.
 REPOSITORY = "Mrzillka/MM-Companion"
 LATEST_RELEASE_URL = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
 RELEASES_PAGE_URL = f"https://github.com/{REPOSITORY}/releases/latest"
+
+#: The installer's fixed Inno Setup ``AppId`` (``installer/mm_companion.iss``) —
+#: the registry key under which it records where it installed the app.
+INSTALLER_APP_ID = "{4E9C2EF5-C7BD-400C-82E3-72F36FF6DF14}"
 
 #: Points the check at another "latest release" document — a local server serving a
 #: hand-made one is how the whole update path is tried out without publishing.
@@ -54,6 +76,18 @@ DEFAULT_TIMEOUT = 5.0
 #: Per read while downloading: a stalled transfer fails rather than hanging.
 DOWNLOAD_TIMEOUT = 30.0
 _CHUNK = 64 * 1024
+
+#: After asking the installer to stand down, how long to give one that had already
+#: got past that check to say so (it writes its ready file in the same breath).
+WITHDRAW_GRACE = 1.0
+
+#: How many installer logs to keep in the workspace; older ones are pruned.
+KEPT_LOGS = 10
+PENDING_FILENAME = "pending-update.json"
+
+#: A failed request: ``OSError`` covers URLError/HTTPError, resets and timeouts;
+#: ``HTTPException`` a server that broke off mid-reply; ``ValueError`` bad JSON.
+_NETWORK_ERRORS = (OSError, http.client.HTTPException, ValueError)
 
 _VERSION_RE = re.compile(r"^v?(\d+(?:\.\d+)*)")
 
@@ -89,7 +123,12 @@ class ReleaseInfo:
     @property
     def installer(self) -> ReleaseAsset | None:
         """The Windows installer, if this release has one."""
-        return self.assets.get(f"MM-Companion-Setup-{self.version}.exe")
+        return self.assets.get(installer_name(self.version))
+
+
+def installer_name(version: str) -> str:
+    """The file name the release workflow gives the installer for *version*."""
+    return f"MM-Companion-Setup-{version}.exe"
 
 
 def parse_version(text: str) -> tuple[int, ...] | None:
@@ -168,8 +207,7 @@ def fetch_latest_release(timeout: float = DEFAULT_TIMEOUT) -> ReleaseInfo | None
             _request(url, "application/vnd.github+json"), timeout=timeout
         ) as response:
             payload = json.loads(response.read().decode("utf-8"))
-    except (OSError, ValueError):
-        # OSError covers URLError/HTTPError and timeouts; ValueError bad JSON.
+    except _NETWORK_ERRORS:
         return None
     if not isinstance(payload, dict):
         return None
@@ -186,22 +224,56 @@ def check_for_update(
     return release
 
 
-# -- installing ----------------------------------------------------------------
+# -- where the app is installed ---------------------------------------------------
+
+
+def _same_folder(a: Path, b: Path) -> bool:
+    return os.path.normcase(str(a.resolve())) == os.path.normcase(str(b.resolve()))
+
+
+def registered_install_dir() -> Path | None:
+    """Where the installer recorded it put the app, per the registry; else ``None``.
+
+    Machine-wide installs record under HKLM's 64-bit view, and an older per-user
+    one under HKCU — the same two places, in the same order, the installer's own
+    upgrade detection reads.
+    """
+    if sys.platform != "win32":
+        return None
+    import winreg
+
+    key_path = rf"Software\Microsoft\Windows\CurrentVersion\Uninstall\{INSTALLER_APP_ID}_is1"
+    for hive, view in (
+        (winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_64KEY),
+        (winreg.HKEY_CURRENT_USER, 0),
+    ):
+        try:
+            with winreg.OpenKey(hive, key_path, 0, winreg.KEY_READ | view) as key:
+                location, _ = winreg.QueryValueEx(key, "InstallLocation")
+        except OSError:
+            continue
+        if isinstance(location, str) and location.strip():
+            return Path(location.strip())
+    return None
 
 
 def install_dir() -> Path | None:
-    """The folder the installer put this app in, or ``None`` if it did not.
+    """The folder of this app if an in-place update would update *it*, else ``None``.
 
-    Only a frozen Windows build can be updated in place, and only one Inno Setup
-    installed: its uninstaller (``unins000.exe``) sits beside the exe. A copy run
-    from anywhere else — a portable exe carried off on a stick, or a checkout run
-    from source — would have the installer upgrade the *registered* install rather
-    than the one running, so it is sent to the release page instead.
+    Only a frozen Windows build can be updated in place, and only one the installer
+    put there: its uninstaller (``unins000.exe``) sits beside the exe, and the
+    registry records this very folder as the install. The installer always upgrades
+    the *registered* folder, so a copy run from anywhere else — a second install, a
+    portable exe carried off on a stick, a checkout run from source — is sent to
+    the release page instead of updating an app it is not.
     """
     if sys.platform != "win32" or not getattr(sys, "frozen", False):
         return None
     folder = Path(sys.executable).resolve().parent
     if not any(folder.glob("unins*.exe")):
+        return None
+    registered = registered_install_dir()
+    if registered is None or not _same_folder(registered, folder):
         return None
     return folder
 
@@ -211,9 +283,94 @@ def can_self_update() -> bool:
     return install_dir() is not None
 
 
+def _processes_to_wait_for() -> list[int]:
+    """This process, and the one-file bootloader above it if there is one.
+
+    A one-file (portable) build runs as two processes: PyInstaller's bootloader,
+    which holds the exe open, unpacks to a temp folder and starts the real app as
+    its child. Its unpacked folder (``sys._MEIPASS``) is outside the exe's own
+    folder, which is how it is told from a one-folder build — where the parent is
+    whatever launched the app, and must not be waited for.
+    """
+    pids = [os.getpid()]
+    bundle = getattr(sys, "_MEIPASS", None)
+    exe_dir = Path(sys.executable).resolve().parent
+    if bundle and not Path(bundle).resolve().is_relative_to(exe_dir):
+        pids.append(os.getppid())
+    return pids
+
+
+def other_instances(exe: Path | None = None) -> list[int]:
+    """Process ids running *exe* (default: this app's own), other than this one.
+
+    A second copy of the app holds the same files open, and the installer only
+    waits for the copy that asked for the update — so it has to be closed first.
+    Windows only (``[]`` elsewhere); stdlib ``ctypes`` over the process list.
+    """
+    if sys.platform != "win32":
+        return []
+    import ctypes
+    from ctypes import wintypes
+
+    target = os.path.normcase(str((exe or Path(sys.executable)).resolve()))
+    own = set(_processes_to_wait_for())
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.QueryFullProcessImageNameW.argtypes = (
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.LPWSTR,
+        ctypes.POINTER(wintypes.DWORD),
+    )
+    process_query_limited_information = 0x1000
+
+    pids = (wintypes.DWORD * 8192)()
+    needed = wintypes.DWORD()
+    if not kernel32.K32EnumProcesses(pids, ctypes.sizeof(pids), ctypes.byref(needed)):
+        return []
+    found: list[int] = []
+    for pid in pids[: needed.value // ctypes.sizeof(wintypes.DWORD)]:
+        if pid == 0 or pid in own:
+            continue
+        handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+        if not handle:
+            continue
+        try:
+            buffer = ctypes.create_unicode_buffer(32768)
+            size = wintypes.DWORD(len(buffer))
+            if kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+                if os.path.normcase(buffer.value) == target:
+                    found.append(int(pid))
+        finally:
+            kernel32.CloseHandle(handle)
+    return found
+
+
+# -- downloading ---------------------------------------------------------------------
+
+
 def download_dir() -> Path:
     """Where installers are downloaded to; kept, so a retry need not fetch again."""
     return Path(tempfile.gettempdir()) / "MM-Companion-update"
+
+
+def clear_downloads(keep: str = "", folder: Path | None = None) -> None:
+    """Delete downloaded installers (and half-downloads) except the one named *keep*.
+
+    Each is ~90 MB, so one is kept at most: the one about to be run, or — once an
+    update is known to have worked — none.
+    """
+    folder = folder or download_dir()
+    if not folder.is_dir():
+        return
+    for path in folder.glob("MM-Companion-Setup-*"):
+        if path.name != keep:
+            try:
+                path.unlink()
+            except OSError:
+                pass  # still open (a download in flight, an installer running)
 
 
 def _sha256(path: Path) -> str:
@@ -231,6 +388,13 @@ def _is_intact(path: Path, asset: ReleaseAsset) -> bool:
     return not asset.sha256 or _sha256(path) == asset.sha256
 
 
+def _discard(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass  # held open by an overlapping attempt; the next one overwrites it
+
+
 def download_asset(
     asset: ReleaseAsset,
     dest_dir: Path | None = None,
@@ -244,10 +408,12 @@ def download_asset(
     is unknown). Setting *cancel* stops the transfer with :class:`UpdateCancelled`.
     The file is written under a ``.part`` name and only renamed once its size and
     SHA-256 match what GitHub published, so a half-finished or tampered download is
-    never the one that gets run. An intact copy already on disk is reused.
+    never the one that gets run. An intact copy already on disk is reused; any other
+    installer lying about from an earlier version is deleted.
     """
     folder = dest_dir or download_dir()
     target = folder / asset.name
+    clear_downloads(keep=asset.name, folder=folder)
     if target.is_file() and _is_intact(target, asset):
         if progress is not None:
             size = target.stat().st_size
@@ -273,34 +439,20 @@ def download_asset(
                 if progress is not None:
                     progress(done, total)
     except UpdateCancelled:
-        partial.unlink(missing_ok=True)
+        _discard(partial)
         raise
-    except OSError as exc:
-        partial.unlink(missing_ok=True)
+    except _NETWORK_ERRORS as exc:
+        _discard(partial)
         raise UpdateError(f"The download failed: {exc}") from exc
 
     if not _is_intact(partial, asset):
-        partial.unlink(missing_ok=True)
+        _discard(partial)
         raise UpdateError("The downloaded installer did not match the published one.")
     os.replace(partial, target)
     return target
 
 
-def _processes_to_wait_for() -> list[int]:
-    """This process, and the one-file bootloader above it if there is one.
-
-    A one-file (portable) build runs as two processes: PyInstaller's bootloader,
-    which holds the exe open, unpacks to a temp folder and starts the real app as
-    its child. Its unpacked folder (``sys._MEIPASS``) is outside the exe's own
-    folder, which is how it is told from a one-folder build — where the parent is
-    whatever launched the app, and must not be waited for.
-    """
-    pids = [os.getpid()]
-    bundle = getattr(sys, "_MEIPASS", None)
-    exe_dir = Path(sys.executable).resolve().parent
-    if bundle and not Path(bundle).resolve().is_relative_to(exe_dir):
-        pids.append(os.getppid())
-    return pids
+# -- running the installer -------------------------------------------------------------
 
 
 @dataclass
@@ -309,6 +461,7 @@ class InstallerLaunch:
 
     process: subprocess.Popen
     ready_file: Path
+    cancel_file: Path
 
     def is_ready(self) -> bool:
         """Windows let the installer elevate: the app should get out of its way."""
@@ -318,25 +471,51 @@ class InstallerLaunch:
         """The installer ended before it was ready — the permission prompt was declined."""
         return self.process.poll() is not None and not self.is_ready()
 
+    def withdraw(self, grace: float = WITHDRAW_GRACE) -> bool:
+        """Ask the installer to stand down; ``False`` if it is already past asking.
 
-def launch_installer(installer: Path, *, relaunch: bool = True) -> InstallerLaunch:
+        The installer checks for the cancel file and only then writes its ready
+        file, so once the cancel file exists, a ready file appearing within *grace*
+        means it had already checked and is going ahead — the app must then quit
+        after all — and none appearing means it will find the cancel file and leave.
+        """
+        if self.is_ready():
+            return False
+        self.cancel_file.write_text("cancel", encoding="utf-8")
+        deadline = time.monotonic() + grace
+        while time.monotonic() < deadline:
+            if self.is_ready():
+                return False
+            time.sleep(0.05)
+        return not self.is_ready()
+
+
+def launch_installer(
+    installer: Path, *, log_file: Path | None = None, relaunch: bool = True
+) -> InstallerLaunch:
     """Start *installer* silently over this install, and return it to watch.
 
-    ``/SILENT`` shows only Inno Setup's own progress window — nothing to answer —
-    and the upgrade path in the script picks the existing install folder and
-    tasks. The installer asks for elevation itself (its manifest is
-    ``asInvoker``), so the process started here is the unelevated one that stays
-    alive for the whole install, and it exits early if the prompt is declined.
+    ``/SILENT`` shows only Inno Setup's own progress window, and ``/NOCANCEL`` takes
+    its Cancel button away: by the time it shows, the app has quit, and a cancelled
+    install is a half-replaced one. The upgrade path in the script keeps the
+    existing install folder and tasks. The installer asks for elevation itself (its
+    manifest is ``asInvoker``), so the process started here is the unelevated one
+    that stays alive for the whole install, and it exits early if the prompt is
+    declined.
     """
     ready_file = installer.with_name("installer.ready")
-    ready_file.unlink(missing_ok=True)
+    cancel_file = installer.with_name("installer.cancel")
+    for stale in (ready_file, cancel_file):
+        stale.unlink(missing_ok=True)
     args = [
         str(installer),
         "/SILENT",
+        "/NOCANCEL",
         "/SUPPRESSMSGBOXES",
         "/NORESTART",
-        f"/LOG={installer.with_name('install.log')}",
+        f"/LOG={log_file or installer.with_name('install.log')}",
         f"/READYFILE={ready_file}",
+        f"/CANCELFILE={cancel_file}",
         "/WAITPID=" + ",".join(str(pid) for pid in _processes_to_wait_for()),
     ]
     if relaunch:
@@ -346,4 +525,84 @@ def launch_installer(installer: Path, *, relaunch: bool = True) -> InstallerLaun
         process = subprocess.Popen(args, cwd=installer.parent, close_fds=True)
     except OSError as exc:
         raise UpdateError(f"The installer could not be started: {exc}") from exc
-    return InstallerLaunch(process=process, ready_file=ready_file)
+    return InstallerLaunch(process=process, ready_file=ready_file, cancel_file=cancel_file)
+
+
+# -- reporting back ------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class UpdateResult:
+    """How the last in-app update went, as seen by the app it relaunched."""
+
+    succeeded: bool
+    from_version: str
+    to_version: str
+    log_file: Path | None
+
+
+def update_log_file(to_version: str, from_version: str = __version__) -> Path:
+    """Where the installer should log the update from *from_version* to *to_version*."""
+    return storage.get_workspace().logs_dir / f"update-{from_version}-to-{to_version}.log"
+
+
+def _pending_file() -> Path:
+    return storage.get_workspace().logs_dir / PENDING_FILENAME
+
+
+def record_pending_update(to_version: str, log_file: Path) -> None:
+    """Note, just before quitting, what the next launch should find itself to be."""
+    path = _pending_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    note = {"from": __version__, "to": to_version, "log": str(log_file)}
+    path.write_text(json.dumps(note, indent=2) + "\n", encoding="utf-8")
+
+
+def discard_pending_update() -> None:
+    """Forget a noted update that did not, after all, hand over."""
+    _pending_file().unlink(missing_ok=True)
+
+
+def take_update_result(current: str = __version__) -> UpdateResult | None:
+    """How the noted update went, and forget it; ``None`` if there was none.
+
+    The running version is the verdict: an installer that finished relaunches the
+    new app, and one that failed relaunches whatever is still there. After a
+    success the downloaded installer is no longer needed and is deleted; old logs
+    beyond :data:`KEPT_LOGS` are pruned either way.
+    """
+    path = _pending_file()
+    try:
+        note = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    finally:
+        path.unlink(missing_ok=True)
+    if not isinstance(note, dict):
+        return None
+    to_version = str(note.get("to", ""))
+    log = note.get("log")
+    new, now = parse_version(to_version), parse_version(current)
+    result = UpdateResult(
+        succeeded=new is not None and new == now,
+        from_version=str(note.get("from", "")),
+        to_version=to_version,
+        log_file=Path(log) if isinstance(log, str) and log else None,
+    )
+    if result.succeeded:
+        clear_downloads()
+    _prune_logs()
+    return result
+
+
+def _prune_logs() -> None:
+    logs = sorted(
+        storage.get_workspace().logs_dir.glob("update-*.log"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for old in logs[KEPT_LOGS:]:
+        try:
+            old.unlink()
+        except OSError:
+            pass

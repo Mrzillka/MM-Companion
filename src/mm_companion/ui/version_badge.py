@@ -8,8 +8,9 @@ On an installed build that button opens the :class:`~mm_companion.ui.update_dial
 which downloads the installer and runs it; anywhere else (a checkout run from
 source, a portable exe carried off somewhere) it opens the release page.
 
-The check is started by whoever shows the launcher (``__main__``), never by the
-constructor, so a test that builds a ``StartWindow`` never touches the network.
+The check is started by whoever shows the launcher (``__main__``, through
+``StartWindow.run_startup_checks``), never by the constructor, so a test that builds
+a ``StartWindow`` never touches the network.
 """
 
 from __future__ import annotations
@@ -87,6 +88,11 @@ class VersionBadge(QWidget):
         self._label.setStyleSheet(tinted_style("tint.better", bold=False))
         self._label.setToolTip(f"You are running v{__version__}")
         self._update_button.show()
+
+    def show_updated(self, from_version: str) -> None:
+        """Say this launch is the one an in-app update just installed."""
+        self._label.setText(f"v{__version__} · updated from v{from_version}")
+        self._label.setToolTip("The update installed successfully")
 
     def _open_update(self) -> None:
         release = self._release

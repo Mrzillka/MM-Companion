@@ -11,12 +11,18 @@
 ;                       appears when the installed version is older than this one.
 ;   * Remove         -> runs the app's uninstaller; a checkbox additionally wipes
 ;                       the user workspace at %APPDATA%\MM-Companion.
-;   * In-app update  -> the app runs this silently (core/updates.py) with three
-;                       extra switches: /READYFILE=<path> is created once Setup
-;                       is running elevated, which is the app's cue to quit;
-;                       /WAITPID=<pid>[,<pid>] are waited out before any file is
-;                       touched, since the running app holds its exe open; and
-;                       /RELAUNCH=1 starts the app again when Setup is done.
+;   * In-app update  -> the app runs this silently (core/updates.py) with its
+;                       own switches:
+;                       /CANCELFILE=<path>  if it exists when Setup starts, the
+;                           app gave up waiting for the permission prompt: leave.
+;                       /READYFILE=<path>   created once Setup is running (and so
+;                           elevated) - the app's cue to quit.
+;                       /WAITPID=<pid>[,<pid>]  waited out before anything is
+;                           touched, since the running app holds its exe open.
+;                       /RELAUNCH=1  start the app again at the end, whether or
+;                           not the install worked, so a failure is reported by
+;                           the app rather than by it vanishing. The /LOG it passes
+;                           records why.
 ;
 ; The version is supplied by the build script:  ISCC /DAppVersion=0.1.0 ...
 
@@ -68,13 +74,11 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: deskto
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
-; The in-app update's restart. As the user who started Setup, not the elevated
-; account - that may be a different user, with a different workspace.
-Filename: "{app}\{#AppExeName}"; Flags: nowait runasoriginaluser; Check: ShouldRelaunch
 
 [Code]
 const
   SYNCHRONIZE      = $00100000;
+  WAIT_OBJECT_0    = 0;
   WAIT_PID_TIMEOUT = 30000;  { ms per process; the app quits in well under that }
 
   ACTION_INSTALL   = 0;  { no prior install }
@@ -91,6 +95,11 @@ var
   ActionPage: TInputOptionWizardPage;
   DelDataCheck: TNewCheckBox;
   AllowSilentCancel: Boolean;
+  { In-app update: past the cancel check (the app is quitting for us), whether the
+    install ran to the end, and whether the app is still running regardless. }
+  Handshaken: Boolean;
+  InstallFinished: Boolean;
+  AppStillRunning: Boolean;
 
 function OpenProcess(dwDesiredAccess: DWORD; bInheritHandle: BOOL; dwProcessId: DWORD): THandle;
   external 'OpenProcess@kernel32.dll stdcall';
@@ -105,25 +114,64 @@ begin
 end;
 
 { Wait for each process in the comma-separated /WAITPID list to exit. One that
-  has already gone (or never existed) opens as 0 and is skipped. }
-procedure WaitForProcesses(pids: String);
+  has already gone (or never existed) opens as 0 and is skipped. False if one
+  was still running when its time ran out. }
+function WaitForProcesses(pids: String): Boolean;
 var
   p: Integer;
   pid: String;
   handle: THandle;
 begin
+  Result := True;
   while pids <> '' do
   begin
     p := Pos(',', pids);
     if p > 0 then begin pid := Copy(pids, 1, p - 1); Delete(pids, 1, p); end
     else begin pid := pids; pids := ''; end;
     handle := OpenProcess(SYNCHRONIZE, False, StrToIntDef(Trim(pid), 0));
-    if handle <> 0 then
+    if handle = 0 then
+      Log('In-app update: process ' + pid + ' has already exited.')
+    else
     begin
-      WaitForSingleObject(handle, WAIT_PID_TIMEOUT);
+      if WaitForSingleObject(handle, WAIT_PID_TIMEOUT) = WAIT_OBJECT_0 then
+        Log('In-app update: process ' + pid + ' exited.')
+      else
+      begin
+        Log('In-app update: process ' + pid + ' was still running after ' +
+            IntToStr(WAIT_PID_TIMEOUT div 1000) + ' seconds.');
+        Result := False;
+      end;
       CloseHandle(handle);
     end;
   end;
+end;
+
+{ Start the app again as the user who started Setup - not the elevated account,
+  which may be a different user with a different workspace. Whatever is in the
+  install folder: the new version if the install finished, the old (or what is
+  left of it) if not. }
+procedure RelaunchApp();
+var
+  exe: String;
+  rc: Integer;
+begin
+  exe := '';
+  try
+    exe := ExpandConstant('{app}\{#AppExeName}');
+  except
+    exe := '';
+  end;
+  if ((exe = '') or not FileExists(exe)) and (PrevLocation <> '') then
+    exe := AddBackslash(RemoveQuotes(PrevLocation)) + '{#AppExeName}';
+  if (exe = '') or not FileExists(exe) then
+  begin
+    Log('In-app update: no app to relaunch.');
+    Exit;
+  end;
+  if ExecAsOriginalUser(exe, '', '', SW_SHOWNORMAL, ewNoWait, rc) then
+    Log('In-app update: relaunched ' + exe)
+  else
+    Log('In-app update: could not relaunch ' + exe + ': ' + SysErrorMessage(rc));
 end;
 
 function UninstallKey(): String;
@@ -158,17 +206,36 @@ end;
 
 function InitializeSetup(): Boolean;
 var
-  readyFile: String;
+  readyFile, cancelFile: String;
 begin
   Result := True;
   PrevInstalled := False;
 
-  { An in-app update: say we are running (and so elevated), then let the app
-    finish quitting before anything tries to replace its files. }
+  { An in-app update. The cancel check comes strictly before the ready file: the
+    app relies on that order to tell "withdrawn in time" from "too late". }
+  cancelFile := ExpandConstant('{param:CANCELFILE|}');
+  if (cancelFile <> '') and FileExists(cancelFile) then
+  begin
+    Log('In-app update: the app withdrew before Setup started; nothing done.');
+    Result := False;
+    Exit;
+  end;
   readyFile := ExpandConstant('{param:READYFILE|}');
   if readyFile <> '' then
+  begin
     SaveStringToFile(readyFile, 'ready', False);
-  WaitForProcesses(ExpandConstant('{param:WAITPID|}'));
+    Handshaken := True;
+    Log('In-app update from the app: waiting for it to close.');
+  end;
+  { Let the app finish quitting before anything tries to replace its files - and
+    if it will not, replace nothing: a half-replaced install is worse than none. }
+  if not WaitForProcesses(ExpandConstant('{param:WAITPID|}')) then
+  begin
+    Log('In-app update: MM-Companion did not close, so nothing was installed.');
+    AppStillRunning := True;
+    Result := False;
+    Exit;
+  end;
 
   { Admin install records the uninstall key under HKLM (64-bit view in 64-bit
     install mode); fall back to HKCU so an older per-user install is still
@@ -307,10 +374,24 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
+  if CurStep = ssDone then
+    InstallFinished := True;
   { A portable install drops a marker beside the exe; the app then keeps its
     workspace in a local "data" folder instead of %APPDATA%. }
   if (CurStep = ssPostInstall) and IsPortable() then
     SaveStringToFile(ExpandConstant('{app}\portable.flag'), '', False);
+end;
+
+procedure DeinitializeSetup();
+begin
+  if not Handshaken then
+    Exit;
+  if InstallFinished then
+    Log('In-app update: installed version {#AppVersion}.')
+  else
+    Log('In-app update: Setup ended before the install finished - see above for why.');
+  if ShouldRelaunch() and not AppStillRunning then
+    RelaunchApp();
 end;
 
 { ------------------------- Uninstaller ------------------------- }

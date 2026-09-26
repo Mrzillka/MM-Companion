@@ -1,8 +1,11 @@
 """The General settings page: preferences that are not about the look or the GM.
 
-One setting so far — how the dice roller arranges itself, as a sheet block and as
-the GM window's Rolls block alike. Normally it reflows to whatever room it is
-given, but two of the shapes it can be in turned out to be worth choosing outright:
+Two settings. Whether the launcher looks for a newer release when the app starts
+(see :mod:`mm_companion.core.updates`) — on by default, and here for whoever would
+rather the app made no request of its own. And how the dice roller arranges
+itself, as a sheet block and as the GM window's Rolls block alike. Normally it
+reflows to whatever room it is given, but two of the shapes it can be in turned
+out to be worth choosing outright:
 the compact one, which was only ever a way to fit the mini window, and the extended
 one, which was only ever what GM Mode happened to be built as. So both are offered
 everywhere rather than each staying where it came from.
@@ -19,6 +22,7 @@ from __future__ import annotations
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
+    QCheckBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -30,6 +34,11 @@ from PySide6.QtWidgets import (
 from mm_companion.core import storage
 from mm_companion.ui.settings.page import SettingsPage
 from mm_companion.ui.widgets import BOLD_STYLE, muted_style
+
+UPDATES_NOTE = (
+    "Ask GitHub, once each time MM-Companion starts, whether a newer version is out. "
+    "Nothing is downloaded until you click Update."
+)
 
 NOTE_TEXT = (
     "How the roll controls, the die and the history share the space the roller is "
@@ -71,6 +80,7 @@ class GeneralPage(SettingsPage):
         super().__init__(parent)
 
         column = QVBoxLayout(self)
+        column.addWidget(self._build_updates())
         column.addWidget(self._build_heading())
         column.addWidget(self._build_dice_layout())
         column.addStretch()
@@ -80,6 +90,25 @@ class GeneralPage(SettingsPage):
         self._load()
 
     # -- construction ------------------------------------------------------------
+
+    def _build_updates(self) -> QWidget:
+        panel = QWidget()
+        stack = QVBoxLayout(panel)
+        stack.setContentsMargins(0, 0, 0, 0)
+
+        title = QLabel("Updates")
+        title.setStyleSheet(BOLD_STYLE)
+        stack.addWidget(title)
+
+        self._check_updates = QCheckBox("Check for updates when MM-Companion starts")
+        self._check_updates.toggled.connect(lambda *_: self._set_status(""))
+        stack.addWidget(self._check_updates)
+
+        note = QLabel(UPDATES_NOTE)
+        note.setWordWrap(True)
+        note.setStyleSheet(muted_style(italic=True))
+        stack.addWidget(note)
+        return panel
 
     def _build_heading(self) -> QWidget:
         panel = QWidget()
@@ -149,10 +178,15 @@ class GeneralPage(SettingsPage):
     # -- the SettingsPage contract -----------------------------------------------
 
     def is_dirty(self) -> bool:
-        return self._chosen() != self._saved
+        return (
+            self._chosen() != self._saved
+            or self._check_updates.isChecked() != self._saved_check_updates
+        )
 
     def save(self) -> None:
         """Write the preference, and reshape every roller already on screen."""
+        storage.set_check_for_updates(self._check_updates.isChecked())
+        self._saved_check_updates = self._check_updates.isChecked()
         storage.set_dice_layout(self._chosen())
         self._saved = self._chosen()
         for window in _open_windows():
@@ -171,6 +205,8 @@ class GeneralPage(SettingsPage):
         return storage.DICE_LAYOUT_AUTO
 
     def _load(self) -> None:
+        self._saved_check_updates = storage.check_for_updates()
+        self._check_updates.setChecked(self._saved_check_updates)
         self._saved = storage.dice_layout()
         self._choices[self._saved].setChecked(True)
         self._set_status("")

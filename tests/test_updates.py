@@ -12,7 +12,8 @@ import urllib.error
 from pathlib import Path
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QWidget
 
 from mm_companion import __version__
 from mm_companion.core import storage, updates
@@ -328,8 +329,59 @@ def test_a_source_checkout_cannot_update_itself() -> None:
     assert updates.can_self_update() is False
 
 
+def _frozen_at(monkeypatch: pytest.MonkeyPatch, folder: Path, registered: Path | None) -> None:
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "MM-Companion.exe").write_bytes(b"")
+    monkeypatch.setattr(updates.sys, "platform", "win32")
+    monkeypatch.setattr(updates.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(updates.sys, "executable", str(folder / "MM-Companion.exe"))
+    monkeypatch.setattr(updates, "registered_install_dir", lambda: registered)
+
+
+def test_the_registered_install_can_update_itself(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    folder = tmp_path / "Program Files" / "MM-Companion"
+    _frozen_at(monkeypatch, folder, registered=folder)
+    (folder / "unins000.exe").write_bytes(b"")
+    assert updates.install_dir() == folder.resolve()
+
+
+def test_a_copy_without_an_uninstaller_cannot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    folder = tmp_path / "stick"
+    _frozen_at(monkeypatch, folder, registered=folder)
+    assert updates.install_dir() is None
+
+
+def test_a_second_install_the_registry_does_not_know_cannot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The installer would upgrade the registered folder, not this one.
+    folder = tmp_path / "second"
+    _frozen_at(monkeypatch, folder, registered=tmp_path / "Program Files" / "MM-Companion")
+    (folder / "unins000.exe").write_bytes(b"")
+    assert updates.install_dir() is None
+
+
 def test_a_one_folder_build_waits_only_for_itself() -> None:
     assert updates._processes_to_wait_for() == [os.getpid()]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="the process list is read through Win32")
+def test_other_instances_finds_another_process_running_the_same_exe() -> None:
+    import subprocess
+    import sys
+
+    other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        found = updates.other_instances(Path(sys.executable))
+        assert other.pid in found
+        assert os.getpid() not in found
+    finally:
+        other.kill()
+        other.wait()
 
 
 class _FakeProcess:
@@ -338,6 +390,14 @@ class _FakeProcess:
 
     def poll(self) -> int | None:
         return self.returncode
+
+
+def _launch(tmp_path: Path, process: _FakeProcess | None = None) -> updates.InstallerLaunch:
+    return updates.InstallerLaunch(
+        process=process or _FakeProcess(),
+        ready_file=tmp_path / "installer.ready",
+        cancel_file=tmp_path / "installer.cancel",
+    )
 
 
 def test_launch_installer_runs_it_silently_and_asks_for_a_restart(
@@ -352,16 +412,21 @@ def test_launch_installer_runs_it_silently_and_asks_for_a_restart(
     monkeypatch.setattr(updates.subprocess, "Popen", popen)
     installer = tmp_path / "MM-Companion-Setup-9.0.0.exe"
     (tmp_path / "installer.ready").write_text("stale")
+    (tmp_path / "installer.cancel").write_text("stale")
+    log = tmp_path / "logs" / "update.log"
 
-    launch = updates.launch_installer(installer)
+    launch = updates.launch_installer(installer, log_file=log)
 
     args = started[0]
     assert args[0] == str(installer)
-    assert {"/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/RELAUNCH=1"} <= set(args)
+    assert {"/SILENT", "/NOCANCEL", "/SUPPRESSMSGBOXES", "/NORESTART", "/RELAUNCH=1"} <= set(args)
+    assert f"/LOG={log}" in args
     assert f"/READYFILE={tmp_path / 'installer.ready'}" in args
+    assert f"/CANCELFILE={tmp_path / 'installer.cancel'}" in args
     assert f"/WAITPID={os.getpid()}" in args
-    # A ready file left by an earlier attempt must not count for this one.
+    # Files left by an earlier attempt must not count for this one.
     assert not launch.is_ready()
+    assert not launch.cancel_file.exists()
     assert not launch.has_given_up()
 
     launch.ready_file.write_text("ready")
@@ -370,9 +435,21 @@ def test_launch_installer_runs_it_silently_and_asks_for_a_restart(
 
 def test_an_installer_that_ends_unready_has_given_up(tmp_path: Path) -> None:
     process = _FakeProcess()
-    launch = updates.InstallerLaunch(process=process, ready_file=tmp_path / "installer.ready")
+    launch = _launch(tmp_path, process)
     process.returncode = 1
     assert launch.has_given_up()
+
+
+def test_withdrawing_in_time_leaves_the_cancel_file_for_the_installer(tmp_path: Path) -> None:
+    launch = _launch(tmp_path)
+    assert launch.withdraw(grace=0.05) is True
+    assert launch.cancel_file.exists()
+
+
+def test_withdrawing_too_late_says_so(tmp_path: Path) -> None:
+    launch = _launch(tmp_path)
+    launch.ready_file.write_text("ready")
+    assert launch.withdraw(grace=0.05) is False
 
 
 def test_an_installer_that_will_not_start_is_an_update_error(
@@ -384,6 +461,72 @@ def test_an_installer_that_will_not_start_is_an_update_error(
     monkeypatch.setattr(updates.subprocess, "Popen", popen)
     with pytest.raises(UpdateError, match="could not be started"):
         updates.launch_installer(tmp_path / "setup.exe")
+
+
+# -- reporting back ----------------------------------------------------------------
+
+
+def test_downloading_clears_older_installers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    folder = tmp_path / "downloads"
+    folder.mkdir()
+    (folder / "MM-Companion-Setup-8.0.0.exe").write_bytes(b"old")
+    (folder / "MM-Companion-Setup-8.5.0.exe.part").write_bytes(b"half")
+    _serve(monkeypatch)
+    updates.download_asset(_asset(), folder)
+    assert sorted(path.name for path in folder.iterdir()) == ["MM-Companion-Setup-9.0.0.exe"]
+
+
+def test_no_note_means_no_result() -> None:
+    assert updates.take_update_result() is None
+
+
+def test_coming_back_as_the_new_version_is_a_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    downloads = tmp_path / "downloads"
+    downloads.mkdir()
+    (downloads / "MM-Companion-Setup-9.0.0.exe").write_bytes(b"done with")
+    monkeypatch.setattr(updates, "download_dir", lambda: downloads)
+    log = updates.update_log_file("9.0.0")
+    updates.record_pending_update("9.0.0", log)
+
+    result = updates.take_update_result(current="9.0.0")
+
+    assert result == updates.UpdateResult(
+        succeeded=True, from_version=__version__, to_version="9.0.0", log_file=log
+    )
+    assert list(downloads.iterdir()) == []  # the installer is no longer needed
+    assert updates.take_update_result(current="9.0.0") is None  # reported once
+
+
+def test_coming_back_as_the_old_version_is_a_failure() -> None:
+    updates.record_pending_update("9.0.0", updates.update_log_file("9.0.0"))
+    result = updates.take_update_result(current=__version__)
+    assert result is not None
+    assert result.succeeded is False
+    assert result.log_file == updates.update_log_file("9.0.0")
+
+
+def test_a_withdrawn_update_leaves_no_note() -> None:
+    updates.record_pending_update("9.0.0", updates.update_log_file("9.0.0"))
+    updates.discard_pending_update()
+    assert updates.take_update_result() is None
+
+
+def test_only_the_newest_logs_are_kept() -> None:
+    logs = storage.get_workspace().logs_dir
+    logs.mkdir(parents=True)
+    for index in range(updates.KEPT_LOGS + 3):
+        path = logs / f"update-0.0.{index}-to-0.0.{index + 1}.log"
+        path.write_text("log")
+        os.utime(path, (index, index))
+    updates.record_pending_update("9.0.0", logs / "update.log")
+    updates.take_update_result()
+    kept = sorted(path.name for path in logs.glob("update-*.log"))
+    assert len(kept) == updates.KEPT_LOGS
+    assert "update-0.0.0-to-0.0.1.log" not in kept
 
 
 # -- the update dialog ---------------------------------------------------------
@@ -402,6 +545,9 @@ def _wait_for(qapp: QApplication, condition) -> None:
 def quits(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
     calls: list[bool] = []
     monkeypatch.setattr(update_dialog, "_quit_app", lambda: calls.append(True))
+    # Neither a session nor a second copy of the app, unless a test says so.
+    monkeypatch.setattr(update_dialog, "_session_running", lambda: False)
+    monkeypatch.setattr(updates, "other_instances", lambda: [])
     return calls
 
 
@@ -414,33 +560,87 @@ def _fake_download(monkeypatch: pytest.MonkeyPatch, path: Path) -> None:
     monkeypatch.setattr(updates, "download_asset", download)
 
 
+def _dialog() -> UpdateDialog:
+    return UpdateDialog(release_from_json(_release_json("v99.0.0")))
+
+
+def _fake_launch(
+    monkeypatch: pytest.MonkeyPatch, launch: updates.InstallerLaunch
+) -> list[tuple[Path, Path | None]]:
+    launched: list[tuple[Path, Path | None]] = []
+
+    def launch_installer(path, *, log_file=None, relaunch=True):  # noqa: ARG001
+        launched.append((path, log_file))
+        return launch
+
+    monkeypatch.setattr(updates, "launch_installer", launch_installer)
+    return launched
+
+
 def test_dialog_downloads_launches_and_quits_once_the_installer_is_ready(
     qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, quits: list[bool]
 ) -> None:
     installer = tmp_path / "setup.exe"
     _fake_download(monkeypatch, installer)
-    launch = updates.InstallerLaunch(process=_FakeProcess(), ready_file=tmp_path / "ready")
-    launched: list[Path] = []
-    monkeypatch.setattr(updates, "launch_installer", lambda path: launched.append(path) or launch)
+    launch = _launch(tmp_path)
+    launched = _fake_launch(monkeypatch, launch)
     monkeypatch.setattr(UpdateDialog, "_close_other_windows", lambda self: True)
 
-    dialog = UpdateDialog(release_from_json(_release_json("v99.0.0")))
+    dialog = _dialog()
     dialog.start()
     _wait_for(qapp, lambda: launched)
 
-    assert launched == [installer]
+    # The installer logs into the workspace, where the next launch will look.
+    assert launched == [(installer, updates.update_log_file("99.0.0"))]
     assert "permission" in dialog._detail.text()
-    # While Windows is asking, the dialog cannot be dismissed out from under it.
-    dialog.reject()
-    assert quits == []
 
     launch.ready_file.write_text("ready")
     _wait_for(qapp, lambda: quits)
     assert "reopen" in dialog._status.text()
+    # The note for the next launch was left before quitting.
+    assert updates.take_update_result(current="99.0.0").succeeded
     # Handed over: the app's quit may now close it like any other window.
     dialog.show()
     dialog.reject()
     assert dialog.isHidden()
+
+
+def test_cancelling_while_windows_asks_withdraws_the_installer(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, quits: list[bool]
+) -> None:
+    _fake_download(monkeypatch, tmp_path / "setup.exe")
+    launch = _launch(tmp_path)
+    _fake_launch(monkeypatch, launch)
+    monkeypatch.setattr(UpdateDialog, "_close_other_windows", lambda self: True)
+    monkeypatch.setattr(updates, "WITHDRAW_GRACE", 0.05)
+
+    dialog = _dialog()
+    dialog.show()
+    dialog.start()
+    _wait_for(qapp, lambda: dialog._poll.isActive())
+    dialog.reject()
+
+    assert launch.cancel_file.exists()
+    assert dialog.isHidden()
+    assert quits == []
+    assert updates.take_update_result() is None
+
+
+def test_cancelling_too_late_hands_over_anyway(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, quits: list[bool]
+) -> None:
+    _fake_download(monkeypatch, tmp_path / "setup.exe")
+    launch = _launch(tmp_path)
+    _fake_launch(monkeypatch, launch)
+    monkeypatch.setattr(UpdateDialog, "_close_other_windows", lambda self: True)
+
+    dialog = _dialog()
+    dialog.start()
+    _wait_for(qapp, lambda: dialog._poll.isActive())
+    launch.ready_file.write_text("ready")  # the installer got there first
+    dialog.reject()
+
+    assert quits == [True]
 
 
 def test_dialog_reports_a_declined_permission_prompt(
@@ -448,11 +648,10 @@ def test_dialog_reports_a_declined_permission_prompt(
 ) -> None:
     _fake_download(monkeypatch, tmp_path / "setup.exe")
     process = _FakeProcess()
-    launch = updates.InstallerLaunch(process=process, ready_file=tmp_path / "ready")
-    monkeypatch.setattr(updates, "launch_installer", lambda path: launch)
+    _fake_launch(monkeypatch, _launch(tmp_path, process))
     monkeypatch.setattr(UpdateDialog, "_close_other_windows", lambda self: True)
 
-    dialog = UpdateDialog(release_from_json(_release_json("v99.0.0")))
+    dialog = _dialog()
     dialog.start()
     _wait_for(qapp, lambda: dialog._poll.isActive())
     process.returncode = 1
@@ -466,17 +665,56 @@ def test_dialog_stops_when_a_window_will_not_close(
     qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, quits: list[bool]
 ) -> None:
     _fake_download(monkeypatch, tmp_path / "setup.exe")
-    launched: list[Path] = []
-    monkeypatch.setattr(updates, "launch_installer", lambda path: launched.append(path))
+    launched = _fake_launch(monkeypatch, _launch(tmp_path))
     monkeypatch.setattr(UpdateDialog, "_close_other_windows", lambda self: False)
 
-    dialog = UpdateDialog(release_from_json(_release_json("v99.0.0")))
+    dialog = _dialog()
     dialog.start()
     _wait_for(qapp, lambda: not dialog._page_button.isHidden())
 
     assert launched == []
     assert "kept open" in dialog._status.text()
     assert quits == []
+
+
+def test_dialog_stops_while_another_copy_is_running(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, quits: list[bool]
+) -> None:
+    _fake_download(monkeypatch, tmp_path / "setup.exe")
+    launched = _fake_launch(monkeypatch, _launch(tmp_path))
+    closed: list[bool] = []
+    monkeypatch.setattr(UpdateDialog, "_close_other_windows", lambda self: closed.append(True))
+    monkeypatch.setattr(updates, "other_instances", lambda: [4242])
+
+    dialog = _dialog()
+    dialog.start()
+    _wait_for(qapp, lambda: not dialog._page_button.isHidden())
+
+    assert "Another MM-Companion window" in dialog._status.text()
+    # Checked before anything of the user's was closed.
+    assert closed == []
+    assert launched == []
+
+
+@pytest.mark.parametrize("answer", [False, True])
+def test_a_running_session_is_only_ended_with_consent(
+    answer: bool,
+    qapp: QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    quits: list[bool],
+) -> None:
+    _fake_download(monkeypatch, tmp_path / "setup.exe")
+    launched = _fake_launch(monkeypatch, _launch(tmp_path))
+    monkeypatch.setattr(UpdateDialog, "_close_other_windows", lambda self: True)
+    monkeypatch.setattr(update_dialog, "_session_running", lambda: True)
+    monkeypatch.setattr(UpdateDialog, "_confirm_end_session", lambda self: answer)
+
+    dialog = _dialog()
+    dialog.start()
+    _wait_for(qapp, lambda: launched or not dialog._page_button.isHidden())
+
+    assert bool(launched) is answer
 
 
 def test_dialog_shows_a_failed_download(
@@ -486,10 +724,130 @@ def test_dialog_shows_a_failed_download(
         raise UpdateError("The download failed: no network")
 
     monkeypatch.setattr(updates, "download_asset", download)
-    dialog = UpdateDialog(release_from_json(_release_json("v99.0.0")))
+    dialog = _dialog()
     dialog.start()
     _wait_for(qapp, lambda: not dialog._page_button.isHidden())
     assert "no network" in dialog._status.text()
+
+
+def test_dialog_shows_even_an_unexpected_download_error(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def download(asset, dest_dir=None, *, progress=None, cancel=None):  # noqa: ARG001
+        raise KeyError("surprise")
+
+    monkeypatch.setattr(updates, "download_asset", download)
+    dialog = _dialog()
+    dialog.start()
+    _wait_for(qapp, lambda: not dialog._page_button.isHidden())
+    assert "surprise" in dialog._status.text()
+
+
+# -- closing the other windows ----------------------------------------------------
+
+
+class _Window(QWidget):
+    """A top-level window that may refuse to close, and records the order it was asked."""
+
+    def __init__(self, log: list[str], name: str, *, refuse: bool = False, parent=None) -> None:
+        super().__init__(parent)
+        if parent is not None:
+            self.setWindowFlag(Qt.WindowType.Window)
+        self._log, self._name, self._refuse = log, name, refuse
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self._log.append(self._name)
+        if self._refuse:
+            event.ignore()
+        else:
+            super().closeEvent(event)
+
+
+def test_closing_skips_owned_windows_and_notices_a_refusal(qapp: QApplication) -> None:
+    log: list[str] = []
+    launcher = QWidget()
+    dialog = UpdateDialog(release_from_json(_release_json("v99.0.0")), launcher)
+    owner = _Window(log, "owner")
+    popped_out = _Window(log, "popped-out block", refuse=True, parent=owner)
+    for window in (launcher, owner, popped_out):
+        window.show()
+
+    assert dialog._close_other_windows() is True
+    # The popped-out block is its owner's business; closing it directly would take
+    # it off the sheet — and it refuses.
+    assert "popped-out block" not in log
+    assert "owner" in log
+
+    stubborn = _Window(log, "unsaved sheet", refuse=True)
+    stubborn.show()
+    assert dialog._close_other_windows() is False
+    stubborn._refuse = False
+    stubborn.close()
+    for window in (launcher, owner, popped_out):
+        window.close()
+
+
+def test_closing_suppresses_a_restart_a_window_asks_for(qapp: QApplication) -> None:
+    from mm_companion.ui import app_restart
+
+    launcher = QWidget()
+    dialog = UpdateDialog(release_from_json(_release_json("v99.0.0")), launcher)
+    try:
+        dialog._close_other_windows()
+        assert app_restart._suppressed is True
+    finally:
+        app_restart._suppressed = False
+
+
+# -- the launcher after an update ---------------------------------------------------
+
+
+def test_a_failed_update_is_reported_with_its_log(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log = updates.update_log_file("99.0.0")
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("Error: something went wrong")
+    updates.record_pending_update("99.0.0", log)
+    shown: list[str] = []
+    monkeypatch.setattr(
+        update_dialog.QMessageBox, "exec", lambda self: shown.append(self.informativeText())
+    )
+
+    result = update_dialog.report_update_result()
+
+    assert result is not None and not result.succeeded
+    assert str(log) in shown[0]
+
+
+def test_a_successful_update_shows_on_the_badge(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(storage, "check_for_updates", lambda: False)
+    monkeypatch.setattr(
+        updates,
+        "take_update_result",
+        lambda: updates.UpdateResult(True, "0.0.1", __version__, None),
+    )
+    window = StartWindow()
+    window.run_startup_checks()
+    assert "updated from v0.0.1" in window._version_badge._label.text()
+
+
+def test_startup_checks_respect_the_setting(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[bool] = []
+    monkeypatch.setattr(VersionBadge, "check_for_update", lambda self: calls.append(True))
+    window = StartWindow()
+
+    storage.set_check_for_updates(False)
+    window.run_startup_checks()
+    assert calls == []
+
+    storage.set_check_for_updates(True)
+    window.run_startup_checks()
+    assert calls == [True]
 
 
 def test_the_badge_sends_a_source_checkout_to_the_release_page(

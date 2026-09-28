@@ -838,6 +838,67 @@ class BlockFrame(QFrame):
         else:
             self._close_feedback.clear()
 
+    # -- lending the section out -----------------------------------------------
+
+    def lend_section(self) -> QWidget:
+        """Hand the live section out of this frame — the simple sheet borrows it.
+
+        The section is *the* block: its model bindings, its bus wiring, its card state
+        and its undo seam all live on it, so a second view of a block whose controls
+        are its whole point (the power cards) borrows this widget rather than building
+        another. The frame stays behind, empty, and :meth:`take_back_section` puts it
+        back exactly where it was.
+
+        Hidden before it leaves, and never left without a parent while visible: a
+        parentless visible widget is a top-level window, and a section flashing up as
+        one on every switch is the failure :func:`~mm_companion.ui.widgets.discard_widget`
+        exists to prevent. The borrower adds it to a layout and shows it.
+
+        The explicit minimum height :class:`_InnerScroll` pinned on the section is
+        dropped as it goes: that number is the content's height *at this frame's
+        width*, and carried anywhere else it is a refusal measured for a different
+        box.
+        """
+        if self.is_lent():
+            return self.section
+        section = self.section
+        section.hide()
+        host = self._scroll.widget()
+        if host is section:
+            self._scroll.takeWidget()
+            self._lent_host = None
+        else:
+            # The frame wrapped the section to hold it top-aligned (see
+            # _wrap_top_aligned); the wrapper stays, and gets the section back.
+            self._lent_host = host
+            if host is not None and host.layout() is not None:
+                host.layout().removeWidget(section)
+        section.setMinimumHeight(0)
+        self._lent = True
+        return section
+
+    def take_back_section(self) -> None:
+        """Re-seat the section :meth:`lend_section` handed out, and re-measure it."""
+        if not self.is_lent():
+            return
+        section = self.section
+        section.hide()
+        host = getattr(self, "_lent_host", None)
+        if host is not None and host.layout() is not None:
+            host.layout().insertWidget(0, section)
+        else:
+            self._scroll.setWidget(section)
+        self._lent = False
+        self._lent_host = None
+        section.show()
+        self._scroll._pin_content_height()
+        self._content_height = -1
+        self._follow_content_height()
+
+    def is_lent(self) -> bool:
+        """Whether the section is out on loan (see :meth:`lend_section`)."""
+        return getattr(self, "_lent", False)
+
     def set_locked(self, locked: bool) -> None:
         """Forward read-only view mode to the section, and re-report the block's size.
 

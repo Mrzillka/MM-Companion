@@ -67,6 +67,8 @@ class CharacterSheet(QWidget):
     pinRequested = Signal(object)
     #: The same, for a row that was already pinned.
     unpinRequested = Signal(object)
+    #: The simple sheet was switched on or off (see :meth:`set_simple`).
+    simpleChanged = Signal(bool)
 
     def __init__(
         self,
@@ -84,6 +86,12 @@ class CharacterSheet(QWidget):
         # must not report one while it happens.
         self._restoring = False
         self._undo = None
+        # The play view (see mm_companion.ui.simple), built the first time it is
+        # asked for. ``_locked_before_simple`` is what the lock was when it went up,
+        # so switching back puts the edit sheet back exactly as it was left.
+        self._simple = None
+        self._simple_preset = "standard"
+        self._locked_before_simple: bool | None = None
 
         # Register any data-described (declarative) blocks the active mods contribute
         # via blocks.json, so they join the registry before we iterate it below.
@@ -166,6 +174,20 @@ class CharacterSheet(QWidget):
     def block_frame(self, key: str) -> BlockFrame:
         """The :class:`BlockFrame` wrapping the block *key* (size constraints live here)."""
         return self._canvas.block_frame(key)
+
+    def section(self, key: str) -> QWidget | None:
+        """The live section of block *key*, wherever its frame is."""
+        return self._sections_by_key.get(key)
+
+    @property
+    def data(self) -> GameData:
+        """The game data this sheet was built over."""
+        return self._data
+
+    @property
+    def is_npc(self) -> bool:
+        """Whether this is a GM's NPC sheet (see :meth:`set_npc_mode`)."""
+        return self._npc
 
     def page_scroll_area(self) -> QScrollArea:
         """The outer page scroll area (the wheel guard redirects the wheel here)."""
@@ -469,6 +491,11 @@ class CharacterSheet(QWidget):
                 continue
             if self._canvas.is_hidden(descriptor.key):
                 self._canvas.show_block(descriptor.key)
+            if self.is_simple:
+                # The floated windows are off the screen while the simple sheet is up;
+                # the block belongs on that page instead.
+                self._simple.reveal(descriptor.key)
+                continue
             window = self._canvas.block_window(descriptor.key)
             if window is not None:
                 window.raise_()
@@ -516,6 +543,96 @@ class CharacterSheet(QWidget):
         for key in self._canvas.block_keys():
             self._canvas.block_frame(key).set_locked(locked)
         self._update_min_width()
+
+    # -- the simple sheet ----------------------------------------------------
+
+    @property
+    def is_simple(self) -> bool:
+        """Whether the simple sheet (the play view) is what this sheet is showing."""
+        return self._simple is not None and self._simple.active
+
+    @property
+    def simple_sheet(self):
+        """The play view, built on first use (see :mod:`mm_companion.ui.simple`)."""
+        if self._simple is None:
+            from mm_companion.ui.simple.sheet import SimpleSheet
+
+            self._simple = SimpleSheet(self)
+            self._simple.set_preset(self._simple_preset)
+            self.layout().addWidget(self._simple)
+            self._simple.hide()
+        return self._simple
+
+    @property
+    def simple_preset(self) -> str:
+        """Which arrangement the simple sheet uses — ``"standard"`` or ``"custom"``."""
+        return self._simple_preset
+
+    def set_simple_preset(self, preset: str) -> None:
+        """Choose the simple sheet's arrangement; takes effect at once if it is up."""
+        from mm_companion.ui.simple.layout import PRESETS
+
+        self._simple_preset = preset if preset in PRESETS else "standard"
+        if self._simple is not None:
+            self._simple.set_preset(self._simple_preset)
+
+    def build_detached_section(self, key: str) -> QWidget | None:
+        """A fresh copy of block *key*'s section over this character, wired to nothing.
+
+        What a *printed* simple sheet is built from: paper wants every block at the
+        width of a page, in a light palette, and the live sections are on screen at
+        neither. A section is built from ``(data, character)`` alone — that is the block
+        contract — so a copy reads the same model and draws the same thing; being on no
+        bus, it can never write back or answer a request. Locked, in its simple look,
+        and in NPC mode if this sheet is. ``None`` for a key this sheet does not have.
+        """
+        descriptor = self._descriptor_by_key.get(key)
+        if descriptor is None:
+            return None
+        template = instance_template(key)
+        if template != key and descriptor.instance_factory is not None:
+            section = descriptor.instance_factory(key)(self._data, self.character)
+        else:
+            section = descriptor.factory(self._data, self.character)
+        section.hide()
+        for name, argument in (("set_npc_mode", self._npc), ("set_locked", True)):
+            setter = getattr(section, name, None)
+            if callable(setter) and (name != "set_npc_mode" or self._npc):
+                setter(argument)
+        from mm_companion.ui.simple.sheet import dress_borrowed
+
+        dress_borrowed(section, True)
+        return section
+
+    def set_simple(self, simple: bool) -> None:
+        """Switch between the edit sheet and the simple sheet.
+
+        The simple sheet is a *play* view, so the sheet is locked while it is up —
+        every block it borrows shows its read-only face, and the controls that stay
+        live in a locked sheet (a power's switch, a worn item, a hero point) are
+        exactly the ones a player uses at the table. The lock is put back the way it
+        was on the way out. Neither direction writes the model or marks it edited.
+        """
+        simple = bool(simple)
+        if simple == self.is_simple:
+            return
+        if simple:
+            view = self.simple_sheet
+            self._locked_before_simple = self._locked
+            self.set_locked(True)
+            self._board.hide()
+            view.activate()
+            view.show()
+        else:
+            view = self._simple
+            view.deactivate()
+            view.hide()
+            self._board.show()
+            previous = self._locked_before_simple
+            self._locked_before_simple = None
+            if previous is not None:
+                self.set_locked(previous)
+        self.simpleChanged.emit(simple)
 
     def release_roller(self) -> tuple[QWidget, QWidget] | None:
         """Lend the dice roller out to a compact window, or ``None`` if there is none.
@@ -569,6 +686,10 @@ class CharacterSheet(QWidget):
         :meth:`~mm_companion.ui.block_canvas.BlockCanvas.set_windows_suspended`.
         """
         self._canvas.set_windows_suspended(suspended)
+        if self._simple is not None:
+            # Coming back from compact re-shows the floated windows; the simple sheet
+            # keeps them off the screen for as long as it is up.
+            self._simple.keep_windows_hidden()
 
     def _relay_edited(self) -> None:
         """Surface a block's edit — unless the sheet is the one that caused it.

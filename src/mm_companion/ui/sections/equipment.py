@@ -118,6 +118,7 @@ from mm_companion.ui.cards import (
     NodeList,
     RollsFooter,
     effects_block,
+    simple_effects_block,
     terms_style,
 )
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
@@ -127,6 +128,7 @@ from mm_companion.ui.power_constructor.terms_grid import TermsGridBox, build_ter
 from mm_companion.ui.sections.equipment_picker import EquipmentPickerDialog
 from mm_companion.ui.sections.stat_table import PinMenuState
 from mm_companion.ui.sections.titled_section import TitledSection
+from mm_companion.ui.simple.style import term_label
 from mm_companion.ui.widgets import (
     BOLD_STYLE,
     discard_widget,
@@ -270,6 +272,8 @@ class EquipmentSection(TitledSection):
         self._data = data
         self._character = character
         self._locked = False
+        # On the simple sheet (see set_simple): the same cards, told more quietly.
+        self._simple = False
         self._picker: EquipmentPickerDialog | None = None
         #: The trait editor while one is open, so locking the sheet can close it. It is
         #: modal, so a *user* can never reach the lock past it — but set_locked is also
@@ -693,6 +697,8 @@ class EquipmentSection(TitledSection):
             self._groups_host.add_entry(category, card)
         self._empty.setVisible(not self._character.equipment)
         self._refresh_budget()
+        # The budget is a build fact; the simple sheet is for using what it bought.
+        self._budget.setVisible(not self._simple)
 
     def _refresh_budget(self) -> None:
         unit = self._data.equipment_rules.currency_abbreviation
@@ -714,6 +720,7 @@ class EquipmentSection(TitledSection):
         user is *told* rather than a drop that quietly does nothing.
         """
         card = DraggableCard(category, group=True, mime=EQUIPMENT_GROUP_MIME)
+        card.set_compact(self._simple)
         layout = QVBoxLayout(card)
         layout.addWidget(self._group_header(category, items, card))
 
@@ -762,12 +769,14 @@ class EquipmentSection(TitledSection):
         cost = QLabel(f"{spent} {unit}")
         cost.setEnabled(False)
         row.addWidget(cost)
+        cost.setVisible(not self._simple)
         return host
 
     # -- item card --------------------------------------------------------
     def _make_card(self, item: EquipmentItem) -> QWidget:
         """A stat-block card for one item, which is also its wear/stow switch."""
         card = DraggableCard(item.id, mime=EQUIPMENT_MIME)
+        card.set_compact(self._simple)
         card.set_clickable(True)
         platform = item_platform(item, self._data)
         card.setToolTip(self._wear_hint(platform))
@@ -782,9 +791,12 @@ class EquipmentSection(TitledSection):
         layout.addWidget(self._header_row(item, card, build))
 
         if item.build.description:
-            desc = QLabel(item.build.description)
-            desc.setWordWrap(True)
-            desc.setStyleSheet(muted_style(italic=True))
+            if self._simple:
+                desc = term_label(item.build.description)
+            else:
+                desc = QLabel(item.build.description)
+                desc.setWordWrap(True)
+                desc.setStyleSheet(muted_style(italic=True))
             layout.addWidget(desc)
 
         # A platform shows what it *is* — five bought traits — where an item shows what
@@ -798,7 +810,8 @@ class EquipmentSection(TitledSection):
             if throttle is not None:
                 layout.addWidget(throttle)
         else:
-            effects = effects_block(build, self._character, self._data)
+            draw = simple_effects_block if self._simple else effects_block
+            effects = draw(build, self._character, self._data)
             if effects is not None:
                 layout.addWidget(effects)
             else:
@@ -827,7 +840,8 @@ class EquipmentSection(TitledSection):
         # rule, the same bargain a passive power's card strikes.
         rolls = self._rolls_block(item, build)
         if rolls is not None:
-            layout.addWidget(hline_separator())
+            if not self._simple:
+                layout.addWidget(hline_separator())
             layout.addWidget(rolls)
 
         self._show_worn(card, item)
@@ -955,6 +969,7 @@ class EquipmentSection(TitledSection):
             specs,
             pins=self._pins,
             pin_ref=lambda index, iid=item.id: PinRef(PIN_EQUIPMENT, iid, index),
+            simple=self._simple,
         )
         footer.rollRequested.connect(self.rollRequested)
         footer.pinRequested.connect(self.pinRequested)
@@ -1006,11 +1021,15 @@ class EquipmentSection(TitledSection):
         # not a breach at all — gear the budget cannot price, which is worth the same
         # glyph precisely because it is otherwise invisible: a free item looks correct.
         violations = (
-            power_pl_violations(
-                build if build is not None else item.build, self._character, self._data
+            []
+            if self._simple
+            else (
+                power_pl_violations(
+                    build if build is not None else item.build, self._character, self._data
+                )
+                + item_platform_violations(item, self._character, self._data)
+                + item_price_warnings(item, self._data)
             )
-            + item_platform_violations(item, self._character, self._data)
-            + item_price_warnings(item, self._data)
         )
         if violations:
             warning = QLabel("⚠")
@@ -1018,7 +1037,7 @@ class EquipmentSection(TitledSection):
             warning.setToolTip("\n".join(violations))
             layout.addWidget(warning)
 
-        if self._is_homerule(item):
+        if not self._simple and self._is_homerule(item):
             homerule = QLabel("⌂")
             homerule.setStyleSheet(tinted_style("tint.homerule"))
             homerule.setToolTip(
@@ -1032,6 +1051,7 @@ class EquipmentSection(TitledSection):
         cost = QLabel(f"{item_ep_cost(item, self._data, self._character)} {unit}")
         cost.setEnabled(False)
         layout.addWidget(cost)
+        cost.setVisible(not self._simple)
 
         # Parented by addWidget *before* the visibility is set, for the reason the
         # powers header gives: setVisible on a parentless widget flashes a top-level
@@ -1331,4 +1351,19 @@ class EquipmentSection(TitledSection):
         if locked:
             for window in list(self._windows):
                 window.close()
+        self._rebuild_list()
+
+    def set_simple(self, simple: bool) -> None:
+        """Draw the cards for the simple sheet (see :mod:`mm_companion.ui.simple`).
+
+        Every item stays its own wear/stow switch and a vehicle keeps its throttle; what
+        goes is the accounting — the budget bar, every price, the breach and homerule
+        markers — and each effect's game terms become small print under it, with a
+        weapon's attack and save as big numbers on its roll chips.
+        """
+        simple = bool(simple)
+        if simple == self._simple:
+            return
+        self._simple = simple
+        self.set_simple_frame(simple)
         self._rebuild_list()

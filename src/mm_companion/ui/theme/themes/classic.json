@@ -135,7 +135,21 @@
     "column.chip-button": 24,
     "column.roll-button": 28,
     "column.hero-point": 26,
-    "column.status-dot": 10
+    "column.status-dot": 10,
+
+    "_simple.gap": "The simple sheet (View > Simple Sheet): the gutter between two of its boxes, in pixels. Deliberately a fraction of the edit page's, so the play view reads as one sheet of paper rather than a dozen floating panels.",
+    "simple.gap": 4,
+    "_simple.margins": "The inside of one simple-sheet box: left, top, right, bottom. The heading sits in the top band, so the top is the smallest.",
+    "simple.margins": [6, 3, 6, 5],
+    "simple.spacing": 2,
+    "simple.page-margin": 6,
+    "_simple.value-box": "How wide a simple-sheet stat box (an ability, a defence) is, in pixels — the big number and its name over it. Boxes flow into as many columns as the block's width holds.",
+    "simple.value-box": 64,
+    "_simple.portrait": "How tall the simple sheet asks for the portrait to be. A request, not a size: beside taller boxes it fills their height, letterboxed.",
+    "simple.portrait": 170,
+    "simple.line-column": 170,
+    "_opacity.term": "How strongly the simple sheet's game terms are drawn — Ranged, Standard action, DC 25 — against the values they qualify. 1 is full strength; the default keeps them readable but plainly secondary.",
+    "opacity.term": 0.6
   },
 
   "_typography": "Point sizes, applied with QFont.setPointSizeF — never as a stylesheet font-size, which would outrank the widget font and break the power card's switched-off transition. A null family keeps the platform default.",
@@ -152,7 +166,12 @@
     "size.compact-button": 15.0,
     "scale.inactive": 0.9,
     "size.notes": 10.0,
-    "scale.notes.heading": 1.1
+    "scale.notes.heading": 1.1,
+    "size.simple-name": 18.0,
+    "size.simple-value": 15.0,
+    "size.simple-label": 9.5,
+    "size.simple-heading": 8.0,
+    "size.simple-term": 7.5
   },
 
   "_blocks": "Per-block size overrides layered over ui/block_sizes.json. Empty here: Classic keeps the shipped sizes.",

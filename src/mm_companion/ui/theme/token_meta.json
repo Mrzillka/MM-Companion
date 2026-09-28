@@ -9,7 +9,7 @@
     },
     "metrics": {
       "label": "Sizes",
-      "order": ["radius", "border", "focus", "space", "card", "group", "column", "canvas", "die", "compact", "opacity"]
+      "order": ["radius", "border", "focus", "space", "card", "group", "column", "canvas", "die", "compact", "simple", "opacity"]
     },
     "typography": {
       "label": "Typography",
@@ -32,6 +32,7 @@
     "radius": "Corner radii",
     "space": "Spacing steps",
     "card": "Power cards",
+    "simple": "Simple sheet",
     "group": "Group boxes",
     "column": "Column minimums",
     "canvas": "Canvas",
@@ -232,6 +233,19 @@
     },
     "size.card-name": {"label": "Power name"},
     "size.terms": {"label": "Game terms", "hint": "The small print under a power's effects."},
+    "size.simple-name": {"label": "Simple sheet: hero name", "hint": "The character's name across the top of the simple sheet."},
+    "size.simple-value": {"label": "Simple sheet: key values", "hint": "The numbers a player reads mid-fight — ability and defence totals, skill bonuses, a power's rank and DC."},
+    "size.simple-label": {"label": "Simple sheet: names", "hint": "What a value belongs to — a skill, an advantage, a power."},
+    "size.simple-heading": {"label": "Simple sheet: box headings"},
+    "size.simple-term": {"label": "Simple sheet: game terms", "hint": "The small italic print that qualifies a value — range, action, duration."},
+    "simple.gap": {"label": "Gap between boxes"},
+    "simple.margins": {"label": "Box padding"},
+    "simple.spacing": {"label": "Line spacing inside a box"},
+    "simple.page-margin": {"label": "Page margin"},
+    "simple.value-box": {"label": "Stat box width"},
+    "simple.portrait": {"label": "Portrait height"},
+    "simple.line-column": {"label": "List column width", "hint": "The narrowest a column of skills or advantages gets before the list drops to fewer columns."},
+    "opacity.term": {"label": "Game terms", "hint": "How strongly the simple sheet's game terms are drawn next to the values they qualify."},
     "size.version": {"label": "Version line", "hint": "The app version under the launcher's buttons."},
     "size.cost-total": {"label": "Cost total"},
     "size.dice-face": {"label": "Die face"},

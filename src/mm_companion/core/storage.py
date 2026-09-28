@@ -63,6 +63,12 @@ DICE_LAYOUT_EXTENDED = "extended"
 #: the writer below validate against this, so a fourth shape is one entry here.
 DICE_LAYOUTS = (DICE_LAYOUT_AUTO, DICE_LAYOUT_COMPACT, DICE_LAYOUT_EXTENDED)
 
+#: The simple sheet's two arrangements (see ``mm_companion.ui.simple.layout``). Kept here,
+#: not imported from there: this module is Qt-free and the layout module is not.
+SIMPLE_PRESET_STANDARD = "standard"
+SIMPLE_PRESET_CUSTOM = "custom"
+SIMPLE_PRESETS = (SIMPLE_PRESET_STANDARD, SIMPLE_PRESET_CUSTOM)
+
 DEFAULT_SETTINGS: dict[str, object] = {
     "version": 1,
     # Id of the visual theme preset (see :mod:`mm_companion.ui.theme`). "classic"
@@ -234,6 +240,11 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # Whether the launcher asks GitHub for a newer release when the app starts. See
     # :mod:`mm_companion.core.updates`.
     "check_for_updates": True,
+    # Which arrangement the simple sheet (View > Simple Sheet) uses: "standard", the
+    # fixed one modelled on a printed sheet, or "custom", the edit sheet's own. A
+    # preference, so it is remembered. Whether a window is *showing* the simple sheet
+    # is not — it is a view switch like the lock and compact mode (see "compact").
+    "simple_sheet_preset": SIMPLE_PRESET_STANDARD,
 }
 
 
@@ -502,6 +513,24 @@ def check_for_updates() -> bool:
 def set_check_for_updates(enabled: bool) -> None:
     """Record whether to look for a newer release at startup."""
     update_settings(check_for_updates=bool(enabled))
+
+
+def simple_sheet_preset() -> str:
+    """The simple sheet's arrangement — one of :data:`SIMPLE_PRESETS`.
+
+    Defaults to :data:`SIMPLE_PRESET_STANDARD` when unset or unrecognized, for the
+    usual reason: :func:`load_settings` returns the file verbatim, so a workspace older
+    than this key answers ``None``.
+    """
+    value = load_settings().get("simple_sheet_preset", SIMPLE_PRESET_STANDARD)
+    return value if value in SIMPLE_PRESETS else SIMPLE_PRESET_STANDARD
+
+
+def set_simple_sheet_preset(preset: str) -> None:
+    """Remember the simple sheet's arrangement; an unknown value means ``standard``."""
+    update_settings(
+        simple_sheet_preset=preset if preset in SIMPLE_PRESETS else SIMPLE_PRESET_STANDARD
+    )
 
 
 def dice_layout() -> str:

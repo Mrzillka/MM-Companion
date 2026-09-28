@@ -155,8 +155,15 @@ class PrintDocument:
         tree = print_tree(sheet)
         for key in lt.keys(tree):
             box = self._box(key)
-            if box is not None:
-                self.boxes[key] = box
+            if box is None:
+                continue
+            empty = getattr(box.body, "is_empty", None)
+            if callable(empty) and empty():
+                box.deleteLater()  # never shown, never parented: nothing to flash
+                continue
+            self.boxes[key] = box
+        dropped = set(lt.keys(tree)) - set(self.boxes)
+        tree = simple_layout.without_keys(simple_layout.SimpleLayout(tree), dropped).page
         self.page.show_tree(tree, self.boxes)
         self.dress()
 

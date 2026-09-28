@@ -330,6 +330,12 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   wheel delivered with `sendEvent` never runs Qt's propagation loop, so asserting
   on scrollbar values alone cannot see this at all — which is exactly how it
   shipped once.
+- **A frame can lend its section out** (`lend_section` / `take_back_section`): the
+  simple sheet borrows the live Powers, Equipment, Notes and Dice sections for as long as
+  it is up, rather than drawing a second copy of their play controls. The frame stays
+  behind empty and gets the section back exactly where it was. Anything that walks a
+  frame's section (`set_locked`, `reseed`) still works while it is lent — the section is
+  the same object. See [The simple sheet](simple-sheet.md).
 - **`minimumSizeHint` is a title bar and `block.min-extent`, and says nothing about
   the content.** It used to be `max(content, the JSON floor)` in both dimensions,
   and that climbed out through the row, the page, the pinned strip and the window

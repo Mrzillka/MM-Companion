@@ -33,11 +33,12 @@ their borders line up the way ruled boxes on paper do.
 
 from __future__ import annotations
 
+import shiboken6
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
+    QBoxLayout,
     QFrame,
     QGroupBox,
-    QHBoxLayout,
     QScrollArea,
     QSizePolicy,
     QSplitter,
@@ -48,6 +49,7 @@ from PySide6.QtWidgets import (
 from mm_companion.ui import theme
 from mm_companion.ui.blocks.bus import NOTIFICATIONS
 from mm_companion.ui.layout_tree import Leaf, Node, Split
+from mm_companion.ui.reflow import ReflowBox
 from mm_companion.ui.sections.titled_section import set_simple_frame
 from mm_companion.ui.simple import views as _views  # noqa: F401 - registers the base views
 from mm_companion.ui.simple.layout import (
@@ -56,13 +58,16 @@ from mm_companion.ui.simple.layout import (
     SimpleLayout,
     custom_layout,
     standard_layout,
+    without_keys,
 )
 from mm_companion.ui.simple.registry import SimpleContext, simple_view
 from mm_companion.ui.simple.style import heading_label
-from mm_companion.ui.widgets import discard_widget
+from mm_companion.ui.widgets import discard_widget, no_reentry
 
 #: How wide the strip beside the page opens when the arrangement names no width.
 DEFAULT_STRIP_EXTENT = 360
+#: The most of the window the strip opens at, whatever width it asks for.
+STRIP_SHARE = 0.4
 
 
 class SimpleBox(QFrame):
@@ -193,21 +198,95 @@ def render_node(node: Node, boxes: dict[str, SimpleBox]) -> QWidget:
             column.addWidget(box)
         host.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         return host
+    children = [render_node(child, boxes) for child in node.children]
+    if isinstance(node, Split) and node.horizontal:
+        weights = node.usable_sizes()
+        shares = [max(1, w) for w in weights] if weights else [1] * len(children)
+        return SimpleRow(children, shares)
     host = QWidget()
-    horizontal = isinstance(node, Split) and node.horizontal
-    layout = QHBoxLayout(host) if horizontal else QVBoxLayout(host)
+    layout = QVBoxLayout(host)
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(gap)
-    weights = node.usable_sizes()
-    for index, child in enumerate(node.children):
-        widget = render_node(child, boxes)
-        if horizontal:
-            weight = weights[index] if weights and weights[index] > 0 else 0
-            layout.addWidget(widget, stretch=max(1, weight) if weights else 1)
-        else:
-            layout.addWidget(widget)
+    for widget in children:
+        layout.addWidget(widget)
     host.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
     return host
+
+
+def _comfortable_width(part: QWidget) -> int:
+    """How wide *part* reads well at: its content's own say, or ``simple.box-min``."""
+    body = part.body if isinstance(part, SimpleBox) else part
+    stated = getattr(body, "simple_min_width", None)
+    if callable(stated):
+        stated = stated()
+    return int(stated) if stated else int(theme.metric("simple.box-min"))
+
+
+class SimpleRow(ReflowBox, QWidget):
+    """Boxes side by side, sharing the row's width by weight — until that is too tight.
+
+    A row of three on a narrow window left each box a sliver: the System block's
+    heading cut off, its hero points spilling past its border. So a row stacks its
+    boxes one under another once any of them would get less than ``simple.box-min``
+    across, and puts them back side by side when the room returns. It is the edit
+    sheet's own reflow (:class:`~mm_companion.ui.reflow.ReflowBox`), dead-band and
+    re-entry guard included — stacking changes the page's height, which can bring a
+    scrollbar in, which narrows the row back over the line.
+    """
+
+    def __init__(self, parts: list[QWidget], shares: list[int]) -> None:
+        super().__init__()
+        self._parts = parts
+        self._shares = shares
+        self.REFLOW_SPACING = int(theme.metric("simple.gap"))
+        layout = QBoxLayout(QBoxLayout.Direction.LeftToRight, self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(self.REFLOW_SPACING)
+        for part, share in zip(parts, shares, strict=True):
+            layout.addWidget(part, stretch=share)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.init_reflow(row=True)
+
+    def reflow_parts(self) -> list[QWidget]:
+        return self._parts
+
+    def apply_reflow(self, row: bool) -> None:
+        layout = self.layout()
+        layout.setDirection(
+            QBoxLayout.Direction.LeftToRight if row else QBoxLayout.Direction.TopToBottom
+        )
+        # Stacked, a box is as tall as its content; the weights only ever divided width.
+        for index, share in enumerate(self._shares):
+            layout.setStretch(index, share if row else 0)
+
+    def row_minimum_width(self) -> int:
+        """The narrowest the row can be with every box still getting its comfortable width.
+
+        A box's comfortable width is ``simple.box-min``, unless what it holds says
+        otherwise (``simple_min_width``) — a portrait reads perfectly well at half of
+        what a column of text needs, and holding its narrow share of the header row to
+        the text's number stacked the header on an ordinary window.
+        """
+        total = sum(self._shares)
+        needed = max(
+            _comfortable_width(part) * total / share
+            for part, share in zip(self._parts, self._shares, strict=True)
+        )
+        return round(needed) + self.REFLOW_SPACING * (len(self._parts) - 1)
+
+    @no_reentry
+    def _sync(self) -> None:
+        self.sync_reflow()
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        super().resizeEvent(event)
+        self._sync()
+
+
+def _is_empty(view: QWidget) -> bool:
+    """Whether a simple view says it has nothing to show (``is_empty()``)."""
+    ask = getattr(view, "is_empty", None)
+    return bool(ask()) if callable(ask) else False
 
 
 def dress_borrowed(section: QWidget, simple: bool) -> None:
@@ -269,6 +348,9 @@ class SimpleSheet(QWidget):
         self._splitter.setChildrenCollapsible(False)
         self._splitter.addWidget(self._scroll)
         self._splitter.addWidget(self._strip)
+        self._strip_dragged = False
+        self._placing = False
+        self._splitter.splitterMoved.connect(self._on_splitter_moved)
         self._strip_extent = DEFAULT_STRIP_EXTENT
 
         layout = QVBoxLayout(self)
@@ -360,11 +442,18 @@ class SimpleSheet(QWidget):
 
     def _build(self) -> None:
         model = self.compute_layout()
-        self._layout_model = model
         for key in model.keys():
             box = self._make_box(key, live=True)
             if box is not None:
                 self._boxes[key] = box
+        # A view with nothing to show (a portrait never loaded) gives its room to its
+        # neighbours rather than standing there as an empty box.
+        empty = [key for key, view in self._views.items() if _is_empty(view)]
+        for key in empty:
+            self._views.pop(key)
+            discard_widget(self._boxes.pop(key))
+        model = without_keys(model, set(empty))
+        self._layout_model = model
         self._page.show_tree(model.page, self._boxes)
         self._strip_page.show_tree(model.strip, self._boxes)
         self._place_strip(model)
@@ -372,9 +461,15 @@ class SimpleSheet(QWidget):
 
     def _teardown(self) -> None:
         for key, box in list(self._boxes.items()):
-            if key in self._borrowed:
-                section = box.release_body()
-                self._return_section(key, section)
+            if key not in self._borrowed:
+                continue
+            section = self._borrowed[key]
+            # A block destroyed while the page was up (a Notes copy removed) took its
+            # frame and section with it; there is nothing left to give back.
+            if not (shiboken6.isValid(section) and key in self._sheet.block_keys()):
+                continue
+            box.release_body()
+            self._return_section(key, section)
         self._borrowed.clear()
         self._page.clear()
         self._strip_page.clear()
@@ -442,20 +537,37 @@ class SimpleSheet(QWidget):
             if isinstance(stated, int) and not isinstance(stated, bool) and stated > 0:
                 extent = stated
         self._strip_extent = extent
-        self._strip_pending = has_strip
         self._apply_strip_extent()
 
     def _apply_strip_extent(self) -> None:
-        if not getattr(self, "_strip_pending", False):
+        """Size the strip: its asked-for width, but never more than a share of the window.
+
+        Re-applied on every resize until the player drags the divider themselves — the
+        first sizing happens before the window has its final width, and a strip sized
+        against a half-built window stayed that narrow for good. Once dragged, the
+        divider is theirs.
+        """
+        if self._strip_dragged or not self._strip.isVisibleTo(self):
             return
         vertical = self._splitter.orientation() == Qt.Orientation.Vertical
         total = self._splitter.height() if vertical else self._splitter.width()
-        if total <= self._strip_extent:
-            return  # not laid out yet; resizeEvent comes back here
+        if total <= 0:
+            return
         first = self._splitter.indexOf(self._strip) == 0
-        page = total - self._strip_extent
-        self._splitter.setSizes([self._strip_extent, page] if first else [page, self._strip_extent])
-        self._strip_pending = False
+        # On a narrow window the page is what the player is reading; the roller
+        # reflows into what is left.
+        strip = min(self._strip_extent, round(total * STRIP_SHARE))
+        sizes = [strip, total - strip] if first else [total - strip, strip]
+        if self._splitter.sizes() != sizes:
+            self._placing = True
+            try:
+                self._splitter.setSizes(sizes)
+            finally:
+                self._placing = False
+
+    def _on_splitter_moved(self, _pos: int, _index: int) -> None:
+        if not self._placing:
+            self._strip_dragged = True
 
     def resizeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
         super().resizeEvent(event)

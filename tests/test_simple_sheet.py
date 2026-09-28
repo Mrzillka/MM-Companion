@@ -114,9 +114,25 @@ def _texts(widget: QWidget) -> list[str]:
 
 
 def test_every_block_is_on_the_standard_sheet(qapp, data) -> None:
+    """Every one — bar a portrait never loaded, whose room goes to the name beside it."""
     sheet = _simple(qapp, data)
 
-    assert sorted(sheet.simple_sheet.shown_keys()) == sorted(sheet.block_keys())
+    expected = set(sheet.block_keys()) - {"character_image"}
+    assert sorted(sheet.simple_sheet.shown_keys()) == sorted(expected)
+
+
+def test_a_loaded_portrait_is_on_the_sheet(qapp, data, tmp_path) -> None:
+    from PySide6.QtGui import QColor, QPixmap
+
+    picture = tmp_path / "face.png"
+    pixmap = QPixmap(40, 50)
+    pixmap.fill(QColor("#884422"))
+    pixmap.save(str(picture))
+    char = _hero(data)
+    char.image_path = str(picture)
+    sheet = _simple(qapp, data, char)
+
+    assert "character_image" in sheet.simple_sheet.shown_keys()
 
 
 def test_the_edit_page_is_hidden_while_the_simple_sheet_is_up(qapp, data) -> None:
@@ -605,3 +621,85 @@ def test_the_heading_of_a_box_is_never_the_last_thing_on_a_page(qapp, data) -> N
                 assert not below <= cut <= below + box.heading.height(), box.key
     finally:
         document.close()
+
+
+def test_compact_mode_borrows_the_roller_and_gives_it_back_to_the_simple_sheet(qapp, data) -> None:
+    win = MainWindow(character=_hero(data), locked=True)
+    win.resize(1100, 800)
+    win.show()
+    _settle(qapp)
+    win._simple_bar_action.trigger()
+    _settle(qapp, win.sheet)
+    sheet = win.sheet
+
+    win._compact.enter()
+    _settle(qapp)
+    assert win._compact.page.isAncestorOf(sheet.dice.panel)
+    win._compact.leave()
+    _settle(qapp)
+
+    assert sheet.dice.isAncestorOf(sheet.dice.panel)
+    assert sheet.simple_sheet.box("dice").isAncestorOf(sheet.dice)
+    assert sheet.simple_sheet.isVisible() and not sheet.board.isVisible()
+
+
+def test_a_row_stacks_its_boxes_when_they_would_be_slivers(qapp, data) -> None:
+    from mm_companion.ui.simple.sheet import SimpleRow
+
+    sheet = _simple(qapp, data)
+    top = sheet.simple_sheet.box("base_info").parentWidget()
+    assert isinstance(top, SimpleRow)
+    assert top.is_row
+
+    sheet.resize(520, 900)
+    _settle(qapp, sheet)
+    assert not top.is_row
+
+    sheet.resize(1400, 900)
+    _settle(qapp, sheet)
+    assert top.is_row
+
+
+def test_the_speed_line_flips_its_units(qapp, data) -> None:
+    sheet = _simple(qapp, data)
+    view = sheet.simple_sheet.view("system_info")
+    before = view.speed.text()
+
+    view.speed.clicked.emit()
+
+    assert view.speed.text() != before
+    assert "km" in view.speed.text()
+
+
+def test_the_custom_preset_settles_rather_than_rebuilding_itself(qapp, data) -> None:
+    """Custom reads the canvas's arrangement and rebuilds when it changes; reading it
+    must not count as a change, or the page would rebuild itself every turn."""
+    sheet = CharacterSheet(data, _hero(data))
+    sheet.show()
+    _settle(qapp)
+    sheet.set_simple_preset("custom")
+    sheet.set_simple(True)
+    _settle(qapp, sheet)
+    rebuilds: list[int] = []
+    sheet.simple_sheet.rebuilt.connect(lambda: rebuilds.append(1))
+
+    for _ in range(10):
+        qapp.processEvents()
+
+    assert rebuilds == []
+
+
+def test_reopening_a_closed_block_reaches_the_custom_preset(qapp, data) -> None:
+    sheet = CharacterSheet(data, _hero(data))
+    sheet.show()
+    _settle(qapp)
+    sheet.hide_block("complications")
+    sheet.set_simple_preset("custom")
+    sheet.set_simple(True)
+    _settle(qapp, sheet)
+    assert "complications" not in sheet.simple_sheet.shown_keys()
+
+    sheet.show_block("complications")
+    _settle(qapp, sheet)
+
+    assert "complications" in sheet.simple_sheet.shown_keys()

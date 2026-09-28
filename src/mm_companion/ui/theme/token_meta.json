@@ -244,6 +244,7 @@
     "simple.page-margin": {"label": "Page margin"},
     "simple.value-box": {"label": "Stat box width"},
     "simple.portrait": {"label": "Portrait height"},
+    "simple.box-min": {"label": "Narrowest box in a row", "hint": "Below this a row of boxes stacks them one under another."},
     "simple.line-column": {"label": "List column width", "hint": "The narrowest a column of skills or advantages gets before the list drops to fewer columns."},
     "opacity.term": {"label": "Game terms", "hint": "How strongly the simple sheet's game terms are drawn next to the values they qualify."},
     "size.version": {"label": "Version line", "hint": "The app version under the launcher's buttons."},

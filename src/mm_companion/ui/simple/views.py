@@ -15,7 +15,7 @@ changed while building is on the page at all.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -171,6 +171,11 @@ class _Portrait(ScalingImageLabel):
 class PortraitView(_View):
     """Just the picture, letterboxed into whatever room the row gives it."""
 
+    @staticmethod
+    def simple_min_width() -> int:
+        """A picture reads at a fraction of the width a column of text needs."""
+        return int(theme.metric("simple.box-min")) // 2
+
     def __init__(self, context: SimpleContext) -> None:
         super().__init__(context)
         layout = _vbox(self)
@@ -179,6 +184,11 @@ class PortraitView(_View):
         layout.addWidget(self.image, stretch=1)
         self._shown: str | None = "unset"
         self.refresh()
+
+    def is_empty(self) -> bool:
+        """No picture, no box: the simple sheet gives the room to the name beside it."""
+        path = library.resolve_image_path(self._character.image_path)
+        return not path or QPixmap(path).isNull()
 
     def refresh(self) -> None:
         path = library.resolve_image_path(self._character.image_path)
@@ -193,6 +203,19 @@ class PortraitView(_View):
 
 
 # -- Power Level & System ------------------------------------------------------
+
+
+class _ClickLabel(QLabel):
+    """A label that is also a button — the speed line, which flips its units."""
+
+    clicked = Signal()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        super().mouseReleaseEvent(event)
+        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(
+            event.position().toPoint()
+        ):
+            self.clicked.emit()
 
 
 class SystemView(_View):
@@ -224,7 +247,13 @@ class SystemView(_View):
         self._hero_row = CaptionBox("Hero Points", self.hero_points)
         self._boxes.addWidget(self._hero_row)
 
-        self.speed = name_label(wrap=True)
+        self.speed = _ClickLabel()
+        self.speed.setWordWrap(True)
+        self.speed.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        set_font(self.speed, "size.simple-label")
+        self.speed.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.speed.clicked.connect(self._toggle_units)
+        self._metric = False
         self.movement = term_label()
         self.facts = term_label()
         layout.addWidget(self.speed)
@@ -250,6 +279,12 @@ class SystemView(_View):
         # Nothing to spend through on paper, so the button is not drawn there.
         self._effort_row.setVisible(context.live and hasattr(context.section, "extra_effort_menu"))
         layout.addStretch()
+        self.refresh()
+
+    def _toggle_units(self) -> None:
+        """Flip every speed between distance per round and km/h, as the edit sheet's
+        button does."""
+        self._metric = not self._metric
         self.refresh()
 
     def _on_hero_points(self, value: int) -> None:
@@ -296,10 +331,13 @@ class SystemView(_View):
             if line.immobilised:
                 speed_parts.append(f"{line.label}: immobilised")
                 continue
-            columns = speed_columns(line.rank, data, ground=index == 0)
+            columns = speed_columns(line.rank, data, metric=self._metric, ground=index == 0)
             text = " / ".join(c.replace(" feet", " ft").replace(" foot", " ft") for c in columns)
             speed_parts.append(f"{line.label} {text}")
         self.speed.setText("; ".join(speed_parts))
+        self.speed.setToolTip(
+            "Click to show distance per round" if self._metric else "Click to show km/h"
+        )
         slowed = any(line.rank_mod or line.immobilised for line in lines)
         self.speed.setStyleSheet(f"color: {theme.color('tint.worse')};" if slowed else "")
 

@@ -179,6 +179,14 @@ def custom_layout(arrangement: dict, keys: Sequence[str]) -> SimpleLayout:
     )
 
 
+def without_keys(layout: SimpleLayout, dropped: set[str]) -> SimpleLayout:
+    """*layout* with the blocks *dropped* names taken out, their rows closing up."""
+    if not dropped:
+        return layout
+    kept = set(layout.keys()) - dropped
+    return SimpleLayout(_as_page(_keep(layout.page, kept)), _keep(layout.strip, kept), layout.edge)
+
+
 def printable_page(layout: SimpleLayout, printable: set[str]) -> Split:
     """The page with everything that does not belong on paper taken out."""
     return _as_page(_keep(layout.page, printable))

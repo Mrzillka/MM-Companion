@@ -261,8 +261,10 @@ class MainWindow(QMainWindow):
             session_menu.addAction("Join session...").triggered.connect(self._join_session)
             install_connection_indicator(self)
 
-        self._build_undo_actions(menu_bar)
+        # Before the undo pair rather than between it and the lock: the three glyphs
+        # at the end of the bar are one cluster (tests/test_main_window.py).
         self._build_simple_toggle(menu_bar)
+        self._build_undo_actions(menu_bar)
 
         # Last on the bar, and on the bar rather than in a menu: locking is how a
         # sheet is read *and* how it is written, so it is reached constantly. An

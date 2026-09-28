@@ -627,7 +627,8 @@ class SimpleSheet(QWidget):
     def _schedule_rebuild(self) -> None:
         if self._active and not self._rebuild_pending:
             self._rebuild_pending = True
-            QTimer.singleShot(0, self._rebuild)
+            # Tied to this widget, so a window closed before the turn ends cancels it.
+            QTimer.singleShot(0, self, self._rebuild)
 
     def _on_arrangement_changed(self) -> None:
         # The Custom preset *is* the edit sheet's arrangement, so a block reopened

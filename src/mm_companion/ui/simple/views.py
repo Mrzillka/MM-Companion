@@ -343,7 +343,7 @@ class SystemView(_View):
 
         modes = []
         for line in movement_mode_lines(character, data):
-            columns = speed_columns(line.rank, data, ground=False)
+            columns = speed_columns(line.rank, data, metric=self._metric, ground=False)
             modes.append(f"{line.label} " + " / ".join(c.replace(" feet", " ft") for c in columns))
         self.movement.setText(_join(modes))
         self.movement.setVisible(bool(modes))
@@ -552,6 +552,9 @@ class AdvantagesView(_View):
         layout.addStretch()
         self.refresh()
 
+    def is_empty(self) -> bool:
+        return not all_advantage_selections(self._character, self._data)
+
     def _text(self, selection) -> str:
         advantage = advantage_by_name(self._data, selection.name)
         ranked = bool(advantage and advantage.ranked)
@@ -595,6 +598,9 @@ class ComplicationsView(_View):
         super().__init__(context)
         self._layout = _vbox(self)
         self.refresh()
+
+    def is_empty(self) -> bool:
+        return not any(c.name or c.description for c in self._character.complications)
 
     def refresh(self) -> None:
         with rebuilding(self):
@@ -744,6 +750,10 @@ class NotesPrintView(_View):
         self._key = key
         self._layout = _vbox(self, "space.sm")
         self.refresh()
+
+    def is_empty(self) -> bool:
+        state = self._character.notes.get(self._key)
+        return state is None or not state.files
 
     def refresh(self) -> None:
         from mm_companion.core import notes

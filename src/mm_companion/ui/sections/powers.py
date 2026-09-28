@@ -1205,8 +1205,13 @@ class PowersSection(TitledSection):
 
         if self._simple:
             # The mode is a fact about the build; on the simple sheet it is small print
-            # beside the name rather than a strip of segments.
-            row.addWidget(term_label(_SIMPLE_MODE_NAMES.get(_group_mode(group), ""), wrap=False))
+            # beside the name rather than a strip of segments — and an unnamed group's
+            # "Group of dynamic alternate effects" would only say it twice.
+            mode = _SIMPLE_MODE_NAMES.get(_group_mode(group), "")
+            if mode and not group.name:
+                label.setText(mode.capitalize())
+            else:
+                row.addWidget(term_label(mode, wrap=False))
         else:
             # Order matters: the lock keeps whichever segment is lit, so the mode has to
             # be set before it — see _ModeToggle.set_locked.
@@ -2883,6 +2888,10 @@ class PowersSection(TitledSection):
         self._locked = locked
         self._add_button.setVisible(not locked)
         self._rebuild_list()
+
+    def is_empty(self) -> bool:
+        """No powers: the simple sheet leaves this block off rather than print "none"."""
+        return not self._character.powers
 
     def set_simple(self, simple: bool) -> None:
         """Draw the cards for the simple sheet (see :mod:`mm_companion.ui.simple`).

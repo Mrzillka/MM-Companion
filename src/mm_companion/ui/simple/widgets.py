@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core.rules import RollSpec
 from mm_companion.ui import theme
-from mm_companion.ui.roll_click import attach_roll_click
+from mm_companion.ui.roll_click import ROLL_TOOLTIP, attach_roll_click
 from mm_companion.ui.sections.column_flow import column_count, even_split
 from mm_companion.ui.simple.registry import SimpleContext
 from mm_companion.ui.simple.style import set_font, term_label, tint, value_label
@@ -57,6 +57,9 @@ def make_rollable(widget: QWidget, context: SimpleContext, factory: SpecFactory)
     widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
     widget.setStyleSheet(_hover_style(widget.objectName()))
     widget.setCursor(Qt.CursorShape.PointingHandCursor)
+    # Kept on the widget, so a box that rewrites its tooltip on every refresh (a stat
+    # box, whose hint names the condition moving it) can say how it rolls as well.
+    widget.setProperty("rollHint", ROLL_TOOLTIP)
     attach_roll_click(widget, factory, context.roll, load_sink=context.load)
 
 
@@ -91,7 +94,8 @@ class StatBox(QFrame):
         self._note.setText(note)
         self._note.setVisible(bool(note))
         if tooltip:
-            self.setToolTip(tooltip)
+            hint = self.property("rollHint")
+            self.setToolTip("\n".join((tooltip, hint)) if hint else tooltip)
 
     def value_text(self) -> str:
         return self._value.text()

@@ -283,8 +283,14 @@ class SimpleRow(ReflowBox, QWidget):
         self._sync()
 
 
-def _is_empty(view: QWidget) -> bool:
-    """Whether a simple view says it has nothing to show (``is_empty()``)."""
+def _is_empty(view: QWidget | None) -> bool:
+    """Whether a view or a section says it has nothing to show (``is_empty()``).
+
+    Opt-in, and only for a block whose emptiness is a fact about the character rather
+    than a control: no powers, no gear, no advantages. The Conditions box is never
+    empty in this sense — it is where a condition goes on — and nor is a live Notes
+    block, which is where a player opens one.
+    """
     ask = getattr(view, "is_empty", None)
     return bool(ask()) if callable(ask) else False
 
@@ -443,16 +449,12 @@ class SimpleSheet(QWidget):
     def _build(self) -> None:
         model = self.compute_layout()
         for key in model.keys():
-            box = self._make_box(key, live=True)
+            box = self._make_box(key)
             if box is not None:
                 self._boxes[key] = box
-        # A view with nothing to show (a portrait never loaded) gives its room to its
-        # neighbours rather than standing there as an empty box.
-        empty = [key for key, view in self._views.items() if _is_empty(view)]
-        for key in empty:
-            self._views.pop(key)
-            discard_widget(self._boxes.pop(key))
-        model = without_keys(model, set(empty))
+        # A block with nothing to show — a portrait never loaded, a character with no
+        # gear — gives its room to its neighbours rather than standing there empty.
+        model = without_keys(model, set(model.keys()) - set(self._boxes))
         self._layout_model = model
         self._page.show_tree(model.page, self._boxes)
         self._strip_page.show_tree(model.strip, self._boxes)
@@ -477,17 +479,24 @@ class SimpleSheet(QWidget):
         self._views.clear()
         self._layout_model = None
 
-    def _make_box(self, key: str, *, live: bool) -> SimpleBox | None:
-        """The box for *key*: its own view, or its section borrowed from its frame."""
+    def _make_box(self, key: str) -> SimpleBox | None:
+        """The box for *key*: its own view, or its section borrowed from its frame.
+
+        ``None`` for a block with nothing to show (see :func:`_is_empty`) — asked of a
+        section *before* it is lent, so an empty one never leaves its frame at all.
+        """
         spec = simple_view(key)
         title = self._sheet.block_frame(key).base_title
         if spec.borrowed:
-            section = self._borrow_section(key)
-            if section is None:
+            if _is_empty(self._sheet.section(key)):
                 return None
+            section = self._borrow_section(key)
             self._borrowed[key] = section
             return SimpleBox(key, title, section, heading=spec.heading)
         view = spec.factory(self.context_for(key))
+        if _is_empty(view):
+            view.deleteLater()  # never parented, never shown: nothing to flash
+            return None
         self._views[key] = view
         return SimpleBox(key, title, view, heading=spec.heading)
 

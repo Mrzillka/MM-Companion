@@ -53,6 +53,10 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   that changes during play stays changeable" true by construction. A section with a
   quieter look for this page answers `set_simple(bool)` (Powers, Equipment); any other
   borrowed `QGroupBox` just loses its border (`titled_section.set_simple_frame`).
+- **Notes stay writable on the simple sheet** (`NotesSection.set_simple`), although the
+  sheet is locked. The lock is off while the simple sheet is up, and a locked note is
+  read-only — so without this a player could not write a note during play without
+  leaving the view. A note is the one thing on a sheet that is *written* at the table.
 - `BlockFrame.lend_section()` / `take_back_section()` are the seam. It **hides before
   it leaves** (a parentless visible widget is a window — the standing rule, watched by
   `test_switching_flashes_no_window`) and drops the explicit `minimumHeight`
@@ -114,8 +118,13 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
 - The strip opens at its width (360, or the edit strip's own under Custom) but never
   more than 40% of the window (`STRIP_SHARE`), re-applied on every resize until the
   player drags the divider. Sizing it once was sizing it against a half-built window.
-- A view may say it has nothing to show (`is_empty()` — a portrait never loaded) and is
-  then left out, its room going to its neighbours.
+- A block may say it has nothing to show (`is_empty()`) and is then left out, on screen
+  and on paper, its room going to its neighbours: a portrait never loaded, no powers, no
+  gear, no advantages, no complications, a printed Notes block with nothing open. Asked
+  of a section **before** it is lent, so an empty one never leaves its frame. Opt-in and
+  only for emptiness that is a fact about the character: Conditions is never empty in
+  this sense (it is where a condition goes on), nor is the live Notes block (it is where
+  a player opens one).
 
 ## Typography
 

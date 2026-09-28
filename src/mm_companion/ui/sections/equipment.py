@@ -1353,6 +1353,10 @@ class EquipmentSection(TitledSection):
                 window.close()
         self._rebuild_list()
 
+    def is_empty(self) -> bool:
+        """No gear: the simple sheet leaves this block off rather than print "none"."""
+        return not self._character.equipment
+
     def set_simple(self, simple: bool) -> None:
         """Draw the cards for the simple sheet (see :mod:`mm_companion.ui.simple`).
 

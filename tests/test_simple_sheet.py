@@ -703,3 +703,47 @@ def test_reopening_a_closed_block_reaches_the_custom_preset(qapp, data) -> None:
     _settle(qapp, sheet)
 
     assert "complications" in sheet.simple_sheet.shown_keys()
+
+
+def test_a_block_with_nothing_in_it_gives_its_room_away(qapp, data) -> None:
+    """No powers, no gear, no advantages: no box saying "none" on the sheet or on paper.
+
+    The Conditions box stays — it is where a condition goes on — and so does the live
+    Notes block, which is where a player opens one.
+    """
+    sheet = _simple(qapp, data, Character.new_default(data))
+    shown = sheet.simple_sheet.shown_keys()
+
+    for key in ("powers", "equipment", "advantages", "complications"):
+        assert key not in shown, key
+    assert "conditions" in shown and "notes" in shown
+    assert not sheet.block_frame("powers").is_lent()
+
+    document = PrintDocument(sheet)
+    try:
+        assert "powers" not in document.boxes
+        assert "notes" not in document.boxes
+    finally:
+        document.close()
+
+
+def test_a_note_can_be_written_on_the_simple_sheet(qapp, data) -> None:
+    """The one thing a player writes during play: the lock is off here, so notes are too."""
+    from mm_companion.core import notes as store
+
+    ref = store.create_note("Session")
+    sheet = CharacterSheet(data, _hero(data))
+    sheet.show()
+    _settle(qapp)
+    sheet.notes.open_note(ref)
+    sheet.set_locked(True)
+    editor = sheet.notes._open[0].editor
+    assert editor.source.isReadOnly()
+
+    sheet.set_simple(True)
+    _settle(qapp, sheet)
+    assert not editor.source.isReadOnly()
+
+    sheet.set_simple(False)
+    _settle(qapp, sheet)
+    assert editor.source.isReadOnly()

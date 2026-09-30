@@ -245,6 +245,10 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # preference, so it is remembered. Whether a window is *showing* the simple sheet
     # is not — it is a view switch like the lock and compact mode (see "compact").
     "simple_sheet_preset": SIMPLE_PRESET_STANDARD,
+    # Whether a saved character opens straight into the simple sheet. Off by default:
+    # a window is otherwise a view switch like the lock, not remembered (see
+    # "compact"), and this is the one player's choice to make it a habit instead.
+    "simple_sheet_on_open": False,
 }
 
 
@@ -531,6 +535,20 @@ def set_simple_sheet_preset(preset: str) -> None:
     update_settings(
         simple_sheet_preset=preset if preset in SIMPLE_PRESETS else SIMPLE_PRESET_STANDARD
     )
+
+
+def simple_sheet_on_open() -> bool:
+    """Whether a saved character opens in the simple sheet; off unless turned on.
+
+    The accessor the standing rule asks for: a workspace older than the key reads
+    ``None`` off :func:`load_settings`, and that must mean "off", not an error.
+    """
+    return load_settings().get("simple_sheet_on_open") is True
+
+
+def set_simple_sheet_on_open(enabled: bool) -> None:
+    """Record whether saved characters open in the simple sheet."""
+    update_settings(simple_sheet_on_open=bool(enabled))
 
 
 def dice_layout() -> str:

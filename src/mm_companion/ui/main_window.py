@@ -167,6 +167,12 @@ class MainWindow(QMainWindow):
         # Restore the remembered window size and block arrangement, if any.
         self._restore_layout()
 
+        # A saved character opened to be played from (locked) goes straight to the
+        # simple sheet for a player who asked for that (Settings > General). Not an
+        # NPC: that is the GM's prep material, opened to be worked on.
+        if locked and not self._npc and storage.simple_sheet_on_open():
+            self._sheet.set_simple(True)
+
     @property
     def sheet(self) -> CharacterSheet:
         """The character sheet this window hosts — the seam a session attaches to."""

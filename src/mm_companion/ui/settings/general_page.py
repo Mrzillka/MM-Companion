@@ -1,8 +1,9 @@
 """The General settings page: preferences that are not about the look or the GM.
 
-Two settings. Whether the launcher looks for a newer release when the app starts
-(see :mod:`mm_companion.core.updates`) — on by default, and here for whoever would
-rather the app made no request of its own. And how the dice roller arranges
+Three settings. Whether a saved character opens in the simple sheet (the play view,
+see :mod:`mm_companion.ui.simple`). Whether the launcher looks for a newer release
+when the app starts (see :mod:`mm_companion.core.updates`) — on by default, and here
+for whoever would rather the app made no request of its own. And how the dice roller arranges
 itself, as a sheet block and as the GM window's Rolls block alike. Normally it
 reflows to whatever room it is given, but two of the shapes it can be in turned
 out to be worth choosing outright:
@@ -38,6 +39,12 @@ from mm_companion.ui.widgets import BOLD_STYLE, muted_style
 UPDATES_NOTE = (
     "Ask GitHub, once each time MM-Companion starts, whether a newer version is out. "
     "Nothing is downloaded until you click Update."
+)
+
+SIMPLE_NOTE = (
+    "The play view: the character on one tight, printable page. A character you open "
+    "from your library starts there; a new one still opens for editing, and the Edit "
+    "sheet button switches back. Its arrangement is under View > Simple Sheet Layout."
 )
 
 NOTE_TEXT = (
@@ -81,6 +88,7 @@ class GeneralPage(SettingsPage):
 
         column = QVBoxLayout(self)
         column.addWidget(self._build_updates())
+        column.addWidget(self._build_simple_sheet())
         column.addWidget(self._build_heading())
         column.addWidget(self._build_dice_layout())
         column.addStretch()
@@ -105,6 +113,25 @@ class GeneralPage(SettingsPage):
         stack.addWidget(self._check_updates)
 
         note = QLabel(UPDATES_NOTE)
+        note.setWordWrap(True)
+        note.setStyleSheet(muted_style(italic=True))
+        stack.addWidget(note)
+        return panel
+
+    def _build_simple_sheet(self) -> QWidget:
+        panel = QWidget()
+        stack = QVBoxLayout(panel)
+        stack.setContentsMargins(0, 0, 0, 0)
+
+        title = QLabel("Simple sheet")
+        title.setStyleSheet(BOLD_STYLE)
+        stack.addWidget(title)
+
+        self._simple_on_open = QCheckBox("Open saved characters in the simple sheet")
+        self._simple_on_open.toggled.connect(lambda *_: self._set_status(""))
+        stack.addWidget(self._simple_on_open)
+
+        note = QLabel(SIMPLE_NOTE)
         note.setWordWrap(True)
         note.setStyleSheet(muted_style(italic=True))
         stack.addWidget(note)
@@ -181,12 +208,15 @@ class GeneralPage(SettingsPage):
         return (
             self._chosen() != self._saved
             or self._check_updates.isChecked() != self._saved_check_updates
+            or self._simple_on_open.isChecked() != self._saved_simple_on_open
         )
 
     def save(self) -> None:
         """Write the preference, and reshape every roller already on screen."""
         storage.set_check_for_updates(self._check_updates.isChecked())
         self._saved_check_updates = self._check_updates.isChecked()
+        storage.set_simple_sheet_on_open(self._simple_on_open.isChecked())
+        self._saved_simple_on_open = self._simple_on_open.isChecked()
         storage.set_dice_layout(self._chosen())
         self._saved = self._chosen()
         for window in _open_windows():
@@ -207,6 +237,8 @@ class GeneralPage(SettingsPage):
     def _load(self) -> None:
         self._saved_check_updates = storage.check_for_updates()
         self._check_updates.setChecked(self._saved_check_updates)
+        self._saved_simple_on_open = storage.simple_sheet_on_open()
+        self._simple_on_open.setChecked(self._saved_simple_on_open)
         self._saved = storage.dice_layout()
         self._choices[self._saved].setChecked(True)
         self._set_status("")

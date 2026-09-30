@@ -131,6 +131,7 @@ from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.simple.style import term_label
 from mm_companion.ui.widgets import (
     BOLD_STYLE,
+    HeldRebuild,
     discard_widget,
     hline_separator,
     make_spin_box,
@@ -241,7 +242,7 @@ class BudgetBar(QWidget):
         )
 
 
-class EquipmentSection(TitledSection):
+class EquipmentSection(HeldRebuild, TitledSection):
     """Equipment section: a budget bar, a catalog picker, and auto-grouped item cards."""
 
     #: A build change (add/remove an item, reorder, re-price) — marks the sheet dirty.
@@ -679,6 +680,8 @@ class EquipmentSection(TitledSection):
     def _rebuild_list(self) -> None:
         # Wearing an item rebuilds every card, and the block is momentarily empty while
         # it does — see PowersSection._rebuild_list for what that costs the page.
+        if self.rebuild_held():
+            return
         with rebuilding(self):
             self._rebuild_cards()
 

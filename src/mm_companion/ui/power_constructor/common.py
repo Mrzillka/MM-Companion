@@ -12,10 +12,12 @@ from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.registry import Registry
 from mm_companion.core.rules import (
+    ROW_SPECIALIZED,
     TRAIT_COLUMN_TYPE,
     config_field_options,
     config_field_shown,
     config_source_options,
+    own_skill_rows,
     trait_rank_cap,
 )
 from mm_companion.ui.power_constructor.trait_picker import (
@@ -238,10 +240,9 @@ def combat_focus_options(character: Character | None, game_data: GameData) -> li
     for skill in game_data.skills:
         if skill.ability != "ATK" or not skill.focused:
             continue
-        for focus in character.focuses.get(skill.name, []):
-            options.append((f"{skill.name}: {focus}", f"{skill.name}::{focus}"))
-        for spec in character.specializations.get(skill.name, []):
-            options.append((f"{skill.name}: {spec} (specialized)", f"{skill.name}::spec::{spec}"))
+        for row in own_skill_rows(character, skill):
+            suffix = " (specialized)" if row.kind == ROW_SPECIALIZED else ""
+            options.append((f"{skill.name}: {row.qualifier}{suffix}", row.row_id))
     return options
 
 

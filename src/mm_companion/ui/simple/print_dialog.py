@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.core import storage
-from mm_companion.ui.blocks.base import instance_template
 from mm_companion.ui.simple.printing import print_candidates, prints_by_default
 from mm_companion.ui.widgets import muted_style
 
@@ -82,10 +81,12 @@ class PrintChoiceDialog(QDialog):
         ok.setEnabled(any(box.isChecked() for box in self._boxes.values()))
 
     def accept(self) -> None:
-        """Remember the answer for the next print, by kind of block."""
-        storage.set_simple_print_choices(
-            {instance_template(key): box.isChecked() for key, box in self._boxes.items()}
-        )
+        """Remember the answer for the next print, block by block.
+
+        By the block's own key, not its kind: two Notes blocks are two checkboxes, and
+        keyed by kind the second one's answer overwrote the first's.
+        """
+        storage.set_simple_print_choices({key: box.isChecked() for key, box in self._boxes.items()})
         super().accept()
 
 

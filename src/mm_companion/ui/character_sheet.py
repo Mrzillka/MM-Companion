@@ -23,6 +23,7 @@ host window can track unsaved changes.
 from __future__ import annotations
 
 import json
+from contextlib import ExitStack
 from dataclasses import replace
 
 from PySide6.QtCore import Qt, Signal
@@ -616,26 +617,45 @@ class CharacterSheet(QWidget):
         simple = bool(simple)
         if simple == self.is_simple:
             return
-        if simple:
-            view = self.simple_sheet
-            self._locked_before_simple = self._locked
-            # Only if it is not already: locking rebuilds the card trees, and a sheet a
-            # player opens to play from is locked already.
-            if not self._locked:
-                self.set_locked(True)
-            self._board.hide()
-            view.activate()
-            view.show()
-        else:
-            view = self._simple
-            view.deactivate()
-            view.hide()
-            self._board.show()
-            previous = self._locked_before_simple
-            self._locked_before_simple = None
-            if previous is not None and previous != self._locked:
-                self.set_locked(previous)
+        # Both halves of a switch redraw the card blocks — the lock and the simple
+        # look each rebuild every card — so the blocks that can hold a rebuild do it
+        # once, at the end, in the state the switch leaves them in.
+        with ExitStack() as holds:
+            for section in self._sections():
+                hold = getattr(section, "held_rebuild", None)
+                if callable(hold):
+                    holds.enter_context(hold())
+            if simple:
+                self._enter_simple()
+            else:
+                self._leave_simple()
         self.simpleChanged.emit(simple)
+
+    def _enter_simple(self) -> None:
+        view = self.simple_sheet
+        self._locked_before_simple = self._locked
+        # Only if it is not already: locking rebuilds the card trees, and a sheet a
+        # player opens to play from is locked already.
+        if not self._locked:
+            self.set_locked(True)
+        # The page is out of sight from here on, and may never have been laid out at
+        # all (a sheet opened straight into this view): its layout is what the tree
+        # says, not what its dividers read.
+        self._canvas.set_sizes_held(True)
+        self._board.hide()
+        view.activate()
+        view.show()
+
+    def _leave_simple(self) -> None:
+        view = self._simple
+        view.deactivate()
+        view.hide()
+        self._board.show()
+        self._canvas.set_sizes_held(False)
+        previous = self._locked_before_simple
+        self._locked_before_simple = None
+        if previous is not None and previous != self._locked:
+            self.set_locked(previous)
 
     def release_roller(self) -> tuple[QWidget, QWidget] | None:
         """Lend the dice roller out to a compact window, or ``None`` if there is none.

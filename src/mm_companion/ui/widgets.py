@@ -618,3 +618,37 @@ def rebuilding(widget: QWidget) -> Iterator[None]:
             bar.setValue(value)
         if areas:
             QTimer.singleShot(0, areas[0], lambda: [bar.setValue(value) for bar, value in values])
+
+
+class HeldRebuild:
+    """For a block that redraws itself whole: hold that redraw across several changes.
+
+    A card block rebuilds its whole tree on every setter that changes how it draws, so
+    two setters in a row — locked, then dressed for the simple sheet — are two full
+    rebuilds, the first thrown away at once; on a well-stocked character each is
+    the expensive part of switching views. Inside :meth:`held_rebuild` a rebuild is
+    only noted, and the last hold to close does it once. Mixed in ahead of the Qt
+    base; the block's rebuild calls :meth:`rebuild_held` first and returns if it says
+    so.
+    """
+
+    _rebuild_holds = 0
+    _rebuild_pending = False
+
+    @contextmanager
+    def held_rebuild(self) -> Iterator[None]:
+        self._rebuild_holds += 1
+        try:
+            yield
+        finally:
+            self._rebuild_holds -= 1
+            if not self._rebuild_holds and self._rebuild_pending:
+                self._rebuild_pending = False
+                self._rebuild_list()
+
+    def rebuild_held(self) -> bool:
+        """Whether a rebuild asked for now should wait for the hold to close."""
+        if self._rebuild_holds:
+            self._rebuild_pending = True
+            return True
+        return False

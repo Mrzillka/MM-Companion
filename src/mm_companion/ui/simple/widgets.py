@@ -309,7 +309,8 @@ class ColumnGrid(QWidget):
         self._sync_columns()
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
-        return QSize(min(self._min_column, 40), super().minimumSizeHint().height())
+        floor = int(theme.metric("simple.column-floor"))
+        return QSize(min(self._min_column, floor), super().minimumSizeHint().height())
 
 
 def clear_layout(layout) -> None:

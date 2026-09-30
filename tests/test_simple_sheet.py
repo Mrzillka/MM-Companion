@@ -1053,3 +1053,184 @@ def test_the_print_choice_names_blocks_as_they_are_titled(qapp, data) -> None:
 
     assert box.text().replace("&&", "&") == "Name & Details"
     assert "&&" in box.text()  # not a shortcut marker eating the ampersand
+
+
+# -- review fixes -----------------------------------------------------------------
+
+
+def test_opening_straight_into_the_simple_sheet_keeps_the_saved_layout(qapp, data) -> None:
+    """A sheet whose page was never laid out must not save its dividers' slivers.
+
+    Opened into the simple sheet (Settings > General), the edit page is hidden before
+    it is ever shown, and its splitters report sizes squeezed into their default
+    geometry. Saved as they read, a first row of 100 : 600 : 122 came back 24 : 32 : 24.
+    """
+    import json
+
+    first = CharacterSheet(data, _hero(data))
+    model = first.arrangement()
+    page = lt.from_dict(model["page"], set(first.canvas.block_keys()))
+    row = lt.at(page, (0,))
+    sizes = [100, 600, 122][: len(row.children)]
+    model["page"] = lt.to_dict(lt.set_sizes(page, (0,), sizes))
+
+    sheet = CharacterSheet(data, _hero(data))
+    assert sheet.restore_layout(json.dumps(model))
+    sheet.set_locked(True)
+    sheet.set_simple(True)  # before the window is ever shown, as MainWindow does
+    sheet.resize(1100, 900)
+    sheet.show()
+    _settle(qapp, sheet)
+
+    saved = json.loads(sheet.save_layout())
+    assert lt.at(lt.from_dict(saved["page"], set(sheet.canvas.block_keys())), (0,)).sizes == (
+        tuple(sizes)
+    )
+
+
+def test_a_divider_dragged_before_switching_is_kept(qapp, data) -> None:
+    """On the way into the simple sheet the page's live sizes are taken in once."""
+    sheet = CharacterSheet(data, _hero(data))
+    sheet.resize(1100, 900)
+    sheet.show()
+    _settle(qapp, sheet)
+    splitter = sheet.canvas._row_widgets[0]
+    total = sum(splitter.sizes())
+    wanted = [total // 2] + [
+        (total - total // 2) // (splitter.count() - 1) for _ in range(splitter.count() - 1)
+    ]
+    splitter.setSizes(wanted)
+    moved = splitter.sizes()
+
+    sheet.set_simple(True)
+    _settle(qapp, sheet)
+    page = lt.as_page(lt.from_dict(sheet.arrangement()["page"], set(sheet.canvas.block_keys())))
+
+    assert list(lt.at(page, (0,)).sizes) == moved
+
+
+def test_switching_rebuilds_the_power_cards_once_each_way(qapp, data, monkeypatch) -> None:
+    """Locking and dressing each rebuild every card; a switch holds them into one."""
+    from mm_companion.ui.sections import powers as powers_module
+
+    real = powers_module.rebuilding
+    count = {"n": 0}
+
+    def counting(widget):
+        if isinstance(widget, powers_module.PowersSection):
+            count["n"] += 1
+        return real(widget)
+
+    sheet = CharacterSheet(data, _hero(data))
+    sheet.set_locked(False)
+    sheet.resize(1100, 900)
+    sheet.show()
+    _settle(qapp, sheet)
+    monkeypatch.setattr(powers_module, "rebuilding", counting)
+
+    sheet.set_simple(True)
+    assert count["n"] == 1
+    count["n"] = 0
+    sheet.set_simple(False)
+    assert count["n"] == 1
+
+
+def test_a_pdf_that_cannot_be_written_says_so(qapp, data, tmp_path) -> None:
+    """A folder that does not exist stands in for a file another program has locked."""
+    result = export_pdf(CharacterSheet(data, _hero(data)), tmp_path / "missing" / "x.pdf")
+
+    assert result.failed
+
+
+def test_a_written_pdf_is_not_a_failure(qapp, data, tmp_path) -> None:
+    result = export_pdf(CharacterSheet(data, _hero(data)), tmp_path / "ok.pdf")
+
+    assert not result.failed and result.pages >= 1
+
+
+def test_a_print_started_inside_a_print_is_refused(qapp, data, tmp_path, monkeypatch) -> None:
+    """Laying the copy out lets queued events run; a second print among them must not
+    start on a printer the first is still painting."""
+    from mm_companion.ui.simple import printing
+
+    sheet = CharacterSheet(data, _hero(data))
+    nested = []
+    real_lay_out = PrintDocument.lay_out
+
+    def lay_out(self):
+        nested.append(printing.export_pdf(sheet, tmp_path / "inner.pdf"))
+        return real_lay_out(self)
+
+    monkeypatch.setattr(PrintDocument, "lay_out", lay_out)
+    outer = printing.export_pdf(sheet, tmp_path / "outer.pdf")
+
+    assert not outer.failed
+    assert nested and nested[0].failed
+    assert not printing._painting
+
+
+def test_two_notes_blocks_remember_their_own_print_choice(qapp, data) -> None:
+    from mm_companion.ui.simple.print_dialog import PrintChoiceDialog
+
+    sheet = CharacterSheet(data, _hero(data))
+    second = sheet.add_block_instance("notes")
+    dialog = PrintChoiceDialog(sheet)
+    dialog._boxes["notes"].setChecked(True)
+    dialog._boxes[second].setChecked(False)
+    dialog.accept()
+
+    again = PrintChoiceDialog(sheet)
+    assert again._boxes["notes"].isChecked()
+    assert not again._boxes[second].isChecked()
+
+
+def test_a_third_notes_block_follows_the_choice_for_notes(qapp, data) -> None:
+    from mm_companion.ui.simple.printing import prints_by_default
+
+    storage.set_simple_print_choices({"notes": False})
+
+    assert not prints_by_default("notes#3")
+
+
+class _BareConditions(QObject):
+    """A mod's Conditions block that offers none of our funnels."""
+
+
+def test_a_conditions_view_over_a_section_without_the_funnels_still_draws(qapp, data) -> None:
+    from mm_companion.core.character import AppliedCondition
+    from mm_companion.ui.simple.registry import SimpleContext
+
+    char = _hero(data)
+    char.conditions.append(AppliedCondition("confused"))
+    view = ConditionsView(SimpleContext(data, char, _BareConditions(), key="conditions"))
+
+    assert "Confused" in " ".join(_texts(view))
+    from PySide6.QtWidgets import QToolButton
+
+    assert not [b for b in view.findChildren(QToolButton) if b.text() == "🎲"]
+    view._on_damage(1)  # no apply_damage_step: nothing happens, nothing raises
+
+
+def test_the_conditions_view_skips_a_redraw_that_changes_nothing(qapp, data) -> None:
+    from mm_companion.core.character import AppliedCondition
+
+    char = _hero(data)
+    char.conditions.append(AppliedCondition("dazed"))
+    sheet = _simple(qapp, data, char)
+    view = next(iter(sheet.simple_sheet.findChildren(ConditionsView)))
+    chips = view._chips_host.findChildren(QWidget, "simpleCondition")
+
+    view.refresh()
+    assert view._chips_host.findChildren(QWidget, "simpleCondition") == chips
+
+    char.conditions.append(AppliedCondition("prone"))
+    view.refresh()
+    assert len(view._chips_host.findChildren(QWidget, "simpleCondition")) == 2
+
+
+def test_the_print_colours_are_theme_tokens(qapp) -> None:
+    from mm_companion.ui.simple.printing import paper_palette
+
+    palette = paper_palette()
+    assert palette.color(QPalette.ColorRole.Window).name() == theme.color("paper.background")
+    assert palette.color(QPalette.ColorRole.WindowText).name() == theme.color("paper.ink")

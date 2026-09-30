@@ -51,6 +51,7 @@ from mm_companion.core.rules import (
     initiative_modifier,
     initiative_roll,
     movement_mode_lines,
+    own_skill_rows,
     pushed_effects,
     pushed_trait_labels,
     reach_is_altered,
@@ -488,14 +489,10 @@ def skill_rows(context: SimpleContext) -> tuple[list[tuple[str, str]], list[tupl
         skill = catalog.get(name)
         if skill is None or name in hidden:
             continue
-        rows: list[tuple[str, str]] = []
-        if skill.focused:
-            for focus in character.focuses.get(name, []):
-                rows.append((f"{name}::{focus}", f"{name}: {focus}"))
-        else:
-            rows.append((name, name))
-        for spec in character.specializations.get(name, []):
-            rows.append((f"{name}::spec::{spec}", f"{name}: {spec}"))
+        rows = [
+            (row.row_id, f"{name}: {row.qualifier}" if row.qualifier else name)
+            for row in own_skill_rows(character, skill)
+        ]
         for row_id in granted:
             if split_trait_key(row_id)[0] == name and all(r[0] != row_id for r in rows):
                 rows.append((row_id, trait_display_name(data, row_id)))
@@ -658,9 +655,11 @@ class ComplicationsView(_View):
         return not any(c.name or c.description for c in self._character.complications)
 
     def refresh(self) -> None:
+        shown = [c for c in self._character.complications if c.name or c.description]
+        if self._unchanged(tuple((c.name, c.description) for c in shown)):
+            return
         with rebuilding(self):
             clear_layout(self._layout)
-            shown = [c for c in self._character.complications if c.name or c.description]
             for complication in shown:
                 name = name_label(complication.name or "Complication", bold=True, wrap=True)
                 self._layout.addWidget(name)
@@ -726,16 +725,42 @@ class ConditionsView(_View):
         menu.exec(self.add_button.mapToGlobal(self.add_button.rect().bottomLeft()))
 
     def _on_damage(self, index: int) -> None:
-        section = self.context.section
-        if section is not None:
-            section.apply_damage_step(index)
+        apply = getattr(self.context.section, "apply_damage_step", None)
+        if callable(apply):
+            apply(index)
 
-    def _chip(self, applied: AppliedCondition) -> QWidget:
+    def _funnel(self, name: str):
+        """The live section's *name* funnel, or ``None`` — a mod's Conditions block
+        may stand in for ours without every one of them."""
+        funnel = getattr(self.context.section, name, None)
+        return funnel if callable(funnel) else None
+
+    def _facts(self, applied: AppliedCondition, catalog: dict) -> tuple:
+        """Everything a chip shows, as values: what :meth:`refresh` compares and draws.
+
+        ``(name, inherited, tooltip, random, rolled)`` — *inherited* when another
+        condition put it on (drawn in italics), *random* for a Confused-style condition
+        that offers a roll, *rolled* this turn's random action if one was rolled.
+        """
         from mm_companion.ui.sections.conditions import condition_display_name, condition_tooltip
 
-        catalog = {c.id: c for c in self._data.conditions}
         record = catalog.get(applied.condition_id)
-        name = condition_display_name(applied, record)
+        roll = self._funnel("confused_roll")
+        random = (
+            record is not None
+            and MECH_RANDOM_ACTION in record.mechanisms
+            and self._funnel("roll_confused") is not None
+        )
+        return (
+            condition_display_name(applied, record),
+            applied.provenance is not None,
+            condition_tooltip(applied, record, catalog),
+            random,
+            (roll(applied) or None) if random and roll is not None else None,
+        )
+
+    def _chip(self, applied: AppliedCondition, facts: tuple) -> QWidget:
+        name, inherited, tooltip, random, rolled = facts
         chip = QWidget()
         chip.setObjectName("simpleCondition")
         chip.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -749,16 +774,14 @@ class ConditionsView(_View):
         pad = int(theme.metric("space.xs"))
         row.setContentsMargins(pad * 2, pad, pad * 2, pad)
         row.setSpacing(pad)
-        label = name_label(name, bold=applied.provenance is None)
-        if applied.provenance is not None:
+        label = name_label(name, bold=not inherited)
+        if inherited:
             font = label.font()
             font.setItalic(True)
             label.setFont(font)
         row.addWidget(label)
-        chip.setToolTip(condition_tooltip(applied, record, catalog))
-        section = self.context.section
-        if record is not None and MECH_RANDOM_ACTION in record.mechanisms and section is not None:
-            rolled = section.confused_roll(applied)
+        chip.setToolTip(tooltip)
+        if random:
             if rolled:
                 row.addWidget(term_label(f"— {rolled}", wrap=False))
             die = QToolButton()
@@ -767,26 +790,36 @@ class ConditionsView(_View):
             die.setToolTip("Roll this turn's random action")
             die.clicked.connect(lambda _c=False, a=applied: self._roll_confused(a))
             row.addWidget(die)
-        if section is not None and hasattr(section, "shed_condition"):
-            attach_context_removal(chip, lambda a=applied: section.shed_condition(a), what=name)
+        shed = self._funnel("shed_condition")
+        if shed is not None:
+            attach_context_removal(chip, lambda a=applied: shed(a), what=name)
         return chip
 
     def _roll_confused(self, applied: AppliedCondition) -> None:
-        section = self.context.section
-        if section is not None:
-            section.roll_confused(applied)
+        roll = self._funnel("roll_confused")
+        if roll is not None:
+            roll(applied)
             self.refresh()
 
     def refresh(self) -> None:
+        self.damage.refresh()
+        catalog = {c.id: c for c in self._data.conditions}
+        conditions = list(self._character.conditions)
+        facts = [self._facts(applied, catalog) for applied in conditions]
+        # And *which* conditions, by identity as well as value: a chip's right-click
+        # sheds the object it was built over, so a list swapped for equal copies (an
+        # undo, a GM's command) has to be drawn again. A chip holds its condition, so
+        # an id cannot be reused while the chip that drew it is still here.
+        if self._unchanged((tuple(facts), tuple(id(applied) for applied in conditions))):
+            return
         with rebuilding(self):
             clear_layout(self._chips)
-            for applied in self._character.conditions:
-                self._chips.addWidget(self._chip(applied))
-            has_any = bool(self._character.conditions)
+            for applied, chip_facts in zip(conditions, facts, strict=True):
+                self._chips.addWidget(self._chip(applied, chip_facts))
+            has_any = bool(conditions)
             self._chips_host.setVisible(has_any)
             self._chips_host.refresh_height()
             self.empty.setVisible(not has_any)
-            self.damage.refresh()
 
 
 # -- Notes, on paper ----------------------------------------------------------------

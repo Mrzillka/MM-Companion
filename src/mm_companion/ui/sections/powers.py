@@ -156,6 +156,7 @@ from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import (
     BOLD_STYLE,
     ElidingLabel,
+    HeldRebuild,
     hline_separator,
     muted_style,
     rebuilding,
@@ -724,7 +725,7 @@ class _EffectSelector(QWidget):
         self._combo.currentIndexChanged.connect(self.effectPicked)
 
 
-class PowersSection(TitledSection):
+class PowersSection(HeldRebuild, TitledSection):
     """Powers section: launches the Power Constructor and lists saved powers as a tree."""
 
     # A build change (add/remove/edit a power, group, re-cost) — marks the sheet dirty.
@@ -1084,6 +1085,8 @@ class PowersSection(TitledSection):
         empty while it does. :func:`~mm_companion.ui.widgets.rebuilding` is what
         stops that shrinking the page out from under the card just clicked.
         """
+        if self.rebuild_held():
+            return
         with rebuilding(self):
             self._normalize_arrays()  # a valid active member per array before drawing
             # The one refresh handler that *writes* the model, so it is also the one

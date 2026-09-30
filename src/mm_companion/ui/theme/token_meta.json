@@ -5,7 +5,7 @@
   "groups": {
     "colors": {
       "label": "Colours",
-      "order": ["surface", "text", "accent", "tint", "scene", "border", "badge", "drop", "focus", "splash", "dice"]
+      "order": ["surface", "text", "accent", "tint", "scene", "border", "badge", "drop", "focus", "splash", "dice", "paper"]
     },
     "metrics": {
       "label": "Sizes",
@@ -29,6 +29,7 @@
     "focus": "Focus ring",
     "splash": "Splash screen",
     "dice": "Dice",
+    "paper": "Paper (printing)",
     "radius": "Corner radii",
     "space": "Spacing steps",
     "card": "Power cards",
@@ -127,6 +128,9 @@
     "splash.background": {"label": "Background", "hint": "The startup splash screen."},
     "splash.text": {"label": "Text", "hint": "On the splash screen."},
     "dice.face": {"label": "Die face", "hint": "The rolled number in the dice roller."},
+    "paper.background": {"label": "Paper", "hint": "The page of a printed or exported sheet, whatever the theme. A #rrggbb."},
+    "paper.ink": {"label": "Ink", "hint": "Text on a printed sheet. A #rrggbb."},
+    "paper.muted": {"label": "Muted ink", "hint": "Secondary text on a printed sheet, and its page footer. A #rrggbb."},
     "radius.card": {"label": "Card", "hint": "Also the fallback for any radius a preset leaves unstated."},
     "radius.group": {"label": "Group box"},
     "radius.canvas": {"label": "Canvas"},
@@ -246,6 +250,7 @@
     "simple.portrait": {"label": "Portrait height"},
     "simple.box-min": {"label": "Narrowest box in a row", "hint": "Below this a row of boxes stacks them one under another."},
     "simple.line-column": {"label": "List column width", "hint": "The narrowest a column of skills or advantages gets before the list drops to fewer columns."},
+    "simple.column-floor": {"label": "List column floor", "hint": "How narrow a single list column may be dragged before it clips rather than refusing."},
     "opacity.term": {"label": "Game terms", "hint": "How strongly the simple sheet's game terms are drawn next to the values they qualify."},
     "size.version": {"label": "Version line", "hint": "The app version under the launcher's buttons."},
     "size.cost-total": {"label": "Cost total"},

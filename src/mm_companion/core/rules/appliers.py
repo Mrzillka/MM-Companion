@@ -231,6 +231,16 @@ TRAIT_QUALIFIER_SEP = "::"
 SPECIALIZED_ROW_MARKER = "spec::"
 
 
+def focus_row_id(skill: str, focus: str) -> str:
+    """The row id of one focus of a focused skill — ``"Expertise::Law"``."""
+    return f"{skill}{TRAIT_QUALIFIER_SEP}{focus}"
+
+
+def specialized_row_id(skill: str, pool: str) -> str:
+    """The row id of a skill's specialized rank pool — ``"Stealth::spec::Urban"``."""
+    return f"{skill}{TRAIT_QUALIFIER_SEP}{SPECIALIZED_ROW_MARKER}{pool}"
+
+
 def split_trait_key(target: str) -> tuple[str, str]:
     """A trait key as ``(base, qualifier)`` — ``"Expertise::Law"`` → ``("Expertise", "Law")``.
 

@@ -482,6 +482,14 @@ class MainWindow(QMainWindow):
         if not path:
             return
         result = export_pdf(self._sheet, Path(path), keys)
+        if result.failed:
+            QMessageBox.warning(
+                self,
+                "Export as PDF",
+                f"Could not write {path}.\n\nIf the file is open in another program, "
+                "close it and try again, or choose another name or folder.",
+            )
+            return
         pages = "page" if result.pages == 1 else "pages"
         self.statusBar().showMessage(f"Exported {result.pages} {pages} to {path}", 5000)
 

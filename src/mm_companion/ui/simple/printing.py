@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6 import QtGui
-from PySide6.QtCore import QEvent, QMarginsF, QObject, QPoint, QRect, QRectF, Qt
+from PySide6.QtCore import QEvent, QEventLoop, QMarginsF, QObject, QPoint, QRect, QRectF, Qt
 from PySide6.QtGui import (
     QAbstractTextDocumentLayout,
     QColor,
@@ -82,10 +82,27 @@ MIN_FILL = 0.35
 MARGIN_MM = 12.0
 
 
+def _settle() -> None:
+    """Let the copy's queued work run — its layout passes, a block's deferred reflow.
+
+    But nothing a person does. This runs inside the print preview's ``paintRequested``,
+    and a click there (a page-setup or orientation button) regenerates the preview —
+    a second print started on the same printer while the first is still painting it,
+    and a click on the sheet itself would edit the character mid-print. Input waits
+    in the queue until the print is done.
+    """
+    QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+
+
+def paper(name: str) -> QColor:
+    """Paper colour *name* (``paper.*``) — the page is light whatever the theme is."""
+    return QColor(theme.color(f"paper.{name}"))
+
+
 def paper_palette() -> QPalette:
-    """Black on white, whatever the theme — what a printed sheet is drawn in."""
+    """Ink on paper, whatever the theme — what a printed sheet is drawn in."""
     palette = QPalette()
-    white, black = QColor("#ffffff"), QColor("#000000")
+    white, ink, muted = paper("background"), paper("ink"), paper("muted")
     for group in (
         QPalette.ColorGroup.Active,
         QPalette.ColorGroup.Inactive,
@@ -94,24 +111,24 @@ def paper_palette() -> QPalette:
         for role, colour in (
             (QPalette.ColorRole.Window, white),
             (QPalette.ColorRole.Base, white),
-            (QPalette.ColorRole.AlternateBase, QColor("#f4f4f4")),
-            (QPalette.ColorRole.Button, QColor("#f0f0f0")),
-            (QPalette.ColorRole.WindowText, black),
-            (QPalette.ColorRole.Text, black),
-            (QPalette.ColorRole.ButtonText, black),
+            (QPalette.ColorRole.AlternateBase, paper("alternate")),
+            (QPalette.ColorRole.Button, paper("button")),
+            (QPalette.ColorRole.WindowText, ink),
+            (QPalette.ColorRole.Text, ink),
+            (QPalette.ColorRole.ButtonText, ink),
             (QPalette.ColorRole.BrightText, white),
             (QPalette.ColorRole.Light, white),
-            (QPalette.ColorRole.Midlight, QColor("#e3e3e3")),
-            (QPalette.ColorRole.Mid, QColor("#a0a0a0")),
-            (QPalette.ColorRole.Dark, QColor("#707070")),
-            (QPalette.ColorRole.Shadow, QColor("#404040")),
-            (QPalette.ColorRole.PlaceholderText, QColor("#6e6e6e")),
-            (QPalette.ColorRole.Highlight, QColor("#cfe0f5")),
-            (QPalette.ColorRole.HighlightedText, black),
+            (QPalette.ColorRole.Midlight, paper("midlight")),
+            (QPalette.ColorRole.Mid, paper("mid")),
+            (QPalette.ColorRole.Dark, paper("dark")),
+            (QPalette.ColorRole.Shadow, paper("shadow")),
+            (QPalette.ColorRole.PlaceholderText, muted),
+            (QPalette.ColorRole.Highlight, paper("highlight")),
+            (QPalette.ColorRole.HighlightedText, ink),
         ):
             palette.setColor(group, role, colour)
-    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, QColor("#777"))
-    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor("#777"))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, muted)
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, muted)
     return palette
 
 
@@ -125,8 +142,14 @@ def print_candidates(sheet) -> list[str]:
 
 
 def prints_by_default(key: str) -> bool:
-    """Whether block *key* is printed when nobody has said otherwise."""
-    choice = storage.simple_print_choices().get(instance_template(key))
+    """Whether block *key* is printed when nobody has said otherwise.
+
+    The player's choice for this very block first, then one made for its kind — a
+    second Notes block nobody has chosen for yet follows the first — then the block's
+    own ``printable``.
+    """
+    choices = storage.simple_print_choices()
+    choice = choices.get(key, choices.get(instance_template(key)))
     return simple_view(key).printable if choice is None else choice
 
 
@@ -235,7 +258,7 @@ class PrintDocument:
         self.root.show()
         height = 0
         for _ in range(8):
-            QApplication.processEvents()
+            _settle()
             layout = self.root.layout()
             layout.activate()
             if layout.hasHeightForWidth():
@@ -247,7 +270,7 @@ class PrintDocument:
                 break
             height = wanted
             self.root.resize(self.width, height)
-        QApplication.processEvents()
+        _settle()
         # A block that rebuilt itself while it was being laid out made new widgets,
         # and they came out in the application's palette.
         self.dress()
@@ -287,7 +310,7 @@ class PrintDocument:
             max(1, round((bottom - top) * factor)),
             QImage.Format.Format_RGB32,
         )
-        image.fill(QColor("#ffffff"))
+        image.fill(paper("background"))
         painter = QPainter(image)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
@@ -513,17 +536,36 @@ def _draw_label(painter: QPainter, label: QLabel, origin: QPoint, device_dpi: in
 
 @dataclass
 class PrintResult:
-    """What a print produced — how many pages, for the status bar and the tests."""
+    """What a print produced — how many pages, for the status bar and the tests.
+
+    *failed* is set when nothing could be written — the painter would not start on
+    the device (a PDF open in a viewer that locks it, a folder that cannot be
+    written to) or would not finish. Zero pages is not by itself a failure.
+    """
 
     pages: int
+    failed: bool = False
+
+
+#: A print is being laid out or painted — see :func:`paint_document`.
+_painting = False
 
 
 def paint_document(sheet, printer, keys=None) -> PrintResult:
     """Lay the simple sheet out and paint it onto *printer*, page by page.
 
     *keys* is which blocks to print; ``None`` is the remembered choice.
+
+    Never twice at once. Laying the copy out lets queued events run (:func:`_settle`),
+    and anything among them that asked for a print — the preview regenerating —
+    would start a second one on a printer the first is still painting. The nested
+    one is refused (``failed``) and the first carries on.
     """
+    global _painting
+    if _painting:
+        return PrintResult(0, failed=True)
     document = PrintDocument(sheet, keys=keys)
+    _painting = True
     try:
         document.lay_out()
         resolution = printer.resolution()
@@ -536,7 +578,7 @@ def paint_document(sheet, printer, keys=None) -> PrintResult:
         bands = document.page_breaks(band_height)
         painter = QPainter()
         if not painter.begin(printer):
-            return PrintResult(0)
+            return PrintResult(0, failed=True)
         try:
             name = library.display_name(sheet.character)
             for index, (top, bottom) in enumerate(bands):
@@ -551,7 +593,7 @@ def paint_document(sheet, printer, keys=None) -> PrintResult:
                 document.draw_text(painter, top, bottom)
                 painter.restore()
                 painter.setFont(footer_font)
-                painter.setPen(QColor("#666666"))
+                painter.setPen(paper("muted"))
                 footer = QRect(
                     0, paint_rect.height() - footer_height, paint_rect.width(), footer_height
                 )
@@ -564,10 +606,11 @@ def paint_document(sheet, printer, keys=None) -> PrintResult:
                     f"{index + 1} / {len(bands)}",
                 )
         finally:
-            painter.end()
-        return PrintResult(len(bands))
+            finished = painter.end()
+        return PrintResult(len(bands), failed=not finished)
     finally:
         document.close()
+        _painting = False
 
 
 def make_printer(*, pdf_path: Path | str | None = None):

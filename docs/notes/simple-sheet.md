@@ -29,6 +29,15 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   is put back as it was on the way out. `MainWindow` disables the 🔒 while simple; the
   bar switch sits *before* ↶ ↷ so the three glyphs stay the bar's closing cluster (a
   test pins that).
+- **The edit page's layout is not read while the simple sheet is up**
+  (`BlockCanvas.set_sizes_held`). A splitter that has never been laid out reports
+  sizes squeezed into its default geometry — it keeps the proportions it was given as
+  weights and only honours them once shown — and a sheet opened *straight into* the
+  simple sheet never shows its page. Read as they were, closing the window saved a
+  first row of 100 : 600 : 122 as 24 : 32 : 24 over the player's layout (and the Custom
+  preset, which reads the arrangement to build, wrote them into the tree at once). So
+  the live sizes are taken in once on the way in, if the page was on screen, and the
+  tree is the truth until it is back.
 - **Whether a window is showing it is not remembered**, on the precedent of the lock
   and compact mode: a view switch, not a preference. **Which preset** it uses is a
   preference and is — `storage.simple_sheet_preset()` (with the usual accessor
@@ -70,7 +79,8 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
 - **Anything a view *does* spends through the live section's funnel**, never the
   model directly: a hero point through `SystemInfoSection.set_hero_points` (which writes
   the roll-history note), a condition through the new `ConditionsSection` public
-  funnels (`choose_condition`, `shed_condition`, `apply_damage_step`, `roll_confused`),
+  funnels (`choose_condition`, `shed_condition`, `apply_damage_step`, `roll_confused`,
+  each looked up before use, since a mod's Conditions block may offer only some),
   a roll through the section's own `rollRequested`/`loadRequested` (so the bus routes
   it to the Dice block — `SimpleContext.roll`/`load`). That is what keeps the undo step,
   the note, the dirty flag and the GM's card identical to the edit page's.
@@ -87,13 +97,21 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   draw the same thing** (`_View._unchanged`, a signature of *values*, never of the
   mutable selections): every click on the sheet redraws every view, a hero point moves
   nothing in Skills or Advantages, and rebuilding fifty lines each time cost a quarter of
-  a second a click on a well-stocked character. The same measurement is why the hover
+  a second a click on a well-stocked character. Every list view does it — Conditions and
+  Complications too; Conditions' signature also carries each chip's condition *by
+  identity*, since a chip's right-click sheds the object it was built over and an undo
+  swaps the list for equal copies. Skills lists its rows through core's
+  `own_skill_rows`, the listing the edit block reads, so the two cannot disagree on
+  which rows a skill has or what their ids are. The same measurement is why the hover
   wash is **one stylesheet per view** matched on a `rollable` property rather than one
   per line (a sheet is polished per widget), and why `ColumnGrid` moves lines between
   columns without hiding and re-showing them.
 - **Switching is kept cheap on purpose.** The sheet is only re-locked if it was not
   locked (locking rebuilds the card trees, and a sheet opened to play from is locked
-  already), the build runs inside `stable_build()`, and a *rebuild* — a preset change,
+  already); from an unlocked sheet the lock and the simple look would each rebuild
+  every card, so `set_simple` holds the rebuilds of every block that offers
+  `held_rebuild` (`ui/widgets.HeldRebuild` — Powers, Equipment) and each rebuilds
+  once, at the end, in both directions; the build runs inside `stable_build()`, and a *rebuild* — a preset change,
   a session starting — keeps its borrowed sections lent and dressed rather than giving
   them back and borrowing them again (`_teardown(give_back=False)`), handing back only
   what the new arrangement no longer shows. Each of those halved something measured.
@@ -183,8 +201,10 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
 - **Which blocks is asked every time and remembered** (`print_dialog.PrintChoiceDialog`):
   one checkbox per block, ticked by each block's `printable` (the roller and the Scene
   off) unless the player chose otherwise before — `storage.simple_print_choices()`,
-  stored by kind of block and only for what was changed, so a block added later prints
-  by its own default. Per print rather than in Settings, because it is decided per
+  stored **by block key**, so a block added later prints by its own default. By key
+  and not by kind: two Notes blocks are two checkboxes, and stored by kind the second
+  one's answer overwrote the first's. A block nobody has chosen for yet follows a
+  choice made for its kind (`notes#3` follows `notes`), then its `printable`. Per print rather than in Settings, because it is decided per
   print (the GM's copy with notes, the table's without).
 - It is a **copy** (`PrintDocument`): views built with no section, borrowed blocks built
   afresh by `CharacterSheet.build_detached_section` (locked, simple, NPC-aware, on no
@@ -194,6 +214,19 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   off their own resize events, which a never-shown widget does not get. Its layout is
   `SetNoConstraint` and it is sized by `heightForWidth` — a window's layout otherwise
   holds it at the summed minimum, the same overstatement as above.
+- **Paper has its own colour tokens** (`paper.*`, read by `printing.paper`): the page,
+  the ink, the muted ink of the footer, and the shades a `QPalette` is built from. They
+  must be literal `#rrggbb` — paper has no window palette for `palette(role)` to read.
+- **A print never runs inside a print, and takes no input while it lays out.** Laying
+  the copy out has to let queued events run (a section reflows off its own resize and
+  layout events), and it runs inside the preview's `paintRequested`: a click there — a
+  page-setup or orientation button — regenerated the preview, a second print on a
+  printer the first was still painting. So `_settle` pumps events with user input
+  excluded, and `paint_document` refuses a nested call (`failed`).
+- **A print that could not be written says so.** `PrintResult.failed` is set when the
+  painter would not start on the device (a PDF open in a viewer that locks it, a folder
+  that cannot be written to) or would not finish; Export as PDF shows a warning rather
+  than "Exported 0 pages".
 - **The palette has to be set on every widget of the copy** (`PrintDocument.dress`).
   With an application stylesheet installed — every styled preset — Qt marks each widget
   `WA_StyleSheet` and stops propagating a parent's palette to its children; a palette on

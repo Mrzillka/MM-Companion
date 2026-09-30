@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import NamedTuple
 
 from ..character import AdvantageSelection, Character
 from ..components import APPLY_BONUS
-from ..data_loader import GameData, Resistance
+from ..data_loader import GameData, Resistance, Skill
 from .advantages import advantage_by_name
 from .appliers import (
     CATEGORY_ABILITY,
@@ -20,9 +21,11 @@ from .appliers import (
     STACK_SUM,
     TraitBonus,
     TraitContribution,
+    focus_row_id,
     resolve_bonuses,
     resolve_contributions,
     skill_for_row,
+    specialized_row_id,
     split_trait_key,
 )
 from .build_cache import build_scoped
@@ -226,6 +229,46 @@ def skill_row_exists(char: Character, game_data: GameData, row_id: str) -> bool:
             SPECIALIZED_ROW_MARKER
         ) in char.specializations.get(base, [])
     return any(s.name == row_id and not s.focused for s in game_data.skills)
+
+
+#: The kinds of row a skill owns on the sheet — see :func:`own_skill_rows`.
+ROW_SKILL = "skill"
+ROW_FOCUS = "focus"
+ROW_SPECIALIZED = "spec"
+
+
+class SkillRow(NamedTuple):
+    """One row a skill has on a character's sheet."""
+
+    kind: str  # ROW_SKILL, ROW_FOCUS or ROW_SPECIALIZED
+    row_id: str
+    #: The focus or pool the row is for; ``""`` for a skill's own row.
+    qualifier: str
+
+
+def own_skill_rows(char: Character, skill: Skill) -> list[SkillRow]:
+    """The rows *skill* has on this character's sheet, in the order the sheet lists them.
+
+    Its own row — or, for a focused skill, which has none, one per focus taken — then
+    one per specialized pool. The one listing every view of the skills reads, so the
+    edit block, the simple sheet and anything a mod draws agree on which rows there
+    are and what they are called. Not the rows a power grants: those are
+    :func:`granted_skill_rows`, and follow these.
+    """
+
+    rows: list[SkillRow] = []
+    if skill.focused:
+        rows += [
+            SkillRow(ROW_FOCUS, focus_row_id(skill.name, focus), focus)
+            for focus in char.focuses.get(skill.name, [])
+        ]
+    else:
+        rows.append(SkillRow(ROW_SKILL, skill.name, ""))
+    rows += [
+        SkillRow(ROW_SPECIALIZED, specialized_row_id(skill.name, pool), pool)
+        for pool in char.specializations.get(skill.name, [])
+    ]
+    return rows
 
 
 def granted_skill_rows(char: Character, game_data: GameData) -> dict[str, TraitBonus]:

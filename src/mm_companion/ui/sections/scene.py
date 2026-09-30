@@ -101,6 +101,11 @@ class SceneSection(TitledSection):
         for ref, portrait in bridge.scene_portraits().items():
             self.board.set_portrait(ref, portrait)
 
+    def is_empty(self) -> bool:
+        """Out of a session there is no scene: the simple sheet leaves the box off
+        rather than spend the strip on "Not in a session"."""
+        return self._bridge is None
+
     def _show_no_session(self) -> None:
         self.board.set_placeholder(NOT_IN_SESSION)
         self.board.set_own_player_id("")

@@ -324,6 +324,9 @@ class BlockCanvas(QWidget):
         self._pin_edge = DEFAULT_EDGE
         self._pin_extent = DEFAULT_EXTENT
         self._board: PinnedBoard | None = None
+        # While set, the tree is the truth and the dividers are not read — see
+        # set_sizes_held.
+        self._sizes_held = False
 
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(6, 6, 6, 6)
@@ -745,6 +748,30 @@ class BlockCanvas(QWidget):
         if self._drag_key is not None:
             self.title_bar_released(self._drag_key, global_pos)
 
+    def set_sizes_held(self, held: bool) -> None:
+        """Stop reading the dividers back into the tree, or start again.
+
+        For while the page is put away behind another view (the simple sheet). A
+        splitter that has never been laid out reports sizes squeezed into its default
+        geometry, not the proportions it was given — it keeps those as weights and
+        only honours them once it is shown — so a sheet opened straight into the
+        simple sheet, then saved, overwrote the player's layout with slivers. While
+        held, the tree is the truth: the dividers cannot be dragged while hidden, so
+        it is taken in once on the way out (if the page was on screen to be dragged)
+        and nothing is read until the page is back.
+        """
+        held = bool(held)
+        if held and not self._sizes_held and self.isVisible():
+            self._sync_from_board()
+            if self._size_settle.isActive():
+                # A divider let go a moment ago: finish that gesture now, so it
+                # still reaches the layout history.
+                self._size_settle.stop()
+                self._flush_sizes()
+            else:
+                self._remember_sizes()
+        self._sizes_held = held
+
     def _remember_sizes(self) -> None:
         """Read the live splitter sizes back into the tree.
 
@@ -752,6 +779,8 @@ class BlockCanvas(QWidget):
         on the widgets until somebody asks. Pulling them in here is what makes a
         resize survive a save, an undo step, or the next rebuild.
         """
+        if self._sizes_held:
+            return
         heights = self._stack.heights()
         page = self._page
         if len(heights) == len(page.children):
@@ -802,7 +831,7 @@ class BlockCanvas(QWidget):
         the sizes are in the tree now, and this walks the same splitters the page
         walks with the same function.
         """
-        if self._board is None:
+        if self._board is None or self._sizes_held:
             return
         region = self._region
         for path, widget in self._board.panel.split_paths():

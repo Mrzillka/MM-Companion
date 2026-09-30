@@ -98,7 +98,20 @@ class DraggableCard(QFrame):
         self._base_points: list[tuple[QWidget, float]] | None = None
         # Controls that must not recede with the card (see :meth:`keep_lit`).
         self._lit: list[QWidget] = []
+        # The simple sheet's tighter card (see :meth:`set_compact`).
+        self._compact = False
         self._restyle()
+
+    def set_compact(self, compact: bool) -> None:
+        """Wear the tight margins everywhere — the simple sheet's card.
+
+        A card's padding normally eases from its live margins to its tighter
+        switched-off ones; a compact card sits at the tight ones either way, since the
+        simple sheet is about fitting a character on a page, and its on/off state
+        still reads from the card's opacity and type. Call before the first
+        :meth:`set_off_progress`.
+        """
+        self._compact = compact
 
     # -- the switched-off look --------------------------------------------
     def keep_lit(self, *widgets: QWidget) -> None:
@@ -218,9 +231,13 @@ class DraggableCard(QFrame):
             return
         prefix = "group" if self._is_group else "card"
         live, off = theme.box(f"{prefix}.margins"), theme.box(f"{prefix}.margins.off")
+        if self._compact:
+            live = off
         margins = (round(lerp(a, b, progress)) for a, b in zip(live, off, strict=True))
         layout.setContentsMargins(*margins)
         spacing = lerp(theme.metric("card.spacing"), theme.metric("card.spacing.off"), progress)
+        if self._compact:
+            spacing = theme.metric("card.spacing.off")
         layout.setSpacing(round(spacing))
 
     # -- clickability -----------------------------------------------------

@@ -144,16 +144,19 @@ from mm_companion.ui.cards import (
     RollsFooter,
     effect_title,
     effects_block,
+    simple_effects_block,
 )
 from mm_companion.ui.extra_effort import ExtraEffortDialog, add_power_effort_actions
 from mm_companion.ui.power_constructor import PowerConstructorWindow
 from mm_companion.ui.power_constructor.canvas import MODE_ARRAY_DYNAMIC
 from mm_companion.ui.sections.stat_table import PinMenuState
 from mm_companion.ui.sections.titled_section import TitledSection
+from mm_companion.ui.simple.style import term_label
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import (
     BOLD_STYLE,
     ElidingLabel,
+    HeldRebuild,
     hline_separator,
     muted_style,
     rebuilding,
@@ -191,6 +194,15 @@ _MODE_LABELS = {
     STRUCTURE_ARRAY: "Group of alternate effects",
     MODE_ARRAY_DYNAMIC: "Group of dynamic alternate effects",
     STRUCTURE_LINKED: "Group of linked powers",
+}
+
+#: The same four modes as one word each — the simple sheet's small print beside a
+#: group's name, where the mode is a fact to read rather than a switch to throw.
+_SIMPLE_MODE_NAMES = {
+    STRUCTURE_INDEPENDENT: "",
+    STRUCTURE_ARRAY: "array",
+    MODE_ARRAY_DYNAMIC: "dynamic array",
+    STRUCTURE_LINKED: "linked",
 }
 
 
@@ -713,7 +725,7 @@ class _EffectSelector(QWidget):
         self._combo.currentIndexChanged.connect(self.effectPicked)
 
 
-class PowersSection(TitledSection):
+class PowersSection(HeldRebuild, TitledSection):
     """Powers section: launches the Power Constructor and lists saved powers as a tree."""
 
     # A build change (add/remove/edit a power, group, re-cost) — marks the sheet dirty.
@@ -762,6 +774,8 @@ class PowersSection(TitledSection):
         self._data = data
         self._character = character
         self._locked = False
+        # On the simple sheet (see set_simple): the same cards, told more quietly.
+        self._simple = False
         # Whether this sheet was opened from a GM card, and what is already on
         # that card. Both are set by the sheet after construction.
         self._pins = PinMenuState()
@@ -1071,6 +1085,8 @@ class PowersSection(TitledSection):
         empty while it does. :func:`~mm_companion.ui.widgets.rebuilding` is what
         stops that shrinking the page out from under the card just clicked.
         """
+        if self.rebuild_held():
+            return
         with rebuilding(self):
             self._normalize_arrays()  # a valid active member per array before drawing
             # The one refresh handler that *writes* the model, so it is also the one
@@ -1124,6 +1140,7 @@ class PowersSection(TitledSection):
         body — and dims as a whole, members included, when it is switched off.
         """
         card = DraggableCard(group.id, group=True)
+        card.set_compact(self._simple)
         self._arm_activation(card, group, parent, interactive)
         layout = QVBoxLayout(card)
         layout.addWidget(self._group_header(group, card, parent))
@@ -1189,13 +1206,23 @@ class PowersSection(TitledSection):
         row.addWidget(rename)
         rename.setVisible(not self._locked)
 
-        # Order matters: the lock keeps whichever segment is lit, so the mode has to
-        # be set before it — see _ModeToggle.set_locked.
-        toggle = _ModeToggle()
-        toggle.set_mode(_group_mode(group))
-        toggle.modeChanged.connect(lambda mode, g=group: self._set_group_mode(g, mode))
-        toggle.set_locked(self._locked)
-        row.addWidget(toggle)
+        if self._simple:
+            # The mode is a fact about the build; on the simple sheet it is small print
+            # beside the name rather than a strip of segments — and an unnamed group's
+            # "Group of dynamic alternate effects" would only say it twice.
+            mode = _SIMPLE_MODE_NAMES.get(_group_mode(group), "")
+            if mode and not group.name:
+                label.setText(mode.capitalize())
+            else:
+                row.addWidget(term_label(mode, wrap=False))
+        else:
+            # Order matters: the lock keeps whichever segment is lit, so the mode has to
+            # be set before it — see _ModeToggle.set_locked.
+            toggle = _ModeToggle()
+            toggle.set_mode(_group_mode(group))
+            toggle.modeChanged.connect(lambda mode, g=group: self._set_group_mode(g, mode))
+            toggle.set_locked(self._locked)
+            row.addWidget(toggle)
 
         row.addStretch()
 
@@ -1217,6 +1244,7 @@ class PowersSection(TitledSection):
         cost.setEnabled(False)
         self._explain_cost(cost, group)
         row.addWidget(cost)
+        cost.setVisible(not self._simple)
 
         ungroup = QPushButton("✕")
         ungroup.setFixedWidth(int(theme.metric("column.chip-button")))
@@ -1814,15 +1842,19 @@ class PowersSection(TitledSection):
         :meth:`_arm_activation` and :meth:`_show_activation`.
         """
         card = DraggableCard(power.id)
+        card.set_compact(self._simple)
         self._arm_activation(card, power, parent, interactive)
         self._arm_card_menu(card, power)
         layout = QVBoxLayout(card)
         layout.addWidget(self._header_row(power, card, parent))
 
         if power.description:
-            desc = QLabel(power.description)
-            desc.setWordWrap(True)
-            desc.setStyleSheet(muted_style(italic=True))
+            if self._simple:
+                desc = term_label(power.description)
+            else:
+                desc = QLabel(power.description)
+                desc.setWordWrap(True)
+                desc.setStyleSheet(muted_style(italic=True))
             layout.addWidget(desc)
 
         effects = self._effects_block(power)
@@ -1872,7 +1904,8 @@ class PowersSection(TitledSection):
         # A power that rolls nothing gets neither the footer nor its rule.
         rolls = self._rolls_block(power)
         if rolls is not None:
-            layout.addWidget(hline_separator())
+            if not self._simple:
+                layout.addWidget(hline_separator())
             layout.addWidget(rolls)
         self._show_activation(card, power, parent)
         return card
@@ -1945,7 +1978,9 @@ class PowersSection(TitledSection):
         # Power Level and a stunt's ceiling alone, and a character built under a
         # different ruleset could carry an over-spent allocation, an over-budget imposed
         # effect or an over-budget minion with nothing on the sheet saying so.
-        violations = power_violations(power, self._character, self._data)
+        # Both markers are about the *build* — a breach, a bent rule — and the simple
+        # sheet is for playing one, so they stay on the edit sheet.
+        violations = [] if self._simple else power_violations(power, self._character, self._data)
         if violations:
             warning = QLabel("⚠")
             warning.setStyleSheet(tinted_style("tint.warning"))
@@ -1954,7 +1989,9 @@ class PowersSection(TitledSection):
 
         # A homerule power (one carrying a Dev-mode override or a blank Custom modifier)
         # is badged so a bent value on the sheet is never mistaken for a by-the-book one.
-        if power_is_homerule(power) or power_has_custom_modifier(power, self._data):
+        if not self._simple and (
+            power_is_homerule(power) or power_has_custom_modifier(power, self._data)
+        ):
             homerule = QLabel("⌂")
             homerule.setStyleSheet(tinted_style("tint.homerule"))
             homerule.setToolTip(
@@ -1992,6 +2029,7 @@ class PowersSection(TitledSection):
             self._explain_cost(cost, power)
         cost.setEnabled(False)
         layout.addWidget(cost)
+        cost.setVisible(not self._simple)
 
         # Add each button to the (host-owned) layout *before* setting visibility:
         # addWidget reparents it to `host`, so setVisible acts on a parented child.
@@ -2706,8 +2744,12 @@ class PowersSection(TitledSection):
 
         Drawn by :mod:`mm_companion.ui.cards.effects`, which the Equipment block
         renders its items with too: an item wraps a real :class:`Power`, so both
-        cards show the same breakdown from the same code.
+        cards show the same breakdown from the same code. The simple sheet asks for
+        that module's shorter version — the terms as small print, the numbers left to
+        the roll chips.
         """
+        if self._simple:
+            return simple_effects_block(power, self._character, self._data)
         return effects_block(power, self._character, self._data)
 
     def _rolls_block(self, power: Power) -> QWidget | None:
@@ -2730,6 +2772,7 @@ class PowersSection(TitledSection):
             specs,
             pins=self._pins,
             pin_ref=lambda index, pid=power.id: PinRef(PIN_POWER, pid, index),
+            simple=self._simple,
         )
         footer.rollRequested.connect(self.rollRequested)
         footer.pinRequested.connect(self.pinRequested)
@@ -2847,4 +2890,24 @@ class PowersSection(TitledSection):
         """In read-only view mode, hide the editing entry points (Add / Remove / group chrome)."""
         self._locked = locked
         self._add_button.setVisible(not locked)
+        self._rebuild_list()
+
+    def is_empty(self) -> bool:
+        """No powers: the simple sheet leaves this block off rather than print "none"."""
+        return not self._character.powers
+
+    def set_simple(self, simple: bool) -> None:
+        """Draw the cards for the simple sheet (see :mod:`mm_companion.ui.simple`).
+
+        The same cards and every control on them — a power's switch, an array's live
+        member, a Dynamic array's share dials, Extra Effort on the right-click — with
+        the build facts taken off: no point costs, no Power Level or homerule
+        markers, no mode strip, and each effect's game terms told as small print
+        with its attack and save as big numbers on the roll chips.
+        """
+        simple = bool(simple)
+        if simple == self._simple:
+            return
+        self._simple = simple
+        self.set_simple_frame(simple)
         self._rebuild_list()

@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -261,3 +262,106 @@ def role_note(power: Power, index: int, character: Character, data: GameData) ->
         kind = "dynamic alternate" if effect.dynamic else "alternate"
         return f"{kind} ({array_alternate_cost(data, dynamic=effect.dynamic)} pt)"
     return ""
+
+
+# -- the simple sheet's summary ----------------------------------------------------
+
+#: The rows of an effect's game terms that *qualify* it rather than say what it does:
+#: what kind of effect, its range, its action and duration, the modifiers it carries,
+#: what overcomes it, a Power Level note. On the simple sheet they are the small print.
+#: Everything else an effect's table says — a leap distance, an Enhanced Trait's
+#: "Toughness +4", the senses it grants — is what the effect *does*, and reads at
+#: ordinary size. Keys, not labels, because the labels are the ruleset's words.
+TERM_ROW_KEYS = frozenset(
+    {"effect_type", "range", "action", "duration", "notes", "pl_cap", "overcomeBy"}
+)
+#: The ones whose value alone is clear — "Ranged", "Standard", "Instant" — and so drop
+#: their label; any other term row keeps it ("Overcome by Fortitude").
+BARE_TERM_KEYS = frozenset({"effect_type", "range", "action", "duration", "notes"})
+#: The rows a simple card shows as roll chips instead — the attack and the save it
+#: forces, whose numbers are the biggest thing on the card.
+ROLL_ROW_KEYS = frozenset({"check", "resistance", "effect_dc"})
+
+
+def _is_term_row(key: str) -> bool:
+    return key in TERM_ROW_KEYS or key.startswith("degree") or key == "distance_rank"
+
+
+def simple_effects_block(power: Power, character: Character, data: GameData) -> QWidget | None:
+    """The simple sheet's version of :func:`effects_block`: one short entry per effect.
+
+    Each is the effect's name at its rank, what it does at ordinary size, and its game
+    terms as one line of translucent small print. The attack and save are left to the
+    card's roll chips, where their numbers are big.
+    """
+    if not power.effects:
+        return None
+    from mm_companion.ui.simple.style import term_label
+
+    host = QWidget()
+    layout = QVBoxLayout(host)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(int(theme.metric("space.xs")))
+    header = structure_header(power)
+    if header:
+        layout.addWidget(term_label(header))
+    for index, effect in enumerate(power.effects):
+        layout.addWidget(simple_effect_summary(power, effect, index, character, data))
+    return host
+
+
+def simple_effect_summary(
+    power: Power,
+    effect: PowerEffectInstance,
+    index: int,
+    character: Character,
+    data: GameData,
+) -> QWidget:
+    """One effect on a simple card — see :func:`simple_effects_block`."""
+    from mm_companion.ui.simple.style import set_font, term_label
+
+    box = QWidget()
+    layout = QVBoxLayout(box)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(0)
+
+    top = QHBoxLayout()
+    top.setContentsMargins(0, 0, 0, 0)
+    top.setSpacing(int(theme.metric("space.sm")))
+    title = QLabel(effect_title(effect, character, data))
+    set_font(title, "size.simple-label", bold=True)
+    top.addWidget(title)
+    note = role_note(power, index, character, data)
+    if note:
+        top.addWidget(term_label(note, wrap=False))
+    top.addStretch()
+    layout.addLayout(top)
+
+    attack_bonus = effect_attack_skill_bonus(effect, character, data)
+    rows = effect_stat_rows(effect, data, character, attack_bonus)
+    terms: list[str] = []
+    for row in rows:
+        if row.key in ROLL_ROW_KEYS:
+            continue
+        if _is_term_row(row.key):
+            terms.append(row.value if row.key in BARE_TERM_KEYS else f"{row.label} {row.value}")
+            continue
+        detail = QLabel(f"{row.label}: {row.value}")
+        detail.setWordWrap(True)
+        detail.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        set_font(detail, "size.simple-label")
+        if row.change:
+            detail.setStyleSheet(
+                tinted_style("tint.better" if row.change == "better" else "tint.worse", bold=False)
+            )
+        if row.base and row.base != row.value:
+            detail.setToolTip(f"Base: {row.base}")
+        layout.addWidget(detail)
+    if terms:
+        layout.addWidget(term_label(" · ".join(term for term in terms if term)))
+
+    if not effect_is_selected(power, effect, data, character):
+        faded = QGraphicsOpacityEffect(box)
+        faded.setOpacity(theme.metric("opacity.inactive"))
+        box.setGraphicsEffect(faded)
+    return box

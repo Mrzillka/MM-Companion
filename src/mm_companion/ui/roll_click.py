@@ -12,7 +12,11 @@ Three rules the sections rely on:
   throws it. A double-click necessarily fires the single first, which is harmless:
   rolling loads the same spec anyway, so the pair is load → (load + roll) on one
   spec. Deferring the load by the double-click interval would only make a plain
-  click feel a beat late.
+  click feel a beat late. What is **not** harmless is the release that *ends* a
+  double-click: Qt delivers press, release, double-click, release, and a roll clears
+  the chip — so that last release loaded it straight back, and every double-clicked
+  stat left the roller armed with the roll just made. The release after a roll is
+  therefore passed over.
 * **A locked sheet is the play view.** Rolling is a mid-play action, so it works
   whether or not the sheet is locked — the same bargain a power's on/off switch
   strikes. What *does* depend on the lock is a spin box: unlocked, clicking inside
@@ -63,6 +67,8 @@ class _RollClicker(QObject):
         self._on_roll = on_roll
         self._on_load = on_load
         self._guard = guard
+        # A double-click just rolled, and the release that ends it is still to come.
+        self._rolled = False
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802 - Qt override
         kind = event.type()
@@ -74,6 +80,11 @@ class _RollClicker(QObject):
             return False
 
         if kind == QEvent.Type.MouseButtonRelease:
+            if self._rolled:
+                # The release that ends a double-click (see the module docstring):
+                # loading here would put the spec just rolled back in the chip.
+                self._rolled = False
+                return False
             if self._on_load is None:
                 return False
             spec = self._factory()
@@ -88,6 +99,7 @@ class _RollClicker(QObject):
         if spec is None:
             return False
         self._on_roll(spec)
+        self._rolled = True
         # Swallowed: a double-click that rolled must not also select text or step a
         # spin box underneath it.
         return True

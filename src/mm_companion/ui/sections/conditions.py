@@ -35,6 +35,8 @@ from mm_companion.core.components import MECH_RANDOM_ACTION
 from mm_companion.core.data_loader import Condition, GameData
 from mm_companion.core.rules import (
     apply_condition,
+    apply_damage_step,
+    damage_steps,
     decrement_condition,
     roll_confused_action,
 )
@@ -312,6 +314,43 @@ class ConditionsSection(QGroupBox):
         decrement_condition(self._character, applied)
         self._render_conditions()
         self._emit_conditions_changed()
+
+    # -- the funnels another view of this block spends through -----------------
+    # The simple sheet draws its own chips (see mm_companion.ui.simple), but a
+    # condition still has one way on and one way off the character: these.
+
+    def choose_condition(self, condition: Condition) -> None:
+        """Apply *condition* as the "+" menu would — prompting for its subject first."""
+        self._choose_condition(condition)
+
+    def shed_condition(self, applied: AppliedCondition) -> None:
+        """Take one instance of *applied* off, as a right-click on its chip does."""
+        self._shed_condition(applied)
+
+    def apply_damage_step(self, index: int) -> bool:
+        """Apply rung *index* of the damage ladder — a Toughness save's outcome.
+
+        ``0`` is a save made (still a Hit), ``1..n`` are degrees of failure. The rung
+        is resolved against this character's current conditions by the core resolver
+        (:func:`~mm_companion.core.rules.apply_damage_step`), so an escalation ("already
+        Dazed, so Stunned") happens here exactly as it does on a GM's card. Returns
+        whether *index* was a rung the ladder has.
+        """
+        step = next((s for s in damage_steps(self._data) if s.index == index), None)
+        if step is None:
+            return False
+        apply_damage_step(self._character, step, self._data)
+        self._render_conditions()
+        self._emit_conditions_changed()
+        return True
+
+    def roll_confused(self, applied: AppliedCondition) -> None:
+        """Roll this turn's random action for a Confused-style condition."""
+        self._roll_confused(applied)
+
+    def confused_roll(self, applied: AppliedCondition) -> str:
+        """The last random action rolled for *applied*, or ``""``."""
+        return self._confused_rolls.get(self._confused_key(applied), "")
 
     def _emit_conditions_changed(self) -> None:
         self._emit_edited()

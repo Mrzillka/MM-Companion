@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, Signal
-from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -33,6 +33,12 @@ CHARACTER_FILTER = "Character files (*.json)"
 #: artwork and stays legible on every preset's bar.
 LOCK_GLYPH_LOCKED = "🔒"
 LOCK_GLYPH_UNLOCKED = "🔓"
+
+#: The simple sheet's switch, on the bar beside the lock and for the same reason: it is
+#: how a sheet is *played*, reached at the start of every session. Words rather than a
+#: glyph, since there is no symbol everyone already reads as "character sheet".
+SIMPLE_TEXT = "Simple sheet"
+SIMPLE_TEXT_ON = "Edit sheet"
 
 #: Undo and redo, on the bar for the same reason the lock is: they are reached
 #: constantly while building, and a button that is *there* is worth more than an
@@ -161,6 +167,12 @@ class MainWindow(QMainWindow):
         # Restore the remembered window size and block arrangement, if any.
         self._restore_layout()
 
+        # A saved character opened to be played from (locked) goes straight to the
+        # simple sheet for a player who asked for that (Settings > General). Not an
+        # NPC: that is the GM's prep material, opened to be worked on.
+        if locked and not self._npc and storage.simple_sheet_on_open():
+            self._sheet.set_simple(True)
+
     @property
     def sheet(self) -> CharacterSheet:
         """The character sheet this window hosts — the seam a session attaches to."""
@@ -208,6 +220,13 @@ class MainWindow(QMainWindow):
             file_menu.addAction("Save").triggered.connect(self._save)
             file_menu.addAction("Save As...").triggered.connect(self._save_as)
             file_menu.addSeparator()
+            # What is printed is the simple sheet, whichever view is on screen — see
+            # mm_companion.ui.simple.printing.
+            self._print_action = file_menu.addAction("Print...")
+            self._print_action.setShortcut(QKeySequence.StandardKey.Print)
+            self._print_action.triggered.connect(self._print)
+            file_menu.addAction("Export as PDF...").triggered.connect(self._export_pdf)
+            file_menu.addSeparator()
             # Exit closes the sheet; closing brings the launcher back (see closeEvent).
             file_menu.addAction("Exit").triggered.connect(self.close)
 
@@ -248,6 +267,9 @@ class MainWindow(QMainWindow):
             session_menu.addAction("Join session...").triggered.connect(self._join_session)
             install_connection_indicator(self)
 
+        # Before the undo pair rather than between it and the lock: the three glyphs
+        # at the end of the bar are one cluster (tests/test_main_window.py).
+        self._build_simple_toggle(menu_bar)
         self._build_undo_actions(menu_bar)
 
         # Last on the bar, and on the bar rather than in a menu: locking is how a
@@ -342,6 +364,7 @@ class MainWindow(QMainWindow):
                 lambda _checked=False, t=descriptor.key: self._sheet.add_block_instance(t)
             )
         self._view_menu.addAction("Reset Layout").triggered.connect(self._reset_layout)
+        self._build_simple_view_actions()
         # Keep the View toggles in sync when a block is hidden/shown elsewhere
         # (its × button, a drag, or Reset Layout).
         self._sheet.canvas.block_visibility_changed.connect(self._on_block_visibility_changed)
@@ -349,6 +372,126 @@ class MainWindow(QMainWindow):
         # (Notes) makes something that changes while the window is open.
         self._sheet.canvas.block_added.connect(self._on_block_added)
         self._sheet.canvas.block_removed.connect(self._on_block_removed)
+
+    # -- the simple sheet ------------------------------------------------------
+
+    def _build_simple_toggle(self, menu_bar) -> None:
+        """The bar's switch between the edit sheet and the simple sheet."""
+        self._simple_bar_action = menu_bar.addAction(SIMPLE_TEXT)
+        self._simple_bar_action.setCheckable(True)
+        self._simple_bar_action.setToolTip(
+            "Switch to the simple sheet: the character laid out for play and for printing"
+        )
+        self._simple_bar_action.toggled.connect(self._sheet.set_simple)
+
+    def _build_simple_view_actions(self) -> None:
+        """View ▸ Simple Sheet, and the choice of arrangement it uses.
+
+        Also on a GM's read-only view of a player's sheet, which has no bar switch —
+        the simple sheet is the quickest way to read somebody else's character.
+        """
+        menu = self._view_menu
+        menu.addSeparator()
+        self._simple_action = menu.addAction("Simple Sheet")
+        self._simple_action.setCheckable(True)
+        self._simple_action.setShortcut(QKeySequence("F8"))
+        self._simple_action.toggled.connect(self._sheet.set_simple)
+        self._sheet.simpleChanged.connect(self._on_simple_changed)
+        presets = menu.addMenu("Simple Sheet Layout")
+        group = QActionGroup(self)
+        group.setExclusive(True)
+        self._preset_actions: dict[str, QAction] = {}
+        for preset, label, tip in (
+            (
+                storage.SIMPLE_PRESET_STANDARD,
+                "Standard",
+                "The fixed arrangement, laid out like a printed character sheet",
+            ),
+            (
+                storage.SIMPLE_PRESET_CUSTOM,
+                "Custom",
+                "Your own arrangement: blocks where you placed them on the edit sheet",
+            ),
+        ):
+            action = presets.addAction(label)
+            action.setCheckable(True)
+            action.setToolTip(tip)
+            action.setStatusTip(tip)
+            group.addAction(action)
+            action.triggered.connect(lambda _checked=False, p=preset: self._set_simple_preset(p))
+            self._preset_actions[preset] = action
+        presets.setToolTipsVisible(True)
+        preset = storage.simple_sheet_preset()
+        self._sheet.set_simple_preset(preset)
+        self._preset_actions[preset].setChecked(True)
+
+    def _set_simple_preset(self, preset: str) -> None:
+        self._sheet.set_simple_preset(preset)
+        storage.set_simple_sheet_preset(preset)
+
+    def _on_simple_changed(self, simple: bool) -> None:
+        """Keep both switches in step, and stand the lock down while the sheet is simple.
+
+        The simple sheet is always a locked view (see :meth:`CharacterSheet.set_simple`),
+        so the lock would be a control with nothing to do; it is put back on the way out.
+        """
+        for action in (self._simple_action, getattr(self, "_simple_bar_action", None)):
+            if action is not None and action.isChecked() != simple:
+                action.blockSignals(True)
+                action.setChecked(simple)
+                action.blockSignals(False)
+        bar = getattr(self, "_simple_bar_action", None)
+        if bar is not None:
+            bar.setText(SIMPLE_TEXT_ON if simple else SIMPLE_TEXT)
+            bar.setToolTip(
+                "Back to the edit sheet"
+                if simple
+                else "Switch to the simple sheet: the character laid out for play and for "
+                "printing"
+            )
+        lock = getattr(self, "_lock_action", None)
+        if lock is not None:
+            lock.setEnabled(not simple)
+            if simple:
+                lock.setToolTip("The simple sheet is a play view — switch back to edit")
+            else:
+                self._show_lock_state(lock.isChecked())
+
+    def _print(self) -> None:
+        """File ▸ Print: which blocks, then the simple sheet through the print preview."""
+        from mm_companion.ui.simple.print_dialog import ask_what_to_print
+        from mm_companion.ui.simple.printing import print_with_preview
+
+        keys = ask_what_to_print(self._sheet, self, action="Preview")
+        if keys is not None:
+            print_with_preview(self._sheet, self, keys)
+
+    def _export_pdf(self) -> None:
+        """File ▸ Export as PDF: which blocks, then a file the user picks."""
+        from mm_companion.ui.simple.print_dialog import ask_what_to_print
+        from mm_companion.ui.simple.printing import export_pdf
+
+        keys = ask_what_to_print(self._sheet, self, action="Export")
+        if keys is None:
+            return
+        directory = self.storage_dir()
+        stem = Path(library.suggested_filename(self._sheet.character)).stem
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export as PDF", str(directory / f"{stem}.pdf"), "PDF files (*.pdf)"
+        )
+        if not path:
+            return
+        result = export_pdf(self._sheet, Path(path), keys)
+        if result.failed:
+            QMessageBox.warning(
+                self,
+                "Export as PDF",
+                f"Could not write {path}.\n\nIf the file is open in another program, "
+                "close it and try again, or choose another name or folder.",
+            )
+            return
+        pages = "page" if result.pages == 1 else "pages"
+        self.statusBar().showMessage(f"Exported {result.pages} {pages} to {path}", 5000)
 
     def _join_session(self) -> None:
         """Join a GM's session, bringing the character already open in this window.

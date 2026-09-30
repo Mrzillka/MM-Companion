@@ -119,7 +119,10 @@ through rather than reinvent. When building new sheet widgets, use it:
 The Lock pattern is threaded top-down: `MainWindow` owns the checkable lock
 action, `CharacterSheet.set_locked(bool)` fans out to each section's
 `set_locked`, and sections call `set_widget_locked` on their editable widgets.
-The sheet **starts locked** (a read-only viewer, not an editor). Any new section
+The sheet **starts locked** (a read-only viewer, not an editor). The simple sheet
+(View ▸ Simple Sheet) locks it too, for as long as it is up, and puts the lock back on the
+way out — the controls that survive a lock are exactly the play-time ones it keeps; see
+[The simple sheet](simple-sheet.md). Any new section
 with editable widgets should expose `set_locked` and be wired into
 `CharacterSheet.set_locked`. That action lives **on the menu bar**, not in a
 menu — `menu_bar.addAction(…)` with no submenu, so one click toggles it — and its

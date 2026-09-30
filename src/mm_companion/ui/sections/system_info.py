@@ -742,6 +742,12 @@ class SystemInfoSection(QGroupBox):
         menu.addAction(self._pins.action_text(ref), lambda: sink.emit(ref))
         menu.exec(self._initiative.mapToGlobal(pos))
 
+    @property
+    def pin_state(self) -> PinMenuState:
+        """Whether this sheet can pin, and what is already pinned — read by the simple
+        sheet's own views of this block, which offer the same right-click."""
+        return self._pins
+
     def set_pin_target(self, enabled: bool) -> None:
         """Whether the Initiative readout offers to pin at all."""
         self._pins.enabled = enabled

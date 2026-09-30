@@ -65,14 +65,20 @@ from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData, Skill
 from mm_companion.core.rules import (
     PIN_SKILL,
+    ROW_FOCUS,
+    ROW_SKILL,
+    TRAIT_QUALIFIER_SEP,
     PinRef,
     SkillModifiers,
     effective_ability,
+    focus_row_id,
     granted_skill_rows,
+    own_skill_rows,
     skill_modifiers,
     skill_points_spent,
     skill_roll,
     skill_total,
+    specialized_row_id,
     split_trait_key,
     trait_display_name,
 )
@@ -383,6 +389,12 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
             return None
         return PinRef(PIN_SKILL, str(payload[0]))
 
+    @property
+    def pin_state(self) -> PinMenuState:
+        """Whether this sheet can pin, and what is already pinned — read by the simple
+        sheet's own views of this block, which offer the same right-click."""
+        return self._pins
+
     def set_pin_target(self, enabled: bool) -> None:
         """Whether this block's rows offer to pin at all."""
         self._pins.enabled = enabled
@@ -602,16 +614,15 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         for skill in skills:
             if skill.focused:
                 specs.append(("header", skill))
-                for focus in self._focuses.get(skill.name, []):
-                    display = f"{skill.name}: {focus}"
-                    row_id = f"{skill.name}::{focus}"
-                    specs.append(("focus", skill, display, row_id, focus))
-            else:
-                specs.append(("skill", skill, skill.name, skill.name))
-            for spec in self._specializations.get(skill.name, []):
-                display = f"{skill.name}: {spec} (specialized)"
-                row_id = f"{skill.name}::spec::{spec}"
-                specs.append(("spec", skill, display, row_id, spec))
+            for row in own_skill_rows(self._character, skill):
+                if row.kind == ROW_SKILL:
+                    specs.append(("skill", skill, skill.name, skill.name))
+                elif row.kind == ROW_FOCUS:
+                    display = f"{skill.name}: {row.qualifier}"
+                    specs.append(("focus", skill, display, row.row_id, row.qualifier))
+                else:
+                    display = f"{skill.name}: {row.qualifier} (specialized)"
+                    specs.append(("spec", skill, display, row.row_id, row.qualifier))
             for row_id, source in granted.items():
                 if split_trait_key(row_id)[0] == skill.name:
                     display = trait_display_name(self._data, row_id)
@@ -843,7 +854,7 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         if focus not in focuses:
             return
         focuses.remove(focus)
-        self._ranks.pop(f"{skill.name}::{focus}", None)
+        self._ranks.pop(focus_row_id(skill.name, focus), None)
         self._rebuild()
         self.changed.emit()
 
@@ -881,7 +892,7 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         specs.remove(spec_name)
         if not specs:  # keep the model tidy — drop the now-empty entry
             self._specializations.pop(skill.name, None)
-        self._ranks.pop(f"{skill.name}::spec::{spec_name}", None)
+        self._ranks.pop(specialized_row_id(skill.name, spec_name), None)
         self._rebuild()
         self.changed.emit()
 
@@ -923,7 +934,7 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
 
         if self._focuses.get(name) or self._specializations.get(name):
             return True
-        prefix = f"{name}::"
+        prefix = f"{name}{TRAIT_QUALIFIER_SEP}"
         return any(
             rank
             for row_id, rank in self._ranks.items()
@@ -958,7 +969,7 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         self._character.hidden_skills.append(name)
         self._focuses.pop(name, None)
         self._specializations.pop(name, None)
-        prefix = f"{name}::"
+        prefix = f"{name}{TRAIT_QUALIFIER_SEP}"
         for row_id in [k for k in self._ranks if k == name or k.startswith(prefix)]:
             del self._ranks[row_id]
         self._rebuild()
@@ -1029,10 +1040,9 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         """Every rank-buying row this skill owns — its own, its focuses, its pools."""
 
         skill = self._skill_by_name(name)
-        rows = [] if skill is not None and skill.focused else [name]
-        rows += [f"{name}::{focus}" for focus in self._focuses.get(name, [])]
-        rows += [f"{name}::spec::{spec}" for spec in self._specializations.get(name, [])]
-        return rows
+        if skill is None:
+            return [name]
+        return [row.row_id for row in own_skill_rows(self._character, skill)]
 
     def _best_of(self, name: str, of_row) -> int:
         """The highest reading over the skill's rows — a focused skill has no own row."""

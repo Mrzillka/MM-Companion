@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Sequence
 
 from PySide6.QtCore import QEvent, QPoint, Qt, Signal
@@ -21,6 +22,26 @@ from mm_companion.ui import theme
 from mm_companion.ui.cards.card import card_ancestors_of, hand_back_highlight
 from mm_companion.ui.sections.stat_table import PinMenuState
 from mm_companion.ui.widgets import tinted_style
+
+
+def split_roll_label(spec: RollSpec) -> tuple[str, str]:
+    """A roll line as ``(the number, the words)`` — ``("+10", "vs. Defense")``.
+
+    The number is what a player reads off a card mid-fight, so the simple sheet prints
+    it large; the words say what it is against and are small print. A save the target
+    makes reads as its DC (``"DC 16"``, ``"Toughness"``); an attack as its signed bonus.
+    The words are the spec's own label with that number taken out, so nothing the rules
+    layer wrote is lost — the label already says "10 vs. Defense (area; Dodge for half)".
+    """
+    label = spec.label
+    if spec.dc is not None and (spec.rolled_by_target or not spec.modifier):
+        pattern = rf"\s*(vs\.?)?\s*(DC\s*)?{spec.dc}\b"
+        words = re.sub(pattern, "", label, count=1)
+        return f"DC {spec.dc}", re.sub(r"\s+", " ", words).strip(" :")
+    number = f"{spec.modifier:+d}"
+    sign = "-" if spec.modifier < 0 else r"\+?"
+    words = re.sub(rf"(?<![\w+-]){sign}{abs(spec.modifier)}\b\s*", "", label, count=1)
+    return number, re.sub(r"\s+", " ", words).strip(" :")
 
 
 class RollLine(QFrame):
@@ -159,15 +180,29 @@ class RollsFooter(QWidget):
         *,
         pins: PinMenuState | None = None,
         pin_ref: Callable[[int], PinRef] | None = None,
+        simple: bool = False,
     ) -> None:
         super().__init__(parent)
         self._pins = pins or PinMenuState()
         self._pin_ref = pin_ref
+        self._simple = simple
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         # Enough of a gap that two neighbouring lines' borders read as two targets
         # rather than one box with a rule through it.
         layout.setSpacing(int(theme.metric("space.xs")))
+        if simple:
+            # The simple sheet's chips sit side by side and wrap, attack beside the
+            # save it forces, the way a stat block prints them on one line.
+            from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
+
+            host = FlowContainer()
+            flow = FlowLayout(host, spacing=int(theme.metric("space.sm")))
+            flow.setContentsMargins(0, 0, 0, 0)
+            layout.addWidget(host)
+            for index, spec in enumerate(specs):
+                flow.addWidget(self._roll_line(spec, index))
+            return
         for index, spec in enumerate(specs):
             layout.addWidget(self._roll_line(spec, index))
 
@@ -204,12 +239,32 @@ class RollsFooter(QWidget):
             # No die, but the same indent, so the lines read as one column.
             line.addSpacing(glyph_width)
 
+        if self._simple:
+            self._simple_text(line, spec)
+            return row
+
         label = QLabel(spec.label)
         label.setWordWrap(True)
         label.setToolTip(spec.hint)
         label.setStyleSheet(tinted_style("accent.dice", bold=False))  # calm blue for dice info
         line.addWidget(label, stretch=1)
         return row
+
+    @staticmethod
+    def _simple_text(line: QHBoxLayout, spec: RollSpec) -> None:
+        """The number big, and what it is against in small print after it."""
+        from mm_companion.ui.simple.style import set_font, term_label
+
+        big, small = split_roll_label(spec)
+        number = QLabel(big)
+        set_font(number, "size.simple-value", bold=True)
+        number.setStyleSheet(tinted_style("accent.dice", bold=True))
+        number.setToolTip(spec.hint)
+        line.addWidget(number)
+        if small:
+            words = term_label(small, wrap=False)
+            words.setToolTip(spec.hint)
+            line.addWidget(words)
 
     def _show_pin_menu(self, row: QWidget, pos, index: int) -> None:
         if not self._pins.enabled or self._pin_ref is None:

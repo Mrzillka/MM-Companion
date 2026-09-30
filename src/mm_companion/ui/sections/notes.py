@@ -45,7 +45,7 @@ from mm_companion.core.data_loader import GameData
 from mm_companion.ui.notes.editor import NoteEditor
 from mm_companion.ui.notes.events import note_events
 from mm_companion.ui.notes.picker import NotePickerDialog
-from mm_companion.ui.sections.titled_section import strip_groupbox_caption
+from mm_companion.ui.sections.titled_section import set_simple_frame, strip_groupbox_caption
 from mm_companion.ui.tab_drag import TabSplitGesture
 from mm_companion.ui.widgets import discard_widget, muted_style
 
@@ -115,6 +115,8 @@ class NotesSection(QGroupBox):
         self.block_key = block_key
         self._loading = True
         self._locked = False
+        # On the simple sheet (see set_simple), where a note stays writable.
+        self._simple = False
         self._open: list[_OpenNote] = []
         self._picker: NotePickerDialog | None = None
         self._focus_filter = _FocusRefresh(self)
@@ -280,7 +282,7 @@ class NotesSection(QGroupBox):
     def _load(self, ref: str) -> _OpenNote:
         editor = NoteEditor()
         editor.set_text(notes.read_note(ref))
-        editor.set_locked(self._locked)
+        editor.set_locked(self._read_only())
         editor.set_preview(self._preview_button.isChecked())
         # Keyed by the *editor*, not by the ref it opened with: a note can be
         # renamed under an open tab, and a captured filename would then mark a
@@ -446,7 +448,7 @@ class NotesSection(QGroupBox):
         tabbed = len(self._open) > 1
         self._tabs.tabBar().setVisible(tabbed)
         self._close_button.setVisible(bool(self._open) and not tabbed)
-        self._close_button.setEnabled(not self._locked)
+        self._close_button.setEnabled(not self._read_only())
         self._preview_button.setEnabled(bool(self._open))
 
     def _emit_title(self) -> None:
@@ -581,6 +583,24 @@ class NotesSection(QGroupBox):
 
     def set_locked(self, locked: bool) -> None:
         self._locked = locked
+        self._apply_lock()
+
+    def set_simple(self, simple: bool) -> None:
+        """Sit on the simple sheet: borderless, and **writable** although the sheet is locked.
+
+        The simple sheet is a locked view with the lock switched off — and a note is the
+        one thing on a sheet a player *writes* during play. Left locked, every note on
+        the play view was read-only with no way to unlock it short of leaving the view.
+        """
+        self._simple = bool(simple)
+        set_simple_frame(self, self._simple)
+        self._apply_lock()
+
+    def _read_only(self) -> bool:
+        return self._locked and not self._simple
+
+    def _apply_lock(self) -> None:
+        locked = self._read_only()
         for item in self._open:
             item.editor.set_locked(locked)
         for button in (self._new_button, self._import_button):

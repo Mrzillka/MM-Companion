@@ -932,3 +932,57 @@ def test_an_npcs_standard_sheet_leaves_off_what_an_npc_opens_without(qapp, data)
 
     assert "dice" not in shown and "complications" not in shown
     assert "powers" in shown
+
+
+def test_the_print_choice_defaults_to_what_belongs_on_paper(qapp, data) -> None:
+    from mm_companion.ui.simple.print_dialog import PrintChoiceDialog
+
+    sheet = CharacterSheet(data, _hero(data))
+    dialog = PrintChoiceDialog(sheet)
+    keys = dialog.keys()
+
+    assert "powers" in keys and "notes" in keys
+    assert "dice" not in keys
+
+
+def test_the_print_choice_is_remembered_and_honoured(qapp, data) -> None:
+    from mm_companion.ui.simple.print_dialog import PrintChoiceDialog
+
+    sheet = CharacterSheet(data, _hero(data))
+    dialog = PrintChoiceDialog(sheet)
+    dialog._boxes["skills"].setChecked(False)
+    dialog._boxes["dice"].setChecked(True)
+    dialog.accept()
+
+    assert storage.simple_print_choices() == {
+        **{key: key in dialog.keys() for key in dialog._boxes},
+    }
+    document = PrintDocument(sheet)
+    try:
+        assert "skills" not in document.boxes
+        assert "dice" in document.boxes
+    finally:
+        document.close()
+    again = PrintChoiceDialog(sheet)
+    assert not again._boxes["skills"].isChecked() and again._boxes["dice"].isChecked()
+
+
+def test_nothing_ticked_is_nothing_to_print(qapp, data) -> None:
+    from PySide6.QtWidgets import QDialogButtonBox
+
+    from mm_companion.ui.simple.print_dialog import PrintChoiceDialog
+
+    dialog = PrintChoiceDialog(CharacterSheet(data, _hero(data)))
+    dialog._set_all(False)
+
+    assert not dialog._buttons.button(QDialogButtonBox.StandardButton.Ok).isEnabled()
+
+
+def test_an_export_prints_only_the_blocks_it_was_given(qapp, data, tmp_path) -> None:
+    sheet = CharacterSheet(data, _hero(data))
+    document = PrintDocument(sheet, keys=["base_info", "abilities"])
+    try:
+        assert set(document.boxes) == {"base_info", "abilities"}
+    finally:
+        document.close()
+    assert export_pdf(sheet, tmp_path / "two.pdf", ["base_info", "abilities"]).pages == 1

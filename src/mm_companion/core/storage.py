@@ -249,6 +249,11 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # a window is otherwise a view switch like the lock, not remembered (see
     # "compact"), and this is the one player's choice to make it a habit instead.
     "simple_sheet_on_open": False,
+    # Which blocks a printed simple sheet carries, by block key, where the player
+    # has chosen differently from the block's own default (the roller and the Scene
+    # are off, everything else on). Only the choices made are stored, so a block
+    # added later prints by its own default.
+    "simple_print_blocks": {},
 }
 
 
@@ -549,6 +554,25 @@ def simple_sheet_on_open() -> bool:
 def set_simple_sheet_on_open(enabled: bool) -> None:
     """Record whether saved characters open in the simple sheet."""
     update_settings(simple_sheet_on_open=bool(enabled))
+
+
+def simple_print_choices() -> dict[str, bool]:
+    """Which blocks the player has chosen to print (or not), by block key.
+
+    Only the explicit choices; a block missing from it prints by its own default.
+    Anything malformed in the file reads as no choice at all.
+    """
+    stored = load_settings().get("simple_print_blocks")
+    if not isinstance(stored, dict):
+        return {}
+    return {str(k): v for k, v in stored.items() if isinstance(v, bool)}
+
+
+def set_simple_print_choices(choices: dict[str, bool]) -> None:
+    """Remember which blocks to print — merged over what was stored before."""
+    merged = simple_print_choices()
+    merged.update({str(k): bool(v) for k, v in choices.items()})
+    update_settings(simple_print_blocks=merged)
 
 
 def dice_layout() -> str:

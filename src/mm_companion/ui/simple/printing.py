@@ -50,9 +50,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from mm_companion.core import library
+from mm_companion.core import library, storage
 from mm_companion.ui import layout_tree as lt
 from mm_companion.ui import theme
+from mm_companion.ui.blocks.base import instance_template
 from mm_companion.ui.layout_tree import VERTICAL, Leaf, Split
 from mm_companion.ui.simple import layout as simple_layout
 from mm_companion.ui.simple.registry import SimpleContext, simple_view
@@ -109,18 +110,35 @@ def paper_palette() -> QPalette:
     return palette
 
 
-def print_keys(sheet) -> list[str]:
-    """The blocks a print of *sheet* shows, in order: the page, then the strip's."""
-    model = sheet.simple_sheet.compute_layout()
-    return [key for key in model.keys() if simple_view(key).printable]
+def print_candidates(sheet) -> list[str]:
+    """Every block the simple sheet would lay out, in order: the page, then the strip.
+
+    What the "What to print" choice is offered over — the roller included, since
+    whether it belongs on paper is the player's call, only defaulted.
+    """
+    return sheet.simple_sheet.compute_layout().keys()
 
 
-def print_tree(sheet) -> Split:
-    """The page tree a print lays out: the preset's page, then the strip as rows."""
+def prints_by_default(key: str) -> bool:
+    """Whether block *key* is printed when nobody has said otherwise."""
+    choice = storage.simple_print_choices().get(instance_template(key))
+    return simple_view(key).printable if choice is None else choice
+
+
+def chosen_print_keys(sheet) -> list[str]:
+    """The blocks a print carries: the player's remembered choice, or each default."""
+    return [key for key in print_candidates(sheet) if prints_by_default(key)]
+
+
+def print_tree(sheet, keys=None) -> Split:
+    """The page tree a print lays out: the preset's page, then the strip as rows.
+
+    *keys* is which blocks to print (:func:`chosen_print_keys` when ``None``).
+    """
     model = sheet.simple_sheet.compute_layout()
-    printable = {key for key in model.keys() if simple_view(key).printable}
-    page = simple_layout.printable_page(model, printable)
-    strip = [key for key in lt.keys(model.strip) if key in printable]
+    chosen = set(chosen_print_keys(sheet) if keys is None else keys)
+    page = simple_layout.printable_page(model, chosen)
+    strip = [key for key in lt.keys(model.strip) if key in chosen]
     rows = tuple(Leaf((key,)) for key in strip)
     return Split(VERTICAL, page.children + rows) if rows else page
 
@@ -134,7 +152,7 @@ class PrintDocument:
     does not get — but with ``WA_DontShowOnScreen``, so nothing ever appears.
     """
 
-    def __init__(self, sheet, width: int = PRINT_WIDTH) -> None:
+    def __init__(self, sheet, width: int = PRINT_WIDTH, keys=None) -> None:
         self.sheet = sheet
         self.width = width
         self.root = QWidget()
@@ -151,7 +169,7 @@ class PrintDocument:
         self.page = SimplePage()
         layout.addWidget(self.page)
         self.boxes: dict[str, SimpleBox] = {}
-        tree = print_tree(sheet)
+        tree = print_tree(sheet, keys)
         for key in lt.keys(tree):
             box = self._box(key)
             if box is None:
@@ -333,9 +351,12 @@ class PrintResult:
     pages: int
 
 
-def paint_document(sheet, printer) -> PrintResult:
-    """Lay the simple sheet out and paint it onto *printer*, page by page."""
-    document = PrintDocument(sheet)
+def paint_document(sheet, printer, keys=None) -> PrintResult:
+    """Lay the simple sheet out and paint it onto *printer*, page by page.
+
+    *keys* is which blocks to print; ``None`` is the remembered choice.
+    """
+    document = PrintDocument(sheet, keys=keys)
     try:
         document.lay_out()
         resolution = printer.resolution()
@@ -397,14 +418,14 @@ def make_printer(*, pdf_path: Path | str | None = None):
     return printer
 
 
-def export_pdf(sheet, path: Path | str) -> PrintResult:
-    """Write the simple sheet to *path* as a PDF."""
+def export_pdf(sheet, path: Path | str, keys=None) -> PrintResult:
+    """Write the simple sheet to *path* as a PDF (*keys*: which blocks, as above)."""
     printer = make_printer(pdf_path=path)
     printer.setDocName(library.display_name(sheet.character))
-    return paint_document(sheet, printer)
+    return paint_document(sheet, printer, keys)
 
 
-def print_with_preview(sheet, parent: QWidget | None = None) -> None:
+def print_with_preview(sheet, parent: QWidget | None = None, keys=None) -> None:
     """Open the print preview, from which the player prints (or cancels)."""
     from PySide6.QtPrintSupport import QPrintPreviewDialog
 
@@ -412,5 +433,5 @@ def print_with_preview(sheet, parent: QWidget | None = None) -> None:
     printer.setDocName(library.display_name(sheet.character))
     dialog = QPrintPreviewDialog(printer, parent)
     dialog.setWindowTitle(f"Print — {library.display_name(sheet.character)}")
-    dialog.paintRequested.connect(lambda target: paint_document(sheet, target))
+    dialog.paintRequested.connect(lambda target: paint_document(sheet, target, keys))
     dialog.exec()

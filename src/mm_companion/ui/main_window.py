@@ -458,15 +458,22 @@ class MainWindow(QMainWindow):
                 self._show_lock_state(lock.isChecked())
 
     def _print(self) -> None:
-        """File ▸ Print: the simple sheet, through the print preview."""
+        """File ▸ Print: which blocks, then the simple sheet through the print preview."""
+        from mm_companion.ui.simple.print_dialog import ask_what_to_print
         from mm_companion.ui.simple.printing import print_with_preview
 
-        print_with_preview(self._sheet, self)
+        keys = ask_what_to_print(self._sheet, self, action="Preview")
+        if keys is not None:
+            print_with_preview(self._sheet, self, keys)
 
     def _export_pdf(self) -> None:
-        """File ▸ Export as PDF: the simple sheet, written to a file the user picks."""
+        """File ▸ Export as PDF: which blocks, then a file the user picks."""
+        from mm_companion.ui.simple.print_dialog import ask_what_to_print
         from mm_companion.ui.simple.printing import export_pdf
 
+        keys = ask_what_to_print(self._sheet, self, action="Export")
+        if keys is None:
+            return
         directory = self.storage_dir()
         stem = Path(library.suggested_filename(self._sheet.character)).stem
         path, _ = QFileDialog.getSaveFileName(
@@ -474,7 +481,7 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
-        result = export_pdf(self._sheet, Path(path))
+        result = export_pdf(self._sheet, Path(path), keys)
         pages = "page" if result.pages == 1 else "pages"
         self.statusBar().showMessage(f"Exported {result.pages} {pages} to {path}", 5000)
 

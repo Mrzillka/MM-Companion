@@ -70,11 +70,31 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   a roll through the section's own `rollRequested`/`loadRequested` (so the bus routes
   it to the Dice block — `SimpleContext.roll`/`load`). That is what keeps the undo step,
   the note, the dirty flag and the GM's card identical to the edit page's.
+- **A GM can pin from it.** On a sheet opened from a GM card the stat boxes, skill lines
+  and Initiative offer the edit rows' "Pin to GM card" / "Unpin" right-click
+  (`widgets.make_pinnable`, reading the section's `pin_state` at click time and emitting
+  through its own `pinRequested`/`unpinRequested`). `pin_menu` builds the menu without
+  showing it — the test seam, since a modal menu headless hangs.
 - **Views redraw off the bus.** `SimpleSheet` subscribes one *coalesced* handler to
   every notification topic (`NOTIFICATIONS`, `edited` included), so a GM's command, an
   undo (`reseed` publishes `RESEED_TOPICS`) or a borrowed card's toggle all reach the
   page once per turn. A view's `refresh()` must be an idempotent redraw from the model.
-  Hidden while the edit page is up, it does nothing.
+  Hidden while the edit page is up, it does nothing. **A list skips a redraw that would
+  draw the same thing** (`_View._unchanged`, a signature of *values*, never of the
+  mutable selections): every click on the sheet redraws every view, a hero point moves
+  nothing in Skills or Advantages, and rebuilding fifty lines each time cost a quarter of
+  a second a click on a well-stocked character. The same measurement is why the hover
+  wash is **one stylesheet per view** matched on a `rollable` property rather than one
+  per line (a sheet is polished per widget), and why `ColumnGrid` moves lines between
+  columns without hiding and re-showing them.
+- **Switching is kept cheap on purpose.** The sheet is only re-locked if it was not
+  locked (locking rebuilds the card trees, and a sheet opened to play from is locked
+  already), the build runs inside `stable_build()`, and a *rebuild* — a preset change,
+  a session starting — keeps its borrowed sections lent and dressed rather than giving
+  them back and borrowing them again (`_teardown(give_back=False)`), handing back only
+  what the new arrangement no longer shows. Each of those halved something measured.
+- **A theme switch redraws it** (`changeEvent` on a style or palette change, through the
+  same coalesced rebuild): its boxes and views read their tokens when built.
 - Floated block windows are hidden while the page is up (they show the *edit* look of
   blocks that are now on the page, and a borrowed one would be an empty frame) and come
   back after. Compact mode re-shows them on its way out, so `CharacterSheet.
@@ -97,7 +117,9 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   Advantages over Complications, then Powers, Equipment and Notes each a full row, with
   the roller and the Scene in a strip on the right. A block it does not have is left out
   (its row **keeps its weights** — a missing portrait must not hand the rest a proportion
-  nobody chose); a block it does not know gets a row at the end; `notes#2` sits with
+  nobody chose); a block it does not know gets a row at the end; on a **GM's NPC** the
+  blocks an NPC sheet opens without (`npc_hidden_keys` — the roller, the Scene, the
+  prose) are left out too; `notes#2` sits with
   `notes`. **Custom** is `BlockCanvas.arrangement()` read through: the page tree, the
   strip on its edge at its width, closed blocks left out, floated ones appended. An
   unreadable arrangement falls back to Standard rather than a blank page.
@@ -120,7 +142,9 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   player drags the divider. Sizing it once was sizing it against a half-built window.
 - A block may say it has nothing to show (`is_empty()`) and is then left out, on screen
   and on paper, its room going to its neighbours: a portrait never loaded, no powers, no
-  gear, no advantages, no complications, a printed Notes block with nothing open. Asked
+  gear, no advantages, no complications, a printed Notes block with nothing open, the
+  Scene outside a session (`CharacterSheet.sync_session` rebuilds the page when one
+  starts or ends). Asked
   of a section **before** it is lent, so an empty one never leaves its frame. Opt-in and
   only for emptiness that is a fact about the character: Conditions is never empty in
   this sense (it is where a condition goes on), nor is the live Notes block (it is where
@@ -150,7 +174,8 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
 ## Printing
 
 - File ▸ **Print…** (a print preview, Ctrl+P) and **Export as PDF…** print **the simple
-  sheet** in the current preset, whichever view is on screen, without the roller and the
+  sheet** in the current preset, on the system's paper size (A4 or Letter, a PDF too),
+  whichever view is on screen, without the roller and the
   Scene (`printable=False`); a strip's printable blocks follow the page as rows.
 - It is a **copy** (`PrintDocument`): views built with no section, borrowed blocks built
   afresh by `CharacterSheet.build_detached_section` (locked, simple, NPC-aware, on no

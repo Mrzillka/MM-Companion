@@ -114,10 +114,11 @@ def _texts(widget: QWidget) -> list[str]:
 
 
 def test_every_block_is_on_the_standard_sheet(qapp, data) -> None:
-    """Every one — bar a portrait never loaded, whose room goes to the name beside it."""
+    """Every one — bar a portrait never loaded, whose room goes to the name beside it,
+    and the Scene, which has nothing to show outside a session."""
     sheet = _simple(qapp, data)
 
-    expected = set(sheet.block_keys()) - {"character_image"}
+    expected = set(sheet.block_keys()) - {"character_image", "scene"}
     assert sorted(sheet.simple_sheet.shown_keys()) == sorted(expected)
 
 
@@ -820,3 +821,114 @@ def test_the_edit_sheets_initiative_is_cured_too(qapp, data, instant_die) -> Non
 
     assert "Initiative" in sheet.dice.panel._readout.text()
     assert sheet.dice.panel.current_spec() is None
+
+
+def test_a_gm_can_pin_from_the_simple_sheet(qapp, data) -> None:
+    """A sheet opened from a GM card offers the same right-click the edit rows do."""
+    from mm_companion.core.rules import PIN_ABILITY, PIN_INITIATIVE, PIN_SKILL, PinRef
+    from mm_companion.ui.simple.widgets import pin_menu
+
+    sheet = _simple(qapp, data)
+    abilities = sheet.simple_sheet.view("abilities")
+    assert pin_menu(abilities.boxes["STR"], abilities.context) is None  # no card, no menu
+
+    sheet.set_pin_target(True)
+    pinned: list = []
+    for section in (sheet.abilities, sheet.skills, sheet.system_info):
+        section.pinRequested.connect(pinned.append)
+    skills = sheet.simple_sheet.view("skills")
+    system = sheet.simple_sheet.view("system_info")
+    for widget, view in (
+        (abilities.boxes["STR"], abilities),
+        (skills.grid.items()[0], skills),
+        (system.initiative, system),
+    ):
+        menu = pin_menu(widget, view.context)
+        assert menu is not None
+        menu.actions()[0].trigger()
+
+    assert pinned[0] == PinRef(PIN_ABILITY, "STR")
+    assert pinned[1] == PinRef(PIN_SKILL, "Acrobatics")
+    assert pinned[2] == PinRef(PIN_INITIATIVE)
+
+
+def test_an_already_pinned_row_offers_unpin(qapp, data) -> None:
+    from mm_companion.core.rules import PIN_ABILITY, PinRef
+    from mm_companion.ui.simple.widgets import pin_menu
+
+    sheet = _simple(qapp, data)
+    sheet.set_pin_target(True)
+    sheet.set_pinned([PinRef(PIN_ABILITY, "STR")])
+    unpinned: list = []
+    sheet.abilities.unpinRequested.connect(unpinned.append)
+    view = sheet.simple_sheet.view("abilities")
+
+    pin_menu(view.boxes["STR"], view.context).actions()[0].trigger()
+
+    assert unpinned == [PinRef(PIN_ABILITY, "STR")]
+
+
+def test_the_scene_is_left_off_outside_a_session(qapp, data) -> None:
+    sheet = _simple(qapp, data)
+
+    assert "scene" not in sheet.simple_sheet.shown_keys()
+    assert "dice" in sheet.simple_sheet.shown_keys()
+    assert not sheet.block_frame("scene").is_lent()
+
+
+def test_the_scene_comes_onto_the_page_when_a_session_starts(qapp, data) -> None:
+    from mm_companion.core.session.model import new_session
+    from mm_companion.ui.session_bridge import SessionBridge, set_active_session
+
+    sheet = _simple(qapp, data)
+    bridge = SessionBridge()
+    bridge.host(new_session("Table"), port=0, bind="127.0.0.1")
+    set_active_session(bridge)
+    try:
+        sheet.sync_session()
+        _settle(qapp, sheet)
+        assert "scene" in sheet.simple_sheet.shown_keys()
+    finally:
+        set_active_session(None)
+        bridge.stop()
+    sheet.sync_session()
+    _settle(qapp, sheet)
+    assert "scene" not in sheet.simple_sheet.shown_keys()
+
+
+def test_a_theme_switch_redraws_the_simple_sheet(qapp, data) -> None:
+    sheet = _simple(qapp, data)
+    before = sheet.simple_sheet.box("abilities").heading.styleSheet()
+    try:
+        theme.set_active_theme("crimson-gold", qapp)
+        _settle(qapp, sheet)
+        after = sheet.simple_sheet.box("abilities").heading.styleSheet()
+    finally:
+        theme.set_active_theme("classic", qapp)
+        _settle(qapp, sheet)
+
+    assert after != before
+    assert theme.color("accent") not in after  # crimson's accent, read at redraw
+
+
+def test_the_simple_sheet_does_not_redraw_itself_while_idle(qapp, data) -> None:
+    sheet = _simple(qapp, data)
+    rebuilds: list[int] = []
+    sheet.simple_sheet.rebuilt.connect(lambda: rebuilds.append(1))
+
+    for _ in range(10):
+        qapp.processEvents()
+
+    assert rebuilds == []
+
+
+def test_an_npcs_standard_sheet_leaves_off_what_an_npc_opens_without(qapp, data) -> None:
+    win = NPCWindow(character=_hero(data))
+    win.show()
+    _settle(qapp)
+    win.sheet.set_simple(True)
+    _settle(qapp, win.sheet)
+    shown = win.sheet.simple_sheet.shown_keys()
+
+    assert "dice" not in shown and "complications" not in shown
+    assert "powers" in shown

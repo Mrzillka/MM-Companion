@@ -619,7 +619,10 @@ class CharacterSheet(QWidget):
         if simple:
             view = self.simple_sheet
             self._locked_before_simple = self._locked
-            self.set_locked(True)
+            # Only if it is not already: locking rebuilds the card trees, and a sheet a
+            # player opens to play from is locked already.
+            if not self._locked:
+                self.set_locked(True)
             self._board.hide()
             view.activate()
             view.show()
@@ -630,7 +633,7 @@ class CharacterSheet(QWidget):
             self._board.show()
             previous = self._locked_before_simple
             self._locked_before_simple = None
-            if previous is not None:
+            if previous is not None and previous != self._locked:
                 self.set_locked(previous)
         self.simpleChanged.emit(simple)
 
@@ -795,6 +798,9 @@ class CharacterSheet(QWidget):
             handler = getattr(section, "sync_session", None)
             if callable(handler):
                 handler()
+        if self.is_simple:
+            # The Scene has something to show now, or has stopped having it.
+            self._simple.schedule_rebuild()
 
     def set_npc_mode(self, npc: bool) -> None:
         """Simplify the sheet for a GM's NPC: no point budget, an estimated PL.

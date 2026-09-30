@@ -383,6 +383,12 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
             return None
         return PinRef(PIN_SKILL, str(payload[0]))
 
+    @property
+    def pin_state(self) -> PinMenuState:
+        """Whether this sheet can pin, and what is already pinned — read by the simple
+        sheet's own views of this block, which offer the same right-click."""
+        return self._pins
+
     def set_pin_target(self, enabled: bool) -> None:
         """Whether this block's rows offer to pin at all."""
         self._pins.enabled = enabled

@@ -34,7 +34,7 @@ their borders line up the way ruled boxes on paper do.
 from __future__ import annotations
 
 import shiboken6
-from PySide6.QtCore import QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QBoxLayout,
     QFrame,
@@ -46,8 +46,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mm_companion.core.rules import stable_build
 from mm_companion.ui import theme
+from mm_companion.ui.blocks.base import instance_template
 from mm_companion.ui.blocks.bus import NOTIFICATIONS
+from mm_companion.ui.blocks.registry import npc_hidden_keys
 from mm_companion.ui.layout_tree import Leaf, Node, Split
 from mm_companion.ui.reflow import ReflowBox
 from mm_companion.ui.sections.titled_section import set_simple_frame
@@ -420,6 +423,12 @@ class SimpleSheet(QWidget):
         keys = self._sheet.block_keys()
         if self._preset == PRESET_CUSTOM:
             return custom_layout(self._sheet.arrangement(), keys)
+        if self._sheet.is_npc:
+            # A GM's NPC opens without the blocks that hold no trait — the roller, the
+            # Scene, the prose — and Standard should not bring back what a mook is
+            # deliberately shown without (see BlockDescriptor.npc_default).
+            closed = set(npc_hidden_keys())
+            keys = [key for key in keys if instance_template(key) not in closed]
         return standard_layout(keys)
 
     def activate(self) -> None:
@@ -442,16 +451,26 @@ class SimpleSheet(QWidget):
         self._rebuild_pending = False
         if not self._active:
             return
-        self._teardown()
+        # The borrowed sections stay lent and dressed across a rebuild: giving one back
+        # and borrowing it again rebuilt the power cards twice for a change of preset.
+        # Whatever the new arrangement no longer shows goes home afterwards.
+        held = self._teardown(give_back=False)
         self._hide_windows()
         self._build()
+        for key, section in held.items():
+            if key not in self._borrowed and shiboken6.isValid(section):
+                self._return_section(key, section)
 
     def _build(self) -> None:
         model = self.compute_layout()
-        for key in model.keys():
-            box = self._make_box(key)
-            if box is not None:
-                self._boxes[key] = box
+        # A read of the build from end to end, so the rules layer may work it out once
+        # (see core.rules.build_cache) — the only write inside, an array normalized
+        # by the Powers block's redraw, invalidates the scope itself.
+        with stable_build():
+            for key in model.keys():
+                box = self._make_box(key)
+                if box is not None:
+                    self._boxes[key] = box
         # A block with nothing to show — a portrait never loaded, a character with no
         # gear — gives its room to its neighbours rather than standing there empty.
         model = without_keys(model, set(model.keys()) - set(self._boxes))
@@ -461,7 +480,13 @@ class SimpleSheet(QWidget):
         self._place_strip(model)
         self.rebuilt.emit()
 
-    def _teardown(self) -> None:
+    def _teardown(self, *, give_back: bool = True) -> dict[str, QWidget]:
+        """Clear the page. Returns the sections still lent (only when not *give_back*).
+
+        Kept sections are parked on this widget, hidden, so clearing the boxes that
+        held them cannot take them down too.
+        """
+        held: dict[str, QWidget] = {}
         for key, box in list(self._boxes.items()):
             if key not in self._borrowed:
                 continue
@@ -471,13 +496,18 @@ class SimpleSheet(QWidget):
             if not (shiboken6.isValid(section) and key in self._sheet.block_keys()):
                 continue
             box.release_body()
-            self._return_section(key, section)
+            if give_back:
+                self._return_section(key, section)
+            else:
+                section.setParent(self)
+                held[key] = section
         self._borrowed.clear()
         self._page.clear()
         self._strip_page.clear()
         self._boxes.clear()
         self._views.clear()
         self._layout_model = None
+        return held
 
     def _make_box(self, key: str) -> SimpleBox | None:
         """The box for *key*: its own view, or its section borrowed from its frame.
@@ -582,6 +612,17 @@ class SimpleSheet(QWidget):
         super().resizeEvent(event)
         self._apply_strip_extent()
 
+    def changeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        """Redraw for a new theme: the boxes and views read their tokens when built.
+
+        A preset switch (or the Settings window's live preview) re-polishes the whole
+        application, which reaches here as a style or palette change. Coalesced like
+        every other rebuild, so a burst of preview updates redraws once.
+        """
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.StyleChange, QEvent.Type.PaletteChange):
+            self.schedule_rebuild()
+
     # -- floated windows -------------------------------------------------------
 
     def _hide_windows(self) -> None:
@@ -624,7 +665,7 @@ class SimpleSheet(QWidget):
         """Redraw every view from the model at once (tests, and after a load)."""
         self._refresh_views()
 
-    def _schedule_rebuild(self) -> None:
+    def schedule_rebuild(self) -> None:
         if self._active and not self._rebuild_pending:
             self._rebuild_pending = True
             # Tied to this widget, so a window closed before the turn ends cancels it.
@@ -634,10 +675,10 @@ class SimpleSheet(QWidget):
         # The Custom preset *is* the edit sheet's arrangement, so a block reopened
         # from the View menu (or revealed by a roll it serves) has to appear here too.
         if self._active and self._preset == PRESET_CUSTOM:
-            self._schedule_rebuild()
+            self.schedule_rebuild()
 
     def _on_blocks_changed(self, _key: str) -> None:
-        self._schedule_rebuild()
+        self.schedule_rebuild()
 
     def reveal(self, key: str) -> None:
         """Make sure block *key* is on the page — a roll it serves was just asked for.
@@ -646,4 +687,4 @@ class SimpleSheet(QWidget):
         edit sheet's own arrangement, where the sheet has just reopened it.
         """
         if self._active and key not in self._boxes:
-            self._schedule_rebuild()
+            self.schedule_rebuild()

@@ -36,7 +36,6 @@ from PySide6.QtGui import (
     QFont,
     QImage,
     QPageLayout,
-    QPageSize,
     QPainter,
     QPalette,
     QRegion,
@@ -379,7 +378,10 @@ def paint_document(sheet, printer) -> PrintResult:
 
 
 def make_printer(*, pdf_path: Path | str | None = None):
-    """A high-resolution printer on the locale's paper, with the sheet's margins.
+    """A high-resolution printer on the system's paper, with the sheet's margins.
+
+    The paper size is left to the platform — A4 or Letter, whichever the system and its
+    default printer say — for a PDF as much as for a printer.
 
     With *pdf_path*, a PDF writer instead of a device.
     """
@@ -391,7 +393,6 @@ def make_printer(*, pdf_path: Path | str | None = None):
     )
     if pdf_path is not None:
         printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
-        printer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
         printer.setOutputFileName(str(pdf_path))
     return printer
 

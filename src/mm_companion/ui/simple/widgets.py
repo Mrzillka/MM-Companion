@@ -21,12 +21,13 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
-from mm_companion.core.rules import RollSpec
+from mm_companion.core.rules import PinRef, RollSpec
 from mm_companion.ui import theme
 from mm_companion.ui.roll_click import ROLL_TOOLTIP, attach_roll_click
 from mm_companion.ui.sections.column_flow import column_count, even_split
@@ -37,12 +38,18 @@ from mm_companion.ui.widgets import discard_widget, no_reentry
 SpecFactory = Callable[[], "RollSpec | None"]
 
 
-def _hover_style(name: str) -> str:
-    """The quiet wash a rollable line or box wears under the pointer."""
+def rollable_style() -> str:
+    """The quiet wash a rollable line or box wears under the pointer.
+
+    One sheet for a whole view, set on the view (see ``views._View``) and matched by
+    the ``rollable`` property :func:`make_rollable` puts on each line. It used to be a
+    sheet per line, and a stylesheet is polished per widget: redrawing a list of fifty
+    skills spent most of its time re-polishing fifty copies of the same two rules.
+    """
     radius = int(theme.metric("radius.chip"))
     return (
-        f"#{name} {{ border-radius: {radius}px; }}"
-        f"#{name}:hover {{ background: {theme.wash('accent.dice', 0.12)}; }}"
+        f'*[rollable="true"] {{ border-radius: {radius}px; }}'
+        f'*[rollable="true"]:hover {{ background: {theme.wash("accent.dice", 0.12)}; }}'
     )
 
 
@@ -55,12 +62,52 @@ def make_rollable(widget: QWidget, context: SimpleContext, factory: SpecFactory)
     if not context.can_roll():
         return
     widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-    widget.setStyleSheet(_hover_style(widget.objectName()))
+    widget.setProperty("rollable", True)
     widget.setCursor(Qt.CursorShape.PointingHandCursor)
     # Kept on the widget, so a box that rewrites its tooltip on every refresh (a stat
     # box, whose hint names the condition moving it) can say how it rolls as well.
     widget.setProperty("rollHint", ROLL_TOOLTIP)
     attach_roll_click(widget, factory, context.roll, load_sink=context.load)
+
+
+def make_pinnable(widget: QWidget, context: SimpleContext, ref: PinRef) -> None:
+    """Offer "Pin to GM card" on a right-click, as the edit sheet's rows do.
+
+    Only on a sheet a GM opened from a card — the section's ``pin_state`` says so, and
+    is read at click time since a card can be attached after the sheet was built. The
+    pin goes out through the section's own ``pinRequested``/``unpinRequested``, so it
+    reaches the card by the same road.
+    """
+    if getattr(context.section, "pin_state", None) is None:
+        return
+    widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+    widget.setProperty("pinRef", ref)
+
+    def show(pos) -> None:
+        menu = pin_menu(widget, context)
+        if menu is not None:
+            menu.exec(widget.mapToGlobal(pos))
+
+    widget.customContextMenuRequested.connect(show)
+
+
+def pin_menu(widget: QWidget, context: SimpleContext) -> QMenu | None:
+    """The pin menu *widget* would open, built but not shown; ``None`` when it offers none.
+
+    Split from the right-click itself so it can be asked without an event loop — a
+    modal menu headless is a test that hangs.
+    """
+    pins = getattr(context.section, "pin_state", None)
+    ref = widget.property("pinRef")
+    if pins is None or not pins.enabled or ref is None:
+        return None
+    pinned = pins.is_pinned(ref)
+    sink = getattr(context.section, "unpinRequested" if pinned else "pinRequested", None)
+    if sink is None:
+        return None
+    menu = QMenu(widget)
+    menu.addAction(pins.action_text(ref), lambda: sink.emit(ref))
+    return menu
 
 
 class StatBox(QFrame):
@@ -225,10 +272,10 @@ class ColumnGrid(QWidget):
 
     def _deal(self, columns: int) -> None:
         columns = max(1, columns)
-        # Out of the old columns first (a parented widget is never left without a
-        # parent here: each is re-added below before anything can show it).
-        for widget in self._items:
-            widget.hide()
+        # Out of the old columns and into the new ones without ever being hidden: a
+        # widget moved between two layouts of the same parent keeps its parent, and a
+        # new one is shown by the parent it lands in. Hiding and re-showing every line
+        # made each re-deal re-polish the whole list.
         while self._row.count():
             item = self._row.takeAt(0)
             layout = item.layout()
@@ -246,8 +293,6 @@ class ColumnGrid(QWidget):
                 column.addWidget(self._items[index])
             column.addStretch(1)
             self._row.addLayout(column, stretch=1)
-        for widget in self._items:
-            widget.show()
         self._columns = columns
 
     @no_reentry

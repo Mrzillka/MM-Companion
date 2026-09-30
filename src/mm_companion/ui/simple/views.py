@@ -31,6 +31,11 @@ from mm_companion.core import library
 from mm_companion.core.character import AppliedCondition
 from mm_companion.core.components import MECH_RANDOM_ACTION
 from mm_companion.core.rules import (
+    PIN_ABILITY,
+    PIN_INITIATIVE,
+    PIN_RESISTANCE,
+    PIN_SKILL,
+    PinRef,
     ability_roll,
     advantage_by_name,
     all_advantage_selections,
@@ -79,7 +84,9 @@ from mm_companion.ui.simple.widgets import (
     SimpleLine,
     StatBox,
     clear_layout,
+    make_pinnable,
     make_rollable,
+    rollable_style,
 )
 from mm_companion.ui.widgets import attach_context_removal, rebuilding
 
@@ -111,6 +118,23 @@ class _View(QWidget):
         self.context = context
         self._data = context.data
         self._character = context.character
+        # What the view last drew, for a view that can tell when a redraw would draw
+        # the same thing again (see _unchanged).
+        self._drawn: object = None
+        if context.can_roll():
+            self.setStyleSheet(rollable_style())
+
+    def _unchanged(self, signature: object) -> bool:
+        """Whether *signature* is what was last drawn — remembering it if not.
+
+        Every change on the sheet redraws every view, and most changes (a hero point, a
+        power switched on) move nothing a given list shows. A list that rebuilds its
+        lines anyway costs a tenth of a second a click on a well-stocked character.
+        """
+        if signature == self._drawn:
+            return True
+        self._drawn = signature
+        return False
 
     def refresh(self) -> None:  # pragma: no cover - every view overrides it
         raise NotImplementedError
@@ -241,6 +265,7 @@ class SystemView(_View):
         make_rollable(
             self.initiative, context, lambda: initiative_roll(self._character, self._data)
         )
+        make_pinnable(self.initiative, context, PinRef(PIN_INITIATIVE))
 
         self.hero_points = HeroPointsWidget()
         self.hero_points.valueChanged.connect(self._on_hero_points)
@@ -384,6 +409,7 @@ class AbilitiesView(_View):
             make_rollable(
                 box, context, lambda k=ability.key: ability_roll(self._character, self._data, k)
             )
+            make_pinnable(box, context, PinRef(PIN_ABILITY, ability.key))
             flow.addWidget(box)
             self.boxes[ability.key] = box
         layout.addStretch()
@@ -420,6 +446,7 @@ class ResistancesView(_View):
                 context,
                 lambda k=resistance.key: resistance_roll(self._character, self._data, k),
             )
+            make_pinnable(box, context, PinRef(PIN_RESISTANCE, resistance.key))
             flow.addWidget(box)
             self.boxes[resistance.key] = box
         layout.addStretch()
@@ -513,11 +540,28 @@ class SkillsView(_View):
             self.context,
             lambda r=row_id, d=display: skill_roll(self._character, self._data, r, label=d),
         )
+        make_pinnable(line, self.context, PinRef(PIN_SKILL, row_id))
         return line
 
+    def _signature(self, trained, untrained) -> tuple:
+        character, data = self._character, self._data
+
+        def row(row_id: str, display: str) -> tuple:
+            spec = skill_roll(character, data, row_id, label=display)
+            bonus = skill_bonus(character, data, row_id)
+            condition = skill_modifiers(character, data, row_id).condition.active
+            return (row_id, display, spec.modifier, spec.hint, bonus and bonus.amount, condition)
+
+        return (
+            tuple(row(r, d) for r, d in trained),
+            tuple(row(r, d) for r, d in untrained),
+        )
+
     def refresh(self) -> None:
+        trained, untrained = skill_rows(self.context)
+        if self._unchanged(self._signature(trained, untrained)):
+            return
         with rebuilding(self):
-            trained, untrained = skill_rows(self.context)
             self.grid.set_items([self._line(row_id, display) for row_id, display in trained])
             self.grid.setVisible(bool(trained))
             clear_layout(self._untrained)
@@ -564,8 +608,19 @@ class AdvantagesView(_View):
         return f"{text} ({subject})" if subject else text
 
     def refresh(self) -> None:
+        lost = debilitated_traits(self._character, self._data)
+        # Values, not the selections themselves: those are mutable, and a remembered
+        # reference would compare equal to its own edited self.
+        signature = (
+            tuple(
+                (s.name, s.rank, s.parameter)
+                for s in all_advantage_selections(self._character, self._data)
+            ),
+            frozenset(lost),
+        )
+        if self._unchanged(signature):
+            return
         with rebuilding(self):
-            lost = debilitated_traits(self._character, self._data)
             sources = {
                 (s.name, s.parameter): source
                 for s, source in granted_advantage_selections(self._character, self._data)

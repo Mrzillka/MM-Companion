@@ -747,3 +747,76 @@ def test_a_note_can_be_written_on_the_simple_sheet(qapp, data) -> None:
     sheet.set_simple(False)
     _settle(qapp, sheet)
     assert editor.source.isReadOnly()
+
+
+def _real_double_click(qapp, widget) -> None:
+    """What a real double-click delivers: press, release, double-click, release.
+
+    ``QTest.mouseDClick`` on this platform sends the double-click alone, which is
+    exactly the sequence that hid this bug.
+    """
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QMouseEvent
+
+    local = QPointF(5, 5)
+    button, no_mods = Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier
+    for kind, held in (
+        (QEvent.Type.MouseButtonPress, button),
+        (QEvent.Type.MouseButtonRelease, Qt.MouseButton.NoButton),
+        (QEvent.Type.MouseButtonDblClick, button),
+        (QEvent.Type.MouseButtonRelease, Qt.MouseButton.NoButton),
+    ):
+        global_pos = QPointF(widget.mapToGlobal(local.toPoint()))
+        event = QMouseEvent(kind, local, global_pos, button, held, no_mods)
+        QApplication.sendEvent(widget, event)
+        qapp.processEvents()
+
+
+@pytest.fixture
+def instant_die(monkeypatch):
+    from mm_companion.ui import dice_roller
+
+    monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
+    monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 11)
+
+
+def test_a_double_click_rolls_and_leaves_the_chip_empty(qapp, data, instant_die) -> None:
+    """The roll lands on the double-click, and the release that ends the gesture must
+    not load the chip straight back — the roller was left armed with every stat a
+    player double-clicked on the simple sheet."""
+    sheet = _simple(qapp, data)
+    box = sheet.simple_sheet.view("abilities").boxes["STR"]
+    rolls: list = []
+    sheet.abilities.rollRequested.connect(rolls.append)
+
+    _real_double_click(qapp, box)
+    _settle(qapp)
+
+    assert len(rolls) == 1
+    assert "Strength" in sheet.dice.panel._readout.text()
+    assert sheet.dice.panel.current_spec() is None
+
+
+def test_a_single_click_still_loads_the_chip(qapp, data) -> None:
+    sheet = _simple(qapp, data)
+    box = sheet.simple_sheet.view("abilities").boxes["STR"]
+
+    QTest.mouseClick(box, Qt.MouseButton.LeftButton, pos=QPoint(5, 5))
+    _settle(qapp)
+
+    spec = sheet.dice.panel.current_spec()
+    assert spec is not None and spec.label == "Strength"
+
+
+def test_the_edit_sheets_initiative_is_cured_too(qapp, data, instant_die) -> None:
+    """The edit sheet's Initiative readout goes through the same click helper."""
+    sheet = CharacterSheet(data, _hero(data))
+    sheet.set_locked(True)
+    sheet.show()
+    _settle(qapp)
+
+    _real_double_click(qapp, sheet.system_info._initiative)
+    _settle(qapp)
+
+    assert "Initiative" in sheet.dice.panel._readout.text()
+    assert sheet.dice.panel.current_spec() is None

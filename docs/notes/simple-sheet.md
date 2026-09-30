@@ -32,7 +32,11 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
 - **Whether a window is showing it is not remembered**, on the precedent of the lock
   and compact mode: a view switch, not a preference. **Which preset** it uses is a
   preference and is — `storage.simple_sheet_preset()` (with the usual accessor
-  fallback, since `load_settings` is verbatim).
+  fallback, since `load_settings` is verbatim). A player who plays from it can make it
+  a habit instead: Settings ▸ General ▸ *Open saved characters in the simple sheet*
+  (`storage.simple_sheet_on_open()`, off by default). Only a character opened
+  **locked** — from the library, or a GM's view of a player — goes there: a new one
+  opens for editing, and an NPC is the GM's prep sheet.
 
 ## Two kinds of box, and why the power cards are borrowed
 
@@ -175,8 +179,13 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
 
 - File ▸ **Print…** (a print preview, Ctrl+P) and **Export as PDF…** print **the simple
   sheet** in the current preset, on the system's paper size (A4 or Letter, a PDF too),
-  whichever view is on screen, without the roller and the
-  Scene (`printable=False`); a strip's printable blocks follow the page as rows.
+  whichever view is on screen; a strip's printed blocks follow the page as rows.
+- **Which blocks is asked every time and remembered** (`print_dialog.PrintChoiceDialog`):
+  one checkbox per block, ticked by each block's `printable` (the roller and the Scene
+  off) unless the player chose otherwise before — `storage.simple_print_choices()`,
+  stored by kind of block and only for what was changed, so a block added later prints
+  by its own default. Per print rather than in Settings, because it is decided per
+  print (the GM's copy with notes, the table's without).
 - It is a **copy** (`PrintDocument`): views built with no section, borrowed blocks built
   afresh by `CharacterSheet.build_detached_section` (locked, simple, NPC-aware, on no
   bus), Notes printed as their text (`NotesPrintView` — an editor prints its first
@@ -190,12 +199,22 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   `WA_StyleSheet` and stops propagating a parent's palette to its children; a palette on
   the root reached nothing, and a Slate Dark sheet printed light grey text on white.
   Graphics effects are stripped too: on paper every power is there to be read.
-- **Each page is drawn to a 300-dpi image** (`PRINT_DPI`) and placed on the page. A
-  `QWidget.render` straight into a `QPrinter` goes through an intermediate pixmap anyway
-  in this Qt — even a bare `QLabel` reaches the PDF as a bitmap — at the printer's own
-  resolution: a four-page sheet was a 15 MB PDF that took 8 s. Rasterising ourselves is
-  ~1 s and a few hundred KB a page, and prints sharp. The footer (name, page n / N) is
-  drawn by the painter and is real text.
+- **A page is two layers: a picture, and the words on it as real text.** A
+  `QWidget.render` straight into a `QPrinter` goes through an intermediate pixmap in
+  this Qt — even a bare `QLabel` reaches the PDF as a bitmap — at the printer's own
+  resolution (a four-page sheet was a 15 MB PDF that took 8 s), and text in a picture
+  cannot be searched or selected. So each band is drawn at 300 dpi (`PRINT_DPI`) with
+  **every text label silenced** (`_SilenceLabels`, an event filter that eats their
+  paint — never an edit to the label, which would re-lay the page out), and the labels'
+  text is then drawn over it by the painter (`draw_text` / `_draw_label`): at the
+  label's own position, alignment and wrapping, the text it *shows* (`QLabel.text`, so
+  an eliding label's shortened caption), Markdown and rich text through a
+  `QTextDocument` as a label's own does. Two things are easy to get wrong there: the
+  font's point size is rescaled from the screen's density to the device's, since the
+  painter's scaling is applied on top; and **a stylesheet `color` never reaches the
+  palette**, so the colour, weight and slant are read off the label's own one-line sheet
+  (`_sheet_text_style`), or every heading and tint printed black. A bit over 1 s and
+  about half a megabyte a page, and the footer is text too.
 - **Page breaks fall between things** (`page_breaks`): never inside a label, a control,
   a stat box, a list line; a power card and a small box move whole to the next page if
   they fit on one; a box's heading is never the last thing on a page. Only a page that

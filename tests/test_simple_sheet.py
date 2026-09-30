@@ -986,3 +986,60 @@ def test_an_export_prints_only_the_blocks_it_was_given(qapp, data, tmp_path) -> 
     finally:
         document.close()
     assert export_pdf(sheet, tmp_path / "two.pdf", ["base_info", "abilities"]).pages == 1
+
+
+def test_a_pdfs_text_is_real_text(qapp, data, tmp_path) -> None:
+    """Searchable and selectable: the words go onto the page as text, not as pixels."""
+    from PySide6.QtPdf import QPdfDocument
+
+    sheet = CharacterSheet(data, _hero(data))
+    path = tmp_path / "ghost.pdf"
+    export_pdf(sheet, path)
+    document = QPdfDocument(None)
+    document.load(str(path))
+    text = " ".join(document.getAllText(page).text() for page in range(document.pageCount()))
+
+    for words in ("Ghost", "Acrobatics", "Armor", "Motivation"):
+        assert words in text, words
+
+
+def test_the_picture_under_the_text_has_no_words_in_it(qapp, data) -> None:
+    """Drawn twice — once as pixels, once as text — would print every word doubled."""
+    from PySide6.QtGui import QColor
+
+    document = PrintDocument(CharacterSheet(data, _hero(data)))
+    try:
+        document.lay_out()
+        name = next(label for label in document.text_labels() if QLabel.text(label) == "Ghost")
+        top = name.mapTo(document.page, QPoint(0, 0)).y()
+        band = document.band_image(top, top + name.height(), 96, with_text=False)
+        left = name.mapTo(document.page, QPoint(0, 0)).x()
+        inked = [
+            (x, y)
+            for x in range(left, left + name.width())
+            for y in range(name.height())
+            if band.pixelColor(x, y).lightness() < 128
+        ]
+        assert inked == []
+        assert band.pixelColor(0, 0) != QColor()  # it is still a real picture
+    finally:
+        document.close()
+
+
+def test_a_stylesheet_colour_reaches_the_printed_text() -> None:
+    from PySide6.QtGui import QColor
+
+    from mm_companion.ui.simple.printing import _sheet_text_style
+
+    label = QLabel("Heading")
+    label.setStyleSheet("color: #3366aa; font-weight: bold;")
+    colour, bold, italic = _sheet_text_style(label)
+    assert colour == QColor("#3366aa") and bold and not italic
+
+    label.setStyleSheet("background-color: #ff0000; font-style: italic;")
+    colour, bold, italic = _sheet_text_style(label)
+    assert colour is None and italic  # a background is not the text's colour
+
+    label.setStyleSheet("color: rgba(10, 20, 30, 0.5);")
+    colour, _bold, _italic = _sheet_text_style(label)
+    assert colour.red() == 10 and abs(colour.alphaF() - 0.5) < 0.01

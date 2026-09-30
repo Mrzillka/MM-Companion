@@ -291,8 +291,11 @@ class ColumnGrid(QWidget):
             column.setSpacing(spacing)
             for index in bucket:
                 column.addWidget(self._items[index])
-            column.addStretch(1)
             self._row.addLayout(column, stretch=1)
+            # Top-aligned rather than padded with a stretch: a stretch makes the whole
+            # grid claim spare height, and a Skills box beside a taller Advantages one
+            # then pushed its Untrained line to the bottom of the box.
+            self._row.setAlignment(column, Qt.AlignmentFlag.AlignTop)
         self._columns = columns
 
     @no_reentry

@@ -27,18 +27,23 @@ rasterising ourselves picks a resolution that prints sharp and stays small.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QMarginsF, QPoint, QRect, Qt
+from PySide6 import QtGui
+from PySide6.QtCore import QEvent, QMarginsF, QObject, QPoint, QRect, QRectF, Qt
 from PySide6.QtGui import (
+    QAbstractTextDocumentLayout,
     QColor,
     QFont,
+    QFontMetricsF,
     QImage,
     QPageLayout,
     QPainter,
     QPalette,
     QRegion,
+    QTextDocument,
 )
 from PySide6.QtWidgets import (
     QAbstractButton,
@@ -257,8 +262,24 @@ class PrintDocument:
         region = QRegion(QRect(0, top, self.page.width(), bottom - top))
         self.page.render(painter, QPoint(0, 0), region, QWidget.RenderFlag.DrawChildren)
 
-    def band_image(self, top: int, bottom: int, dpi: int = PRINT_DPI) -> QImage:
-        """The band ``top..bottom`` drawn onto white paper at *dpi*."""
+    def text_labels(self) -> list[QLabel]:
+        """Every label on the copy that shows text rather than a picture."""
+        return [
+            label
+            for label in self.page.findChildren(QLabel)
+            if label.isVisibleTo(self.page)
+            and QLabel.text(label)
+            and (label.pixmap() is None or label.pixmap().isNull())
+        ]
+
+    def band_image(
+        self, top: int, bottom: int, dpi: int = PRINT_DPI, *, with_text: bool = True
+    ) -> QImage:
+        """The band ``top..bottom`` drawn onto white paper at *dpi*.
+
+        Without text (*with_text* ``False``), every text label is left out of the
+        picture, for :meth:`draw_text` to put on the page as real text instead.
+        """
         factor = dpi / max(1, self.root.logicalDpiX())
         width = self.page.width()
         image = QImage(
@@ -272,9 +293,32 @@ class PrintDocument:
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         painter.scale(factor, factor)
-        self.render(painter, top, bottom)
+        silence = None if with_text else _SilenceLabels(self.text_labels())
+        try:
+            self.render(painter, top, bottom)
+        finally:
+            if silence is not None:
+                silence.release()
         painter.end()
         return image
+
+    def draw_text(self, painter: QPainter, top: int, bottom: int) -> None:
+        """Draw the band's text as text, where :meth:`band_image` left it out.
+
+        *painter* is in the copy's own pixels, with the band's top at its origin. Each
+        label is drawn where it sits, in its own font, colour and alignment and with the
+        same wrapping — so the page looks as the picture would have, and a PDF of it can
+        be searched, selected and read aloud.
+        """
+        device_dpi = painter.device().logicalDpiY()
+        painter.save()
+        painter.setClipRect(QRectF(0, 0, self.page.width(), bottom - top))
+        for label in self.text_labels():
+            origin = label.mapTo(self.page, QPoint(0, 0))
+            if origin.y() >= bottom or origin.y() + label.height() <= top:
+                continue
+            _draw_label(painter, label, QPoint(origin.x(), origin.y() - top), device_dpi)
+        painter.restore()
 
     def close(self) -> None:
         self.root.hide()
@@ -344,6 +388,129 @@ def page_breaks(page: QWidget, total: int, page_height: int) -> list[tuple[int, 
     return bands
 
 
+class _SilenceLabels(QObject):
+    """Keep *labels* from painting while installed — their text is drawn separately.
+
+    An event filter rather than an edit to the labels: emptying a label's text would
+    ask its layout to re-measure it, and the picture has to be of the page exactly as
+    it was laid out.
+    """
+
+    def __init__(self, labels: list[QLabel]) -> None:
+        super().__init__()
+        self._labels = labels
+        for label in labels:
+            label.installEventFilter(self)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802 - Qt override
+        return event.type() == QEvent.Type.Paint
+
+    def release(self) -> None:
+        for label in self._labels:
+            label.removeEventFilter(self)
+
+
+_SHEET_COLOUR = re.compile(r"(?<![-\w])color\s*:\s*([^;}]+)")
+_SHEET_BOLD = re.compile(r"font-weight\s*:\s*(bold|[6-9]00)")
+_SHEET_ITALIC = re.compile(r"font-style\s*:\s*italic")
+
+
+def _sheet_text_style(label: QLabel) -> tuple[QColor | None, bool, bool]:
+    """The colour, weight and slant a label's own stylesheet gives its text.
+
+    Qt paints a stylesheet ``color`` without ever putting it in the widget's palette,
+    so reading the palette alone drew every heading, tint and muted line in plain black.
+    The sheet's labels are dressed with one-line snippets (``tinted_style``,
+    ``muted_style``, the heading's accent), which this reads; anything it cannot parse
+    falls back to the palette, which is at worst the plain text colour.
+    """
+    sheet = label.styleSheet()
+    if not sheet:
+        return None, False, False
+    match = _SHEET_COLOUR.search(sheet)
+    colour = _parse_colour(match.group(1).strip(), label) if match else None
+    return colour, bool(_SHEET_BOLD.search(sheet)), bool(_SHEET_ITALIC.search(sheet))
+
+
+def _parse_colour(value: str, label: QLabel) -> QColor | None:
+    """A stylesheet colour value as a QColor: ``#rrggbb``, a name, ``rgb[a](...)`` or
+    ``palette(role)``; ``None`` for anything else."""
+    if value.startswith("palette(") and value.endswith(")"):
+        name = "".join(part.capitalize() for part in value[8:-1].strip().split("-"))
+        role = getattr(QPalette.ColorRole, name, None)
+        return label.palette().color(role) if role is not None else None
+    if value.startswith(("rgb(", "rgba(")) and value.endswith(")"):
+        parts = [part.strip() for part in value[value.index("(") + 1 : -1].split(",")]
+        try:
+            red, green, blue = (int(float(part)) for part in parts[:3])
+            colour = QColor(red, green, blue)
+            if len(parts) > 3:
+                alpha = float(parts[3])
+                colour.setAlphaF(alpha if alpha <= 1 else alpha / 255)
+            return colour
+        except ValueError:
+            return None
+    colour = QColor(value)
+    return colour if colour.isValid() else None
+
+
+def _draw_label(painter: QPainter, label: QLabel, origin: QPoint, device_dpi: int) -> None:
+    """Draw *label*'s text at *origin* the way the label itself would.
+
+    The font's point size is rescaled from the screen's density to the device's, so
+    that after the painter's own scaling a glyph comes out exactly as large as the label
+    drew it; the text is what the label *shows* (``QLabel.text``, which an eliding label
+    has already shortened), and rich or Markdown text goes through a text document, as
+    a label's own does.
+    """
+    shown = QLabel.text(label)
+    font = QFont(label.font())
+    if font.pointSizeF() > 0:
+        font.setPointSizeF(font.pointSizeF() * label.logicalDpiY() / max(1, device_dpi))
+    group = QPalette.ColorGroup.Active if label.isEnabled() else QPalette.ColorGroup.Disabled
+    colour = label.palette().color(group, label.foregroundRole())
+    sheet_colour, bold, italic = _sheet_text_style(label)
+    if sheet_colour is not None:
+        colour = sheet_colour
+    if bold:
+        font.setBold(True)
+    if italic:
+        font.setItalic(True)
+    rect = QRectF(label.contentsRect()).translated(origin.x(), origin.y())
+    margin = label.margin()
+    rect.adjust(margin, margin, -margin, -margin)
+    text_format = label.textFormat()
+    rich = text_format in (Qt.TextFormat.RichText, Qt.TextFormat.MarkdownText) or (
+        text_format == Qt.TextFormat.AutoText and QtGui.Qt.mightBeRichText(shown)
+    )
+    if rich:
+        document = QTextDocument()
+        document.setDocumentMargin(0)
+        document.setDefaultFont(font)
+        if text_format == Qt.TextFormat.MarkdownText:
+            document.setMarkdown(shown)
+        else:
+            document.setHtml(shown)
+        document.setTextWidth(rect.width())
+        context = QAbstractTextDocumentLayout.PaintContext()
+        context.palette.setColor(QPalette.ColorRole.Text, colour)
+        painter.save()
+        painter.translate(rect.topLeft())
+        document.documentLayout().draw(painter, context)
+        painter.restore()
+        return
+    painter.setFont(font)
+    painter.setPen(colour)
+    flags = int(label.alignment().value)
+    if label.wordWrap():
+        flags |= int(Qt.TextFlag.TextWordWrap.value)
+    else:
+        metrics = QFontMetricsF(font, painter.device())
+        if metrics.horizontalAdvance(shown) > rect.width() + 0.5:
+            shown = metrics.elidedText(shown, Qt.TextElideMode.ElideRight, rect.width())
+    painter.drawText(rect, flags, shown)
+
+
 @dataclass
 class PrintResult:
     """What a print produced — how many pages, for the status bar and the tests."""
@@ -375,9 +542,14 @@ def paint_document(sheet, printer, keys=None) -> PrintResult:
             for index, (top, bottom) in enumerate(bands):
                 if index:
                     printer.newPage()
-                image = document.band_image(top, bottom)
+                # The boxes, rules and pictures as an image; the words on top as text.
+                image = document.band_image(top, bottom, with_text=False)
                 target = QRect(0, 0, paint_rect.width(), round((bottom - top) * scale))
                 painter.drawImage(target, image)
+                painter.save()
+                painter.scale(scale, scale)
+                document.draw_text(painter, top, bottom)
+                painter.restore()
                 painter.setFont(footer_font)
                 painter.setPen(QColor("#666666"))
                 footer = QRect(

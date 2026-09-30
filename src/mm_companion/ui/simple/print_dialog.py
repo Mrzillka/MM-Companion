@@ -43,7 +43,9 @@ class PrintChoiceDialog(QDialog):
         note.setStyleSheet(muted_style(italic=True))
         layout.addWidget(note)
         for key in print_candidates(sheet):
-            box = QCheckBox(sheet.block_frame(key).base_title)
+            # "&" doubled: a checkbox reads a single one as a shortcut marker, and
+            # "Name & Details" came out as "Name  Details".
+            box = QCheckBox(sheet.block_frame(key).base_title.replace("&", "&&"))
             box.setChecked(prints_by_default(key))
             box.toggled.connect(self._sync_ok)
             layout.addWidget(box)

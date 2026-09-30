@@ -1043,3 +1043,13 @@ def test_a_stylesheet_colour_reaches_the_printed_text() -> None:
     label.setStyleSheet("color: rgba(10, 20, 30, 0.5);")
     colour, _bold, _italic = _sheet_text_style(label)
     assert colour.red() == 10 and abs(colour.alphaF() - 0.5) < 0.01
+
+
+def test_the_print_choice_names_blocks_as_they_are_titled(qapp, data) -> None:
+    from mm_companion.ui.simple.print_dialog import PrintChoiceDialog
+
+    dialog = PrintChoiceDialog(CharacterSheet(data, _hero(data)))
+    box = dialog._boxes["base_info"]
+
+    assert box.text().replace("&&", "&") == "Name & Details"
+    assert "&&" in box.text()  # not a shortcut marker eating the ampersand

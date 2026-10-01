@@ -125,7 +125,7 @@ def test_a_bottom_strip_gets_a_row_and_stays_thin(qapp: QApplication) -> None:
 
 
 def test_two_pinned_blocks_share_a_bottom_strips_length(qapp: QApplication) -> None:
-    """What the default arrangement does once the Scene is pinned beside the roller.
+    """What happens once a second block — the Scene — is pinned beside the roller.
 
     Along a *vertical* strip the two lines stack and cost thickness, which is what
     the strip is for. Along a bottom one they sit side by side and split its width,
@@ -134,6 +134,7 @@ def test_two_pinned_blocks_share_a_bottom_strips_length(qapp: QApplication) -> N
     second pinned block, and it is one drag away from being undone.
     """
     sheet = _laid_out(qapp, _sheet(qapp))
+    sheet.canvas.pin_block("scene")
     sheet.canvas.set_pin_edge("bottom")
     _settle(qapp)
 

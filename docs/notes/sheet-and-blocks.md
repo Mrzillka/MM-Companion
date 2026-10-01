@@ -202,6 +202,80 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   serve it. A strip too short for its blocks squashes them, and they scroll inside
   themselves.
 
+## Nothing the user did not drag may change size
+
+"It just feels off sometimes" turned out to be four separate faults, each one a
+gesture whose *undoing* did not give back the page that went in. They were found by
+round-tripping gestures on a real sheet and diffing every block's size and the saved
+tree; `tests/test_layout_drift.py` is that probe, kept.
+
+- **A splitter is born in Qt's default box.** A rebuild makes new row splitters and
+  hands them the tree's sizes before their row has laid them out, and in that 100×30
+  box they scale those sizes down under the block floor, which bends the proportions
+  (`[432, 459, 270]` read back as `[27, 29, 24]`). Every layout snapshot is taken in
+  the same breath as the gesture that rebuilt the page, so the bent numbers went into
+  the tree and the next render scaled *them* up to the full width: showing one block
+  reshaped every row on the page. `GridSplitter.has_real_sizes` says whether a
+  splitter has been resized away from the box it was born in, and `_absorb_sizes`
+  leaves the tree alone until it has. Not "resized while visible": Qt delivers a newly
+  shown widget's held-back first resize *before* it counts as visible.
+- **A block coming back takes back its share, from the whole row.** A drop halves its
+  target, because the drop mark promised exactly that. A block being *returned* —
+  unpinned, reopened, a floated block docked home — went through the same insert and
+  halved whichever neighbour it landed beside, so a row of three equal blocks came back
+  591/316/315. `_detach` now remembers the share of its row a block had
+  (`layout_tree.share_of`) and `_place` passes it to `insert_beside(..., share=…)`,
+  which takes it proportionally out of every cell in the run — and, for a cell that is
+  now alone, divides the new pair in the remembered proportion.
+- **The pin button is not a drop.** A block pinned by its `🖈` used to take half of the
+  last block in the strip; the Scene under the roller came back from every pin and
+  unpin smaller. It now takes a share sized to its recommended height
+  (`_strip_share`, at most half), from every block in the strip in proportion, so
+  unpinning gives each of them back what it had.
+- **A block re-pinned goes back where it was in the strip.** Unpinning remembers a
+  neighbour, a side and a share (`_strip_home`); pinning it again by its button puts
+  it back there. Unpinning the roller and pinning it again used to send it to the
+  bottom of the strip at a quarter of its height.
+
+What remains is rounding — a few pixels — since sizes return through a proportion.
+**Window and strip resizes were never the problem**: a plain `QSplitter` shares a
+change of width in proportion to its panes, and both round-trip exactly.
+
+## The strip opens wide enough for what is in it
+
+A side strip opened at the thickness its layout said — the default 320, or whatever a
+saved layout remembered — and the roller in it needs about 363 (more on a larger
+font), so every fresh sheet, every Reset Layout and every restored older layout opened
+with the roller's Ask button and spin-box arrows cut off. The block's inner scroll area
+never scrolls sideways, so too narrow is clipped, not scrolled. The roller's stated
+recommendation (360) was itself short, and any stated number would be wrong on some
+screen.
+
+So **opening a layout fits the strip** (`PinnedBoard.fit_to_content`): the first time
+the board is laid out at a real size after a fresh start, `set_extent` (a restore),
+Reset Layout or an edge change, a side strip is given at least
+`PinnedPanel.content_extent()` — every pinned block's `BlockFrame.content_width()`,
+its section's minimum plus the frame's chrome *measured* off the laid-out frame —
+capped at `FIT_SHARE` (half) of the window. It is the width the strip *opens* at, not a
+minimum it reports, and only opening a layout does it: a strip the user then drags
+narrower stays there for the rest of the session. A bottom strip is not fitted — its
+blocks reflow into rows, and a height is not a thing to fit to. The GM window's strip
+is the same board and gets the same fit.
+
+## The default arrangement
+
+Paired rows, chosen with the user: identity and system; Abilities, Resistances,
+Conditions; Skills beside Advantages; Powers beside Equipment; Complications, Notes and
+the Scene. Only the roller is pinned — the Scene used to sit under it in the strip and
+took the height the roll history needed. A row is divided by its blocks'
+`default_share` (`block_sizes.json`, theme-overridable like the rest) when every block
+in it states one, so Skills opens at about 60% of its row; any other row divides itself
+from the blocks' recommended widths, as before. A saved layout is untouched by this —
+only a new workspace or **View ▸ Reset Layout** gets the new default.
+`tests/test_adaptive_blocks.py` pins the *old* arrangement in its fixture: those tests
+measure how a block sheds as the page narrows, and the default moving every shedding
+band is not what they are about.
+
 ## How the sheet is built
 
 - UI construction: `MainWindow` → `CharacterSheet` (a `QWidget` that owns a

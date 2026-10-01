@@ -292,7 +292,15 @@ def _remove(node: Node, key: str) -> Node | None:
     return Split(node.orientation, tuple(children), tuple(kept))
 
 
-def insert_beside(node: Node | None, key: str, target: str, side: str, *, extent: int = 0) -> Node:
+def insert_beside(
+    node: Node | None,
+    key: str,
+    target: str,
+    side: str,
+    *,
+    extent: int = 0,
+    share: float = 0.0,
+) -> Node:
     """Put *key* in its own cell on the given *side* of the cell holding *target*.
 
     When the target's parent already divides along the side's axis, the new cell
@@ -315,14 +323,27 @@ def insert_beside(node: Node | None, key: str, target: str, side: str, *, extent
     axis, needed when the cell is *wrapped* in a brand-new split, since a new run
     has no sizes of its own to divide. Without it that pair falls back to its hints.
 
+    A *share* (between 0 and 1) is the other answer, for a block *coming back*
+    rather than being dropped: an unpinned, reopened or re-docked block takes that
+    fraction of the whole run, every cell in it giving up its proportion — see
+    :func:`share_of`. Halving its neighbour is right for a drop, whose mark promised
+    exactly that; for a block returning to a row it left, it is how a row of three
+    equal blocks came back 591/316/315.
+
     A *target* that is not in the tree puts *key* in a row of its own at the end,
     which is the same answer the old canvas gave a block it could not place.
     """
-    return insert_node_beside(node, Leaf((key,)), target, side, extent=extent)
+    return insert_node_beside(node, Leaf((key,)), target, side, extent=extent, share=share)
 
 
 def insert_node_beside(
-    node: Node | None, arriving: Node, target: str, side: str, *, extent: int = 0
+    node: Node | None,
+    arriving: Node,
+    target: str,
+    side: str,
+    *,
+    extent: int = 0,
+    share: float = 0.0,
 ) -> Node:
     """Put a whole *arriving* cell on the given *side* of the cell holding *target*.
 
@@ -339,8 +360,43 @@ def insert_node_beside(
     path = find(node, target)
     if path is None:
         return append_node_row(node, arriving)
-    grown = _insert_at(node, path, arriving, _SIDE_AXIS[side], _SIDE_AFTER[side], int(extent))
+    axis, after = _SIDE_AXIS[side], _SIDE_AFTER[side]
+    grown = _insert_at(node, path, arriving, axis, after, int(extent), float(share))
     return normalize(grown) or arriving
+
+
+def share_of(node: Node | None, key: str, *, root_is_run: bool = False) -> float:
+    """The fraction of its run the cell holding *key* takes, or 0 when unknown.
+
+    What a block leaving a row remembers, so it can be given the same room back
+    when it returns (``insert_beside(..., share=…)``). Zero for a block that is a
+    row of its own, or sits in a run nobody has sized: there is no proportion to
+    keep, and the run lays itself out from its cells' hints as it always did.
+
+    The page's root split is its list of *rows*, whose heights are absolute and
+    owe each other nothing, so it is not a run; the strip's root is
+    (*root_is_run*).
+    """
+    path = find(node, key) if node is not None else None
+    if not path:
+        return 0.0
+    parent = at(node, path[:-1])
+    if not isinstance(parent, Split) or (parent is node and not root_is_run):
+        return 0.0
+    sizes = parent.usable_sizes()
+    total = sum(sizes) if sizes else 0
+    if total <= 0 or len(sizes) < 2:
+        return 0.0
+    return sizes[path[-1]] / total
+
+
+def _take_share(sizes: tuple[int, ...], slot: int, share: float) -> tuple[int, ...]:
+    """*sizes* with a cell taking *share* of their total at *slot*, out of every other."""
+    total = sum(sizes)
+    arriving = max(1, round(total * share))
+    scale = (total - arriving) / total
+    kept = [max(1, round(size * scale)) for size in sizes]
+    return tuple(kept[:slot]) + (arriving,) + tuple(kept[slot:])
 
 
 def _share_extent(extent: int, after: bool) -> tuple[int, ...]:
@@ -353,13 +409,30 @@ def _share_extent(extent: int, after: bool) -> tuple[int, ...]:
     return (extent - half, half) if after else (half, extent - half)
 
 
-def _insert_at(node: Node, path: Path, arriving: Node, axis: str, after: bool, extent: int) -> Node:
+def _insert_at(
+    node: Node,
+    path: Path,
+    arriving: Node,
+    axis: str,
+    after: bool,
+    extent: int,
+    share: float = 0.0,
+) -> Node:
     if not path:
         # The target *is* this node: wrap it in a split of the requested axis. The
         # pair divides the extent the target had, so the newcomer takes half of it
         # and nothing outside this cell moves at all.
         pair = (node, arriving) if after else (arriving, node)
-        return Split(axis, pair, _share_extent(extent, after) if extent > 0 else ())
+        if extent > 0:
+            return Split(axis, pair, _share_extent(extent, after))
+        if 0.0 < share < 1.0:
+            # A block coming back beside a cell that is now alone in its run: the
+            # pair divides in the proportion the two had. A splitter scales sizes
+            # to its real extent, so a scale of a thousand states the proportion.
+            arriving_size = max(1, round(1000 * share))
+            sizes = (1000 - arriving_size, arriving_size)
+            return Split(axis, pair, sizes if after else sizes[::-1])
+        return Split(axis, pair, ())
     index, rest = path[0], path[1:]
     if not isinstance(node, Split):
         raise IndexError("path runs past a leaf")
@@ -374,13 +447,17 @@ def _insert_at(node: Node, path: Path, arriving: Node, axis: str, after: bool, e
             # Nothing remembered about this run, so there is no proportion to keep
             # and nothing to halve.
             return node.with_children(children)
+        if 0.0 < share < 1.0 and all(size > 0 for size in sizes):
+            # A block coming back to a run it left takes its old share out of the
+            # whole run, rather than half of one neighbour (see insert_beside).
+            return Split(node.orientation, children, _take_share(sizes, slot, share))
         # The target gives up half of *its own* share and every other cell in the
         # run keeps exactly what it had. A zero is not a size but "take your
         # content's" — the page's own answer for a row nobody has dragged — so it
         # divides into two of itself rather than into two noughts of a number.
         divided = _share_extent(sizes[index], after) if sizes[index] > 0 else (0, 0)
         return Split(node.orientation, children, sizes[:index] + divided + sizes[index + 1 :])
-    replaced = _insert_at(child, rest, arriving, axis, after, extent)
+    replaced = _insert_at(child, rest, arriving, axis, after, extent, share)
     children = node.children[:index] + (replaced,) + node.children[index + 1 :]
     # The child's own extent did not change, so this run keeps its proportions.
     return Split(node.orientation, children, node.usable_sizes())

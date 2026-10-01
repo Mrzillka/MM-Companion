@@ -249,13 +249,14 @@ def test_the_empty_board_is_still_the_drop_target(qapp: QApplication) -> None:
 # -- the block on the sheet --------------------------------------------------
 
 
-def test_the_sheet_builds_a_scene_block_pinned_in_the_strip(qapp: QApplication) -> None:
-    """It starts in the strip for the roller's reason: a turn order that has
-    scrolled away under the sheet is no use in the round it matters."""
+def test_the_sheet_builds_a_scene_block_on_the_page(qapp: QApplication) -> None:
+    """It starts at the foot of the page, beside Complications and Notes. It used to
+    be pinned under the roller, where it took the height the roll history needed;
+    a table that plays online pins it back with one click."""
     sheet = _sheet(qapp)
 
     assert isinstance(sheet.scene, SceneSection)
-    assert sheet.is_block_pinned("scene")
+    assert not sheet.is_block_pinned("scene")
     assert sheet.block_frame("scene").base_title == "Scene"
 
 

@@ -60,7 +60,9 @@ def test_abilities_and_resistances_state_no_opinion() -> None:
     sizes = load_block_sizes()
 
     for key in ("abilities", "resistances"):
-        assert sizes[key] == RecommendedSize()
+        # A default_share is not a size: it weighs the block against its row-mates
+        # in the default arrangement and says nothing about how big it reads well.
+        assert (sizes[key].width, sizes[key].height) == (0, 0)
         assert not sizes[key]
 
 
@@ -114,7 +116,8 @@ def test_the_json_is_documented_and_parses() -> None:
     for key, spec in raw.items():
         if key.startswith("_"):
             continue
-        assert set(spec) <= set(BOUNDS), f"{key} states something that is not a recommendation"
+        allowed = set(BOUNDS) | {"default_share"}
+        assert set(spec) <= allowed, f"{key} states something that is not a recommendation"
 
 
 # -- what the frames actually do with them -----------------------------------

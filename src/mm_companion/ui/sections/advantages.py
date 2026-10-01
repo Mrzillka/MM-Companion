@@ -324,10 +324,11 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         # lines, then crop. The name never goes either — a list of advantages with
         # no advantages in it is nothing.
         #
-        # The Uses dots go after it. They are a play-time control, but the simple
-        # sheet carries the same dots, and a panel this narrow has stopped being a
-        # place anyone plays from.
-        table.set_shed_order([COL_TYPE, COL_USES])
+        # The Uses dots never go. They are a play-time control, the block shares a
+        # row with Skills by default and so is narrow on any ordinary window, and a
+        # Luck that silently lost its dots there is a use nobody can spend. The
+        # column is a few dots wide; the Description beside it wraps to pay for it.
+        table.set_shed_order([COL_TYPE])
         table.setColumnWidth(0, self._name_column_for(table))
         table.itemSelectionChanged.connect(lambda t=table: self._on_selection_changed(t))
         table.cellDoubleClicked.connect(lambda row, _col, t=table: self._edit_row(t, row))
@@ -710,7 +711,10 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         """
         fm = self.fontMetrics()
         captions = fm.horizontalAdvance("Advantage") + fm.horizontalAdvance("Description")
-        return captions + 2 * NAME_PADDING + FRAME_PADDING
+        # The Uses column does not shed (see _make_table), so the floor has to hold it
+        # — by its caption, like the other two, and only while it shows at all.
+        uses = fm.horizontalAdvance(HEADERS[COL_USES]) + TYPE_PADDING if self._has_uses() else 0
+        return captions + 2 * NAME_PADDING + FRAME_PADDING + uses
 
     def _apply_picker_mode(self, narrow: bool) -> None:
         """Lay the picker out on one or two rows.

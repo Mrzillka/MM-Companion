@@ -50,14 +50,17 @@ from mm_companion.core.rules import (
     HEROIC_TYPE,
     advantage_points_spent,
     advantage_rank_cap,
+    advantage_uses,
     debilitated_traits,
     granted_advantage_selections,
     heroic_advantage_budget,
     heroic_advantage_ranks,
     heroic_advantage_ranks_free,
+    reset_advantage_uses,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.advantage_parameters import parameter_display, parameter_options
+from mm_companion.ui.advantage_uses import UsePips, advantage_use_note
 from mm_companion.ui.sections.column_flow import ColumnFlowPanels, even_split
 from mm_companion.ui.sections.row_table import (
     SHED_HYSTERESIS,
@@ -112,6 +115,11 @@ NAME_PADDING = 24
 TYPE_PADDING = 24
 FRAME_PADDING = 24
 
+#: The columns. Uses is last and shows only while some advantage on the sheet is a
+#: resource spent at the table (Luck, Determination — see ui/advantage_uses.py).
+COL_NAME, COL_TYPE, COL_DESCRIPTION, COL_USES = range(4)
+HEADERS = ["Advantage", "Type", "Description", "Uses"]
+
 
 class AdvantagesSection(ColumnFlowPanels, TitledSection):
     """A picker and table of advantages backed by the shared :class:`Character`.
@@ -121,6 +129,11 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
     """
 
     changed = Signal()
+    #: A use of an advantage was spent or given back — an edit (undoable, dirties the
+    #: sheet) that moves no number on the build, so it is kept off :attr:`changed`.
+    edited = Signal()
+    #: The history line for that use, answered by the Dice block like a hero point's.
+    noteRequested = Signal(str)
 
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -277,8 +290,8 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
     def _make_table(self) -> AutoHeightTable:
         # word_wrap: the Description column wraps, so its rows have to be
         # re-measured whenever the panel's width changes.
-        table = AutoHeightTable(0, 3, word_wrap=True)
-        table.setHorizontalHeaderLabels(["Advantage", "Type", "Description"])
+        table = AutoHeightTable(0, len(HEADERS), word_wrap=True)
+        table.setHorizontalHeaderLabels(HEADERS)
         table.verticalHeader().setVisible(False)
         table.setWordWrap(True)
         # A block shows all of its content and lets the *page* scroll, and column 0
@@ -299,6 +312,7 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(COL_USES, QHeaderView.ResizeMode.ResizeToContents)
         # The Type column, and only the Type column — it is a one-word category and
         # the advantage's own name carries it well enough when there is no room.
         #
@@ -309,7 +323,11 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         # elide. Losing it outright skipped both. So: lose the Type, then break the
         # lines, then crop. The name never goes either — a list of advantages with
         # no advantages in it is nothing.
-        table.set_shed_order([1])
+        #
+        # The Uses dots go after it. They are a play-time control, but the simple
+        # sheet carries the same dots, and a panel this narrow has stopped being a
+        # place anyone plays from.
+        table.set_shed_order([COL_TYPE, COL_USES])
         table.setColumnWidth(0, self._name_column_for(table))
         table.itemSelectionChanged.connect(lambda t=table: self._on_selection_changed(t))
         table.cellDoubleClicked.connect(lambda row, _col, t=table: self._edit_row(t, row))
@@ -385,6 +403,7 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
             table.setRowCount(0)
             for index in bucket:
                 self._render_row(table, *entries[index])
+            table.set_column_absent(COL_USES, not self._has_uses())
             table.updateGeometry()
         self.refresh_conditions()
         self._restore_selection()
@@ -419,6 +438,21 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         table.setItem(row, 0, name_item)
         table.setItem(row, 1, QTableWidgetItem(types))
         table.setItem(row, 2, QTableWidgetItem(description))
+        table.setItem(row, COL_USES, QTableWidgetItem(""))
+        total = advantage_uses(self._data, selection)
+        if total and not source:
+            # Only a bought advantage: a granted one is rebuilt from the power on every
+            # refresh and has nowhere to keep a count.
+            pips = UsePips(total, selection.used, name=selection.name)
+            pips.usedChanged.connect(lambda used, s=selection: self.set_advantage_used(s, used))
+            pips.resetRequested.connect(self.reset_advantage_uses)
+            host = QWidget()
+            line = QHBoxLayout(host)
+            pad = int(theme.metric("space.sm"))
+            line.setContentsMargins(pad, 0, pad, 0)
+            line.addWidget(pips, alignment=Qt.AlignmentFlag.AlignVCenter)
+            line.addStretch()
+            table.setCellWidget(row, COL_USES, host)
         if source:
             muted = QBrush(QColor(theme.color("text.muted.rich")))
             for column in range(3):
@@ -430,6 +464,48 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
             self._granted_refs.append((table, row, selection))
         else:
             self._row_refs.add(table, row, selection)
+
+    # -- uses spent at the table ---------------------------------------------
+
+    def _has_uses(self) -> bool:
+        return any(advantage_uses(self._data, s) for s in self._character.advantages)
+
+    def set_advantage_used(self, selection: AdvantageSelection, used: int) -> None:
+        """Spend or give back uses of *selection*, write the history line, and redraw.
+
+        The one funnel for a use, whichever sheet's dots were clicked — the simple
+        sheet calls straight in here — so a use can never move without its note.
+        """
+        if not any(s is selection for s in self._character.advantages):
+            return
+        total = advantage_uses(self._data, selection)
+        used = max(0, min(int(used), total))
+        previous = selection.used
+        if used == previous:
+            return
+        selection.used = used
+        self.noteRequested.emit(
+            advantage_use_note(selection.name, total - used, total, spent=used > previous)
+        )
+        self._sync_pips()
+        self.edited.emit()
+
+    def reset_advantage_uses(self) -> None:
+        """Give every use back — a new adventure has begun."""
+        names = [s.name for s in self._character.advantages if s.used]
+        if not reset_advantage_uses(self._character):
+            return
+        self.noteRequested.emit(f"new adventure — uses of {', '.join(names)} restored")
+        self._sync_pips()
+        self.edited.emit()
+
+    def _sync_pips(self) -> None:
+        """Bring every row's dots into line with the model without a rebuild."""
+        for table, row, selection in self._row_refs:
+            host = table.cellWidget(row, COL_USES)
+            pips = host.findChild(UsePips) if host is not None else None
+            if pips is not None:
+                pips.set_state(advantage_uses(self._data, selection), selection.used)
 
     # -- ordering / sorting --------------------------------------------------
 
@@ -596,7 +672,24 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
             advantage = self._advantages_by_name.get(selection.name)
             types = ", ".join(advantage.types) if advantage else ""
             type_width = max(type_width, fm.horizontalAdvance(types))
-        return self._name_col_width() + type_width + TYPE_PADDING + min_desc_width() + FRAME_PADDING
+        return (
+            self._name_col_width()
+            + type_width
+            + TYPE_PADDING
+            + min_desc_width()
+            + self._uses_col_width()
+            + FRAME_PADDING
+        )
+
+    def _uses_col_width(self) -> int:
+        """The Uses column at its widest row, or nothing while no advantage has uses."""
+        most = max((advantage_uses(self._data, s) for s in self._character.advantages), default=0)
+        if not most:
+            return 0
+        dots = most * int(theme.metric("column.use-pip"))
+        gaps = (most - 1) * int(theme.metric("space.xs"))
+        caption = self.fontMetrics().horizontalAdvance(HEADERS[COL_USES])
+        return max(dots + gaps + 2 * int(theme.metric("space.sm")), caption) + TYPE_PADDING
 
     def _panel_floor_width(self) -> int:
         """The narrowest a panel knows how to reach: a name and a readable description.

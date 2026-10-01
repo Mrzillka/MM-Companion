@@ -27,9 +27,11 @@ from PySide6.QtCore import QObject, QTimer
 from mm_companion.core.character import Character
 from mm_companion.core.session import client as session_client
 from mm_companion.core.session.protocol import CharacterSnapshot, encode, sanitize_snapshot
+from mm_companion.ui import theme
 from mm_companion.ui.blocks.bus import BUILD_CHANGED, CONDITION_CHANGED, EDITED
 from mm_companion.ui.session_bridge import SessionBridge, set_active_session
 from mm_companion.ui.session_portrait import encode_portrait
+from mm_companion.ui.toasts import notify_window
 from mm_companion.ui.undo import absorbing
 
 #: How long a burst of edits is allowed to coalesce before one snapshot goes out.
@@ -248,15 +250,17 @@ def attach_player_session(window, bridge: SessionBridge) -> None:
         window.sheet.sync_session()
 
     def on_state(state: str, detail: object) -> None:
-        """Say it on the status bar too, for the change worth narrating.
+        """Say it over the sheet too, for the change worth narrating.
 
         The indicator carries the standing truth; this is the moment it changed,
         which is what someone looking at the sheet rather than the menu bar sees.
         """
         if state == session_client.STATE_RECONNECTING:
-            window.statusBar().showMessage("Lost the session — trying to get back in…", 10000)
+            notify_window(
+                window, "Lost the session — trying to get back in…", theme.color("tint.warning")
+            )
         elif state == session_client.STATE_ONLINE and isinstance(detail, dict):
-            window.statusBar().showMessage("Back in the session.", 5000)
+            notify_window(window, "Back in the session.", theme.color("tint.better"))
 
     window.closed.connect(leave)
     # A reconnect raises this again with a fresh welcome, and ``push_now`` drops
@@ -265,18 +269,20 @@ def attach_player_session(window, bridge: SessionBridge) -> None:
     bridge.connected.connect(lambda _welcome: pusher.push_now())
     bridge.connectionStateChanged.connect(on_state)
     bridge.disconnected.connect(
-        lambda reason: window.statusBar().showMessage(f"Left the session: {reason}", 10000)
+        lambda reason: notify_window(
+            window, f"Left the session: {reason}", theme.color("tint.worse")
+        )
     )
     bridge.kicked.connect(
-        lambda reason: window.statusBar().showMessage(
-            f"The GM removed you from the session: {reason}", 10000
+        lambda reason: notify_window(
+            window, f"The GM removed you from the session: {reason}", theme.color("tint.worse")
         )
     )
     # The blocks were built before the session existed, so tell them it does now.
     # (A session *ending* reaches them on its own: the Dice block follows the
     # bridge's disconnected/stopped/kicked signals once it has one.)
     window.sheet.sync_session()
-    window.statusBar().showMessage(f"Joined “{bridge.client.session_name}”.", 10000)
+    notify_window(window, f"Joined “{bridge.client.session_name}”.", theme.color("tint.better"))
     # Keep the wires alive for the window's lifetime.
     window._session_pusher = pusher
     window._session_receiver = receiver

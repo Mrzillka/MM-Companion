@@ -99,6 +99,11 @@ Examples: Determination, Guidance, Luck, Edit Scene, Prepared Effect, Partner Bo
 Well-Equipped, Untapped Potential (modifies Extra Effort math, not a separate counter — see
 below), Ultimate Effort (Focused: one tracker per configured check).
 
+**As built:** an advantage declares `usesPerAdventurePerRank` in `advantages.json`, the
+selection carries the count spent (`AdvantageSelection.used`), and the sheet draws one dot
+per use (`rules.advantage_uses`, `ui/advantage_uses.py`). Only the per-adventure cadence
+exists so far; nothing in the data resets per scene.
+
 ### Pattern F — `hero_point_spend`
 Requires spending a Hero Point (the character's separate resource — see
 `mm-core-mechanics.md`'s Hero Points note) rather than a private per-advantage counter.
@@ -126,6 +131,9 @@ SkillRule {
 Examples: Jack-of-All-Trades, Know-It-All, Skill Expertise (reroll), Skill Mastery (always
 routine), Animal Empathy (removes the −10 penalty), Tactical Genius (Intellect for Presence
 in Command-advantage limits), Alternate Initiative (AGL → INT/AWE/PRE for Initiative).
+
+**As built, for untrained use:** `allowsUntrained` (with `allowsUntrainedExcept`) on
+Jack-of-All-Trades, read by `rules.skill_allows_untrained`.
 
 ### Pattern H — `npc_follower`
 Grants an NPC (Minion or Sidekick) built with its own Power Point budget scaling with the

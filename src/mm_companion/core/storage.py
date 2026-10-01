@@ -63,6 +63,20 @@ DICE_LAYOUT_EXTENDED = "extended"
 #: the writer below validate against this, so a fourth shape is one entry here.
 DICE_LAYOUTS = (DICE_LAYOUT_AUTO, DICE_LAYOUT_COMPACT, DICE_LAYOUT_EXTENDED)
 
+#: Which corner of the screen a roll notification appears in (see
+#: ``mm_companion.ui.toasts``). The first is the default — where Telegram Desktop and
+#: most messengers put theirs.
+TOAST_CORNER_BOTTOM_RIGHT = "bottom-right"
+TOAST_CORNER_BOTTOM_LEFT = "bottom-left"
+TOAST_CORNER_TOP_RIGHT = "top-right"
+TOAST_CORNER_TOP_LEFT = "top-left"
+TOAST_CORNERS = (
+    TOAST_CORNER_BOTTOM_RIGHT,
+    TOAST_CORNER_BOTTOM_LEFT,
+    TOAST_CORNER_TOP_RIGHT,
+    TOAST_CORNER_TOP_LEFT,
+)
+
 #: The simple sheet's two arrangements (see ``mm_companion.ui.simple.layout``). Kept here,
 #: not imported from there: this module is Qt-free and the layout module is not.
 SIMPLE_PRESET_STANDARD = "standard"
@@ -237,6 +251,12 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # only a way to fit a mini window, the second only what GM Mode happened to be
     # built as.
     "dice_layout": DICE_LAYOUT_AUTO,
+    # Whether a roll, a note or a request landing in the history also pops up as a
+    # small always-on-top notification in a corner of the screen, and which corner.
+    # A history in a pinned strip shows three or four cards at a time; the
+    # notification is how a roll is read without the history having to be tall.
+    "roll_notifications": True,
+    "roll_notification_corner": TOAST_CORNER_BOTTOM_RIGHT,
     # Whether the launcher asks GitHub for a newer release when the app starts. See
     # :mod:`mm_companion.core.updates`.
     "check_for_updates": True,
@@ -590,6 +610,36 @@ def dice_layout() -> str:
 def set_dice_layout(layout: str) -> None:
     """Choose how the dice roller arranges itself; an unknown value means ``auto``."""
     update_settings(dice_layout=layout if layout in DICE_LAYOUTS else DICE_LAYOUT_AUTO)
+
+
+def roll_notifications() -> bool:
+    """Whether a new history entry pops up as a corner-of-the-screen notification.
+
+    On unless turned off — through an accessor because a workspace older than the key
+    reads ``None`` off :func:`load_settings`, which would switch it off for everyone.
+    """
+    stored = load_settings().get("roll_notifications")
+    if stored is None:
+        return bool(DEFAULT_SETTINGS["roll_notifications"])
+    return bool(stored)
+
+
+def set_roll_notifications(enabled: bool) -> None:
+    """Record whether new history entries pop up as notifications."""
+    update_settings(roll_notifications=bool(enabled))
+
+
+def roll_notification_corner() -> str:
+    """Which screen corner roll notifications stack in — one of :data:`TOAST_CORNERS`."""
+    value = load_settings().get("roll_notification_corner", TOAST_CORNER_BOTTOM_RIGHT)
+    return value if value in TOAST_CORNERS else TOAST_CORNER_BOTTOM_RIGHT
+
+
+def set_roll_notification_corner(corner: str) -> None:
+    """Choose the notifications' corner; an unknown value means bottom-right."""
+    update_settings(
+        roll_notification_corner=corner if corner in TOAST_CORNERS else TOAST_CORNER_BOTTOM_RIGHT
+    )
 
 
 #: The settings keys a window's block arrangement may be stored under. One per

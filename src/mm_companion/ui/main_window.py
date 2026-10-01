@@ -22,6 +22,7 @@ from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.compact import CompactController
 from mm_companion.ui.connection_indicator import install_connection_indicator
 from mm_companion.ui.layout_undo import LayoutHistory, UndoRouter
+from mm_companion.ui.toasts import notify_window
 from mm_companion.ui.undo import UndoController
 
 CHARACTER_FILTER = "Character files (*.json)"
@@ -491,7 +492,7 @@ class MainWindow(QMainWindow):
             )
             return
         pages = "page" if result.pages == 1 else "pages"
-        self.statusBar().showMessage(f"Exported {result.pages} {pages} to {path}", 5000)
+        notify_window(self, f"Exported {result.pages} {pages} to {path}")
 
     def _join_session(self) -> None:
         """Join a GM's session, bringing the character already open in this window.
@@ -609,7 +610,7 @@ class MainWindow(QMainWindow):
             self._undo.mark_saved()
         self._dirty = False
         self._update_title()
-        self.statusBar().showMessage(f"Saved to {saved_path}", 5000)
+        notify_window(self, f"Saved to {saved_path}")
         self.saved.emit()
         return True
 

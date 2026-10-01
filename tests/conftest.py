@@ -110,6 +110,22 @@ def _instant_compact_transitions():
 
 
 @pytest.fixture(autouse=True)
+def _no_roll_notifications():
+    """Keep roll notifications off the screen of whoever runs the suite.
+
+    Every roll a test makes would otherwise pop up a real always-on-top window in a
+    corner of the developer's desktop. A test about the notifications themselves
+    sets ``toasts.SUPPRESSED = False`` for its own duration.
+    """
+    from mm_companion.ui import toasts
+
+    original = toasts.SUPPRESSED
+    toasts.SUPPRESSED = True
+    yield
+    toasts.SUPPRESSED = original
+
+
+@pytest.fixture(autouse=True)
 def _close_top_level_widgets():
     yield
     app = QApplication.instance()

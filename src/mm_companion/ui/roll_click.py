@@ -35,9 +35,10 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from PySide6.QtCore import QEvent, QObject, Qt
-from PySide6.QtWidgets import QAbstractSpinBox, QWidget
+from PySide6.QtWidgets import QAbstractSpinBox, QFrame, QHBoxLayout, QSizePolicy, QWidget
 
 from mm_companion.core.rules import RollSpec
+from mm_companion.ui import theme
 
 #: What a rollable widget says for itself. Kept here so every line says it the same.
 ROLL_TOOLTIP = "Click to load, double-click to roll"
@@ -138,3 +139,43 @@ def attach_roll_click(
         target.installEventFilter(_RollClicker(factory, sink, load_sink, enabled, target))
     if tooltip and not widget.toolTip():
         widget.setToolTip(ROLL_TOOLTIP)
+
+
+class RollChip(QFrame):
+    """A loose readout dressed as what it is: a die you can throw.
+
+    A table row says it rolls by lighting under the pointer, the way every row of a
+    table does; a lone label says nothing at all, so Initiative — the one stat that is
+    not a row — read as a plain fact, and nobody thought to click it. The chip borrows
+    the border a power card's dice footer already wears (``cards.rolls.RollLine``): a
+    washed-out ``accent.dice`` that firms up and fills on hover. Without the footer's
+    ``🎲`` — a die beside the number read as clutter on a line that is one number.
+
+    The chip is the click target end to end. Its *content* is transparent
+    to the mouse, so a press anywhere on it lands on the chip itself and
+    :func:`attach_roll_click` is attached **here**, once. An event sent straight to the
+    content still reaches the chip by ordinary propagation (a label ignores the mouse),
+    so nothing is handled twice. A tooltip has to live here too, for the same reason —
+    use :meth:`setToolTip` on the chip, not on the content.
+    """
+
+    def __init__(self, content: QWidget, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("rollChip")
+        self.content = content
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        layout = QHBoxLayout(self)
+        pad = int(theme.metric("space.xs"))
+        layout.setContentsMargins(pad + pad, 0, pad + pad, 0)
+        layout.setSpacing(pad)
+        content.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        layout.addWidget(content)
+        width = int(theme.metric("border.width"))
+        radius = int(theme.metric("radius.chip"))
+        self.setStyleSheet(
+            f"#rollChip {{ border: {width}px solid {theme.wash('accent.dice', 0.45)};"
+            f" border-radius: {radius}px; }}"
+            f"#rollChip:hover {{ border-color: {theme.color('accent.dice')};"
+            f" background: {theme.wash('accent.dice', 0.10)}; }}"
+        )

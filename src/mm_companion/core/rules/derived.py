@@ -294,6 +294,48 @@ def granted_skill_rows(char: Character, game_data: GameData) -> dict[str, TraitB
     }
 
 
+def skill_allows_untrained(char: Character, game_data: GameData, skill: Skill) -> bool:
+    """Whether *skill* may be attempted with no ranks by this character.
+
+    True for any skill the data does not flag ``trainedOnly``; for one it does, only
+    while an advantage on the sheet opens trained-only skills up (``allowsUntrained`` —
+    Jack-of-All-Trades) and does not name this one among its exceptions.
+    """
+
+    if not skill.trained_only:
+        return True
+    for selection in all_advantage_selections(char, game_data):
+        advantage = advantage_by_name(game_data, selection.name)
+        if (
+            advantage is not None
+            and advantage.allows_untrained
+            and skill.name not in advantage.allows_untrained_except
+        ):
+            return True
+    return False
+
+
+def skill_usable(char: Character, game_data: GameData, row_id: str) -> bool:
+    """Whether a skill row can be used at all — ``False`` only for an untrained,
+    trained-only one.
+
+    A skill flagged ``trainedOnly`` in the data cannot be attempted without training
+    (unless :func:`skill_allows_untrained` says an advantage opens it up), and
+    *training* is read the way the simple sheet's "trained" list reads it: ranks
+    bought in the row, or any outside bonus standing on it (a power granting the
+    skill, an advantage aimed at it, a specialized pool's parent ranks). A row the
+    catalog does not know is assumed usable rather than hidden — a mod's skill with no
+    flag is an ordinary skill.
+    """
+
+    skill = skill_for_row(game_data, row_id)
+    if skill is None or skill_allows_untrained(char, game_data, skill):
+        return True
+    if int(char.skill_ranks.get(row_id, 0) or 0) > 0:
+        return True
+    return skill_bonus(char, game_data, row_id) is not None
+
+
 #: How :attr:`~mm_companion.core.character.Character.extra_effort` spells one target:
 #: the contribution category, then the trait key it lands on.
 EFFORT_KEY_SEP = ":"

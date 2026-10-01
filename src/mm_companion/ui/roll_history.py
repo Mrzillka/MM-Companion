@@ -47,6 +47,7 @@ from mm_companion.core.rules import (
 from mm_companion.core.session.model import KIND_MOD, KIND_NOTE, KIND_REQUEST, KIND_ROLL
 from mm_companion.ui import theme
 from mm_companion.ui.session_bridge import SessionBridge
+from mm_companion.ui.toasts import announce
 from mm_companion.ui.widgets import discard_widget, muted_style, tinted_style
 
 #: Marks a roll only the GM can see. Shown on the GM's own history; a player's
@@ -341,6 +342,111 @@ def request_widgets(spec: object, *, on_roll: Callable[[RollSpec], None]) -> lis
     return [button]
 
 
+def roll_heading(roll: dict) -> str:
+    """A roll's first line, as rich text: who rolled it, and what it was."""
+    who = str(roll.get("player_name", "")) or "Someone"
+    label = str(roll.get("label", ""))
+    heading = f"<b>{escape_rich_text(who)}</b>"
+    if roll.get("hidden"):
+        heading = f"{HIDDEN_MARK} {heading}"
+    if label:
+        heading += (
+            f" <span style='color:{theme.color('text.muted.rich')}'>"
+            f"— {escape_rich_text(label)}</span>"
+        )
+    return heading
+
+
+def roll_headline(roll: dict) -> str:
+    """A roll's number line, as rich text: the total, how it was made, and how it went.
+
+    The degree rides on the **same line** as the total rather than one of its own. A
+    history is a column of these in a strip a few cards tall, and the line a degree
+    used to take was a third of every card — the difference between three rolls in
+    view and five.
+    """
+    die = int(roll.get("die", 0))
+    modifier = int(roll.get("bonus", 0)) - int(roll.get("penalty", 0))
+    muted = theme.color("text.muted.rich")
+    breakdown = f"<span style='color:{muted}'>(d20 {die} {modifier:+d})</span>"
+    headline = f"<b>{die + modifier}</b> {breakdown}"
+    dc = roll.get("dc")
+    if dc is not None:
+        headline += f" vs DC {int(dc)}"
+    degree = roll.get("degree")
+    if degree is not None:
+        colour = theme.color("tint.better" if int(degree) > 0 else "tint.worse")
+        words = degree_label(int(degree), bool(roll.get("critical")), die)
+        headline += f" · <span style='color:{colour}'>{escape_rich_text(words)}</span>"
+    return headline
+
+
+def _rich(text: str) -> QLabel:
+    label = QLabel(text)
+    label.setTextFormat(Qt.TextFormat.RichText)
+    label.setWordWrap(True)
+    return label
+
+
+def toast_widgets(entry: dict) -> list[QWidget]:
+    """A history entry as a notification reads it: who, what, and how it went.
+
+    No buttons — a notification is read at a glance from the corner of the screen,
+    and the history card it mirrors is where the follow-up chip and the star live.
+    """
+    kind = entry.get("kind", KIND_ROLL)
+    who = escape_rich_text(str(entry.get("player_name", "")) or "Someone")
+    if kind in (KIND_NOTE, KIND_MOD):
+        text = QLabel(str(entry.get("text", "")))
+        text.setTextFormat(Qt.TextFormat.PlainText)
+        text.setWordWrap(True)
+        text.setStyleSheet(muted_style(italic=True))
+        return [_rich(f"<b>{who}</b>"), text]
+    if kind == KIND_REQUEST:
+        spec = RollSpec.from_dict(entry.get("spec"))
+        widgets = [_rich(f"Requested by <b>{who}</b>")]
+        if spec is not None:
+            ask = QLabel(f"🎲 {request_caption(spec)}")
+            ask.setWordWrap(True)
+            ask.setStyleSheet(tinted_style("accent.dice", bold=True))
+            widgets.append(ask)
+        return widgets
+    return [_rich(roll_heading(entry)), _rich(roll_headline(entry))]
+
+
+def toast_accent(entry: dict) -> str | None:
+    """The colour of a notification's edge: how the roll went, or what it is."""
+    kind = entry.get("kind", KIND_ROLL)
+    if kind == KIND_REQUEST:
+        return theme.color("accent.dice")
+    if kind != KIND_ROLL:
+        return None
+    degree = entry.get("degree")
+    if degree is None:
+        return theme.color("accent.dice")
+    return theme.color("tint.better" if int(degree) > 0 else "tint.worse")
+
+
+def announce_entry(entry: dict, source: QWidget | None) -> None:
+    """Pop a *live* history entry up as a notification (see :mod:`~.toasts`).
+
+    Keyed by the server's sequence number, so the same roll fed to two histories in
+    this app — a GM window and a sheet — is announced once. A negative ``seq`` is a
+    window's own off-air counter and identifies nothing outside it.
+    """
+    seq = entry.get("seq")
+    key = ("seq", seq) if isinstance(seq, int) and seq > 0 else None
+    announce(lambda: toast_widgets(entry), key=key, accent=toast_accent(entry), source=source)
+
+
+def tighten_card(layout: QHBoxLayout, info: QVBoxLayout) -> None:
+    """Pack a history card's lines close: the strip shows more rolls at once."""
+    small = int(theme.metric("space.sm"))
+    layout.setContentsMargins(int(theme.metric("space.md")), small, small, small)
+    layout.setSpacing(small)
+    info.setSpacing(int(theme.metric("space.xxs")))
+
+
 class HistoryCard(QFrame):
     """What every card in a history has in common: an id, and a star or not.
 
@@ -388,6 +494,7 @@ class NoteCard(HistoryCard):
 
         layout = QHBoxLayout(self)
         info = QVBoxLayout()
+        tighten_card(layout, info)
 
         if show_author:
             who = str(note.get("player_name", "")) or "Someone"
@@ -448,6 +555,7 @@ class RequestCard(HistoryCard):
 
         layout = QHBoxLayout(self)
         info = QVBoxLayout()
+        tighten_card(layout, info)
 
         # "Requested by X" rather than "X asks for a roll", because the subject is
         # not always a third party: off the air the asker is the reader, and the
@@ -506,47 +614,14 @@ class SessionRollCard(HistoryCard):
         self._roll = dict(roll)
 
         die = int(roll.get("die", 0))
-        bonus = int(roll.get("bonus", 0))
-        penalty = int(roll.get("penalty", 0))
-        modifier = bonus - penalty
-        dc = roll.get("dc")
         degree = roll.get("degree")
-        hidden = bool(roll.get("hidden"))
 
         layout = QHBoxLayout(self)
         info = QVBoxLayout()
+        tighten_card(layout, info)
 
-        who = str(roll.get("player_name", "")) or "Someone"
-        label = str(roll.get("label", ""))
-        heading = f"<b>{escape_rich_text(who)}</b>"
-        if hidden:
-            heading = f"{HIDDEN_MARK} {heading}"
-        if label:
-            heading += (
-                f" <span style='color:{theme.color('text.muted.rich')}'>"
-                f"— {escape_rich_text(label)}</span>"
-            )
-        name_line = QLabel(heading)
-        name_line.setTextFormat(Qt.TextFormat.RichText)
-        name_line.setWordWrap(True)
-        info.addWidget(name_line)
-
-        headline = (
-            f"<b>{die + modifier}</b> "
-            f"<span style='color:{theme.color('text.muted.rich')}'>(d20 {die} {modifier:+d})</span>"
-        )
-        if dc is not None:
-            headline += f" vs DC {int(dc)}"
-        title = QLabel(headline)
-        title.setTextFormat(Qt.TextFormat.RichText)
-        title.setWordWrap(True)
-        info.addWidget(title)
-
-        if degree is not None:
-            outcome = QLabel(degree_label(int(degree), bool(roll.get("critical")), die))
-            colour = theme.color("tint.better" if int(degree) > 0 else "tint.worse")
-            outcome.setStyleSheet(f"color: {colour};")
-            info.addWidget(outcome)
+        info.addWidget(_rich(roll_heading(roll)))
+        info.addWidget(_rich(roll_headline(roll)))
 
         # The chain — on every card, whoever rolled it. A save an attack forced is
         # made by the *other* side of the table, so the button has to be on the
@@ -629,6 +704,9 @@ class RollHistoryPanel(QWidget):
         # vanish for good.
         self._awaiting_own = False
         self._held: dict[int, dict] = {}
+        # True while a whole log is being laid in (a join, a reconnect, the GM's log
+        # off disk): none of that is news, so none of it pops up as a notification.
+        self._replaying = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -778,8 +856,12 @@ class RollHistoryPanel(QWidget):
         self.clear()
         if not isinstance(rolls, list):
             return
-        for roll in rolls[-MAX_CARDS:]:
-            self.add_roll(roll)
+        self._replaying = True
+        try:
+            for roll in rolls[-MAX_CARDS:]:
+                self.add_roll(roll)
+        finally:
+            self._replaying = False
 
     def add_roll(self, roll: object) -> None:
         """Put one entry at the top of the list.
@@ -856,6 +938,8 @@ class RollHistoryPanel(QWidget):
         self._layout.insertWidget(0, card)
         self._trim()
         self._empty.setVisible(False)
+        if not self._replaying:
+            announce_entry(roll, self)
 
     def _request_remove(self, seq: int) -> None:
         """A ✕ was clicked — drop the roll (GM action).

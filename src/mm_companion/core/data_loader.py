@@ -203,6 +203,14 @@ class Advantage:
     skill_bonus_per_rank: int = 0
     skill_bonus_target: str = ""
     parameter: ParameterSpec | None = None
+    #: Uses per adventure for each bought rank — ``0`` for an advantage that is not a
+    #: limited resource. Luck, Determination and Edit Scene are ``1``: once per rank per
+    #: adventure, all reset at the next one. See :func:`~.rules.advantage_uses`.
+    uses_per_rank: int = 0
+    #: Whether owning this lets trained-only skills be tried without ranks
+    #: (Jack-of-All-Trades), and the skills it still leaves closed.
+    allows_untrained: bool = False
+    allows_untrained_except: tuple[str, ...] = ()
     #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
     extra: dict = field(default_factory=dict, compare=False)
 
@@ -2367,6 +2375,9 @@ def _parse_advantage(a: dict) -> Advantage:
         skill_bonus_per_rank=int(a.get("skillBonusPerRank", 0)),
         skill_bonus_target=a.get("skillBonusTarget", ""),
         parameter=_parse_parameter(a.get("parameter"), initiative_choice),
+        uses_per_rank=max(0, int(a.get("usesPerAdventurePerRank", 0) or 0)),
+        allows_untrained=bool(a.get("allowsUntrained", False)),
+        allows_untrained_except=tuple(str(n) for n in a.get("allowsUntrainedExcept", ())),
         extra=_extras(
             a,
             "name",
@@ -2383,6 +2394,9 @@ def _parse_advantage(a: dict) -> Advantage:
             "skillBonusPerRank",
             "skillBonusTarget",
             "parameter",
+            "usesPerAdventurePerRank",
+            "allowsUntrained",
+            "allowsUntrainedExcept",
         ),
     )
 

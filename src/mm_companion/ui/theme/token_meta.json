@@ -94,6 +94,7 @@
     "surface.titlebar": {"label": "Block title bar", "hint": "The drag handle above each block."},
     "surface.card": {"label": "Card", "hint": "A power card, a player card, a modifier chip."},
     "surface.field": {"label": "Input field", "hint": "Behind a spin box, combo box or line edit."},
+    "surface.toast": {"label": "Notification", "hint": "Behind a notification card — a session notice over a window, a roll in a corner of the screen. May be a palette() role."},
     "text.primary": {"label": "Primary", "hint": "Ordinary body text. Styled presets only."},
     "text.muted": {
       "label": "Muted",
@@ -174,6 +175,7 @@
       "hint": "Room around the drawing inside its button, in pixels."
     },
     "compact.width": {"label": "Window width", "hint": "What the mini roller opens at, in pixels."},
+    "toast.width": {"label": "Notification width", "hint": "A roll or session notice card, in pixels."},
     "compact.height": {"label": "Window height", "hint": "In pixels."},
     "compact.min-width": {
       "label": "Minimum width",
@@ -226,6 +228,10 @@
     "column.hero-point": {
       "label": "Hero point pip",
       "hint": "The medallion is square, so this is its height too."
+    },
+    "column.use-pip": {
+      "label": "Advantage use dot",
+      "hint": "One dot per use of an advantage spent at the table (Luck, Determination). Round, so this is its height too."
     },
     "column.status-dot": {
       "label": "Connection dot",

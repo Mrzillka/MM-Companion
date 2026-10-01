@@ -269,7 +269,7 @@ _BASE_BLOCKS = [
         "Advantages",
         AdvantagesSection,
         2,
-        0,
+        1,
         # A use of Luck or Determination spent is an edit and nothing else: it moves
         # no number anyone derives.
         {"changed": (BUILD_CHANGED, FACTS_CHANGED, DERIVED_CHANGED, EDITED), "edited": (EDITED,)},
@@ -288,7 +288,7 @@ _BASE_BLOCKS = [
         "complications",
         "Complications",
         ComplicationsSection,
-        3,
+        4,
         0,
         {"edited": (EDITED,)},
         {},
@@ -299,7 +299,7 @@ _BASE_BLOCKS = [
         "skills",
         "Skills",
         SkillsSection,
-        4,
+        2,
         0,
         {"changed": (BUILD_CHANGED, FACTS_CHANGED, EDITED)},
         {
@@ -323,7 +323,7 @@ _BASE_BLOCKS = [
         "powers",
         "Powers",
         PowersSection,
-        5,
+        3,
         0,
         {
             "changed": (BUILD_CHANGED, ENHANCEMENTS_CHANGED, DERIVED_CHANGED, EDITED),
@@ -357,8 +357,8 @@ _BASE_BLOCKS = [
         "equipment",
         "Equipment",
         EquipmentSection,
-        6,
-        0,
+        3,
+        1,
         {
             "changed": (BUILD_CHANGED, ENHANCEMENTS_CHANGED, DERIVED_CHANGED, EDITED),
             # Wearing a jacket is a play action, not a build edit, so it drives the
@@ -381,8 +381,8 @@ _BASE_BLOCKS = [
         # off it), and ``block_key`` already defaults to the template's own key.
         # The closure is only how the *extra* instances are built.
         NotesSection,
-        7,
-        0,
+        4,
+        1,
         # Opening, closing or reordering a tab is a character edit. Typing in a
         # note is not — that autosaves to its own file and never reaches the bus
         # (see mm_companion.ui.sections.notes).
@@ -395,11 +395,10 @@ _BASE_BLOCKS = [
         "scene",
         "Scene",
         SceneSection,
-        # After the roller in row order, which is what puts it *under* the Dice
-        # block in the pinned strip: ``default_pin_lines`` sorts the pinned blocks
-        # by (row, col) and gives each one a line of its own.
-        7,
-        0,
+        # At the foot of the page, beside Complications and Notes. It used to be
+        # pinned under the roller, where it took the height the roll history needed.
+        4,
+        2,
         # Publishes and subscribes nothing, for the Dice block's reason: the scene
         # is the GM's, not this character's, and an update landing mid-edit must
         # never mark the sheet dirty. It serves nothing either — there is no
@@ -413,7 +412,7 @@ _BASE_BLOCKS = [
         "dice",
         "Dice Roller",
         DiceSection,
-        6,
+        9,
         0,
         # A roll is not a character edit and must never mark the sheet dirty, and
         # the roller reads nothing off the build — so it publishes and subscribes
@@ -435,7 +434,13 @@ _BASE_BLOCKS = [
 # ``BlockDescriptor.default_pinned``). The strip is the one region that does not
 # scroll with the page, which is exactly where a die belongs: it stays in view
 # through a fight rather than scrolling away under the sheet.
-_PINNED_BY_DEFAULT = frozenset({"dice", "scene"})
+#
+# The roller alone. The Scene used to share the strip, under the die, and took the
+# height the roll history needed — in a strip three or four cards tall, the one part
+# of the roller that scrolls was the part that paid. It sits at the foot of the page
+# now, beside Complications and Notes, where a board that is empty outside a session
+# costs nothing.
+_PINNED_BY_DEFAULT = frozenset({"dice"})
 
 # Blocks that start *closed* on a GM's NPC sheet (see ``BlockDescriptor.npc_default``).
 # The four that hold no trait: the GM already rolls from the card and the GM

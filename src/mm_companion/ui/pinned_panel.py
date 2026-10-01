@@ -434,6 +434,28 @@ class PinnedPanel(QFrame):
             return sum(extents) + handle_thickness() * (len(extents) - 1)
         return max(extents)
 
+    def content_extent(self) -> int:
+        """How thick a side strip must be for no block in it to be cut off.
+
+        The measured counterpart of :meth:`recommended_size`: a block's
+        recommendation is a stated number, tuned on one machine's fonts, and the
+        roller stated 360 for content that needs 363 there and more on a larger font
+        — so a strip opened at the recommendation clipped the Ask button and every
+        spin box's arrows. Only a **side** strip is measured: across a bottom strip
+        the blocks reflow into rows and their height is not a thing to fit to.
+        """
+        if not is_vertical_strip(self._edge) or self._rendered is None:
+            return 0
+        widest = max(
+            (
+                frame.content_width()
+                for key, frame in self._frames.items()
+                if key in lt.keys(self._rendered) and hasattr(frame, "content_width")
+            ),
+            default=0,
+        )
+        return widest + self._chrome() if widest else 0
+
     def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
         """Its handle, and nothing about what is pinned in it.
 
@@ -732,6 +754,11 @@ class PinnedBoard(QWidget):
         self._settle.setSingleShot(True)
         self._settle.timeout.connect(self._apply_extent)
 
+        # Whether the thickness still has to be fitted to what is pinned — true for
+        # a strip that has just been opened, restored or reset, and settled the
+        # first time it can be measured. See fit_to_content.
+        self._fit_pending = True
+
         self._apply_edge()
 
     # -- the host's seam ------------------------------------------------------
@@ -777,12 +804,45 @@ class PinnedBoard(QWidget):
         """Make the next render rebuild the strip (see :meth:`PinnedPanel.invalidate`)."""
         self.panel.invalidate()
 
+    #: The most of the window a strip may take when it is fitted to its blocks, so a
+    #: small screen keeps at least half its width for the page. Half rather than
+    #: less because the roller is what a small screen is *played* from: at 40% an
+    #: 800px window still cut it off. A strip that needs more than this opens at
+    #: this and its blocks clip; the user can still drag it.
+    FIT_SHARE = 0.5
+
     def set_extent(self, extent: int) -> None:
         """Set the strip's thickness — a restored layout, not a live drag."""
         if extent > 0:
             self._extent = extent
+        self._fit_pending = True
         self._fresh_settle()
         self._apply_extent()
+
+    def fit_to_content(self, total: int) -> None:
+        """Widen the strip to what its blocks need, once, as a layout is opened.
+
+        A strip opens at the thickness the layout says — the default 320, or what a
+        saved layout remembered — and the roller in it needs about 363, so every
+        fresh sheet and every Reset Layout opened with the roller cut off down its
+        right-hand side, and a screen with larger fonts needs more again. So the
+        first time the strip can be measured after being opened, restored or reset,
+        it is given at least :meth:`PinnedPanel.content_extent`, capped at
+        :attr:`FIT_SHARE` of the window.
+
+        Only *opening* a layout fits, never a later rebuild: a strip the user has
+        dragged narrower stays where they put it for the rest of the session. It is
+        the width a strip opens at, not a minimum it reports — nothing here can hold
+        the window open.
+        """
+        if not self._fit_pending or self.panel.is_empty() or total <= 0:
+            return
+        self._fit_pending = False
+        need = self.panel.content_extent()
+        if need <= self._extent:
+            return
+        cap = int(total * self.FIT_SHARE)
+        self._extent = max(self._extent, min(need, cap))
 
     def extent(self) -> int:
         """The strip's live thickness, or 0 while it is empty.
@@ -867,6 +927,9 @@ class PinnedBoard(QWidget):
         instead of sticking (see the ``_settle`` timer in ``__init__``).
         """
         total = self._splitter.width() if is_vertical_strip(self._edge) else self._splitter.height()
+        if total > self.panel.empty_extent() * 3:
+            # Laid out at a real size: the one moment the fit can be measured.
+            self.fit_to_content(total)
         if total <= 0:
             # Not laid out yet; any ratio will do.
             total = max(self._extent, self.panel.empty_extent()) * 3

@@ -15,6 +15,12 @@ exactly three things —
   (:mod:`mm_companion.ui.grid_handle`);
 * the mark shown during a drag, and the "fit to content" it snaps back to.
 
+Plus one number that is not a size at all: ``default_share``, a block's weight in the
+row it opens in on a fresh sheet. Skills beside Advantages reads best at about 60/40,
+which is not what their recommended widths divide into, and no per-block width can
+say "the larger part of whatever row I end up in". Only the default arrangement reads
+it, and only for a row whose every block states one.
+
 and for **nothing** in any layout minimum. Drag a block to a single pixel if you
 like; it will reflow as far as it can and then scroll inside its own frame.
 
@@ -63,6 +69,9 @@ class RecommendedSize:
 
     width: int = 0
     height: int = 0
+    #: This block's weight in its row of the *default* arrangement — see the module
+    #: docstring. Zero leaves the row to divide itself from the blocks' hints.
+    share: int = 0
 
     def __bool__(self) -> bool:
         """Whether this block states a recommendation at all."""
@@ -88,7 +97,11 @@ def _as_size(spec: dict[str, Any]) -> RecommendedSize:
             value = spec.get(_ALIASES[field])
         return int(value or 0)
 
-    return RecommendedSize(width=read("recommended_width"), height=read("recommended_height"))
+    return RecommendedSize(
+        width=read("recommended_width"),
+        height=read("recommended_height"),
+        share=int(spec.get("default_share") or 0),
+    )
 
 
 @lru_cache(maxsize=4)

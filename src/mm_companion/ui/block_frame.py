@@ -599,6 +599,38 @@ class BlockFrame(QFrame):
         """The size this block reads well at — the divider's detent asks for this."""
         return self._size
 
+    def content_width(self) -> int:
+        """How wide this frame has to be for its section not to be cut off.
+
+        The section's own minimum (what it has left once it has reflowed as far as
+        it can) plus the frame's chrome around it. A **measurement**, not a minimum
+        the frame reports: nothing here holds a layout open, which the frame's
+        ``minimumSizeHint`` still refuses to do. What asks is the pinned strip,
+        choosing the width it *opens* at — see
+        :meth:`~mm_companion.ui.pinned_panel.PinnedBoard.fit_to_content`.
+
+        The inner scroll area never shows a horizontal bar, so a frame narrower than
+        this does not scroll sideways: it clips, which is exactly the fault this
+        number exists to avoid.
+        """
+        section = self._scroll.widget()
+        if section is None:
+            return 0
+        viewport = self._scroll.viewport().width()
+        if viewport > 0 and self.width() > viewport:
+            # Laid out: everything between the frame's edge and the section — its
+            # border, the scroll area's frame, a vertical bar if one is showing —
+            # measured rather than added up, since a preset's border is a style's.
+            chrome = self.width() - viewport
+        else:
+            margins = self.layout().contentsMargins()
+            chrome = (
+                margins.left()
+                + margins.right()
+                + 2 * (self.frameWidth() + self._scroll.frameWidth())
+            )
+        return section.minimumSizeHint().width() + chrome
+
     def content_size_hint(self) -> QSize:
         """What the section would take if nothing constrained its height.
 

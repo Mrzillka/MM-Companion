@@ -16,6 +16,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from mm_companion.core.data_loader import load_game_data
+from mm_companion.ui import layout_tree as lt
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.power_constructor.terms_grid import (
     PAIRS_MIN_WIDTH,
@@ -169,11 +170,34 @@ class TestPairsPerRow:
 # -- and the widgets really do it --------------------------------------------
 
 
+#: The arrangement the widths below were calibrated on: every block in a row of
+#: its own past the first two, rows divided by the blocks' own hints, and the Scene
+#: pinned under the roller. These tests are about how a block *sheds* as the page
+#: narrows, not about the default arrangement, and a default that pairs blocks and
+#: divides rows by weight moves every shedding band — so the fixture pins the
+#: arrangement rather than the constants chasing it.
+_CALIBRATED_ROWS = [
+    ["base_info", "system_info", "character_image"],
+    ["abilities", "resistances", "conditions"],
+    ["advantages"],
+    ["complications"],
+    ["skills"],
+    ["powers"],
+    ["equipment"],
+    ["notes"],
+]
+
+
 @pytest.fixture
 def squeezed(qapp: QApplication):
     """A roomy sheet the tests below narrow themselves."""
     sheet = CharacterSheet(load_game_data())
     sheet.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+    model = sheet.canvas.default_arrangement()
+    model["page"] = lt.to_dict(lt.rows_to_page(_CALIBRATED_ROWS))
+    edge = model["region"]["edge"]
+    model["region"]["root"] = lt.to_dict(lt.lines_to_region([["dice"], ["scene"]], edge))
+    assert sheet.canvas.apply_arrangement(model)
     # Wide enough that nothing has reflowed yet, so every test starts from the
     # unsqueezed sheet and squeezes it itself.
     sheet.resize(1700, 800)

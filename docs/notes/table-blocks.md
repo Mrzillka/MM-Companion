@@ -324,3 +324,38 @@ Three things the blocks add on top:
   Only the indented focus/specialization rows and the locked view are plain items
   and wrap; the two cell-widget name cells (the unlocked `＋` row, the group header)
   hold a bare skill name, which the cap fits comfortably.
+
+## Skills: the Untrained? column, and the locked sheet's muting
+
+- **Unlocked, an `Untrained?` column** (`COL_UNTRAINED`, `✓`/`✕`) says which skills can
+  be attempted with no ranks — a build-time fact, read while deciding where ranks go.
+  It is first in the shed order: a player can work it out, and nothing else here can be.
+  It is filled in `_refresh_totals`, not at render time, because it is *this
+  character's* answer (`rules.skill_allows_untrained`): Jack-of-All-Trades
+  (`allowsUntrained` in `advantages.json`, with `allowsUntrainedExcept`) opens the
+  trained-only skills up, and adding it reaches the block through `DERIVED_CHANGED`.
+- **Locked, the column hides** and a row that cannot be used at all —
+  trained-only, untrained, no ranks and no bonus (`rules.skill_usable`) — is drawn in
+  the muted text colour with its name saying why. A total printed at full strength for
+  a skill that cannot be attempted is a number someone will roll.
+- The simple sheet already left those rows out of its "Untrained" small print; it now
+  asks `skill_allows_untrained` too, so Jack-of-All-Trades puts them back.
+
+## Advantages: the Uses column
+
+An advantage with `usesPerAdventurePerRank` (Luck, Determination, Edit Scene, Guidance,
+Partner Bond, Prepared Effect, Well-Equipped) is a resource spent at the table, and its
+row carries one dot per use (`ui/advantage_uses.py`, `UsePips`) in a trailing `Uses`
+column that shows only while some advantage has uses. A filled dot is a use in hand; a
+click spends one, a click on a hollow one gives it back, and the right-click resets
+every use for a new adventure.
+
+- **The count is the model's** — `AdvantageSelection.used`, saved only while non-zero
+  — and `AdvantagesSection.set_advantage_used` is the one funnel: the simple sheet's
+  dots call straight into it, so the history line ("used Luck — 1 of 2 left", over
+  `note-requested`) is written in one place. It emits `edited` (→ `EDITED` only), not
+  `changed`: a use moves no number anyone derives, but it is undoable and dirties the
+  sheet, like a hero point.
+- Live on a locked sheet, like the hero-point pips — a use is spent in play.
+- Only a **bought** advantage gets dots: a granted one is rebuilt from its power on
+  every refresh and has nowhere to keep a count.

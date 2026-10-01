@@ -47,22 +47,37 @@ def rollable_style() -> str:
     skills spent most of its time re-polishing fifty copies of the same two rules.
     """
     radius = int(theme.metric("radius.chip"))
+    width = int(theme.metric("border.width"))
     return (
         f'*[rollable="true"] {{ border-radius: {radius}px; }}'
         f'*[rollable="true"]:hover {{ background: {theme.wash("accent.dice", 0.12)}; }}'
+        # A box that is not obviously a trait (Initiative, beside Power Level) wears
+        # the dice footer's border at rest as well — see make_rollable's *chip*.
+        f'*[rollChip="true"] {{ border: {width}px solid {theme.wash("accent.dice", 0.45)}; }}'
+        f'*[rollChip="true"]:hover {{ border-color: {theme.color("accent.dice")}; }}'
     )
 
 
-def make_rollable(widget: QWidget, context: SimpleContext, factory: SpecFactory) -> None:
+def make_rollable(
+    widget: QWidget, context: SimpleContext, factory: SpecFactory, *, chip: bool = False
+) -> None:
     """Load *factory*'s spec on a click and throw it on a double-click — when live.
 
     A no-op on paper: a printed box is not a button, and a hover wash on a page that
     will never see a pointer is noise.
+
+    *chip* also dresses the box as a roll at rest — the power footer's washed
+    ``accent.dice`` border. For a
+    box whose neighbours do not roll: an ability is self-evidently a check, but
+    Initiative sits between Power Level and the hero points, and looked as inert as
+    they are.
     """
     if not context.can_roll():
         return
     widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
     widget.setProperty("rollable", True)
+    if chip:
+        widget.setProperty("rollChip", True)
     widget.setCursor(Qt.CursorShape.PointingHandCursor)
     # Kept on the widget, so a box that rewrites its tooltip on every refresh (a stat
     # box, whose hint names the condition moving it) can say how it rolls as well.
@@ -147,6 +162,12 @@ class StatBox(QFrame):
     def value_text(self) -> str:
         return self._value.text()
 
+    def caption(self) -> str:
+        return self._caption.text()
+
+    def set_caption(self, caption: str) -> None:
+        self._caption.setText(caption)
+
 
 class CaptionBox(QFrame):
     """A small caption over any widget — a stat box whose value is a control.
@@ -188,6 +209,7 @@ class SimpleLine(QWidget):
         bold: bool = False,
         strike: bool = False,
         moved: int = 0,
+        trailing: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("simpleLine")
@@ -202,6 +224,9 @@ class SimpleLine(QWidget):
         self.name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         set_font(self.name, "size.simple-label", bold=bold, strike=strike)
         top.addWidget(self.name, stretch=1)
+        # A small control at the end of the name line (an advantage's use dots).
+        if trailing is not None:
+            top.addWidget(trailing, alignment=Qt.AlignmentFlag.AlignVCenter)
         self.value: QLabel | None = None
         if value:
             self.value = value_label(value)

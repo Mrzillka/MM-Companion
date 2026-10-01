@@ -112,3 +112,39 @@ def advantage_violations(char: Character, game_data: GameData) -> list[str]:
             f"Heroic advantages use {used} ranks, exceeding the PL {pl} budget of {budget}."
         )
     return violations
+
+
+def advantage_uses(game_data: GameData, selection) -> int:
+    """How many times per adventure *selection* may be used — ``0`` if it is not limited.
+
+    Read off the advantage's ``usesPerAdventurePerRank`` (data, never a name list): Luck,
+    Determination and Edit Scene are once per adventure per rank (p84-p93), so a
+    selection at rank 3 has three uses. An unranked advantage counts as rank 1.
+    """
+
+    advantage = advantage_by_name(game_data, selection.name)
+    if advantage is None or not advantage.uses_per_rank:
+        return 0
+    rank = max(1, int(selection.rank)) if advantage.ranked else 1
+    return advantage.uses_per_rank * rank
+
+
+def advantage_uses_left(game_data: GameData, selection) -> int:
+    """The uses of *selection* still unspent this adventure, never below zero.
+
+    ``used`` can outrun the total when a rank is sold back after a use was spent; the
+    pips then simply show none left rather than a negative count.
+    """
+
+    return max(0, advantage_uses(game_data, selection) - max(0, int(selection.used)))
+
+
+def reset_advantage_uses(char: Character) -> bool:
+    """Give back every spent use — a new adventure has begun. ``True`` if any moved."""
+
+    moved = False
+    for selection in char.advantages:
+        if selection.used:
+            selection.used = 0
+            moved = True
+    return moved

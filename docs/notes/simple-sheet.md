@@ -253,6 +253,22 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   they fit on one; a box's heading is never the last thing on a page. Only a page that
   would be left less than `MIN_FILL` full, or a single thing taller than a page, is cut.
 
+## Initiative is dressed as a roll
+
+Initiative is a roll that sits between Power Level and the hero points, and it read as
+inert as they are. `make_rollable(..., chip=True)` dresses its box as the power cards'
+roll lines are dressed — the washed `accent.dice` border at rest — and the edit
+sheet's System block gives its readout the same look through `roll_click.RollChip`.
+Deliberately **without** the footer's `🎲`: it was tried and read as clutter beside a
+single number. An ability box needs neither: it is self-evidently a check.
+
+## Advantage use dots
+
+An advantage spent per adventure (Luck, Determination…) carries the same `UsePips` on
+its line as on the edit sheet's Advantages block, and a click goes through
+`AdvantagesSection.set_advantage_used` — see [the table blocks](table-blocks.md). On
+paper the dots are drawn but are not a control.
+
 ## Tests
 
 `tests/test_simple_layout.py` (the presets and the roll-chip split, pure) and

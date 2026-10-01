@@ -70,7 +70,7 @@ from PySide6.QtWidgets import (
 from mm_companion.core import storage
 from mm_companion.core.dice import CheckResult, resolve_check, roll_d20
 from mm_companion.core.rules import RollSpec
-from mm_companion.core.session.model import KIND_ROLL
+from mm_companion.core.session.model import KIND_NOTE, KIND_REQUEST, KIND_ROLL
 from mm_companion.ui import theme
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.reflow import ReflowBox
@@ -84,11 +84,14 @@ from mm_companion.ui.roll_history import (
     QuickRollStar,
     RequestCard,
     RollHistoryPanel,
+    announce_entry,
     chain_widgets,
     degree_label,
     escape_rich_text,
     quick_roll_key,
+    roll_headline,
     size_history_scroll,
+    tighten_card,
 )
 from mm_companion.ui.session_bridge import SessionBridge, live_session
 from mm_companion.ui.svg_assets import die_resource, svg_pixmap
@@ -252,6 +255,33 @@ class QuickRollStrip(FlowContainer):
         return layout.count()
 
 
+def local_record(
+    die: int,
+    bonus: int,
+    penalty: int,
+    dc: int | None,
+    result: CheckResult | None,
+    *,
+    label: str = "",
+) -> dict:
+    """A roll this app made on its own, in the shape a session record has.
+
+    So the shared history's line builders (``roll_headline``) and the notification
+    (``toast_widgets``) read it exactly as they read one off the wire.
+    """
+    return {
+        "kind": KIND_ROLL,
+        "player_name": "You",
+        "label": label,
+        "die": die,
+        "bonus": bonus,
+        "penalty": penalty,
+        "dc": dc,
+        "degree": None if result is None else result.degree,
+        "critical": False if result is None else result.critical,
+    }
+
+
 class RollCard(QFrame):
     """One history entry: the die, the modifier breakdown, and (with a DC) the
     degree of success — plus a star to save its parameters and a ``−`` to drop it."""
@@ -285,17 +315,13 @@ class RollCard(QFrame):
         # :func:`~mm_companion.ui.roll_history.roll_parameters`.
         self._params = {"name": label, "bonus": bonus, "penalty": penalty}
 
-        modifier = bonus - penalty
-        total = die + modifier
-
         layout = QHBoxLayout(self)
         info = QVBoxLayout()
+        tighten_card(layout, info)
 
-        # Rich text can't resolve a Qt palette() role, so this takes the literal token.
-        muted = theme.color("text.muted.rich")
-        headline = f"<b>{total}</b> <span style='color:{muted}'>(d20 {die} {modifier:+d})</span>"
-        if dc is not None:
-            headline += f" vs DC {dc}"
+        # The same number line the shared history's card prints — degree and all, on
+        # one line (see roll_headline).
+        headline = roll_headline(local_record(die, bonus, penalty, dc, result))
         # What was rolled leads, the way the shared history's card names the player —
         # a private history of bare numbers is unreadable a few rolls later.
         if label:
@@ -308,12 +334,6 @@ class RollCard(QFrame):
         title.setTextFormat(Qt.TextFormat.RichText)
         title.setWordWrap(True)
         info.addWidget(title)
-
-        if result is not None:
-            color = theme.color("tint.better" if result.success else "tint.worse")
-            degree = QLabel(degree_text(result))
-            degree.setStyleSheet(f"color: {color};")
-            info.addWidget(degree)
 
         for widget in chain_widgets(
             spec,
@@ -682,9 +702,13 @@ class DiceRollerPanel(ReflowBox, QWidget):
         """The Request row: a trait, a difficulty, and a button that asks the table.
 
         Below the roll's own controls because it is a different verb — everything
-        above rolls something *here*, and this asks somebody else to. It borrows
-        their caption column so the two read as one form, but spans the rest of the
-        grid itself: see the button, below.
+        above rolls something *here*, and this asks somebody else to. It sits **on
+        the same grid** as the rows above it, cell for cell: the caption in the
+        caption column, the trait under the sliders, and the difficulty with its
+        button under the spin boxes. It used to span the slider and spin columns
+        as one free-running line, which lined up with nothing above it — the combo
+        overran the sliders, the DC box floated mid-cell — and read as a second,
+        broken form bolted under the first.
 
         The DC box is a plain spin box where **0 means no DC**, deliberately unlike
         the Difficulty Class row above it. That row's checkbox exists because the
@@ -697,11 +721,6 @@ class DiceRollerPanel(ReflowBox, QWidget):
         (:meth:`set_roll_choices`), so a roller with no ruleset behind it is the
         panel it always was.
         """
-
-        self._request_part = QWidget()
-        line = QHBoxLayout(self._request_part)
-        line.setContentsMargins(0, 0, 0, 0)
-        line.setSpacing(int(theme.metric("space.xs")))
 
         self._request_combo = QComboBox()
         self._request_combo.setToolTip("What to ask the table to roll")
@@ -723,34 +742,30 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._request_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         # And an explicit floor, which *replaces* the hint-derived one rather than
         # raising it (``qSmartMinSize``) — so this, and not the longest skill name,
-        # is how narrow the row can be squeezed. It is also what holds the *panel*
-        # open in the split shape, where the splitter hands the controls exactly
-        # their minimum and every spare pixel to the history: drop it and the die
-        # and its result line lose that width, wrapping the readout against the
-        # block's border. A trait name is worth about this much either way.
+        # is how narrow the slider column can be squeezed. A trait name is worth
+        # about this much either way.
         self._request_combo.setMinimumWidth(int(theme.metric("column.request-trait")))
         guard_wheel(self._request_combo)
         self._request_combo.currentIndexChanged.connect(self._on_request_trait_changed)
-        line.addWidget(self._request_combo, stretch=1)
 
-        # Arrowless, and Fixed so every spare pixel in this cell goes to the combo
-        # beside it. The theme reserves a right-hand column for the arrows the
-        # platform style draws — 50px under ``windows11`` — which here is more than
-        # the two digits it frames: with them the number took 148px of a 210px cell
-        # and the trait name was clipped to "Trai". The same trade the sheet's own
-        # rank grids make, and the reason ``buttons=False`` exists.
+        # The difficulty and the button share the spin-box column, so the row ends
+        # exactly where the Bonus and Penalty boxes above it end.
+        self._request_part = QWidget()
+        line = QHBoxLayout(self._request_part)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(int(theme.metric("space.xs")))
+
+        # Arrowless: the theme reserves a right-hand column for the arrows the
+        # platform style draws — 50px under ``windows11`` — which is more than the
+        # two digits it frames, and would leave "Ask" no room in this cell. It takes
+        # the cell's slack, so the button beside it stays exactly as wide as its word.
         self._request_dc = make_spin_box(0, 60, value=0, buttons=False)
         self._request_dc.setToolTip("The difficulty to ask for — 0 for no DC")
-        self._request_dc.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        line.addWidget(self._request_dc)
+        # And it says so: a bare "0" read as a DC of nothing, which nobody means.
+        self._request_dc.setSpecialValueText("—")
+        self._request_dc.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        line.addWidget(self._request_dc, stretch=1)
 
-        # In the row rather than the grid's third column, and Fixed so it is exactly
-        # as wide as the word on it. That column is sized by the Bonus and Penalty
-        # spin boxes above — two digits framed by fifty pixels of arrow column — and
-        # a button parked in it was stretched to match, spending on "Ask" the width
-        # the combo beside it needed to show a skill's name. Spanning both columns
-        # instead hands the difference to the combo, which is the one thing in this
-        # row worth widening.
         self._request_button = QPushButton("Ask")
         self._request_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self._request_button.setToolTip(
@@ -759,9 +774,10 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._request_button.clicked.connect(self._emit_request)
         line.addWidget(self._request_button)
 
-        grid.addWidget(QLabel("Request"), row, 0)
-        grid.addWidget(self._request_part, row, 1, 1, 2)
-        self._request_label = grid.itemAtPosition(row, 0).widget()
+        self._request_label = QLabel("Request")
+        grid.addWidget(self._request_label, row, 0)
+        grid.addWidget(self._request_combo, row, 1)
+        grid.addWidget(self._request_part, row, 2)
         self._show_request_row(False)
 
     def _show_request_row(self, visible: bool) -> None:
@@ -773,7 +789,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
         the window for one it now does).
         """
 
-        for widget in (self._request_label, self._request_part, self._request_button):
+        for widget in (self._request_label, self._request_combo, self._request_part):
             widget.setVisible(visible)
         self.updateGeometry()
         self.contentChanged.emit()
@@ -1757,6 +1773,15 @@ class LocalRollHistory(QWidget):
         # Newest on top: insert above every existing card (the stretch is last).
         self._layout.insertWidget(0, card)
         self._trim()
+        record = local_record(
+            int(roll["die"]),
+            int(roll["bonus"]),
+            int(roll["penalty"]),
+            roll["dc"],
+            roll["result"],
+            label=str(roll.get("label", "")),
+        )
+        announce_entry(record, self)
 
     def add_note(self, text: str) -> None:
         """Write a line that nobody rolled — the off-air twin of a session note.
@@ -1768,6 +1793,7 @@ class LocalRollHistory(QWidget):
         card = NoteCard({"text": text}, show_author=False)
         self._layout.insertWidget(0, card)
         self._trim()
+        announce_entry({"kind": KIND_NOTE, "player_name": "You", "text": text}, self)
 
     def add_request(self, spec: object) -> None:
         """Write a requested roll that reached nobody — the off-air twin of one.
@@ -1797,6 +1823,14 @@ class LocalRollHistory(QWidget):
         card.removeRequested.connect(lambda _seq, c=card: self._remove_card(c))
         self._layout.insertWidget(0, card)
         self._trim()
+        announce_entry(
+            {
+                "kind": KIND_REQUEST,
+                "player_name": "you",
+                "spec": spec.to_dict() if isinstance(spec, RollSpec) else spec,
+            },
+            self,
+        )
 
     def cards(self) -> list[RollCard]:
         """The roll cards on screen, newest first (notes carry no parameters)."""

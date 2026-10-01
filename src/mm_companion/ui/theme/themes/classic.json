@@ -28,6 +28,9 @@
     "text.on-badge": "#ffffff",
 
     "border.card": "palette(mid)",
+
+    "_surface.toast": "Behind a notification card: a session notice floating over the window, or a roll popping up in a corner of the screen. A palette() role, so it is the window's own colour under every preset that does not restate it.",
+    "surface.toast": "palette(window)",
     "border.group": "#8894b0",
     "border.empty": "palette(mid)",
 
@@ -92,6 +95,8 @@
 
     "_compact.width": "The size the window opens at in compact mode, before the user resizes it. The minimums are deliberately far below the roller's own content: past them the die and the history simply scroll, which is what lets the mini window be shoved into a corner of a shared screen.",
     "compact.width": 380,
+    "_toast.width": "How wide a notification card is: a roll popping up in a corner of the screen, or a session notice floating over a window (narrowed to fit a window smaller than this).",
+    "toast.width": 340,
     "compact.height": 560,
     "compact.min-width": 200,
     "compact.min-height": 150,
@@ -147,6 +152,7 @@
     "column.chip-button": 24,
     "column.roll-button": 28,
     "column.hero-point": 26,
+    "column.use-pip": 12,
     "column.status-dot": 10,
 
     "_simple.gap": "The simple sheet (View > Simple Sheet): the gutter between two of its boxes, in pixels. Deliberately a fraction of the edit page's, so the play view reads as one sheet of paper rather than a dozen floating panels.",

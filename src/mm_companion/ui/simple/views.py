@@ -38,6 +38,7 @@ from mm_companion.core.rules import (
     PinRef,
     ability_roll,
     advantage_by_name,
+    advantage_uses,
     all_advantage_selections,
     character_reach,
     condition_check_penalty,
@@ -58,6 +59,7 @@ from mm_companion.core.rules import (
     reach_text,
     resistance_condition_effect,
     resistance_roll,
+    skill_allows_untrained,
     skill_bonus,
     skill_modifiers,
     skill_roll,
@@ -68,6 +70,7 @@ from mm_companion.core.rules import (
 )
 from mm_companion.ui import theme
 from mm_companion.ui.advantage_parameters import parameter_display
+from mm_companion.ui.advantage_uses import UsePips
 from mm_companion.ui.damage_row import DamageRow
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.sections.character_image import ScalingImageLabel
@@ -264,7 +267,10 @@ class SystemView(_View):
         self._boxes.addWidget(self.level)
         self._boxes.addWidget(self.initiative)
         make_rollable(
-            self.initiative, context, lambda: initiative_roll(self._character, self._data)
+            self.initiative,
+            context,
+            lambda: initiative_roll(self._character, self._data),
+            chip=True,
         )
         make_pinnable(self.initiative, context, PinRef(PIN_INITIATIVE))
 
@@ -500,7 +506,7 @@ def skill_rows(context: SimpleContext) -> tuple[list[tuple[str, str]], list[tupl
             has_ranks = int(character.skill_ranks.get(row_id, 0)) > 0
             if has_ranks or row_id in granted or skill_bonus(character, data, row_id) is not None:
                 trained.append((row_id, display))
-            elif row_id == name and not getattr(skill, "trained_only", False):
+            elif row_id == name and skill_allows_untrained(character, data, skill):
                 untrained.append((row_id, display))
     return trained, untrained
 
@@ -604,13 +610,31 @@ class AdvantagesView(_View):
         subject = parameter_display(spec, selection.parameter, self._data)
         return f"{text} ({subject})" if subject else text
 
+    def _use_pips(self, selection) -> UsePips | None:
+        """The dots of an advantage spent at the table, or ``None`` for any other.
+
+        Only a bought one (a granted advantage has nowhere to keep a count). A click goes
+        through the Advantages block, which writes the model and the history line; on
+        paper the dots are drawn but are not a control.
+        """
+        total = advantage_uses(self._data, selection)
+        if not total or not any(s is selection for s in self._character.advantages):
+            return None
+        section = self.context.section
+        live = section is not None and hasattr(section, "set_advantage_used")
+        pips = UsePips(total, selection.used, interactive=live, name=selection.name)
+        if live:
+            pips.usedChanged.connect(lambda used, s=selection: section.set_advantage_used(s, used))
+            pips.resetRequested.connect(section.reset_advantage_uses)
+        return pips
+
     def refresh(self) -> None:
         lost = debilitated_traits(self._character, self._data)
         # Values, not the selections themselves: those are mutable, and a remembered
         # reference would compare equal to its own edited self.
         signature = (
             tuple(
-                (s.name, s.rank, s.parameter)
+                (s.name, s.rank, s.parameter, s.used)
                 for s in all_advantage_selections(self._character, self._data)
             ),
             frozenset(lost),
@@ -630,7 +654,10 @@ class AdvantagesView(_View):
                 if source and selection not in self._character.advantages:
                     summary = _join([f"from {source}", summary])
                 line = SimpleLine(
-                    self._text(selection), terms=summary, strike=selection.name in lost
+                    self._text(selection),
+                    terms=summary,
+                    strike=selection.name in lost,
+                    trailing=self._use_pips(selection),
                 )
                 if selection.name in lost:
                     line.setToolTip("Debilitated — this advantage is effectively lost")

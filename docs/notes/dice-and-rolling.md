@@ -609,3 +609,47 @@ ask for a check nobody had provoked.
   `PROTOCOL_VERSION` **8**. Not GM-gated — anyone may ask. A spec that does not
   survive `sanitize_spec` is dropped rather than recorded: a card with a dead button
   is worse than no card.
+
+## Roll notifications, and a history that holds more (matters when touching a history card)
+
+A history in the pinned strip shows three or four cards, and the GM's — beside a board
+of NPCs — often fewer. Two answers, and they are independent.
+
+- **The cards are denser.** The degree of success rides on the total's line
+  (`roll_history.roll_headline`: `21 (d20 12 +9) vs DC 15 · Success (2 degrees)`)
+  rather than a line of its own, and `tighten_card` packs every card's margins. Both
+  histories build their number line from the one function — `LocalRollHistory`'s
+  `RollCard` converts its roll with `dice_roller.local_record` first — so the private
+  and the shared card cannot drift apart again.
+- **Every new entry pops up in a corner of the screen** (`ui/toasts.py`,
+  `RollToaster`): a frameless, always-on-top window that never takes focus, stacking
+  away from the corner the user chose, fading after `DWELL_MS`, and held — the whole
+  stack, as Telegram Desktop does it — while the pointer is over any of them. Clicking
+  one brings forward the window whose history it came from. On by default; on/off and
+  the corner are on the General settings page (`storage.roll_notifications()`,
+  `storage.roll_notification_corner()`).
+- **Only live entries are announced.** `RollHistoryPanel.set_rolls` is a *replay* — a
+  join, a reconnect's fresh `Welcome`, the GM's log off disk — and raises `_replaying`
+  around its loop, or every reconnect would flood the screen with the evening's rolls.
+  `add_roll` (the bridge's `rollAdded`) and `release_roll` (one's own roll, as its die
+  settles) are the news. The private history announces from all three of its `add_*`.
+- **Deduplicated by `seq`.** One session can feed several histories in one app (the GM
+  window and a sheet, two sheets), and each would announce the same roll. Only a
+  positive `seq` is a key: a negative one is a window's own off-air counter.
+- A toast is built from the record, never from the card (`toast_widgets`): no star,
+  no ✕, no follow-up chip — a notification is read at a glance, and the card in the
+  history is where those live. The edge is the outcome's colour (`toast_accent`).
+- Over the desktop a toast is a **transparent window holding a styled `QFrame`**: a
+  translucent top-level paints no stylesheet background of its own, and a `palette()`
+  role reads as see-through there, so its colours are resolved to `#rrggbb`
+  (`toasts._solid`) before they are written.
+- `tests/conftest.py` sets `toasts.SUPPRESSED` for every test, or every roll a test
+  makes would pop a real window on the developer's desktop; `tests/test_toasts.py`
+  lifts it for its own.
+
+## The Request row sits on the grid
+
+The trait combo is in the sliders' column and the DC box with its "Ask" in the spin
+boxes' column, cell for cell. It used to span both columns as one free-running line,
+which lined up with nothing above it. The DC box shows `—` for 0 (`setSpecialValueText`):
+0 means "no DC" here, and a bare `0` read as a DC of nothing.

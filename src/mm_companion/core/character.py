@@ -25,11 +25,17 @@ class AdvantageSelection:
 
     ``parameter`` carries a per-selection choice an advantage needs (e.g. Alternate
     Initiative's mental ability key); ``""`` for advantages that take no parameter.
+
+    ``used`` counts the uses spent this adventure of an advantage that is a limited
+    resource (Luck, Determination — see :func:`~.rules.advantage_uses`). Runtime state
+    like a hero point: spent at the table, costs nothing, saved so a sheet reopens the
+    way it was left, and written only while non-zero.
     """
 
     name: str
     rank: int = 1
     parameter: str = ""
+    used: int = 0
 
 
 @dataclass
@@ -254,6 +260,7 @@ class Character:
                     "name": a.name,
                     "rank": a.rank,
                     **({"parameter": a.parameter} if a.parameter else {}),
+                    **({"used": a.used} if a.used else {}),
                 }
                 for a in self.advantages
             ],
@@ -334,7 +341,10 @@ class Character:
             hidden_skills=[str(name) for name in raw.get("hidden_skills", [])],
             advantages=[
                 AdvantageSelection(
-                    name=a["name"], rank=int(a.get("rank", 1)), parameter=a.get("parameter", "")
+                    name=a["name"],
+                    rank=int(a.get("rank", 1)),
+                    parameter=a.get("parameter", ""),
+                    used=max(0, int(a.get("used", 0) or 0)),
                 )
                 for a in raw.get("advantages", [])
             ],

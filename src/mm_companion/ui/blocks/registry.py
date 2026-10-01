@@ -270,7 +270,9 @@ _BASE_BLOCKS = [
         AdvantagesSection,
         2,
         0,
-        {"changed": (BUILD_CHANGED, FACTS_CHANGED, DERIVED_CHANGED, EDITED)},
+        # A use of Luck or Determination spent is an edit and nothing else: it moves
+        # no number anyone derives.
+        {"changed": (BUILD_CHANGED, FACTS_CHANGED, DERIVED_CHANGED, EDITED), "edited": (EDITED,)},
         {
             CAPS_CHANGED: "refresh_limits",
             CONDITION_CHANGED: "refresh_conditions",
@@ -278,7 +280,8 @@ _BASE_BLOCKS = [
             COST_RATES_CHANGED: "refresh_cost",
             ENHANCEMENTS_CHANGED: "refresh_granted",
         },
-        {},
+        # the line a use of a per-adventure advantage writes in the roll history
+        {"noteRequested": (NOTE_REQUESTED,)},
         {},
     ),
     (
@@ -301,6 +304,11 @@ _BASE_BLOCKS = [
         {"changed": (BUILD_CHANGED, FACTS_CHANGED, EDITED)},
         {
             ABILITY_CHANGED: "refresh_totals",
+            # An advantage can move a skill without touching an ability: a standing
+            # bonus (skillBonusPerRank), or Jack-of-All-Trades opening the trained-only
+            # skills up — which is what the Untrained? column and the locked sheet's
+            # muting read. The Advantages block's `changed` carries this topic.
+            DERIVED_CHANGED: "refresh_totals",
             # Not refresh_totals: a power can grant a skill *row* the character never
             # bought (an Enhanced Trait naming a focus), and a row that does not exist
             # cannot have its total refreshed. refresh_granted rebuilds when the granted

@@ -33,6 +33,7 @@ from mm_companion.core.session.model import new_session
 from mm_companion.ui import dice_roller
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.sections.powers import _RollLine
+from mm_companion.ui.sections.skills import COL_TOTAL as SKILL_TOTAL
 from mm_companion.ui.sections.stat_table import COL_NAME, COL_TOTAL, ROLL_ROLE
 from mm_companion.ui.session_bridge import SessionBridge, set_active_session
 
@@ -242,9 +243,9 @@ def test_clicking_a_skill_row_loads_it(qapp: QApplication) -> None:
     row = next(
         r
         for r in range(table.rowCount())
-        if (table.item(r, 5) or None) and table.item(r, 5).data(ROLL_ROLE)
+        if (table.item(r, SKILL_TOTAL) or None) and table.item(r, SKILL_TOTAL).data(ROLL_ROLE)
     )
-    table.cellClicked.emit(row, 5)
+    table.cellClicked.emit(row, SKILL_TOTAL)
 
     assert len(seen) == 1
     assert seen[0].kind == "skill"
@@ -365,9 +366,10 @@ def test_double_clicking_a_skill_row_rolls_that_row(qapp: QApplication) -> None:
     row = next(
         r
         for r in range(table.rowCount())
-        if (table.item(r, 5) or None) and table.item(r, 5).data(Qt.ItemDataRole.UserRole)
+        if (table.item(r, SKILL_TOTAL) or None)
+        and table.item(r, SKILL_TOTAL).data(Qt.ItemDataRole.UserRole)
     )
-    table.cellDoubleClicked.emit(row, 5)
+    table.cellDoubleClicked.emit(row, SKILL_TOTAL)
 
     assert len(seen) == 1
     assert seen[0].kind == "skill"

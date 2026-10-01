@@ -73,7 +73,7 @@ The shape:
 - **Two ways to ask, because the failure has three shapes.** `Session ▸ Reconnect`
   is the one that always works — keyboard-reachable, and it cannot fade — and the
   board's trouble card carries a `Reconnect now` button beside the sentence
-  explaining what is wrong. That card is **held** rather than poked (`_Notice.hold`
+  explaining what is wrong. That card is **held** rather than poked (`ToastCard.hold`
   / `release`): it is a *condition*, not a message, and a condition that fades after
   ten seconds is one a GM will not see when they look up mid-fight — the same
   argument that produced `ConnectionIndicator`. The third shape is why the menu
@@ -569,3 +569,16 @@ The shape:
   stdlib), and **nothing new under `data/`** — the session layer is MIT code, not
   OGL content. Verify with the fast, window-free files (`tests/test_session_*.py`,
   `tests/test_headless_server.py`); the GUI ones need `QT_QPA_PLATFORM=offscreen`.
+
+## Notices float over the window
+
+The GM window's three notice cards (the hosting status, the trouble card, the one-off
+line) and a player's session messages ("Joined", "Lost the session…", "Left the
+session") are `ui/toasts.py` `ToastCard`s in a `ToastStack` floating over the window's
+bottom-right corner — in no layout, so a message coming or going never moves a block.
+They used to be laid out under the board (GM) and on a status bar (player), and every
+message shoved the page up and handed the room back a few seconds later. A player's
+window reaches its stack through `toasts.notify_window`, which also carries the sheet's
+"Saved to…" and "Exported…" lines. **Hovering a card holds it** — the dwell stops, the
+fade reverses — until the pointer leaves: a message that fades out from under the
+cursor of the person reading it has not been delivered.

@@ -38,7 +38,8 @@ EXPECTED_DEFAULT_ROWS = [
     ["base_info", "system_info", "character_image"],
     ["abilities", "resistances", "conditions"],
     ["skills", "advantages"],
-    ["powers", "equipment"],
+    ["powers"],
+    ["equipment"],
     ["complications", "notes", "scene"],
 ]
 

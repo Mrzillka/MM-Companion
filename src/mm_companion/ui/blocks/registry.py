@@ -288,7 +288,7 @@ _BASE_BLOCKS = [
         "complications",
         "Complications",
         ComplicationsSection,
-        4,
+        5,
         0,
         {"edited": (EDITED,)},
         {},
@@ -357,8 +357,9 @@ _BASE_BLOCKS = [
         "equipment",
         "Equipment",
         EquipmentSection,
-        3,
-        1,
+        # Under Powers rather than beside it: the two side by side were too cramped.
+        4,
+        0,
         {
             "changed": (BUILD_CHANGED, ENHANCEMENTS_CHANGED, DERIVED_CHANGED, EDITED),
             # Wearing a jacket is a play action, not a build edit, so it drives the
@@ -381,7 +382,7 @@ _BASE_BLOCKS = [
         # off it), and ``block_key`` already defaults to the template's own key.
         # The closure is only how the *extra* instances are built.
         NotesSection,
-        4,
+        5,
         1,
         # Opening, closing or reordering a tab is a character edit. Typing in a
         # note is not — that autosaves to its own file and never reaches the bus
@@ -397,7 +398,7 @@ _BASE_BLOCKS = [
         SceneSection,
         # At the foot of the page, beside Complications and Notes. It used to be
         # pinned under the roller, where it took the height the roll history needed.
-        4,
+        5,
         2,
         # Publishes and subscribes nothing, for the Dice block's reason: the scene
         # is the GM's, not this character's, and an update landing mid-edit must

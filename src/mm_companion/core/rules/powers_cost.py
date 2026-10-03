@@ -819,7 +819,7 @@ def effect_effective_rank(
     :func:`effect_build_rank` with the **runtime dial** applied
     (:func:`~.runtime.effect_current_rank`), so a Damage 10 a player has turned down to
     5 forces a save against 5. An effect nobody has dialled reads its bought rank, which
-    is every effect until someone touches a slider.
+    is every effect until someone touches a dial.
 
     This is the rank that sets the resistance DC. It stops short of the *hard* Power
     Level cap, which needs an effect's attack bonus in hand and so lives one layer up as
@@ -1307,7 +1307,7 @@ def dynamic_share_points(rank: int, wanted: int, full_cost: int) -> int:
     """The smallest share that buys ``wanted`` ranks of a member bought at ``rank``.
 
     The exact inverse of :func:`dynamic_rank_share`, and the reason a Dynamic member's
-    slider can be a *rank* slider at all: every notch converts to the cheapest number of
+    dial can be a *rank* dial at all: every notch converts to the cheapest number of
     points that reaches it, so the split always lands on a legal cost. It is also what
     makes the notches step differently per member — a member costing 2 points a rank
     moves the split 2 points per notch and one costing 1 moves it by 1, which is what
@@ -1337,7 +1337,7 @@ def dynamic_held_rank(effect: PowerEffectInstance, points: int, full_cost: int) 
     Gargantuan has to be able to pay for six and stand at five. Bigger is not better for
     a size effect (a Gargantuan character is easier to hit and impossible to hide), and
     the same is true of any effect a player would pull: the pool decides what a member
-    *may* do, and the player still decides what it *is* doing. So the slider carries a
+    *may* do, and the player still decides what it *is* doing. So the dial carries a
     notch per rank rather than per price (:func:`dynamic_share_steps` is what it used to
     carry) and writes the rank it stopped on into ``current_rank`` beside the share it
     spent.
@@ -1362,7 +1362,7 @@ def dynamic_held_rank(effect: PowerEffectInstance, points: int, full_cost: int) 
 def dynamic_share_steps(rank: int, full_cost: int) -> tuple[tuple[int, int], ...]:
     """Every ``(points, rank)`` a member's share can actually stop at, cheapest first.
 
-    A Dynamic member's card slider is a *rank* slider whose value is spent in points, and
+    A Dynamic member's card dial is a *rank* dial whose value is spent in points, and
     these are its notches: one per rank the pool can genuinely buy, priced by
     :func:`dynamic_share_points` and confirmed against :func:`dynamic_rank_share`, so the
     two can never disagree about what a share is worth. Always starts at ``(0, 0)`` —
@@ -1423,7 +1423,7 @@ def dynamic_member_cost(node, game_data: GameData) -> int:
     The **one** denominator in the Dynamic pool, and it exists because there were two:
     the cards priced their share notches *with* the wielder while :func:`dynamic_rank_cap`
     priced the same member *without* one, so a notch could promise "6 PP · Flight 3" while
-    the sheet ran Flight 2. Whatever asks what a share is worth — the cap, the slider's
+    the sheet ran Flight 2. Whatever asks what a share is worth — the cap, the dial's
     notches, the label beside them — asks here.
 
     It is priced **without the wielder** on purpose, and that is not merely a tie-break.
@@ -1480,7 +1480,7 @@ def dynamic_rank_cap(
 def _share_cap(effect: PowerEffectInstance, points: int, full_cost: int) -> int:
     """What one share holds an effect to: the rank it buys, or the lower one it is held at.
 
-    The two halves of a Dynamic member's single slider — the points it spent and the notch
+    The two halves of a Dynamic member's single dial — the points it spent and the notch
     it stopped on (:func:`dynamic_held_rank`) — asked as one number, so both places a
     share is read (a member's own, and the one an enclosing array hands it) answer alike.
     """

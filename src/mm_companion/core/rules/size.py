@@ -228,7 +228,7 @@ class SizeStep:
 
 
 def effect_dials_by_default(effect: PowerEffectInstance, game_data: GameData) -> bool:
-    """Whether the ruleset gives this effect a rank slider without being asked.
+    """Whether the ruleset gives this effect a rank dial without being asked.
 
     A size effect does, because a Growth 3 is not one leap to Gargantuan — it is Large,
     then Huge, then Gargantuan, and which rung you are standing on is a mid-fight
@@ -236,7 +236,7 @@ def effect_dials_by_default(effect: PowerEffectInstance, game_data: GameData) ->
     the test is the :data:`SIZE_READOUT_KIND` readout :func:`size_steps` already reads,
     so a mod's own size effect defaults to a ladder on the same terms.
 
-    Every other effect defaults to no slider — a Blast is all-or-nothing until somebody
+    Every other effect defaults to no dial — a Blast is all-or-nothing until somebody
     says otherwise.
     """
 
@@ -247,7 +247,7 @@ def effect_dials_by_default(effect: PowerEffectInstance, game_data: GameData) ->
 
 
 def effect_has_rank_dial(effect: PowerEffectInstance, game_data: GameData) -> bool:
-    """Whether this effect's card carries a rank slider at all.
+    """Whether this effect's card carries a rank dial at all.
 
     The one door both the sheet card and the Power Constructor's *Extended settings*
     checkbox go through, so the box can never say one thing and the card another.
@@ -310,7 +310,7 @@ def size_steps(
 
     # A rung is lit only where the power is actually standing — see ``effect_stands``,
     # which is the same pair ``size_shift`` asks and which the card's rank dial reads to
-    # position itself, so the strip and the slider can never disagree about where a
+    # position itself, so the strip and the dial can never disagree about where a
     # power is.
     if not effect_stands(power, effect, game_data, char):
         return tuple(steps)

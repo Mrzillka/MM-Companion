@@ -55,13 +55,11 @@ from PySide6.QtCore import (
     QAbstractAnimation,
     QEasingCurve,
     Qt,
-    QTimer,
     QVariantAnimation,
     Signal,
 )
 from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
-    QApplication,
     QButtonGroup,
     QComboBox,
     QDialog,
@@ -71,7 +69,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QPushButton,
-    QSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -149,6 +146,7 @@ from mm_companion.ui.cards import (
 from mm_companion.ui.extra_effort import ExtraEffortDialog, add_power_effort_actions
 from mm_companion.ui.power_constructor import PowerConstructorWindow
 from mm_companion.ui.power_constructor.canvas import MODE_ARRAY_DYNAMIC
+from mm_companion.ui.rank_pips import RankPips
 from mm_companion.ui.sections.stat_table import PinMenuState
 from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.simple.style import term_label
@@ -227,7 +225,7 @@ def _held_effects(node) -> list[PowerEffectInstance]:
 
     A share is held by a member of an array, and an array exists at two levels: its
     members are whole cards at the group level and single effects inside one power. The
-    slider is the same either way, so this is where the two shapes meet.
+    dial is the same either way, so this is where the two shapes meet.
     """
 
     if isinstance(node, PowerEffectInstance):
@@ -280,7 +278,7 @@ def _mode_toggle_style(locked: bool) -> str:
     ``QuickRollStar`` already carry. No ``font-size`` here: weight only.
 
     Used by the group card's mode switch alone now that the size ladder has become a
-    slider; it stays a shared helper because a segmented strip is the shape any future
+    dial; it stays a shared helper because a segmented strip is the shape any future
     one-of-N card control wants, and two of them agreeing about nothing is the bug this
     docstring exists to prevent.
     """
@@ -363,7 +361,7 @@ class _ModeToggle(QWidget):
             "Dynamic array",
             "The members share the array's points and run at the same time at reduced "
             "effectiveness, instead of switching each other off. Each alternate costs "
-            "the dearer Dynamic price, and the split is made on the cards' sliders.",
+            "the dearer Dynamic price, and the split is made on the cards' rank scales.",
         ),
         (STRUCTURE_LINKED, "Linked", "Members always activate together as one; costs add up."),
     )
@@ -420,23 +418,23 @@ class _ModeToggle(QWidget):
 
 
 class _SplitGroup:
-    """Keeps one array's share sliders honest about each other, live.
+    """Keeps one array's share dials honest about each other, live.
 
     A split is one decision spread over several controls: every member draws from the
     same pool, so moving one changes what the others may take. Without something joining
-    them each slider knew only its own bounds at the moment it was built, and the truth
-    arrived a rebuild later — which is how a handle came to move because a *sibling* had.
+    them each dial knew only its own bounds at the moment it was built, and the truth
+    arrived a rebuild later — which is how a handle came to move because a *sibling* had,
+    back when the dials were sliders.
 
-    So the dials report every notch they pass (:attr:`_RankDial.previewed`) and this
+    So each dial reports the notch it is set to (:attr:`_RankDial.previewed`) and this
     restates the rest of the array from that: each other dial's ceiling becomes what the
-    pool has left once the previewing one is paid, and the header says what is unspent.
-    Nothing here writes to the model — a drag is not a decision until it is released —
-    which is what keeps a whole gesture a single undoable step.
+    pool has left once that one is paid, and the header says what is unspent. Nothing
+    here writes to the model; the dial's own commit does.
 
     A **phantom** entry is a member seated on a share it does not hold: an unsplit array
-    runs its selected alternate anyway, and its slider says so rather than reading "Off"
+    runs its selected alternate anyway, and its dial says so rather than reading "Off"
     (:meth:`PowersSection._fallback_share`). Those points are not spoken for until the
-    player moves that handle, so they are counted as nothing while it sits where it was
+    player picks another notch, so they are counted as nothing while it sits where it was
     drawn — otherwise the first split of an untouched array would find the pool already
     eaten by a share nobody had assigned.
     """
@@ -487,10 +485,10 @@ class _SplitGroup:
     def readout_text(assigned: int, pool: int) -> str:
         """What the group header says about the pool — before a split and during one.
 
-        A static method because the header's label is built before any of the sliders
+        A static method because the header's label is built before any of the dials
         exist (:meth:`PowersSection._pool_readout`) and restated by this coordinator once
         they do; two places writing the sentence two ways is how a readout comes to
-        disagree with itself mid-drag.
+        disagree with itself.
 
         **Unsplit is a state, not an absence.** An array with nothing spread says how
         many points there are and that none of them are spoken for — which is also the
@@ -505,32 +503,39 @@ class _SplitGroup:
 
 
 class _RankDial(QWidget):
-    """A slider for the rank an effect is currently *held at*, and what that means.
+    """A scale of pips for the rank an effect is currently *held at*, and what that means.
 
     Two kinds of power want one and they want the same control. A Growth 3 is not one
     leap to Gargantuan — it is Large, then Huge, then Gargantuan, and which of the three
     you are standing at is a mid-fight decision. A Damage 10 is not all-or-nothing
-    either: a hero pulling their punches fires it at 5. So the card carries one slider
-    from ``0`` to the effect's bought rank, with a label beside it saying what the
-    current notch *is*: the **size the character becomes** for a size effect (read
-    against the wielder, so a Small character's dial starts at Medium) and the plain
-    rank otherwise. A rank is an accounting fact the card already prints; "Huge" is the
-    thing being chosen.
+    either: a hero pulling their punches fires it at 5. So the card carries one pip per
+    rank (:class:`~mm_companion.ui.rank_pips.RankPips`), with a label beside them saying
+    what the current notch *is*: the **size the character
+    becomes** for a size effect (read against the wielder, so a Small character's scale
+    starts at Medium) and the plain rank otherwise. A rank is an accounting fact the card
+    already prints; "Huge" is the thing being chosen.
+
+    It was a ``QSlider``, which looked like a stray form control on a card and had to
+    work around a drag: a slider that wrote on every tick would have deleted itself under
+    the player's thumb, so it committed on release, deferred a commit made from a groove
+    click until the mouse grab was over, and so on. A pip is picked by a click, which is
+    the whole gesture, so all of that went with it.
 
     Ranks the Size Table clamps together simply repeat their category, which is honest —
-    a Growth 8 really does spend several of its ranks at Gargantuan.
+    a Growth 8 really does spend several of its ranks at Gargantuan — and the scale
+    groups them with a wider gap so the stretch at one size is visible.
 
-    Four behaviours carried over from the strip of buttons this replaces:
+    What carried over:
 
     * **Zero is off.** Nothing is held while the power is switched off — the dial
-      reports where the power *is*, and off is nowhere — and sliding back to 0 switches
-      it off, exactly as clicking the card would, so the dial is a whole control rather
-      than one that can only turn a power on. Sliding up from 0 wakes the power at the
-      notch asked for, so going from dormant to Huge is one gesture.
-    * **It commits on release.** Every runtime setter ends in a rebuild, so a slider
-      that wrote on each tick would delete itself under the player's thumb. The label
-      tracks the drag; only ``sliderReleased`` (and a keyboard or groove step, which
-      leaves the handle up) reaches the section.
+      reports where the power *is*, and off is nowhere, every pip hollow — and reaching
+      zero switches it off, exactly as clicking the card would, so the dial is a whole
+      control rather than one that can only turn a power on. There is no Off button:
+      clicking the **last lit pip puts it out**, so a power held at rank 1 goes off on
+      that click, and any other one steps down a rank. Picking a pip on a dormant power
+      wakes it at the notch asked for, so going from dormant to Huge is one click.
+    * **Hover names, click commits.** Hovering a pip names the notch a click there would
+      land on and previews it on the scale; nothing reaches the section until a click.
     * **NoFocus**, because committing destroys the whole card: focus would land on
       whatever the tab order offers next — a table in some other block — and a
       ``QScrollArea`` scrolls to show a child that has just taken focus. That was the
@@ -543,9 +548,9 @@ class _RankDial(QWidget):
     """
 
     rankPicked = Signal(int)  #: the effect rank the player settled on (0 = switch off)
-    #: Every notch the handle passes, drag included. Nothing is written for these — they
-    #: are what lets a Dynamic array's other sliders restate their ceilings, and its
-    #: header its remaining points, while one of them is still moving.
+    #: The notch the dial has just been set to, emitted ahead of :attr:`rankPicked`.
+    #: Nothing is written for it — it is what lets a Dynamic array's other dials restate
+    #: their ceilings, and its header its remaining points.
     previewed = Signal(int)
 
     def __init__(
@@ -559,6 +564,7 @@ class _RankDial(QWidget):
     ) -> None:
         super().__init__(parent)
         self._labels = labels
+        maximum = max(0, maximum)
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(int(theme.metric("space.sm")))
@@ -568,35 +574,15 @@ class _RankDial(QWidget):
         caption_label.setStyleSheet(muted_style())
         row.addWidget(caption_label)
 
-        self._slider = QSlider(Qt.Orientation.Horizontal)
-        self._slider.setRange(0, max(0, maximum))
-        self._slider.setSingleStep(1)
-        self._slider.setPageStep(1)
-        self._slider.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self._slider.setTickInterval(1)
-        # The top of the groove. For a Dynamic member this moves as its siblings give
-        # points back, so the right-hand end of the track *is* the most it can be set
-        # to. See :meth:`set_ceiling`.
-        self._ceiling = max(0, maximum)
-        self._slider.setValue(max(0, min(maximum, current)))
-        self._slider.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not interactive)
-        self._slider.setCursor(
-            Qt.CursorShape.PointingHandCursor if interactive else Qt.CursorShape.ArrowCursor
-        )
-        guard_wheel(self._slider)  # don't let a card's slider steal the page wheel
-        # *After* the wheel guard, which asks for StrongFocus so a focused widget keeps
-        # its own wheel. Focus is the one thing this slider must never take: committing
-        # destroys the card, and a QScrollArea chases whatever takes focus next.
-        self._slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        row.addWidget(self._slider, 1)
+        self._pips = RankPips(maximum, max(0, min(maximum, current)), labels, interactive)
+        self._pips.picked.connect(self.pick)
+        self._pips.hovered.connect(self._on_hovered)
+        row.addWidget(self._pips)
 
-        self._value = QLabel(self._label_for(self._slider.value()))
+        self._value = QLabel()
         row.addWidget(self._value)
-
-        # Connected *after* the initial value, so seeding the dial never reads as the
-        # player having moved it.
-        self._slider.valueChanged.connect(self._on_value_changed)
-        self._slider.sliderReleased.connect(self._commit)
+        row.addStretch(1)
+        self._show(self._pips.value())
 
     def caption(self) -> str:
         """What this dial is *of* — "Size", "Share", or the effect's own name."""
@@ -604,71 +590,58 @@ class _RankDial(QWidget):
         return self._caption_text
 
     def value(self) -> int:
-        """The notch the handle is on right now, committed or merely being dragged."""
+        """The notch the dial stands on."""
 
-        return self._slider.value()
+        return self._pips.value()
 
     def ceiling(self) -> int:
         """The highest notch currently reachable."""
 
-        return self._ceiling
+        return self._pips.ceiling()
 
     def set_ceiling(self, ceiling: int) -> None:
-        """Move the end of the groove to the highest notch currently reachable.
+        """End the reachable part of the scale at the highest notch currently affordable.
 
-        What a Dynamic member's slider needs: the track has to *end* where the pool ends,
-        so the right-hand end is the most this member can be set to and the divisions on
-        it are the choices it actually has. Free a point elsewhere and this slider gains
-        a division; spend one and it loses one. A member whose siblings hold everything
-        is left with the single notch it is sitting on rather than a long track most of
-        which refuses the handle — a slider that can be dragged into a region it then
-        rejects is the thing this exists to avoid.
+        What a Dynamic member's dial needs: the reachable pips have to *end* where the
+        pool ends, so the last hollow pip is the most this member can be set to and the
+        dotted ones beyond it are rungs its siblings' shares have spent. Free a point
+        elsewhere and a dotted pip becomes pickable; spend one and one goes dotted. A
+        member whose siblings hold everything is left with only the pip it is sitting
+        on, which a click puts out.
 
         The **index space does not move**: the notch list is the member's whole ladder
         and what is affordable is always a prefix of it, so notch *n* buys the same rank
-        for the same points however far the end has travelled, and the handle keeps its
-        meaning while a sibling is still being dragged.
+        for the same points however far the end has travelled.
 
-        Never below the notch the handle is seated on. A rebuild can move the pool under
-        a split already made, and an end that cut into a stored share would spend it the
+        Never below the notch the dial is seated on. A rebuild can move the pool under a
+        split already made, and an end that cut into a stored share would spend it the
         moment the dial was touched.
         """
 
-        self._ceiling = max(0, min(ceiling, len(self._labels) - 1))
-        self._ceiling = max(self._ceiling, self._slider.value())
-        self._slider.setMaximum(self._ceiling)
+        ceiling = max(0, min(ceiling, len(self._labels) - 1))
+        self._pips.set_ceiling(max(ceiling, self._pips.value()))
+
+    def pick(self, notch: int) -> None:
+        """Set the dial to *notch* and report it — what a click on a pip does."""
+
+        notch = max(0, min(notch, self.ceiling()))
+        if notch == self._pips.value():
+            return
+        self._pips.set_value(notch)
+        self._show(notch)
+        self.previewed.emit(notch)
+        self.rankPicked.emit(notch)
 
     def _label_for(self, rank: int) -> str:
         return self._labels.get(rank, f"Rank {rank}")
 
-    def _on_value_changed(self, value: int) -> None:
-        self._value.setText(self._label_for(value))
-        self.previewed.emit(value)
-        # A drag reports every notch it passes; only the one it stops on is a decision.
-        # A keyboard or groove step leaves the handle up, and *is* one.
-        if not self._slider.isSliderDown():
-            self._commit()
+    def _show(self, notch: int) -> None:
+        """Say what *notch* is — "Off" at zero, since no pip is lit to say it."""
 
-    def _commit(self) -> None:
-        """Report the notch settled on, once it is safe to be deleted for it.
+        self._value.setText(self._label_for(notch))
 
-        Every commit ends in a rebuild that deletes this very widget. A **groove click**
-        reaches :meth:`_on_value_changed` from inside ``mousePressEvent``, so committing
-        straight through tore the slider down while it still held the mouse grab: the
-        rest of that gesture went nowhere, and a queued auto-repeat could re-fire against
-        a stale reading of the pool. So a commit made while a button is still held is
-        deferred a turn of the event loop, letting the press finish first.
-
-        Only that case. A release has already cleared the button, and a keyboard step or
-        a programmatic ``setValue`` never had one — those commit straight through, which
-        keeps the dial synchronous everywhere it was before.
-        """
-
-        value = self._slider.value()
-        if QApplication.mouseButtons() != Qt.MouseButton.NoButton:
-            QTimer.singleShot(0, lambda: self.rankPicked.emit(value))
-            return
-        self.rankPicked.emit(value)
+    def _on_hovered(self, notch: int) -> None:
+        self._show(notch if notch >= 0 else self._pips.value())
 
 
 class _EffectSelector(QWidget):
@@ -783,7 +756,7 @@ class PowersSection(HeldRebuild, TitledSection):
         # fully off). Survives the card teardown a toggle triggers, so the replacement
         # card can ease on from where its predecessor was — see _show_activation.
         self._card_off: dict[str, float] = {}
-        # Per-array share-slider coordinators, keyed by group id; see :class:`_SplitGroup`,
+        # Per-array share-dial coordinators, keyed by group id; see :class:`_SplitGroup`,
         # and the header labels waiting to be handed to them.
         self._splits: dict[str, _SplitGroup] = {}
         self._pool_labels: dict[str, QLabel] = {}
@@ -1157,7 +1130,7 @@ class PowersSection(HeldRebuild, TitledSection):
         inner.moveRequested.connect(self._on_move)
         for child in group.children:
             inner.add_entry(child.id, self._render_node(child, group, child_interactive))
-        # Now that the members' sliders exist, give the header's readout to the thing
+        # Now that the members' dials exist, give the header's readout to the thing
         # that counts it down while one of them is moving.
         split = self._splits.get(group.id)
         readout = self._pool_labels.get(group.id)
@@ -1459,14 +1432,14 @@ class PowersSection(HeldRebuild, TitledSection):
         """How much of a Dynamic array's pool is currently spread, or ``None``.
 
         A readout, not a control: the split itself is made on each member's own rank
-        slider, which is the point of moving it there — a member's share and the rank
+        dial, which is the point of moving it there — a member's share and the rank
         that share buys are one gesture instead of a number typed into a dialog and a
         rank worked out afterwards. What the header still owes the player is the one
-        number no single slider can show, which is how much of the pool is spoken for.
+        number no single dial can show, which is how much of the pool is spoken for.
 
         Leaving part of a pool unassigned stays legal, so nothing is tinted for it: this
         says what is spent and what is left, not what is wrong. The one thing it does
-        flag is a split that has come to *more* than the pool, which no slider can
+        flag is a split that has come to *more* than the pool, which no dial can
         produce but a rebuild can — editing the array moves the pool underneath a split
         already made.
 
@@ -1476,10 +1449,10 @@ class PowersSection(HeldRebuild, TitledSection):
         many points there were to spread until they had already spread some. An unsplit
         array therefore states the pool and says it is not split, which is also the only
         place a Dynamic array announces *which of its two regimes it is in* — click a
-        card to pick one alternate, or move a slider and run several at once.
+        card to pick one alternate, or pick a pip and run several at once.
 
-        It is handed to the array's :class:`_SplitGroup`, so it counts down while a
-        member's slider is still moving rather than a rebuild later.
+        It is handed to the array's :class:`_SplitGroup`, which restates it whenever a
+        member's dial is set.
         """
 
         if group.mode != STRUCTURE_ARRAY or not any(c.dynamic for c in group.children):
@@ -1490,10 +1463,11 @@ class PowersSection(HeldRebuild, TitledSection):
         label = QLabel()
         label.setToolTip(
             "This array's points are shared across its Dynamic members, which run at "
-            "the same time at reduced effectiveness. Move a member's slider to give it "
-            "a share of the pool; hand the whole pool back with the button beside this."
+            "the same time at reduced effectiveness. Pick a pip on a member's rank "
+            "scale to give it a share of the pool; hand the whole pool back with the "
+            "button beside this."
         )
-        # A group's header is built before its members' cards, so their sliders have not
+        # A group's header is built before its members' cards, so their dials have not
         # registered yet and the coordinator does not exist. Say the truth now and let
         # :meth:`_make_group_card` hand the label over once they have.
         assigned = sum(c.dynamic_points or 0 for c in group.children if c.dynamic)
@@ -1569,8 +1543,9 @@ class PowersSection(HeldRebuild, TitledSection):
         label.setStyleSheet(muted_style())
         label.setToolTip(
             "This power's points are shared across its Dynamic effects, which run at "
-            "the same time at reduced effectiveness. Move an effect's slider to give it "
-            "a share of the pool; hand the whole pool back with the button beside this."
+            "the same time at reduced effectiveness. Pick a pip on an effect's rank "
+            "scale to give it a share of the pool; hand the whole pool back with the "
+            "button beside this."
         )
         self._pool_labels[power.id] = label
         return label
@@ -1867,7 +1842,7 @@ class PowersSection(HeldRebuild, TitledSection):
         if selector is not None:
             layout.addWidget(selector)
 
-        # A Dynamic member's share of its array's pool, made on the same slider a rank
+        # A Dynamic member's share of its array's pool, made on the same dial a rank
         # is: the share and the rank it buys are one gesture rather than a number typed
         # into a dialog and a rank worked out afterwards.
         share = self._share_dial(power, parent, interactive)
@@ -1887,7 +1862,7 @@ class PowersSection(HeldRebuild, TitledSection):
             effect_split.set_readout(effect_readout)
             effect_split.restate()
 
-        # A dialled effect is a range, not a switch: a slider over the ranks the wielder
+        # A dialled effect is a range, not a switch: a dial over the ranks the wielder
         # can hold it at, under the effect breakdown that explains what each notch is
         # worth and above the dice, with the rest of the mid-play controls.
         # Every dial stays at full strength while the card recedes: zero is off and
@@ -2002,8 +1977,8 @@ class PowersSection(HeldRebuild, TitledSection):
 
         # The effect-level twin of a group header's pool line. An array exists at two
         # levels and so does its pool, but only the group level ever said so: a power
-        # whose own effects were split coordinated their sliders live and stated the
-        # pool nowhere, which is the one number no single slider can show.
+        # whose own effects were split coordinated their dials live and stated the
+        # pool nowhere, which is the one number no single dial can show.
         pool = self._effect_pool_readout(power)
         if pool is not None:
             layout.addWidget(pool)
@@ -2085,10 +2060,10 @@ class PowersSection(HeldRebuild, TitledSection):
     def _share_dial(
         self, node: PowerNode, parent: PowerGroup | None, interactive: bool
     ) -> QWidget | None:
-        """The slider a Dynamic member's share is made on — and its **only** slider.
+        """The dial a Dynamic member's share is made on — and its **only** dial.
 
         The split used to be a modal dialog of spin boxes reached from the group header.
-        It is the same slider a rank is dialled on now, for the reason the dialog itself
+        It is the same dial a rank is dialled on now, for the reason the dialog itself
         had to keep explaining: a share is only ever interesting for the rank it buys, so
         the notches *are* the ranks and the points are what each one spends
         (:func:`~mm_companion.core.rules.dynamic_share_steps`). A member costing 2 points
@@ -2096,16 +2071,16 @@ class PowersSection(HeldRebuild, TitledSection):
         stop is a legal price for both of them.
 
         It **replaces** the rank dial rather than sitting beside it — :meth:`_rank_dials`
-        stands down for a member under a share. Two sliders each claiming the same rank
+        stands down for a member under a share. Two dials each claiming the same rank
         deadlocked: the rank one wrote a value the share then clamped away, and because
         the clamp was a minimum that written-and-clamped value survived as a floor the
         share could no longer lift.
 
-        The groove **ends where the pool does**: a member can be dragged to its
-        right-hand end and no further, and it gains a division for every point a sibling
-        hands back. A Growth 6 holding all six of a six-point pool leaves an Elongation 3
-        with a slider of one notch; drop the Growth a rung and the Elongation has two.
-        The slider is always drawn, even at one notch — it used to disappear outright
+        The reachable pips **end where the pool does**: a member can be set to its last
+        hollow pip and no further, and one dotted pip turns hollow for every point a
+        sibling hands back. A Growth 6 holding all six of a six-point pool leaves an
+        Elongation 3 with every pip dotted; drop the Growth a rung and it has one.
+        The dial is always drawn, even at one notch — it used to disappear outright
         once its siblings had spent the pool, with no way to give it points again.
         """
 
@@ -2128,7 +2103,7 @@ class PowersSection(HeldRebuild, TitledSection):
         )
 
     def _effect_share_dials(self, power: Power, interactive: bool) -> list[QWidget]:
-        """The same slider one level down: a power's *own* Dynamic effects, sharing its pool.
+        """The same dial one level down: a power's *own* Dynamic effects, sharing its pool.
 
         An array exists at two levels and so does its pool, so the control does too. The
         arithmetic is identical — only what holds the share differs, an effect rather
@@ -2175,28 +2150,28 @@ class PowersSection(HeldRebuild, TitledSection):
         split: _SplitGroup | None = None,
         fallback: tuple[int, int | None] = (0, None),
     ) -> QWidget | None:
-        """One share slider, whatever holds the share.
+        """One share dial, whatever holds the share.
 
         *affordable* is the most this member could pay for — what is unassigned plus what
-        it already holds — and it is where the groove ends, so the right-hand end of the
-        track is always the most the player can ask for. A share stored above it (a
-        rebuild moved the pool under a split already made) still seats the handle at its
+        it already holds — and it is where the reachable pips end, so the last hollow pip
+        is always the most the player can ask for. A share stored above it (a rebuild
+        moved the pool under a split already made) still seats the dial at its
         true notch rather than quietly reading low, so the number on the card and the
         number charged against the pool are the same one.
 
         *fallback* is the notch a member running on **no** share at all is standing on —
         an unsplit array's selected alternate (:meth:`_fallback_share`). It is a reading
-        rather than a claim, so it is what the handle is drawn on and what a commit
+        rather than a claim, so it is what the dial is drawn on and what a commit
         landing back on it counts as *no change*, while the pool goes on being counted
-        without it until the player actually moves the handle.
+        without it until the player actually picks another notch.
 
         **And its label says so**, by naming the rank without a price. Every other notch
-        is priced because moving the handle there spends that many points; the one a
+        is priced because picking it spends that many points; the one a
         member was *found* on spends nothing, and reading ``10 PP · Growth 6`` under a
         header saying the array is not split invited exactly the wrong conclusion — that
         this member was holding the whole pool. :class:`_SplitGroup` already counts a
         phantom as zero (:meth:`_SplitGroup._held`); this is the label agreeing with the
-        arithmetic. The price appears the moment the handle moves, which is the moment
+        arithmetic. The price appears the moment another notch is picked, which is the moment
         the points are genuinely spoken for.
         """
 
@@ -2269,7 +2244,7 @@ class PowersSection(HeldRebuild, TitledSection):
         Written only where it is doing work — a notch that stands exactly where its share
         already reaches stores nothing — so a file gains a ``current_rank`` only for a
         member deliberately held below its ceiling, and a value left behind by a rank dial
-        the effect had before it joined the pool is cleared the first time the slider is
+        the effect had before it joined the pool is cleared the first time the dial is
         touched.
         """
 
@@ -2292,7 +2267,7 @@ class PowersSection(HeldRebuild, TitledSection):
         is not split at all, and :func:`~mm_companion.core.rules.live_array_children`
         then falls back to running its **selected alternate** at the rank it stands at;
         one level down, :func:`~mm_companion.core.rules.effect_is_selected` says the same
-        of a power's own effects. That member is running, so its one slider has to say
+        of a power's own effects. That member is running, so its one dial has to say
         where — seating it on "Off" is the same lie the zero notch was fixed for at the
         other end (see :meth:`_on_share_dialled`), and the one an untouched Dynamic array
         told about every member it was running.
@@ -2326,7 +2301,7 @@ class PowersSection(HeldRebuild, TitledSection):
         return (dynamic_share_points(effects[0].rank, rank, full), rank)
 
     def _split_for(self, host, pool: int) -> _SplitGroup:
-        """The coordinator joining one array's share sliders, made on first ask.
+        """The coordinator joining one array's share dials, made on first ask.
 
         Keyed by the host's id, so a group of cards and a power's own effects each get
         their own — an array exists at two levels and the two pools are separate.
@@ -2341,7 +2316,7 @@ class PowersSection(HeldRebuild, TitledSection):
     def _share_caption(self, node, power: Power | None) -> str:
         """What the share dial calls itself — the same word the rank dial would use.
 
-        A Dynamic member's slider *is* its rank slider, so it answers to the same name: a
+        A Dynamic member's dial *is* its rank dial, so it answers to the same name: a
         size effect's ladder is captioned "Size" whether or not a pool is rationing it,
         and a member holding more than one effect is captioned "Share" because its label
         already names them all.
@@ -2356,13 +2331,13 @@ class PowersSection(HeldRebuild, TitledSection):
         return "Rank"
 
     def _share_notches(self, node, full: int, held: int) -> list[tuple[int, int | None]]:
-        """Every ``(share, rank)`` this member's slider can stop on, cheapest first.
+        """Every ``(share, rank)`` this member's dial can stop on, cheapest first.
 
         **One notch per rank, not per price.** A share buys a ceiling rather than a rank,
         and the two are different ladders wherever a member does not cost a round number
         of points a rank: five points of a six-rank member costing five buys all six, and
         nothing at all buys exactly five. Pricing the notches meant that rank simply was
-        not on the slider — a Growth could be Large or Gargantuan and never Huge, which
+        not on the dial — a Growth could be Large or Gargantuan and never Huge, which
         for a size effect is not a rounding error but a rung the player wanted (bigger is
         easier to hit and impossible to hide). So every rank gets a notch, priced at the
         cheapest share that *reaches* it, and the notch carries the rank it stands at:
@@ -2440,7 +2415,7 @@ class PowersSection(HeldRebuild, TitledSection):
         "5 PP · Gargantuan" beside it spends the same points on the next rung.
 
         **A size effect is named by the size it becomes**, exactly as the rank dial this
-        slider replaces names it (:meth:`_dial_labels`). Moving a Growth into a Dynamic
+        dial replaces names it (:meth:`_dial_labels`). Moving a Growth into a Dynamic
         array used to swap its ladder of Large/Huge/Gargantuan for bare rank numbers, so
         the one control the player had left said less than the one it replaced — and
         "Huge" is the thing being chosen, while the rank is an accounting fact the card
@@ -2493,7 +2468,7 @@ class PowersSection(HeldRebuild, TitledSection):
         index: int,
         seated: int | None = None,
     ) -> None:
-        """Hand a member the share its slider was left on — and at zero, switch it off.
+        """Hand a member the share its dial was left on — and at zero, switch it off.
 
         Runtime, so it emits ``runtimeChanged`` like the rank dial it replaces. A notch at
         zero is stored as *no share at all* rather than a zero — the two behave
@@ -2502,30 +2477,30 @@ class PowersSection(HeldRebuild, TitledSection):
         it was before anyone split the pool. That is also the way back to an ordinary
         array, which is what clearing the split used to be a button for.
 
-        **Zero is off, the same as it is on the rank dial this slider replaces**, and it
+        **Zero is off, the same as it is on the rank dial this dial replaces**, and it
         has to be said out loud here. Handing a share back ordinarily drops the member
         out of :func:`~mm_companion.core.rules.live_array_children` all by itself — but
         not the *last* one: with every share back the array falls back to its selected
         alternate at full rank, so a Growth parked on "Off" came straight back on and the
-        sheet went on reading Gargantuan under a slider saying the power was off. So the
+        sheet went on reading Gargantuan under a dial saying the power was off. So the
         notch flips the member's own master switches too, exactly as a click on its card
         would, and a notch above zero flips them back — every switch the card flips
         (:meth:`_set_member_running`), and only on this member's own leaves, which is
         what keeps a share from switching off a Linked group it happens to sit inside.
 
-        A commit that lands where it started rebuilds nothing: the deferred commit and
-        the live preview between them can both report a notch the model already holds,
-        and tearing every card down to write the number that is already there is how a
-        gesture ends up fighting the widget making it. *Where it started* is the notch the
-        handle was **drawn** on (:meth:`_build_share_dial` passes its index back) and the
+        A commit that lands where it started rebuilds nothing — tearing every card down
+        to write the number that is already there would be a rebuild for nothing. A click
+        always moves the dial, so this is insurance for a programmatic pick rather than
+        a gesture. *Where it started* is the notch the
+        dial was **drawn** on (:meth:`_build_share_dial` passes its index back) and the
         switch: the share it holds for a member the pool is rationing, and the share it is
         running on for one the fallback woke (:meth:`_fallback_share`) — so leaving that
-        handle where it sits keeps the array unsplit, while dragging it down to zero still
+        dial where it sits keeps the array unsplit, while stepping it down to zero still
         puts the member down.
 
         A notch is a **share and a rank**, and both are written: two notches can spend the
         same points and stop at different ranks (:meth:`_share_notches`), so the index is
-        what a commit is compared by and :meth:`_hold_member` stores the rank the handle
+        what a commit is compared by and :meth:`_hold_member` stores the rank the dial
         stopped at whenever it is below what those points buy.
         """
 
@@ -2620,7 +2595,7 @@ class PowersSection(HeldRebuild, TitledSection):
 
         One way in, and the block names neither Growth nor Damage:
         :func:`~mm_companion.core.rules.effect_has_rank_dial`, which is the *Add a rank
-        slider* checkbox in the constructor's Extended settings when the player has
+        dial* checkbox in the constructor's Extended settings when the player has
         touched it and the ruleset's own answer when they have not — and the ruleset
         says yes to anything carrying a size readout, so a mod's own size effect gets a
         ladder without touching this file. That is the whole of the rule now: a Growth's
@@ -2636,7 +2611,7 @@ class PowersSection(HeldRebuild, TitledSection):
         is held by its own power (a Dynamic array of effects) or by the card it sits on
         (a Dynamic member of an array group). Its rank is not the player's to set
         directly; the share dial is the control that moves it, and it is deliberately the
-        only one. Two sliders claiming one rank is what made a Growth's ladder snap back:
+        only one. Two dials claiming one rank is what made a Growth's ladder snap back:
         this one wrote a rank the share then clamped away, and the clamped value stayed
         behind as a floor the share could not lift.
 
@@ -2661,7 +2636,7 @@ class PowersSection(HeldRebuild, TitledSection):
             caption = "Size" if sized else "Rank"
             if len(power.effects) > 1:
                 caption = effect_title(effect, self._character, self._data)
-            # Where the handle sits. A *size* effect is positioned by whether it is
+            # Where the dial stands. A *size* effect is positioned by whether it is
             # standing on the sheet — a Growth that is switched off is nowhere, not at
             # rank 1. An instant effect (a Damage) never "stands" at all, so asking the
             # same question would peg every blast card at Off; what matters there is
@@ -2725,7 +2700,7 @@ class PowersSection(HeldRebuild, TitledSection):
             if role != "select":
                 self._set_power_active(power, False)  # rebuilds and emits
             else:
-                self._rebuild_list()  # put the handle back where the array left it
+                self._rebuild_list()  # put the dial back where the array left it
             return
         effect.current_rank = rank
         if role == "select" and isinstance(parent, PowerGroup):

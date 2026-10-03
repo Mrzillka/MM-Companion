@@ -431,10 +431,23 @@ had their look. Three things fall out of it:
 - **`_abandon_roll` does not settle it.** A session roll that never came back is one
   the player will want to throw again; taking the trait away would send them back to
   the sheet to click the stat a second time.
-- **A named quick roll keeps its chip**, because it does not go through `roll_spec`:
-  its chip is the caption for slider values that stay set, so the panel genuinely
-  still *is* that quick roll once the die has settled. (Its DC is not part of that —
-  see the quick-roll notes above.)
+- **A named quick roll lets go of its chip too**, though it does not go through
+  `roll_spec`: `_apply_quick_roll` marks its caption transient itself. It used to keep
+  it, as the caption for slider values that stayed set — but the sliders are now spent
+  by the roll (below), so a chip left standing would be naming numbers that are gone.
+
+**And the sliders are spent by the roll.** Bonus and Penalty are a circumstance of
+*one* check — cover against this attack, Extra Effort's "+2 on a single check" — yet a
+value left in a slider used to ride along on every roll after it, unnoticed.
+`_spend_extras` zeroes both beside each `_settle_spec`, i.e. at the end of both paths
+that produce a number and **not** in `_abandon_roll`, for the same reason the chip
+survives there. While either holds anything, `_mark_extras` tints its label and spin
+box (`tint.better` / `tint.worse`, bold) so a pending charge is as visible as a loaded
+trait. Only `color` and weight go on the spin box — a `border`, `padding` or
+`background` there trips rule 4 of the theme notes. Note what this did to tests that
+call `_start_roll()` and then `_finish_roll()` under a zero `ROLL_DURATION_MS`: the
+first call already finishes the roll, so that pair is *two* rolls, and the second now
+has no bonus — call one or the other.
 
 The other half of the same guard is that a loaded chip is **loud** — an `accent.dice`
 fill inside an `accent.dice` border (`#specChip`, scoped to the object name, since a
@@ -489,8 +502,8 @@ clearing is precisely what `_settle_spec` does one line after the roll wrote one
   check" (p21) into the bonus slider through `DiceSection.add_bonus`. It is the one Extra
   Effort benefit that lands on the *next roll* rather than on the build, and nothing
   tracks which roll that will be — so it goes where the player would have typed it, on
-  top of whatever is already set, and dragging the slider back is how it is spent or
-  dropped. It is **not** quiet, for `load-requested`'s reason: a player who has just paid
+  top of whatever is already set, and the next roll spends it (`_spend_extras`, above);
+  dragging the slider back is how it is dropped unused. It is **not** quiet, for `load-requested`'s reason: a player who has just paid
   a rung of fatigue for it is about to roll, and putting it into a Dice block they cannot
   see would charge them for something they never got.
 - `DiceRollerPanel.roll_spec(spec)` / `load_spec(spec)` are the public way in. A

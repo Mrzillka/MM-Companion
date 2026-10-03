@@ -665,12 +665,16 @@ class DiceRollerPanel(ReflowBox, QWidget):
 
         self._bonus_slider, self._bonus_spin = self._make_slider_spin(0, 20)
         self._penalty_slider, self._penalty_spin = self._make_slider_spin(0, 20)
+        self._bonus_label = QLabel("Bonus")
+        self._penalty_label = QLabel("Penalty")
+        self._bonus_spin.valueChanged.connect(self._mark_extras)
+        self._penalty_spin.valueChanged.connect(self._mark_extras)
 
-        grid.addWidget(QLabel("Bonus"), 1, 0)
+        grid.addWidget(self._bonus_label, 1, 0)
         grid.addWidget(self._bonus_slider, 1, 1)
         grid.addWidget(self._bonus_spin, 1, 2)
 
-        grid.addWidget(QLabel("Penalty"), 2, 0)
+        grid.addWidget(self._penalty_label, 2, 0)
         grid.addWidget(self._penalty_slider, 2, 1)
         grid.addWidget(self._penalty_spin, 2, 2)
 
@@ -849,6 +853,35 @@ class DiceRollerPanel(ReflowBox, QWidget):
         slider.valueChanged.connect(spin.setValue)
         spin.valueChanged.connect(slider.setValue)
         return slider, spin
+
+    def _mark_extras(self) -> None:
+        """Tint the Bonus and Penalty rows while either holds anything.
+
+        The sliders are spent by the next roll (:meth:`_spend_extras`), so a value
+        sitting in one is a pending charge on that roll and has to be as visible as
+        a loaded trait. Only ``color`` and weight go on the spin box: a ``border``,
+        ``padding`` or ``background`` there would lay its edit field over the arrows
+        (rule 4 in the theme notes).
+        """
+        for label, spin, token in (
+            (self._bonus_label, self._bonus_spin, "tint.better"),
+            (self._penalty_label, self._penalty_spin, "tint.worse"),
+        ):
+            style = tinted_style(token) if spin.value() > 0 else ""
+            label.setStyleSheet(style)
+            spin.setStyleSheet(f"QSpinBox {{ {style} }}" if style else "")
+
+    def _spend_extras(self) -> None:
+        """Zero the sliders once the roll they were set for has produced a number.
+
+        A bonus or penalty is a circumstance of *one* check — cover against this
+        attack, Extra Effort's "+2 on a single check" — so a value left standing in
+        the slider used to ride along silently on every later roll. Called beside
+        :meth:`_settle_spec` and for the same reason; not from :meth:`_abandon_roll`,
+        whose roll the player will want to throw again as it was.
+        """
+        self._bonus_spin.setValue(0)
+        self._penalty_spin.setValue(0)
 
     def _build_die(self) -> QWidget:
         """The die and the number it rolled — one part, since the two belong together.
@@ -1157,6 +1190,8 @@ class DiceRollerPanel(ReflowBox, QWidget):
         the next roll rather than on the build. Added to whatever is set rather than
         replacing it: the player may already have dialled in a circumstance bonus, and
         taking that away would be charging them a rung of fatigue to lose two points.
+        The next roll spends it (:meth:`_spend_extras`), which is what "a single check"
+        asks for.
         """
 
         self._bonus_spin.setValue(
@@ -1351,6 +1386,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._unlock_inputs()
         # Last, so everything above still sees what was rolled.
         self._settle_spec()
+        self._spend_extras()
 
     def _reveal_session_roll(self, roll: dict) -> None:
         """Show the number the session rolled for us and let go of the inputs."""
@@ -1382,6 +1418,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
         # is placed by the cue above rather than by the flush the close performs.
         self.awaitingOwnRoll.emit(False)
         self._settle_spec()
+        self._spend_extras()
 
     def _abandon_roll(self, message: str) -> None:
         """Give up on a session roll that never came back.
@@ -1612,7 +1649,10 @@ class DiceRollerPanel(ReflowBox, QWidget):
         A *named* chip also loads its name as a spec, so a saved roll reaches the
         table under that name instead of anonymously. Its numbers stay in the
         sliders where they have always been, so the spec carries no modifier of its
-        own — the chip is a caption, not a second bonus.
+        own — the chip is a caption, not a second bonus. That caption is **transient**
+        like :meth:`roll_spec`'s: the roll spends the sliders it names
+        (:meth:`_spend_extras`), so a chip left standing would be captioning numbers
+        that are no longer there.
 
         **The DC box is left exactly as it is.** A quick roll does not carry one
         (:func:`~mm_companion.ui.roll_history.roll_parameters`), and the difficulty
@@ -1623,6 +1663,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._penalty_spin.setValue(entry["penalty"])
         name = str(entry.get("name", "")).strip()
         self.load_spec(RollSpec(label=name) if name else None)
+        self._transient = bool(name)
         self._start_roll()
 
     def _rebuild_quick_strip(self) -> None:

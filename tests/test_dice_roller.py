@@ -140,6 +140,73 @@ def test_roll_with_dc_shows_degree_of_success(
     assert "Nat 20" in view.panel._readout.text()
 
 
+def test_a_roll_spends_the_bonus_and_penalty(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A circumstance modifier is for one check, not for every roll after it."""
+    monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 12)
+    view = DiceRollerView()
+    view.panel._bonus_spin.setValue(4)
+    view.panel._penalty_spin.setValue(1)
+
+    view.panel._finish_roll()
+
+    # The roll itself still carried them …
+    assert view._local_history.cards()[0]._params["bonus"] == 4
+    # … and then they were gone.
+    assert view.panel._bonus_spin.value() == 0
+    assert view.panel._penalty_spin.value() == 0
+
+
+def test_an_abandoned_roll_keeps_its_bonus(qapp: QApplication) -> None:
+    """Nobody answered, so the player will throw it again — as it was."""
+    view = DiceRollerView()
+    view.panel._bonus_spin.setValue(3)
+    view.panel._rolling = True
+
+    view.panel._abandon_roll("No answer")
+
+    assert view.panel._bonus_spin.value() == 3
+
+
+def test_a_set_bonus_or_penalty_is_highlighted(qapp: QApplication) -> None:
+    view = DiceRollerView()
+    panel = view.panel
+    assert panel._bonus_label.styleSheet() == ""
+    assert panel._penalty_spin.styleSheet() == ""
+
+    panel._bonus_spin.setValue(2)
+    assert "bold" in panel._bonus_label.styleSheet()
+    assert "bold" in panel._bonus_spin.styleSheet()
+    assert panel._penalty_label.styleSheet() == ""
+
+    panel._penalty_spin.setValue(1)
+    assert "bold" in panel._penalty_label.styleSheet()
+
+    panel._bonus_spin.setValue(0)
+    assert panel._bonus_label.styleSheet() == ""
+    assert panel._bonus_spin.styleSheet() == ""
+
+
+def test_a_named_quick_roll_lets_go_of_its_name_once_rolled(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Its sliders are spent, so a chip left captioning them would be lying."""
+    monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
+    view = DiceRollerView()
+    view.panel._add_quick_roll({"bonus": 9, "penalty": 0}, name="Athletics")
+
+    view.panel._apply_quick_roll(view.panel._quick_rolls[0])
+
+    assert view._local_history.cards()[0]._params == {
+        "name": "Athletics",
+        "bonus": 9,
+        "penalty": 0,
+    }
+    assert view.panel.current_spec() is None
+    assert view.panel._bonus_spin.value() == 0
+
+
 def test_saving_a_roll_adds_a_persisted_quick_roll(qapp: QApplication) -> None:
     view = DiceRollerView()
 

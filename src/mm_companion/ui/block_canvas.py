@@ -29,6 +29,7 @@ from PySide6.QtCore import (
     QPoint,
     QPropertyAnimation,
     QRect,
+    Qt,
     QTimer,
     Signal,
 )
@@ -260,6 +261,14 @@ class BlockCanvas(QWidget):
     ) -> None:
         super().__init__(parent)
         self.setObjectName("blockCanvas")
+        # The page is laid out from the top, so a change in its height moves nothing
+        # above the row that changed. Qt does not know that: it repaints the whole of
+        # a resized widget, every block on it included, unless told its contents are
+        # static. Without this, a power card easing on or off (its type and padding
+        # shrink, so the row's height moves every frame) repainted the entire visible
+        # sheet on every frame of the ease. The rows that really move still repaint;
+        # they are moved, and a moved child repaints itself. Set on the RowStack too.
+        self.setAttribute(Qt.WidgetAttribute.WA_StaticContents, True)
 
         self._sizes = block_sizes
         self._default_rows = default_rows

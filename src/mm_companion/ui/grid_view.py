@@ -560,6 +560,9 @@ class RowStack(QWidget):
         # first drag and destroyed on release (see :class:`_DetentMark`).
         self._mark: _DetentMark | None = None
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        # Top-down like the canvas holding it, and for the canvas's reason (see
+        # BlockCanvas.__init__): a row changing height must not repaint the rows above.
+        self.setAttribute(Qt.WidgetAttribute.WA_StaticContents, True)
 
     def set_rows(self, rows: Sequence[QWidget], heights: Sequence[int]) -> None:
         """Show *rows*, the nth at ``heights[n]`` pixels (or its content at zero)."""

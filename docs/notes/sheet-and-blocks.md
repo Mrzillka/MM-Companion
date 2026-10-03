@@ -474,6 +474,14 @@ band is not what they are about.
   `float_block`, `show_block`/`hide_block`, `pin_block`/`unpin_block`,
   `set_block_on_top`, `arrangement`, `apply_arrangement`, `default_arrangement` are
   the headless-testable seams.
+- **The canvas and its `RowStack` are `WA_StaticContents`, so a row changing height
+  repaints only what moved.** The page is laid out from the top, so when one row
+  changes height nothing above it moves. But Qt repaints the *whole* of a resized widget
+  unless it is told its contents are static, and the canvas's area is every block on the
+  page. A power card switched on or off eases its type and padding, so the Powers row's
+  height moves on every frame of the ease, and each of those frames repainted every
+  block on the sheet. With the attribute set, the rows under the change still repaint
+  (they moved, and a moved child repaints itself); the rows above it do not.
 - **`minimumSizeHint` on the canvas is the page's shape rule, and it is asymmetric.**
   As narrow as you like (so every row can be dragged in and its blocks reflow) and as
   tall as its rows (so the page overflows the viewport and *scrolls* rather than

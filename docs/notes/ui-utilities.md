@@ -110,6 +110,18 @@ through rather than reinvent. When building new sheet widgets, use it:
   back — twice, because Qt clamps the bar to the shrunken block's maximum while it
   is short and only recomputes the range on the layout pass that follows. It was
   `preserved_scroll` when it only did the second half.
+- **…and it shows the new children before it returns.** A widget added to the layout
+  of a parent already on screen is not shown by the add: `QLayout::addChildWidget`
+  *queues* the show for the next turn, and until then every layout passes it over as
+  hidden. So a freshly rebuilt card tree measured as **empty** for one pass. An
+  undragged row is as tall as its content, so the Powers row folded to a title bar, the
+  page shrank under it, every other row was laid out again, and the next turn put it
+  all back. On a furnished sheet one click on a power card took the page from 3393px to
+  1987px and back, resizing and repainting every block. `_show_laid_out_now` does what
+  the queued call would have done: walking the layouts top-down, it shows each widget
+  that is hidden only because nobody has shown it yet (not `WA_WState_ExplicitShowHide`,
+  and never a window). Freezing the paint could not have covered this: the paint freeze
+  is on the block, and the fold was in the page. `tests/test_click_repaint.py`.
 - Tests build real windows, and `conftest.py` tears them down after each one.
   `processEvents()` alone does **not** run deferred deletions, so the teardown also
   sends `QEvent.Type.DeferredDelete` explicitly — without it every window built all

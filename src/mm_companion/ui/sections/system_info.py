@@ -269,7 +269,13 @@ class SpeedWidget(QWidget):
         :func:`~mm_companion.core.rules.condition_speed_lines` — a slowed line arrives
         at its reduced rank carrying the penalty in ``rank_mod``, an immobilised one is
         flagged. This widget only expands ranks into distance columns and tints.
+
+        The same lines again draw nothing: this runs on every derived-stat refresh,
+        which is every power toggled, and a rebuild of labels nobody changed still
+        relays the System block out and repaints it.
         """
+        if lines == self._lines:
+            return
         self._lines = lines
         self._redraw()
 
@@ -376,8 +382,13 @@ class MovementModesWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(int(theme.metric("space.xxs")))
         self.setVisible(False)
+        self._lines: list | None = None
 
     def render_lines(self, lines: list) -> None:
+        # Unchanged lines draw nothing, for SpeedWidget.render_lines's reason.
+        if lines == self._lines:
+            return
+        self._lines = lines
         layout = self.layout()
         while layout.count():  # rebuilt wholesale — a mode list is a handful of rows
             widget = layout.takeAt(0).widget()

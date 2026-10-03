@@ -47,7 +47,9 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.core.rules import stable_build
+from mm_companion.ui import layout_tree as lt
 from mm_companion.ui import theme
+from mm_companion.ui.block_frame import InnerScroll
 from mm_companion.ui.blocks.base import instance_template
 from mm_companion.ui.blocks.bus import NOTIFICATIONS
 from mm_companion.ui.blocks.registry import npc_hidden_keys
@@ -73,6 +75,23 @@ DEFAULT_STRIP_EXTENT = 360
 STRIP_SHARE = 0.4
 
 
+class _BoxScroll(InnerScroll):
+    """The edit frame's scroll, asking for its content's whole height.
+
+    A ``QScrollArea`` caps its ``sizeHint`` at a couple of dozen lines of text, so two
+    boxes sharing the strip asked for the same height whatever they held, and the
+    roller lost its history to a three-card turn order. A hint is a preference and may
+    be content-shaped; the minimum stays the scroll's own.
+    """
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        widget = self.widget()
+        if widget is None:
+            return super().sizeHint()
+        frame = 2 * self.frameWidth()
+        return widget.sizeHint() + QSize(frame, frame)
+
+
 class SimpleBox(QFrame):
     """One box of the simple sheet: a small heading over the block's content.
 
@@ -82,7 +101,9 @@ class SimpleBox(QFrame):
 
     It never reports a minimum *width* its content decides: a row divides its width by
     weight, and past what a box can reflow into, it clips, exactly as a block on the
-    edit page does. Height is the content's, and the page scrolls.
+    edit page does. Height is the content's, and the page scrolls — except in the strip,
+    which does not scroll (that is what it is for), so a box there scrolls inside itself
+    instead (:meth:`scroll_body`).
     """
 
     def __init__(self, key: str, title: str, body: QWidget, *, heading: bool = True) -> None:
@@ -105,6 +126,27 @@ class SimpleBox(QFrame):
             layout.addWidget(self.heading)
         layout.addWidget(body, stretch=1)
         body.show()
+        #: The scroll the body is held in, once :meth:`scroll_body` has put it in one.
+        self._scroll: _BoxScroll | None = None
+
+    def scroll_body(self) -> None:
+        """Hold the body in a scroll of its own, under the heading. Idempotent.
+
+        For a box in the strip. The strip hands its boxes its height rather than
+        scrolling (the roller must not scroll away mid-fight), so a body taller than its
+        share — a turn order that grew mid-round — had nowhere to go and was squeezed
+        under its content and clipped. On the edit page the same block scrolls inside
+        its frame; here it does the same, through the same scroll.
+        """
+        if self._scroll is not None:
+            return
+        layout = self.layout()
+        self.body.hide()
+        layout.removeWidget(self.body)
+        self._scroll = _BoxScroll()
+        layout.addWidget(self._scroll, stretch=1)
+        self._scroll.hold(self.body)
+        self.body.show()
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
         return QSize(int(theme.metric("block.min-extent")), super().minimumSizeHint().height())
@@ -113,7 +155,14 @@ class SimpleBox(QFrame):
         """Take the content back out (a borrowed section going home)."""
         body = self.body
         body.hide()
-        self.layout().removeWidget(body)
+        if self._scroll is not None:
+            self._scroll.takeWidget()
+            body.setParent(self)
+            # The scroll pinned the body's height at the strip's width; carried
+            # anywhere else that is a refusal measured for a different box.
+            body.setMinimumHeight(0)
+        else:
+            self.layout().removeWidget(body)
         return body
 
 
@@ -146,6 +195,9 @@ class SimplePage(QWidget):
             return
         self._content = render_node(node, boxes)
         if self._fill:
+            for key in lt.keys(node):
+                if key in boxes:
+                    boxes[key].scroll_body()
             self._layout.addWidget(self._content, stretch=1)
         else:
             self._layout.addWidget(self._content)

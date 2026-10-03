@@ -40,9 +40,23 @@ def test_standard_places_every_block_exactly_once() -> None:
 def test_standard_keeps_the_roller_beside_the_page() -> None:
     layout = standard_layout(BASE_KEYS)
 
-    assert lt.keys(layout.strip) == ["dice", "scene"]
+    assert lt.keys(layout.strip) == ["dice"]
     assert layout.edge == STANDARD_EDGE
     assert "dice" not in lt.keys(layout.page)
+
+
+def test_standard_puts_the_scene_beside_notes_as_the_edit_sheet_does() -> None:
+    """At the foot of the page, as on the edit sheet — not under the roller, where it
+    took the height the roll history needed."""
+    last_row = layout_rows(standard_layout(BASE_KEYS))[-1]
+
+    assert lt.keys(last_row) == ["notes", "scene"]
+
+
+def test_without_a_scene_notes_has_the_row_to_itself() -> None:
+    last_row = layout_rows(standard_layout([k for k in BASE_KEYS if k != "scene"]))[-1]
+
+    assert last_row == lt.Leaf(("notes",))
 
 
 def test_standard_opens_with_who_the_character_is() -> None:

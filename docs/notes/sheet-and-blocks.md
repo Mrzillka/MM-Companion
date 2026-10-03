@@ -379,7 +379,7 @@ band is not what they are about.
 
 - `ui/block_frame.py`: a `BlockFrame` wraps one section — a `TitleBar` (the drag
   handle, plus pin `🖈`, float `↗` and close `✕` buttons) above the section **in a
-  scroll area of its own** (`_InnerScroll`). That scroll area is the whole reason a
+  scroll area of its own** (`InnerScroll`). That scroll area is the whole reason a
   block can be dragged to any size: a `QScrollArea` does not pass its child's
   minimum on, so the frame is free to report a minimum of almost nothing and let
   the section reflow — and, past what reflow can save, scroll. It **declines a
@@ -399,7 +399,7 @@ band is not what they are about.
   already at its bottom scrolled nothing, handed the event back still ignored, and
   the whole sheet moved — with the check above passing every time, because the
   decision to pass the event on is made *after* it, by Qt, on a flag nobody had
-  set. `_InnerScroll.wheelEvent` therefore accepts unconditionally once it has
+  set. `InnerScroll.wheelEvent` therefore accepts unconditionally once it has
   decided the wheel is its. The tests watch `isAccepted()` for the same reason: a
   wheel delivered with `sendEvent` never runs Qt's propagation loop, so asserting
   on scrollbar values alone cannot see this at all — which is exactly how it
@@ -520,7 +520,7 @@ band is not what they are about.
   draws a **border**, so a block dragged taller showed that border stopping half
   way down with bare block underneath — which reads as a block that failed to draw,
   not as slack. So the spacer moved in. `_give_trailing_slack` puts a stretch at the
-  bottom of the section's own vertical box layout and `_InnerScroll.set_section`
+  bottom of the section's own vertical box layout and `InnerScroll.set_section`
   then hands it the whole viewport: the surplus lands under the last row, inside the
   border. Centrally rather than in each section, because a mod ships a block too and
   the rule that a section fills its block is the page's. A section that already
@@ -558,7 +558,7 @@ band is not what they are about.
   and they overstated by different amounts: the block took its height from the
   first, Qt decided whether to scroll from the second, and the Powers block ended
   up scrolling 30px inside a frame with nothing in the bottom 30px of it.
-  `content_height` asks `heightForWidth` and `_InnerScroll._pin_content_height`
+  `content_height` asks `heightForWidth` and `InnerScroll._pin_content_height`
   pins the answer as an explicit `minimumHeight`, which is the one number
   `qSmartMinSize` takes over the hint; `content_size_hint` asks the same question
   for the frame's own hint. It may only ever **lower** what the widget already

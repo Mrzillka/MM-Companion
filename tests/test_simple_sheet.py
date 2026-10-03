@@ -1234,3 +1234,52 @@ def test_the_print_colours_are_theme_tokens(qapp) -> None:
     palette = paper_palette()
     assert palette.color(QPalette.ColorRole.Window).name() == theme.color("paper.background")
     assert palette.color(QPalette.ColorRole.WindowText).name() == theme.color("paper.ink")
+
+
+def test_the_scene_sits_beside_notes_on_the_standard_page(qapp, data) -> None:
+    from mm_companion.core.session.model import new_session
+    from mm_companion.ui.session_bridge import SessionBridge, set_active_session
+
+    sheet = _simple(qapp, data)
+    bridge = SessionBridge()
+    bridge.host(new_session("Table"), port=0, bind="127.0.0.1")
+    set_active_session(bridge)
+    try:
+        sheet.sync_session()
+        _settle(qapp, sheet)
+        model = sheet.simple_sheet.layout_model()
+        assert lt.keys(model.strip) == ["dice"]
+        assert lt.keys(model.page.children[-1]) == ["notes", "scene"]
+    finally:
+        set_active_session(None)
+        bridge.stop()
+        sheet.sync_session()
+
+
+def test_a_box_in_the_strip_scrolls_inside_itself_rather_than_clipping(qapp) -> None:
+    """The strip hands its boxes its height and never scrolls, so a box there taller
+    than its share — a turn order grown mid-round — scrolls inside itself."""
+    from PySide6.QtWidgets import QVBoxLayout
+
+    from mm_companion.ui.simple.sheet import SimplePage
+
+    body = QWidget()
+    column = QVBoxLayout(body)
+    for index in range(40):
+        column.addWidget(QLabel(f"Mook {index}"))
+    box = SimpleBox("scene", "Scene", body)
+    page = SimplePage(fill=True)
+    page.show_tree(lt.Leaf(("scene",)), {"scene": box})
+    page.resize(300, 200)
+    page.show()
+    _settle(qapp)
+
+    scroll = box._scroll
+    assert scroll is not None and body.parent() is scroll.viewport()
+    assert scroll.verticalScrollBar().maximum() > 0
+    assert box.height() <= page.height()
+
+    page.hide()
+    released = box.release_body()
+    assert released is body and body.parent() is box
+    assert body.minimumHeight() == 0  # a refusal measured for the strip goes no further

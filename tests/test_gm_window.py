@@ -1176,7 +1176,7 @@ def test_the_gm_roller_fills_the_block_it_is_given(qapp: QApplication, window: G
 
     The block is pinned to the strip by default, so it is handed the strip's whole
     height — and a section with nothing expanding in its layout is held at its hint
-    over a trailing stretch (:meth:`_InnerScroll.set_section`). That left the roller
+    over a trailing stretch (:meth:`InnerScroll.set_section`). That left the roller
     stopping two-thirds of the way down a full-height strip with bare block under
     it. The box states ``fills_height`` for the reason the sheet's Dice block does:
     it is the history *inside* it that wants the room.

@@ -153,6 +153,7 @@
     "column.roll-button": 28,
     "column.hero-point": 26,
     "column.use-pip": 12,
+    "column.rank-pip": 11,
     "column.status-dot": 10,
 
     "_simple.gap": "The simple sheet (View > Simple Sheet): the gutter between two of its boxes, in pixels. Deliberately a fraction of the edit page's, so the play view reads as one sheet of paper rather than a dozen floating panels.",

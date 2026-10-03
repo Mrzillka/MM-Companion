@@ -147,7 +147,7 @@ class PowerConstructorWindow(QMainWindow):
         # build, so every method below goes on working on the power it always did.
         self._gear = gear or item is not None
         self._editing = (item if self._gear else power) is not None
-        # Whether the player has actually touched the rank-slider box. Until they do,
+        # Whether the player has actually touched the rank-dial box. Until they do,
         # each effect keeps its own ``None`` and the ruleset answers for it — otherwise
         # dropping a Growth into an untouched Blast power would quietly take the
         # Growth's ladder away.
@@ -507,7 +507,7 @@ class PowerConstructorWindow(QMainWindow):
 
         Three settings, each a decision about the *power* rather than about one of its
         effects — whether the wielder's size raises its damage, whether it is held hard
-        to the Power Level cap, and whether the sheet card carries a rank slider. A
+        to the Power Level cap, and whether the sheet card carries a rank dial. A
         giant's fists scale and a giant's laser does not, and that is one answer however
         many effects carry it. (The flags themselves live on each effect, which is the
         level they apply at and the journey ``attack_skill`` already made; these
@@ -772,7 +772,7 @@ class PowerConstructorWindow(QMainWindow):
         return row
 
     def _build_rank_dial_row(self) -> QWidget:
-        """The build half of the runtime rank dial: whether the card carries a slider.
+        """The build half of the runtime rank dial: whether the card carries a dial.
 
         One box for every power, size effects included. A Growth used to get its ladder
         whatever this said, which made the box a control that changed nothing on exactly
@@ -785,7 +785,7 @@ class PowerConstructorWindow(QMainWindow):
         layout = QVBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
-        self._rank_dial = QCheckBox("Add a rank slider to the card")
+        self._rank_dial = QCheckBox("Add a rank scale to the card")
         self._rank_dial.setToolTip(
             "Let this power be used below its bought rank in play — a Damage 10 fired "
             "at 5. It costs the same either way: what a power is worth is what it was "
@@ -964,12 +964,12 @@ class PowerConstructorWindow(QMainWindow):
         ]
 
     def _dialable_effects(self) -> list:
-        """The effects a rank slider could usefully be offered for.
+        """The effects a rank dial could usefully be offered for.
 
         An effect bought at rank 1 has nothing to dial between **unless the ruleset
         gives it a ladder anyway** — a Growth 1 really does climb a rung — and one whose
         rank *is* its allocation (Enhanced Trait) has no rank of its own to turn down,
-        since its rows would say one thing and the slider another.
+        since its rows would say one thing and the dial another.
         """
 
         by_id = {e.id: e for e in self._data.effects}
@@ -982,9 +982,9 @@ class PowerConstructorWindow(QMainWindow):
         ]
 
     def _dial_is_forced(self) -> bool:
-        """Whether this build's sliders are not the player's to switch off.
+        """Whether this build's dials are not the player's to switch off.
 
-        A Dynamic array splits its points *on* those sliders, so taking them away would
+        A Dynamic array splits its points *on* those dials, so taking them away would
         leave the split with no control at all.
         """
 
@@ -1018,7 +1018,7 @@ class PowerConstructorWindow(QMainWindow):
     def _refresh_rank_dial_row(self) -> None:
         """Force the box on where the split needs it, and say why.
 
-        A Dynamic array hands its points out on the members' rank sliders, so the box is
+        A Dynamic array hands its points out on the members' rank dials, so the box is
         ticked and made read-only rather than left as a switch that would take the
         split's only control away. Read-only, never ``setEnabled(False)`` — nothing in
         this app greys a control out — so it goes on saying what is true.
@@ -1039,7 +1039,7 @@ class PowerConstructorWindow(QMainWindow):
         )
         self._rank_dial_note.setVisible(forced)
         self._rank_dial_note.setText(
-            "A Dynamic array shares its points out on these sliders, so they stay."
+            "A Dynamic array shares its points out on these rank scales, so they stay."
             if forced
             else ""
         )

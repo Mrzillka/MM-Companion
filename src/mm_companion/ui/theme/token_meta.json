@@ -233,6 +233,10 @@
       "label": "Advantage use dot",
       "hint": "One dot per use of an advantage spent at the table (Luck, Determination). Round, so this is its height too."
     },
+    "column.rank-pip": {
+      "label": "Power rank pip",
+      "hint": "One pip per rank on a power card's rank scale (a Growth's sizes, a Dynamic member's share). Round, so this is its height too; a narrow card shrinks them."
+    },
     "column.status-dot": {
       "label": "Connection dot",
       "hint": "The dot beside the connection state in the menu bar corner. Round, so this is its height too."

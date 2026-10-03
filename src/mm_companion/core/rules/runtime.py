@@ -368,7 +368,7 @@ def effect_current_rank(
     the cap is not asked for and the bought rank comes back, exactly as it always did.
 
     **Where there is a share, the share decides** — the cap *replaces* the dialled rank
-    rather than being the smaller of the two. That is what makes the card's single slider
+    rather than being the smaller of the two. That is what makes the card's single dial
     honest: a Dynamic member has one control, and it spends points. Taking the minimum
     instead was a deadlock. The card used to carry a rank dial beside the share dial, the
     rank one wrote a value the cap then clamped away, and because the clamp was a ``min``

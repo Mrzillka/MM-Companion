@@ -87,7 +87,7 @@ class PowerModeBar(QWidget):
             "Dynamic array",
             "The effects share the array's points and run at the same time at reduced "
             "effectiveness, instead of switching each other off. Each alternate costs "
-            "the dearer Dynamic price, and the split is made on the card's sliders.",
+            "the dearer Dynamic price, and the split is made on the card's rank scales.",
         ),
     )
 

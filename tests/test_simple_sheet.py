@@ -294,7 +294,7 @@ def test_a_dynamic_arrays_points_can_still_be_shared_out(qapp, data) -> None:
     assert dials
 
     dial = dials[0]
-    dial._slider.setValue(dial._slider.minimum())
+    dial.pick(0)
     assert group.children[0].dynamic_points in (None, 0)
 
 

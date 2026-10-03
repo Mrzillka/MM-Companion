@@ -551,7 +551,7 @@ def build(target: str):
     elif target in ("dynamic-array", "dynamic-array-split"):
         # A Dynamic array on the sheet, in both of the two regimes it has. Unsplit, the
         # header states the pool and says it is *not* split, the cards are still
-        # clickable, and each member's slider is seated where the member is actually
+        # clickable, and each member's pip scale is seated where the member is actually
         # running with no price on that one notch. Split, the header counts the pool
         # down, a hand-back button appears beside it, and every member runs at once.
         # The System block rides along for its Limits row and its Size readout.
@@ -593,13 +593,13 @@ def build(target: str):
                 for d in sheet.powers._list_host.findChildren(_RankDial)
                 if any("PP" in text for text in d._labels.values())
             ]
-            dials[1]._slider.setValue(2)  # some Flight...
+            dials[1].pick(2)  # some Flight...
             dials = [
                 d
                 for d in sheet.powers._list_host.findChildren(_RankDial)
                 if any("PP" in text for text in d._labels.values())
             ]
-            dials[2]._slider.setValue(2)  # ...and some Force Field, at the same time
+            dials[2].pick(2)  # ...and some Force Field, at the same time
             sheet.system_info.refresh_derived()
         for key in sheet.block_keys():
             if key not in ("powers", "system_info"):
@@ -632,7 +632,7 @@ def build(target: str):
             for d in sheet.powers._list_host.findChildren(_RankDial)
             if any("PP" in text for text in d._labels.values())
         ]
-        dials[0]._slider.setValue(2)
+        dials[0].pick(2)
         sheet.system_info.refresh_derived()
         for key in sheet.block_keys():
             if key not in ("powers", "system_info"):
@@ -660,7 +660,7 @@ def build(target: str):
         _pump(_app())
         # Large is the dial's first notch above Off for a Medium wielder. Setting the
         # value is the keyboard/groove path, which commits without a slider release.
-        sheet.powers.findChild(_RankDial)._slider.setValue(1)
+        sheet.powers.findChild(_RankDial).pick(1)
         path = library.save_character(sheet.character)
         # Left open rather than closed: the rung dirtied the sheet (which is the point
         # — a saved state that never marks the window unwritten is a state you lose),

@@ -1241,9 +1241,8 @@ def test_a_dial_inside_a_switched_off_linked_group_is_a_read_out(qapp: QApplicat
 
     dial = _dial(sec)
     assert _dial_labels(sec) == ["Off", "Large", "Huge", "Gargantuan"]
-    for control in (dial._pips, dial._off):
-        assert control.isEnabled()
-        assert control.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+    assert dial._pips.isEnabled()
+    assert dial._pips.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
 
 def test_the_dial_makes_an_array_member_the_live_alternate(qapp: QApplication) -> None:
@@ -1357,7 +1356,6 @@ def test_the_dial_never_takes_focus(qapp: QApplication) -> None:
 
     dial = _dial(sheet.powers)
     assert dial._pips.focusPolicy() == Qt.FocusPolicy.NoFocus
-    assert dial._off.focusPolicy() == Qt.FocusPolicy.NoFocus
 
 
 def test_hovering_a_pip_names_it_and_commits_nothing(qapp: QApplication) -> None:
@@ -1380,25 +1378,44 @@ def test_hovering_a_pip_names_it_and_commits_nothing(qapp: QApplication) -> None
     assert dial._value.text() == "Gargantuan"
 
 
-def test_clicking_a_pip_picks_that_notch(qapp: QApplication) -> None:
-    """A real press and release on the second pip holds the Growth at Huge."""
-    sheet, _char, power = _size_sheet(3)
-    dial = _dial(sheet.powers)
-    pips = dial._pips
+def _click_pip(sec: PowersSection, notch: int) -> None:
+    """A real press and release on pip *notch* (1-based) of the section's first dial."""
+    pips = _dial(sec)._pips
     pips.resize(pips.sizeHint())
-    centre = pips._rects()[1].center().toPoint()
+    centre = pips._rects()[notch - 1].center().toPoint()
     QTest.mouseClick(pips, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, centre)
+
+
+def test_clicking_a_pip_picks_that_notch(qapp: QApplication) -> None:
+    """A click on the second pip holds the Growth at Huge."""
+    sheet, _char, power = _size_sheet(3)
+    _click_pip(sheet.powers, 2)
 
     assert power.effects[0].current_rank == 2
     assert _dial_state(sheet.powers) == (2, 3, "Huge")
 
 
-def test_the_off_chip_switches_the_power_off(qapp: QApplication) -> None:
+def test_clicking_the_last_lit_pip_puts_it_out(qapp: QApplication) -> None:
+    """There is no Off button: the last lit pip steps down a rank, and at 1 goes off."""
     sheet, _char, power = _size_sheet(3)
-    _dial(sheet.powers)._off.click()
+    _click_pip(sheet.powers, 3)  # standing at Gargantuan
+    assert _dial_state(sheet.powers) == (2, 3, "Huge")
 
+    _click_pip(sheet.powers, 1)
+    _click_pip(sheet.powers, 1)
     assert _dial_state(sheet.powers) == (0, 3, "Off")
-    assert _dial(sheet.powers)._off.isChecked()
+    assert not sheet.powers._power_is_active(power)
+
+
+def test_hovering_the_last_lit_pip_names_the_rank_below(qapp: QApplication) -> None:
+    sheet, _char, _power = _size_sheet(3)
+    pips = _dial(sheet.powers)._pips
+    hovered: list[int] = []
+    pips.hovered.connect(hovered.append)
+    pips._set_hover(3)
+    pips._set_hover(1)
+
+    assert hovered == [2, 1]
 
 
 def test_a_scale_with_repeating_names_is_grouped_by_them(qapp: QApplication) -> None:

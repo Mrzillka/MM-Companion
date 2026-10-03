@@ -508,9 +508,9 @@ class _RankDial(QWidget):
     Two kinds of power want one and they want the same control. A Growth 3 is not one
     leap to Gargantuan — it is Large, then Huge, then Gargantuan, and which of the three
     you are standing at is a mid-fight decision. A Damage 10 is not all-or-nothing
-    either: a hero pulling their punches fires it at 5. So the card carries an **Off**
-    chip and one pip per rank (:class:`~mm_companion.ui.rank_pips.RankPips`), with a
-    label beside them saying what the current notch *is*: the **size the character
+    either: a hero pulling their punches fires it at 5. So the card carries one pip per
+    rank (:class:`~mm_companion.ui.rank_pips.RankPips`), with a label beside them saying
+    what the current notch *is*: the **size the character
     becomes** for a size effect (read against the wielder, so a Small character's scale
     starts at Medium) and the plain rank otherwise. A rank is an accounting fact the card
     already prints; "Huge" is the thing being chosen.
@@ -528,12 +528,14 @@ class _RankDial(QWidget):
     What carried over:
 
     * **Zero is off.** Nothing is held while the power is switched off — the dial
-      reports where the power *is*, and off is nowhere — and picking Off switches it
-      off, exactly as clicking the card would, so the dial is a whole control rather
-      than one that can only turn a power on. Picking a pip on a dormant power wakes it
-      at the notch asked for, so going from dormant to Huge is one click.
-    * **Hover names, click commits.** Hovering a pip reads its name in the label and
-      previews it on the scale; nothing reaches the section until a click.
+      reports where the power *is*, and off is nowhere, every pip hollow — and reaching
+      zero switches it off, exactly as clicking the card would, so the dial is a whole
+      control rather than one that can only turn a power on. There is no Off button:
+      clicking the **last lit pip puts it out**, so a power held at rank 1 goes off on
+      that click, and any other one steps down a rank. Picking a pip on a dormant power
+      wakes it at the notch asked for, so going from dormant to Huge is one click.
+    * **Hover names, click commits.** Hovering a pip names the notch a click there would
+      land on and previews it on the scale; nothing reaches the section until a click.
     * **NoFocus**, because committing destroys the whole card: focus would land on
       whatever the tab order offers next — a table in some other block — and a
       ``QScrollArea`` scrolls to show a child that has just taken focus. That was the
@@ -543,11 +545,6 @@ class _RankDial(QWidget):
       Linked group it goes transparent to the mouse instead, so a click falls through to
       the card exactly as it does off the group's own chrome — never
       ``setEnabled(False)``, which nothing in this app does.
-
-    *recommit* lets a click on the notch already held still reach the section. A share
-    dial wants it — a member the array's fallback woke can be put back down by picking
-    the "Off" it is already drawn on — while a rank dial would only rebuild every card
-    for nothing.
     """
 
     rankPicked = Signal(int)  #: the effect rank the player settled on (0 = switch off)
@@ -564,11 +561,9 @@ class _RankDial(QWidget):
         labels: dict[int, str],
         interactive: bool = True,
         parent: QWidget | None = None,
-        recommit: bool = False,
     ) -> None:
         super().__init__(parent)
         self._labels = labels
-        self._recommit = recommit
         maximum = max(0, maximum)
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
@@ -578,22 +573,6 @@ class _RankDial(QWidget):
         caption_label = QLabel(caption)
         caption_label.setStyleSheet(muted_style())
         row.addWidget(caption_label)
-
-        # Off is a chip of its own rather than a pip: it is not "how much" but "not at
-        # all", and it is the one notch every dial has. Styled as a segment of the
-        # card's segmented switches, lit while the power is off.
-        self._off = QPushButton(self._label_for(0))
-        self._off.setCheckable(True)
-        self._off.setFixedHeight(int(theme.metric("column.mode-toggle")))
-        self._off.setStyleSheet(_mode_toggle_style(locked=not interactive))
-        self._off.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._off.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not interactive)
-        if interactive:
-            self._off.setCursor(Qt.CursorShape.PointingHandCursor)
-        # A click re-checks it in _show rather than leaving the toggle to Qt, so the chip
-        # only ever says what the dial says.
-        self._off.clicked.connect(lambda _checked=False: self.pick(0))
-        row.addWidget(self._off)
 
         self._pips = RankPips(maximum, max(0, min(maximum, current)), labels, interactive)
         self._pips.picked.connect(self.pick)
@@ -627,8 +606,8 @@ class _RankDial(QWidget):
         pool ends, so the last hollow pip is the most this member can be set to and the
         dotted ones beyond it are rungs its siblings' shares have spent. Free a point
         elsewhere and a dotted pip becomes pickable; spend one and one goes dotted. A
-        member whose siblings hold everything is left with only its Off chip and the pip
-        it is sitting on.
+        member whose siblings hold everything is left with only the pip it is sitting
+        on, which a click puts out.
 
         The **index space does not move**: the notch list is the member's whole ladder
         and what is affordable is always a prefix of it, so notch *n* buys the same rank
@@ -643,11 +622,10 @@ class _RankDial(QWidget):
         self._pips.set_ceiling(max(ceiling, self._pips.value()))
 
     def pick(self, notch: int) -> None:
-        """Set the dial to *notch* and report it — what a click on Off or a pip does."""
+        """Set the dial to *notch* and report it — what a click on a pip does."""
 
         notch = max(0, min(notch, self.ceiling()))
-        if notch == self._pips.value() and not self._recommit:
-            self._show(notch)  # put the Off chip back if Qt toggled it
+        if notch == self._pips.value():
             return
         self._pips.set_value(notch)
         self._show(notch)
@@ -658,14 +636,12 @@ class _RankDial(QWidget):
         return self._labels.get(rank, f"Rank {rank}")
 
     def _show(self, notch: int) -> None:
-        """Say what *notch* is, and light the Off chip only while it is the one held."""
+        """Say what *notch* is — "Off" at zero, since no pip is lit to say it."""
 
-        self._off.setChecked(self._pips.value() == 0)
-        # Off already names itself on the chip; the label would only say it twice.
-        self._value.setText("" if notch == 0 else self._label_for(notch))
+        self._value.setText(self._label_for(notch))
 
     def _on_hovered(self, notch: int) -> None:
-        self._show(notch if notch > 0 else self._pips.value())
+        self._show(notch if notch >= 0 else self._pips.value())
 
 
 class _EffectSelector(QWidget):
@@ -2103,7 +2079,7 @@ class PowersSection(HeldRebuild, TitledSection):
         The reachable pips **end where the pool does**: a member can be set to its last
         hollow pip and no further, and one dotted pip turns hollow for every point a
         sibling hands back. A Growth 6 holding all six of a six-point pool leaves an
-        Elongation 3 with nothing but Off; drop the Growth a rung and it has one pip.
+        Elongation 3 with every pip dotted; drop the Growth a rung and it has one.
         The dial is always drawn, even at one notch — it used to disappear outright
         once its siblings had spent the pool, with no way to give it points again.
         """
@@ -2219,7 +2195,6 @@ class PowersSection(HeldRebuild, TitledSection):
             index,
             labels,
             interactive,
-            recommit=True,
         )
         dial.set_ceiling(max(self._share_index(steps, affordable), index))
         if split is not None:
@@ -2513,14 +2488,14 @@ class PowersSection(HeldRebuild, TitledSection):
         (:meth:`_set_member_running`), and only on this member's own leaves, which is
         what keeps a share from switching off a Linked group it happens to sit inside.
 
-        A commit that lands where it started rebuilds nothing: a share dial reports a
-        click on the notch it already holds (it is built with ``recommit``), and tearing
-        every card down to write the number that is already there would be a rebuild for
-        nothing. *Where it started* is the notch the
+        A commit that lands where it started rebuilds nothing — tearing every card down
+        to write the number that is already there would be a rebuild for nothing. A click
+        always moves the dial, so this is insurance for a programmatic pick rather than
+        a gesture. *Where it started* is the notch the
         dial was **drawn** on (:meth:`_build_share_dial` passes its index back) and the
         switch: the share it holds for a member the pool is rationing, and the share it is
         running on for one the fallback woke (:meth:`_fallback_share`) — so leaving that
-        dial where it sits keeps the array unsplit, while picking Off on it still
+        dial where it sits keeps the array unsplit, while stepping it down to zero still
         puts the member down.
 
         A notch is a **share and a rank**, and both are written: two notches can spend the

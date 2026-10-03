@@ -102,8 +102,8 @@ data-first; nothing below names a trait, an effect or a column in Python.
   labelled from these steps, so the player can stop on any rank and the label simply
   repeats the category where the table ran out — the pip scale opens a wider gap where a
   repeated category changes, so the stretch of a ladder spent at one size is visible.
-- **`_RankDial` is the rank scale on the card** (`ui/sections/powers.py`): an **Off**
-  chip and one pip per rank (`ui/rank_pips.py`'s `RankPips`, a single painted widget),
+- **`_RankDial` is the rank scale on the card** (`ui/sections/powers.py`): one pip per
+  rank (`ui/rank_pips.py`'s `RankPips`, a single painted widget) and a label naming it,
   under the effect's term grid and above the dice footer with the rest of the mid-play
   controls. It has been two other things. A strip of checkable buttons, one per rung,
   could not serve an ordinary Damage (ten buttons reading "Rank 1"…"Rank 10" is not a
@@ -118,13 +118,14 @@ data-first; nothing below names a trait, an effect or a column in Python.
   rank 1. **A move does whatever a click on the card body would have done, then lands
   where it was asked**: from zero it wakes the power at that notch (flipping the
   switches, or becoming the array's live alternate), so dormant → Huge is one click,
-  and **picking Off switches the power off** — the dial is a whole control, not one that
-  can only turn a power on. The one exception is an array's *live* member, where a card
-  click is deliberately a no-op, so Off there just redraws the dial where it was. A
-  click on the notch already held reaches nothing (every commit ends in `_rebuild_list`,
-  which would rebuild every card for no change) — except on a share dial, which passes
-  `recommit` for the reason "And the handle sits where the member is running" in [The
-  powers layer](powers.md) gives. It **stays live
+  and **reaching zero switches the power off** — the dial is a whole control, not one
+  that can only turn a power on. There is **no Off button**: clicking the *last lit pip*
+  puts that pip out, a rank down, so a power held at rank 1 goes off on that click (the
+  user's call — an Off chip beside the pips read as clutter). Every other pip jumps
+  straight there, so a click always changes the dial and a rebuild is never spent on
+  nothing; hover names the notch the click would land on, "Off" included. The one
+  exception is an array's *live* member, where a card click is deliberately a no-op, so
+  zero there just redraws the dial where it was. It **stays live
   in the locked sheet** and emits `runtimeChanged`, never `changed`, like every other
   card switch — which, the notch being saved, does now mark the sheet unwritten (see
   "Runtime is saved" in [The powers layer](powers.md)). And a **single-rank effect gets
@@ -143,7 +144,7 @@ data-first; nothing below names a trait, an effect or a column in Python.
   scrolls to show a child that has just taken focus. The page jumped away from the card
   under the cursor. `NoFocus` closes the cause (the dial is destroyed by its own
   commit, so focus could never usefully rest there, and the card body it sits on is not
-  focusable either; the Off chip and the pips both refuse it); `widgets.rebuilding`
+  focusable either); `widgets.rebuilding`
   closes the
   rest — it restores the bar **twice**, now and on the next turn of the event loop,
   because the range is only recomputed on the following layout pass and an immediate

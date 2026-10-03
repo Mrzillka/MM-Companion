@@ -6,6 +6,11 @@ picks one of mid-fight; its groove and handle also looked out of place among the
 card's chips and pips. So the ladder is drawn as what it is: one pip per notch, filled
 up to the notch the effect is held at, and a click on a pip is the whole gesture.
 
+**Clicking the last lit pip puts that pip out** — the effect drops a rank — so the scale
+needs no separate Off control: on a power held at rank 1 the same click switches it off.
+Every other pip is a jump straight to that notch. A click therefore always changes
+something, which is what keeps a rebuild-per-click from ever being spent on nothing.
+
 It is **one painted widget** rather than a button per pip, for the same reason the
 slider was one: the card it sits on is rebuilt on every runtime change, and a Damage 15
 would otherwise be sixteen widgets torn down and re-made per click.
@@ -23,17 +28,17 @@ What it draws, left to right:
   line because on a size ladder most sizes are one rank wide, and a line beside every
   one of those read as noise.
 
-Hovering a reachable pip previews it — the pips that would light wash in, the ones that
-would go out fade — and reports it through :attr:`hovered`, so the owner can name the
-notch before it is chosen. Nothing is committed until a click.
+Hovering a reachable pip previews what a click there would do — the pips that would
+light wash in, the ones that would go out fade — and reports the notch it would land on
+through :attr:`hovered`, so the owner can name it before it is chosen. Nothing is
+committed until a click.
 
 **Width adapts; height does not.** Narrower than its natural width the pips shrink
 toward a floor and past it clip; nothing here reports a minimum width, since whether a
 card is too narrow to read is the player's call (``CLAUDE.md``). Shrinking happens in
 the paint, so it never relays anything out and needs no reflow guard.
 
-Notch ``0`` — off — is not a pip: the owner draws it as its own chip, since it is a
-different kind of choice from "how much".
+Notch ``0`` — off — is not a pip: it is where the scale stands with every pip hollow.
 """
 
 from __future__ import annotations
@@ -56,8 +61,9 @@ class RankPips(QWidget):
     with no cursor, hover or click.
     """
 
-    picked = Signal(int)  #: the notch clicked, ``1..ceiling``
-    hovered = Signal(int)  #: the reachable notch under the pointer, or ``-1`` once it leaves
+    picked = Signal(int)  #: the notch a click lands on, ``0..ceiling``
+    #: The notch a click under the pointer would land on, or ``-1`` once it leaves.
+    hovered = Signal(int)
 
     def __init__(
         self,
@@ -174,7 +180,7 @@ class RankPips(QWidget):
         accent = QColor(theme.color("accent"))
         muted = QColor(theme.color("text.muted.rich"))
         ring = float(theme.metric("border.width.emphasis"))
-        target = self._hover if self._hover > 0 else self._value
+        target = self._outcome(self._hover) if self._hover > 0 else self._value
         for notch, rect in enumerate(self._rects(), start=1):
             inner = rect.adjusted(ring / 2, ring / 2, -ring / 2, -ring / 2)
             lit = notch <= self._value
@@ -200,6 +206,10 @@ class RankPips(QWidget):
     def _reachable(self, notch: int) -> bool:
         return 1 <= notch <= self._ceiling
 
+    def _outcome(self, notch: int) -> int:
+        """Where a click on pip *notch* lands: one lower on the last lit pip, else there."""
+        return notch - 1 if notch == self._value else notch
+
     def _set_hover(self, notch: int) -> None:
         if notch == self._hover:
             return
@@ -208,7 +218,7 @@ class RankPips(QWidget):
             Qt.CursorShape.PointingHandCursor if notch > 0 else Qt.CursorShape.ArrowCursor
         )
         self.update()
-        self.hovered.emit(notch)
+        self.hovered.emit(self._outcome(notch) if notch > 0 else -1)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt override
         notch = self._notch_at(event.position().x())
@@ -233,7 +243,7 @@ class RankPips(QWidget):
         if event.button() != Qt.MouseButton.LeftButton or pressed < 0:
             return
         if self._notch_at(event.position().x()) == pressed:
-            self.picked.emit(pressed)
+            self.picked.emit(self._outcome(pressed))
 
 
 def _alpha(colour: QColor, alpha: float) -> QColor:

@@ -109,8 +109,8 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
 - **The reachable pips end where the pool does.** A share dial's last hollow pip *is*
   the most that member can be set to; the rungs beyond it are drawn **dotted** and refuse
   a click, and one turns hollow for every point a sibling hands back: a Growth 6 holding
-  all six of a six-point pool leaves an Elongation 3 with nothing but Off and the pip it
-  sits on, and dropping the Growth a rung gives the Elongation one more. The index space
+  all six of a six-point pool leaves an Elongation 3 with nothing but the pip it sits
+  on, and dropping the Growth a rung gives the Elongation one more. The index space
   is the member's whole ladder and what is affordable is always a **prefix** of it, so
   notch *n* means the same points however far the end has travelled. `_SplitGroup` is
   what moves it: a dial reports the notch it is set to (`previewed`), and it re-ends every
@@ -194,9 +194,10 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   the *dimming* asks the same question after the pool's (`_node_is_inactive`), or the one
   member the fallback woke would be the only undimmed card on a switched-off array; and
   a commit that lands where it started now compares the **switch as well as the share**,
-  so a member the fallback woke under a lit "Off" can still be put back down by
-  clicking that Off where it already sits — which is why a share dial is built with
-  `recommit`, and a rank dial, for which a repeat click is a rebuild for nothing, is not.
+  so stepping a fallback-woken member down to zero still puts it down even though its
+  share was already nothing. (While the dial had an Off button, re-clicking a lit Off
+  was the gesture this served; with the last lit pip stepping down instead, a click
+  always moves the dial.)
 - **And the handle sits where the member is running, share or no share.** The other end
   of the same lie: an array nobody has split still runs its selected alternate, so
   drawing every one of its dials on "Off" said the array was doing nothing while the

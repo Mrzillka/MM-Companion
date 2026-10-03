@@ -169,6 +169,8 @@ class AutoHeightTable(QTableWidget):
         # What each column measured the last time it was showing — see
         # :meth:`natural_column_widths` for why a hidden one cannot be measured.
         self._natural: dict[int, int] = {}
+        # Columns with nothing to show — see :meth:`set_column_absent`.
+        self._absent: set[int] = set()
         self._reorder: RowReorder | None = None
         self._press_pos: QPoint | None = None
         self._dragged = False
@@ -269,6 +271,30 @@ class AutoHeightTable(QTableWidget):
         self._shed_order = tuple(columns)
         self.sync_shed_columns()
 
+    def set_column_absent(self, column: int, absent: bool) -> None:
+        """Hide *column* for want of **content**, whatever the width says.
+
+        The other reason a column goes, and it must not be confused with shedding:
+        the Skills block's "+" column while nothing modifies a skill, its Untrained?
+        column on a locked sheet, the Advantages block's Uses while no advantage is
+        spent per adventure. A bare ``setColumnHidden`` for these fought the shed:
+        :meth:`sync_shed_columns` restores every shed-order column it is not
+        shedding, so the next change of width brought an empty column back — and a
+        hidden column was reported as shed, and counted at whatever it last measured.
+        An absent column is out of the shed order and measures nothing.
+        """
+        if absent == (column in self._absent):
+            return
+        if absent:
+            self._absent.add(column)
+        else:
+            self._absent.discard(column)
+        self.setColumnHidden(column, absent or column in self._shed)
+        if absent and column in self._shed:
+            self._shed = tuple(c for c in self._shed if c != column)
+        self.sync_shed_columns()
+        self.updateGeometry()
+
     def natural_column_widths(self) -> list[int]:
         """What each column would take if it were showing, header text included.
 
@@ -288,6 +314,9 @@ class AutoHeightTable(QTableWidget):
         header = self.horizontalHeader()
         widths: list[int] = []
         for column in range(self.columnCount()):
+            if column in self._absent:
+                widths.append(0)
+                continue
             if self.isColumnHidden(column):
                 widths.append(self._natural.get(column, 0))
                 continue
@@ -308,17 +337,18 @@ class AutoHeightTable(QTableWidget):
         """Hide or restore columns to suit the width. Returns whether it changed."""
         if not self._shed_order:
             return False
+        order = tuple(column for column in self._shed_order if column not in self._absent)
         wanted = columns_to_shed(
             self._shed_available_width(),
             self.natural_column_widths(),
-            self._shed_order,
-            current=self._shed,
+            order,
+            current=tuple(column for column in self._shed if column not in self._absent),
             hysteresis=SHED_HYSTERESIS,
         )
         if wanted == self._shed:
             return False
         self._shed = wanted
-        hidden = set(wanted)
+        hidden = set(wanted) | self._absent
         for column in self._shed_order:
             if 0 <= column < self.columnCount():
                 self.setColumnHidden(column, column in hidden)

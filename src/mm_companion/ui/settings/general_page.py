@@ -1,8 +1,11 @@
 """The General settings page: preferences that are not about the look or the GM.
 
-Two settings. Whether the launcher looks for a newer release when the app starts
-(see :mod:`mm_companion.core.updates`) — on by default, and here for whoever would
-rather the app made no request of its own. And how the dice roller arranges
+Four settings. Whether a roll landing in the history also pops up in a corner of
+the screen, and which corner (see :mod:`mm_companion.ui.toasts`). Whether a saved
+character opens in the simple sheet (the play view,
+see :mod:`mm_companion.ui.simple`). Whether the launcher looks for a newer release
+when the app starts (see :mod:`mm_companion.core.updates`) — on by default, and here
+for whoever would rather the app made no request of its own. And how the dice roller arranges
 itself, as a sheet block and as the GM window's Rolls block alike. Normally it
 reflows to whatever room it is given, but two of the shapes it can be in turned
 out to be worth choosing outright:
@@ -23,6 +26,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
     QCheckBox,
+    QComboBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -33,11 +37,32 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core import storage
 from mm_companion.ui.settings.page import SettingsPage
+from mm_companion.ui.toasts import roll_toaster
 from mm_companion.ui.widgets import BOLD_STYLE, muted_style
+
+NOTIFICATIONS_NOTE = (
+    "Every roll, note and request that lands in the history also pops up for a few "
+    "seconds in a corner of the screen, on top of every window — so the last roll can "
+    "be read without the history taking half the window. Hover one to keep it."
+)
+
+#: The corners a notification can stack in, as the combo offers them.
+CORNERS: tuple[tuple[str, str], ...] = (
+    ("Bottom right", storage.TOAST_CORNER_BOTTOM_RIGHT),
+    ("Bottom left", storage.TOAST_CORNER_BOTTOM_LEFT),
+    ("Top right", storage.TOAST_CORNER_TOP_RIGHT),
+    ("Top left", storage.TOAST_CORNER_TOP_LEFT),
+)
 
 UPDATES_NOTE = (
     "Ask GitHub, once each time MM-Companion starts, whether a newer version is out. "
     "Nothing is downloaded until you click Update."
+)
+
+SIMPLE_NOTE = (
+    "The play view: the character on one tight, printable page. A character you open "
+    "from your library starts there; a new one still opens for editing, and the Edit "
+    "sheet button switches back. Its arrangement is under View > Simple Sheet Layout."
 )
 
 NOTE_TEXT = (
@@ -80,7 +105,9 @@ class GeneralPage(SettingsPage):
         super().__init__(parent)
 
         column = QVBoxLayout(self)
+        column.addWidget(self._build_notifications())
         column.addWidget(self._build_updates())
+        column.addWidget(self._build_simple_sheet())
         column.addWidget(self._build_heading())
         column.addWidget(self._build_dice_layout())
         column.addStretch()
@@ -90,6 +117,37 @@ class GeneralPage(SettingsPage):
         self._load()
 
     # -- construction ------------------------------------------------------------
+
+    def _build_notifications(self) -> QWidget:
+        panel = QWidget()
+        stack = QVBoxLayout(panel)
+        stack.setContentsMargins(0, 0, 0, 0)
+
+        title = QLabel("Roll notifications")
+        title.setStyleSheet(BOLD_STYLE)
+        stack.addWidget(title)
+
+        self._notifications = QCheckBox("Pop up new rolls in a corner of the screen")
+        self._notifications.toggled.connect(lambda *_: self._set_status(""))
+        stack.addWidget(self._notifications)
+
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(QLabel("Corner:"))
+        self._corner = QComboBox()
+        for label, corner in CORNERS:
+            self._corner.addItem(label, corner)
+        self._corner.currentIndexChanged.connect(lambda *_: self._set_status(""))
+        self._notifications.toggled.connect(self._corner.setEnabled)
+        row.addWidget(self._corner)
+        row.addStretch()
+        stack.addLayout(row)
+
+        note = QLabel(NOTIFICATIONS_NOTE)
+        note.setWordWrap(True)
+        note.setStyleSheet(muted_style(italic=True))
+        stack.addWidget(note)
+        return panel
 
     def _build_updates(self) -> QWidget:
         panel = QWidget()
@@ -105,6 +163,25 @@ class GeneralPage(SettingsPage):
         stack.addWidget(self._check_updates)
 
         note = QLabel(UPDATES_NOTE)
+        note.setWordWrap(True)
+        note.setStyleSheet(muted_style(italic=True))
+        stack.addWidget(note)
+        return panel
+
+    def _build_simple_sheet(self) -> QWidget:
+        panel = QWidget()
+        stack = QVBoxLayout(panel)
+        stack.setContentsMargins(0, 0, 0, 0)
+
+        title = QLabel("Simple sheet")
+        title.setStyleSheet(BOLD_STYLE)
+        stack.addWidget(title)
+
+        self._simple_on_open = QCheckBox("Open saved characters in the simple sheet")
+        self._simple_on_open.toggled.connect(lambda *_: self._set_status(""))
+        stack.addWidget(self._simple_on_open)
+
+        note = QLabel(SIMPLE_NOTE)
         note.setWordWrap(True)
         note.setStyleSheet(muted_style(italic=True))
         stack.addWidget(note)
@@ -181,12 +258,23 @@ class GeneralPage(SettingsPage):
         return (
             self._chosen() != self._saved
             or self._check_updates.isChecked() != self._saved_check_updates
+            or self._simple_on_open.isChecked() != self._saved_simple_on_open
+            or self._notifications.isChecked() != self._saved_notifications
+            or self._corner.currentData() != self._saved_corner
         )
 
     def save(self) -> None:
         """Write the preference, and reshape every roller already on screen."""
+        storage.set_roll_notifications(self._notifications.isChecked())
+        self._saved_notifications = self._notifications.isChecked()
+        storage.set_roll_notification_corner(self._corner.currentData())
+        self._saved_corner = self._corner.currentData()
+        if not self._saved_notifications:
+            roll_toaster().clear()
         storage.set_check_for_updates(self._check_updates.isChecked())
         self._saved_check_updates = self._check_updates.isChecked()
+        storage.set_simple_sheet_on_open(self._simple_on_open.isChecked())
+        self._saved_simple_on_open = self._simple_on_open.isChecked()
         storage.set_dice_layout(self._chosen())
         self._saved = self._chosen()
         for window in _open_windows():
@@ -205,8 +293,15 @@ class GeneralPage(SettingsPage):
         return storage.DICE_LAYOUT_AUTO
 
     def _load(self) -> None:
+        self._saved_notifications = storage.roll_notifications()
+        self._notifications.setChecked(self._saved_notifications)
+        self._corner.setEnabled(self._saved_notifications)
+        self._saved_corner = storage.roll_notification_corner()
+        self._corner.setCurrentIndex(max(0, self._corner.findData(self._saved_corner)))
         self._saved_check_updates = storage.check_for_updates()
         self._check_updates.setChecked(self._saved_check_updates)
+        self._saved_simple_on_open = storage.simple_sheet_on_open()
+        self._simple_on_open.setChecked(self._saved_simple_on_open)
         self._saved = storage.dice_layout()
         self._choices[self._saved].setChecked(True)
         self._set_status("")

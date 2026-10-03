@@ -39,6 +39,43 @@ def strip_groupbox_caption(box: QGroupBox) -> None:
     )
 
 
+def set_simple_frame(box: QGroupBox, simple: bool) -> None:
+    """Shed *box*'s own border and inset while it sits on the simple sheet, or put them back.
+
+    The simple sheet puts every block in a ruled box of its own
+    (:class:`~mm_companion.ui.simple.sheet.SimpleBox`), so a borrowed section that kept
+    its group-box border would draw a frame inside a frame, and its layout margin would
+    be padding inside padding. Both are restored exactly on the way home. Scoped to this
+    box by object name, like :func:`strip_groupbox_caption`, so nothing nested inside it
+    changes. A module function rather than only a method, because the simple sheet
+    applies it to any borrowed group box — a mod's block included.
+    """
+    if simple == bool(box.property("simpleFrame")):
+        return
+    box.setProperty("simpleFrame", simple)
+    layout = box.layout()
+    if simple:
+        box.setProperty("simpleFrameSheet", box.styleSheet())
+        if layout is not None:
+            margins = layout.contentsMargins()
+            box.setProperty(
+                "simpleFrameMargins",
+                (margins.left(), margins.top(), margins.right(), margins.bottom()),
+            )
+        name = box.objectName() or f"simpleframe_{id(box):x}"
+        box.setObjectName(name)
+        box.setStyleSheet(
+            box.styleSheet() + f"QGroupBox#{name} {{ border: none; margin: 0px; padding: 0px; }}"
+        )
+        if layout is not None:
+            layout.setContentsMargins(0, 0, 0, 0)
+    else:
+        box.setStyleSheet(box.property("simpleFrameSheet") or "")
+        margins = box.property("simpleFrameMargins")
+        if layout is not None and margins:
+            layout.setContentsMargins(*margins)
+
+
 class TitledSection(QGroupBox):
     """A captionless section that reports its title (with cost) to its block frame.
 
@@ -91,3 +128,8 @@ class TitledSection(QGroupBox):
     def block_title(self) -> str:
         """The most recently set block title (``""`` until one is set)."""
         return self._block_title
+
+    def set_simple_frame(self, simple: bool) -> None:
+        """Shed this box's own border and inset on the simple sheet — see
+        :func:`set_simple_frame`."""
+        set_simple_frame(self, simple)

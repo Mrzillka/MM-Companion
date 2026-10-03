@@ -202,6 +202,80 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   serve it. A strip too short for its blocks squashes them, and they scroll inside
   themselves.
 
+## Nothing the user did not drag may change size
+
+"It just feels off sometimes" turned out to be four separate faults, each one a
+gesture whose *undoing* did not give back the page that went in. They were found by
+round-tripping gestures on a real sheet and diffing every block's size and the saved
+tree; `tests/test_layout_drift.py` is that probe, kept.
+
+- **A splitter is born in Qt's default box.** A rebuild makes new row splitters and
+  hands them the tree's sizes before their row has laid them out, and in that 100×30
+  box they scale those sizes down under the block floor, which bends the proportions
+  (`[432, 459, 270]` read back as `[27, 29, 24]`). Every layout snapshot is taken in
+  the same breath as the gesture that rebuilt the page, so the bent numbers went into
+  the tree and the next render scaled *them* up to the full width: showing one block
+  reshaped every row on the page. `GridSplitter.has_real_sizes` says whether a
+  splitter has been resized away from the box it was born in, and `_absorb_sizes`
+  leaves the tree alone until it has. Not "resized while visible": Qt delivers a newly
+  shown widget's held-back first resize *before* it counts as visible.
+- **A block coming back takes back its share, from the whole row.** A drop halves its
+  target, because the drop mark promised exactly that. A block being *returned* —
+  unpinned, reopened, a floated block docked home — went through the same insert and
+  halved whichever neighbour it landed beside, so a row of three equal blocks came back
+  591/316/315. `_detach` now remembers the share of its row a block had
+  (`layout_tree.share_of`) and `_place` passes it to `insert_beside(..., share=…)`,
+  which takes it proportionally out of every cell in the run — and, for a cell that is
+  now alone, divides the new pair in the remembered proportion.
+- **The pin button is not a drop.** A block pinned by its `🖈` used to take half of the
+  last block in the strip; the Scene under the roller came back from every pin and
+  unpin smaller. It now takes a share sized to its recommended height
+  (`_strip_share`, at most half), from every block in the strip in proportion, so
+  unpinning gives each of them back what it had.
+- **A block re-pinned goes back where it was in the strip.** Unpinning remembers a
+  neighbour, a side and a share (`_strip_home`); pinning it again by its button puts
+  it back there. Unpinning the roller and pinning it again used to send it to the
+  bottom of the strip at a quarter of its height.
+
+What remains is rounding — a few pixels — since sizes return through a proportion.
+**Window and strip resizes were never the problem**: a plain `QSplitter` shares a
+change of width in proportion to its panes, and both round-trip exactly.
+
+## The strip opens wide enough for what is in it
+
+A side strip opened at the thickness its layout said — the default 320, or whatever a
+saved layout remembered — and the roller in it needs about 363 (more on a larger
+font), so every fresh sheet, every Reset Layout and every restored older layout opened
+with the roller's Ask button and spin-box arrows cut off. The block's inner scroll area
+never scrolls sideways, so too narrow is clipped, not scrolled. The roller's stated
+recommendation (360) was itself short, and any stated number would be wrong on some
+screen.
+
+So **opening a layout fits the strip** (`PinnedBoard.fit_to_content`): the first time
+the board is laid out at a real size after a fresh start, `set_extent` (a restore),
+Reset Layout or an edge change, a side strip is given at least
+`PinnedPanel.content_extent()` — every pinned block's `BlockFrame.content_width()`,
+its section's minimum plus the frame's chrome *measured* off the laid-out frame —
+capped at `FIT_SHARE` (half) of the window. It is the width the strip *opens* at, not a
+minimum it reports, and only opening a layout does it: a strip the user then drags
+narrower stays there for the rest of the session. A bottom strip is not fitted — its
+blocks reflow into rows, and a height is not a thing to fit to. The GM window's strip
+is the same board and gets the same fit.
+
+## The default arrangement
+
+Paired rows, chosen with the user: identity and system; Abilities, Resistances,
+Conditions; Skills beside Advantages; Powers beside Equipment; Complications, Notes and
+the Scene. Only the roller is pinned — the Scene used to sit under it in the strip and
+took the height the roll history needed. A row is divided by its blocks'
+`default_share` (`block_sizes.json`, theme-overridable like the rest) when every block
+in it states one, so Skills opens at about 60% of its row; any other row divides itself
+from the blocks' recommended widths, as before. A saved layout is untouched by this —
+only a new workspace or **View ▸ Reset Layout** gets the new default.
+`tests/test_adaptive_blocks.py` pins the *old* arrangement in its fixture: those tests
+measure how a block sheds as the page narrows, and the default moving every shedding
+band is not what they are about.
+
 ## How the sheet is built
 
 - UI construction: `MainWindow` → `CharacterSheet` (a `QWidget` that owns a
@@ -305,7 +379,7 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
 
 - `ui/block_frame.py`: a `BlockFrame` wraps one section — a `TitleBar` (the drag
   handle, plus pin `🖈`, float `↗` and close `✕` buttons) above the section **in a
-  scroll area of its own** (`_InnerScroll`). That scroll area is the whole reason a
+  scroll area of its own** (`InnerScroll`). That scroll area is the whole reason a
   block can be dragged to any size: a `QScrollArea` does not pass its child's
   minimum on, so the frame is free to report a minimum of almost nothing and let
   the section reflow — and, past what reflow can save, scroll. It **declines a
@@ -325,11 +399,17 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   already at its bottom scrolled nothing, handed the event back still ignored, and
   the whole sheet moved — with the check above passing every time, because the
   decision to pass the event on is made *after* it, by Qt, on a flag nobody had
-  set. `_InnerScroll.wheelEvent` therefore accepts unconditionally once it has
+  set. `InnerScroll.wheelEvent` therefore accepts unconditionally once it has
   decided the wheel is its. The tests watch `isAccepted()` for the same reason: a
   wheel delivered with `sendEvent` never runs Qt's propagation loop, so asserting
   on scrollbar values alone cannot see this at all — which is exactly how it
   shipped once.
+- **A frame can lend its section out** (`lend_section` / `take_back_section`): the
+  simple sheet borrows the live Powers, Equipment, Notes and Dice sections for as long as
+  it is up, rather than drawing a second copy of their play controls. The frame stays
+  behind empty and gets the section back exactly where it was. Anything that walks a
+  frame's section (`set_locked`, `reseed`) still works while it is lent — the section is
+  the same object. See [The simple sheet](simple-sheet.md).
 - **`minimumSizeHint` is a title bar and `block.min-extent`, and says nothing about
   the content.** It used to be `max(content, the JSON floor)` in both dimensions,
   and that climbed out through the row, the page, the pinned strip and the window
@@ -394,6 +474,14 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   `float_block`, `show_block`/`hide_block`, `pin_block`/`unpin_block`,
   `set_block_on_top`, `arrangement`, `apply_arrangement`, `default_arrangement` are
   the headless-testable seams.
+- **The canvas and its `RowStack` are `WA_StaticContents`, so a row changing height
+  repaints only what moved.** The page is laid out from the top, so when one row
+  changes height nothing above it moves. But Qt repaints the *whole* of a resized widget
+  unless it is told its contents are static, and the canvas's area is every block on the
+  page. A power card switched on or off eases its type and padding, so the Powers row's
+  height moves on every frame of the ease, and each of those frames repainted every
+  block on the sheet. With the attribute set, the rows under the change still repaint
+  (they moved, and a moved child repaints itself); the rows above it do not.
 - **`minimumSizeHint` on the canvas is the page's shape rule, and it is asymmetric.**
   As narrow as you like (so every row can be dragged in and its blocks reflow) and as
   tall as its rows (so the page overflows the viewport and *scrolls* rather than
@@ -432,7 +520,7 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   draws a **border**, so a block dragged taller showed that border stopping half
   way down with bare block underneath — which reads as a block that failed to draw,
   not as slack. So the spacer moved in. `_give_trailing_slack` puts a stretch at the
-  bottom of the section's own vertical box layout and `_InnerScroll.set_section`
+  bottom of the section's own vertical box layout and `InnerScroll.set_section`
   then hands it the whole viewport: the surplus lands under the last row, inside the
   border. Centrally rather than in each section, because a mod ships a block too and
   the rule that a section fills its block is the page's. A section that already
@@ -470,7 +558,7 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   and they overstated by different amounts: the block took its height from the
   first, Qt decided whether to scroll from the second, and the Powers block ended
   up scrolling 30px inside a frame with nothing in the bottom 30px of it.
-  `content_height` asks `heightForWidth` and `_InnerScroll._pin_content_height`
+  `content_height` asks `heightForWidth` and `InnerScroll._pin_content_height`
   pins the answer as an explicit `minimumHeight`, which is the one number
   `qSmartMinSize` takes over the hint; `content_size_hint` asks the same question
   for the frame's own hint. It may only ever **lower** what the widget already

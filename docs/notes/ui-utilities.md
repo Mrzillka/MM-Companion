@@ -19,7 +19,7 @@ through rather than reinvent. When building new sheet widgets, use it:
   **Which scroll area is the whole of this module's judgement.** It used to be
   the outermost — the page — and that was right while a block was a plain frame
   with nothing between it and the page. A block is a scroll area itself now
-  (`BlockFrame._InnerScroll`), so the outermost answer sent every wheel straight
+  (`BlockFrame.InnerScroll`), so the outermost answer sent every wheel straight
   past a block the user had squashed: the block sat there with a scrollbar it
   could not be scrolled by, and the page moved instead. The target is now the
   **nearest ancestor that has a scroll range on this axis**, and the outermost
@@ -33,11 +33,11 @@ through rather than reinvent. When building new sheet widgets, use it:
   incidental, and a block is neither. The page is still reached by wheeling
   anywhere that is not a scrolling block — the gaps between rows, a title bar, any
   block short enough to have no bar at all. `has_scroll_range(area, event)` is
-  that test on its own, because `_InnerScroll` asks the identical question about
+  that test on its own, because `InnerScroll` asks the identical question about
   itself before declining a wheel it has no use for, and two spellings of one rule
   is how they drift apart. Note that *routing* the wheel is only half of it: the
   surface it lands on has to **accept** it, or Qt walks it up to the page anyway —
-  see the note on `_InnerScroll` in
+  see the note on `InnerScroll` in
   [The character sheet](sheet-and-blocks.md#block-frames-the-canvas-api-and-layout-persistence).
 - `ui/lock.py` — `set_widget_locked(widget, locked)` implements the read-only
   **view** mode. Locking is *not* `setEnabled(False)` (which greys a control
@@ -110,6 +110,18 @@ through rather than reinvent. When building new sheet widgets, use it:
   back — twice, because Qt clamps the bar to the shrunken block's maximum while it
   is short and only recomputes the range on the layout pass that follows. It was
   `preserved_scroll` when it only did the second half.
+- **…and it shows the new children before it returns.** A widget added to the layout
+  of a parent already on screen is not shown by the add: `QLayout::addChildWidget`
+  *queues* the show for the next turn, and until then every layout passes it over as
+  hidden. So a freshly rebuilt card tree measured as **empty** for one pass. An
+  undragged row is as tall as its content, so the Powers row folded to a title bar, the
+  page shrank under it, every other row was laid out again, and the next turn put it
+  all back. On a furnished sheet one click on a power card took the page from 3393px to
+  1987px and back, resizing and repainting every block. `_show_laid_out_now` does what
+  the queued call would have done: walking the layouts top-down, it shows each widget
+  that is hidden only because nobody has shown it yet (not `WA_WState_ExplicitShowHide`,
+  and never a window). Freezing the paint could not have covered this: the paint freeze
+  is on the block, and the fold was in the page. `tests/test_click_repaint.py`.
 - Tests build real windows, and `conftest.py` tears them down after each one.
   `processEvents()` alone does **not** run deferred deletions, so the teardown also
   sends `QEvent.Type.DeferredDelete` explicitly — without it every window built all
@@ -119,7 +131,10 @@ through rather than reinvent. When building new sheet widgets, use it:
 The Lock pattern is threaded top-down: `MainWindow` owns the checkable lock
 action, `CharacterSheet.set_locked(bool)` fans out to each section's
 `set_locked`, and sections call `set_widget_locked` on their editable widgets.
-The sheet **starts locked** (a read-only viewer, not an editor). Any new section
+The sheet **starts locked** (a read-only viewer, not an editor). The simple sheet
+(View ▸ Simple Sheet) locks it too, for as long as it is up, and puts the lock back on the
+way out — the controls that survive a lock are exactly the play-time ones it keeps; see
+[The simple sheet](simple-sheet.md). Any new section
 with editable widgets should expose `set_locked` and be wired into
 `CharacterSheet.set_locked`. That action lives **on the menu bar**, not in a
 menu — `menu_bar.addAction(…)` with no submenu, so one click toggles it — and its

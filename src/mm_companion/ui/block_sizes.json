@@ -1,53 +1,69 @@
 {
   "_comment": "Per-block RECOMMENDED sizes (pixels) for the character-sheet blocks, plus the GM window's own blocks (gm_*). Keyed by block. These are not constraints: the grid is user-resizable, so a number here is the size a block reads well at, and nothing stops anyone dragging a block smaller. It is used for exactly three things — the size a block opens at, the soft detent a divider sticks at on its way past, and the mark shown during a drag (with the 'fit to content' that snaps back to it). Omit a dimension (or set it to null/0) to state no opinion, and the block opens at whatever its own content asks for; abilities and resistances say nothing in either dimension because their tables report their real columns and rows, which is more honest than a number a denser or roomier preset would make wrong. There are no maxima any more: pinning a block's width was how the old page stopped Abilities being stretched, and a page whose columns the user drags has no use for it. The old min_width/min_height names are still read as the recommendation, for mods that ship a blocks.json written against them. These are the baseline: the active theme's 'blocks' map overrides any of them, since how much room a block needs depends on the look's density.",
+  "_comment_share": "default_share is a block's weight in the row it opens in on a fresh sheet: Skills 60 beside Advantages 40 opens at 60/40. Read only by the default arrangement, and only for a row whose every block states one; any other row divides itself from the blocks' recommended widths.",
   "base_info": {
     "recommended_width": 320,
-    "recommended_height": 160
+    "recommended_height": 160,
+    "default_share": 36
   },
   "system_info": {
     "recommended_width": 340,
-    "recommended_height": 200
+    "recommended_height": 200,
+    "default_share": 40
   },
   "character_image": {
     "recommended_width": 200,
-    "recommended_height": 210
+    "recommended_height": 210,
+    "default_share": 24
   },
-  "abilities": {},
-  "resistances": {},
+  "abilities": {
+    "default_share": 35
+  },
+  "resistances": {
+    "default_share": 37
+  },
   "conditions": {
     "recommended_width": 340,
-    "recommended_height": 150
+    "recommended_height": 150,
+    "default_share": 28
   },
   "advantages": {
     "recommended_width": 330,
-    "recommended_height": 150
+    "recommended_height": 150,
+    "default_share": 42
   },
   "complications": {
     "recommended_width": 300,
-    "recommended_height": 120
+    "recommended_height": 120,
+    "default_share": 34
   },
   "skills": {
     "recommended_width": 300,
-    "recommended_height": 180
+    "recommended_height": 180,
+    "default_share": 58
   },
   "powers": {
     "recommended_width": 240,
-    "recommended_height": 180
+    "recommended_height": 180,
+    "default_share": 60
   },
   "equipment": {
     "recommended_width": 240,
-    "recommended_height": 180
+    "recommended_height": 180,
+    "default_share": 40
   },
   "notes": {
     "recommended_width": 320,
-    "recommended_height": 220
+    "recommended_height": 220,
+    "default_share": 40
   },
   "dice": {
     "recommended_width": 360,
     "recommended_height": 300
   },
   "scene": {
-    "recommended_width": 210
+    "recommended_width": 210,
+    "default_share": 26
   },
   "gm_players": {
     "recommended_width": 240,

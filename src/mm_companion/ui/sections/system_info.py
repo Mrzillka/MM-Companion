@@ -66,7 +66,7 @@ from mm_companion.core.rules import (
 from mm_companion.ui import theme
 from mm_companion.ui.extra_effort import ExtraEffortDialog, character_effort_menu
 from mm_companion.ui.lock import set_widget_locked
-from mm_companion.ui.roll_click import ROLL_TOOLTIP, attach_roll_click
+from mm_companion.ui.roll_click import ROLL_TOOLTIP, RollChip, attach_roll_click
 from mm_companion.ui.sections.cost_config_dialog import CostConfigDialog
 from mm_companion.ui.sections.stat_table import PinMenuState
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
@@ -269,7 +269,13 @@ class SpeedWidget(QWidget):
         :func:`~mm_companion.core.rules.condition_speed_lines` — a slowed line arrives
         at its reduced rank carrying the penalty in ``rank_mod``, an immobilised one is
         flagged. This widget only expands ranks into distance columns and tints.
+
+        The same lines again draw nothing: this runs on every derived-stat refresh,
+        which is every power toggled, and a rebuild of labels nobody changed still
+        relays the System block out and repaints it.
         """
+        if lines == self._lines:
+            return
         self._lines = lines
         self._redraw()
 
@@ -376,8 +382,13 @@ class MovementModesWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(int(theme.metric("space.xxs")))
         self.setVisible(False)
+        self._lines: list | None = None
 
     def render_lines(self, lines: list) -> None:
+        # Unchanged lines draw nothing, for SpeedWidget.render_lines's reason.
+        if lines == self._lines:
+            return
+        self._lines = lines
         layout = self.layout()
         while layout.count():  # rebuilt wholesale — a mode list is a handful of rows
             widget = layout.takeAt(0).widget()
@@ -715,32 +726,56 @@ class SystemInfoSection(QGroupBox):
 
     def _build_initiative(self) -> QWidget:
         self._initiative = QLabel("—")
-        self._initiative.setToolTip(INITIATIVE_TIP)
+        # Dressed as a roll (a 🎲 in a dice-tinted border) rather than left a bare
+        # label: it is the one readout on this block that is a die roll rather than a
+        # fact, and the only rollable stat on the sheet that is not a table row, so
+        # nothing else about it said it could be clicked. The chip is the click target
+        # and carries the tooltip (see RollChip); the label is just its text.
+        self._initiative_chip = RollChip(self._initiative)
+        self._set_initiative_tip(INITIATIVE_TIP)
         # Initiative is the one readout on this block a GM pins, and the only
         # pinnable line on the sheet that is not a table row — so the menu is hung
-        # on the label itself rather than through stat_table.
-        self._initiative.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self._initiative.customContextMenuRequested.connect(self._show_initiative_pin_menu)
-        # The one readout on this block that is a die roll rather than a fact. Its
-        # tooltip is rewritten on every refresh, so the click hint is folded into
+        # on the chip itself rather than through stat_table.
+        self._initiative_chip.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._initiative_chip.customContextMenuRequested.connect(self._show_initiative_pin_menu)
+        # Its tooltip is rewritten on every refresh, so the click hint is folded into
         # that text rather than left to attach_roll_click.
         attach_roll_click(
-            self._initiative,
+            self._initiative_chip,
             lambda: initiative_roll(self._character, self._data),
             self.rollRequested.emit,
             load_sink=self.loadRequested.emit,
             tooltip=False,
         )
-        return self._initiative
+        # Left-aligned at its own width: a form row would otherwise stretch the
+        # border across the whole block, and a chip is a thing, not a band.
+        row = QWidget()
+        line = QHBoxLayout(row)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.addWidget(self._initiative_chip)
+        line.addStretch(1)
+        return row
+
+    def _set_initiative_tip(self, text: str) -> None:
+        """The chip shows the tooltip (its label is mouse-transparent); the label keeps a
+        copy so what the readout says about itself can be read off either."""
+        self._initiative.setToolTip(text)
+        self._initiative_chip.setToolTip(text)
 
     def _show_initiative_pin_menu(self, pos) -> None:
         if not self._pins.enabled:
             return
         ref = PinRef(PIN_INITIATIVE)
         sink = self.unpinRequested if self._pins.is_pinned(ref) else self.pinRequested
-        menu = QMenu(self._initiative)
+        menu = QMenu(self._initiative_chip)
         menu.addAction(self._pins.action_text(ref), lambda: sink.emit(ref))
-        menu.exec(self._initiative.mapToGlobal(pos))
+        menu.exec(self._initiative_chip.mapToGlobal(pos))
+
+    @property
+    def pin_state(self) -> PinMenuState:
+        """Whether this sheet can pin, and what is already pinned — read by the simple
+        sheet's own views of this block, which offer the same right-click."""
+        return self._pins
 
     def set_pin_target(self, enabled: bool) -> None:
         """Whether the Initiative readout offers to pin at all."""
@@ -1260,13 +1295,13 @@ class SystemInfoSection(QGroupBox):
         if penalty:
             worse = theme.color("tint.worse")
             self._initiative.setText(f'<span style="color: {worse};">{net:+d}</span> ({ability})')
-            self._initiative.setToolTip(
+            self._set_initiative_tip(
                 f"{modifier:+d} base {penalty:+d} from an active condition on all checks"
                 f"\n{ROLL_TOOLTIP}"
             )
         else:
             self._initiative.setText(f"{net:+d} ({ability})")
-            self._initiative.setToolTip(INITIATIVE_TIP)
+            self._set_initiative_tip(INITIATIVE_TIP)
 
         effective = effective_size(self._character, self._data)
         base = str(self._character.characteristics.get("size", "Medium"))

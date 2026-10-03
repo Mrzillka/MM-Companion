@@ -33,6 +33,7 @@ from mm_companion.core.session.model import new_session
 from mm_companion.ui import dice_roller
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.sections.powers import _RollLine
+from mm_companion.ui.sections.skills import COL_TOTAL as SKILL_TOTAL
 from mm_companion.ui.sections.stat_table import COL_NAME, COL_TOTAL, ROLL_ROLE
 from mm_companion.ui.session_bridge import SessionBridge, set_active_session
 
@@ -242,9 +243,9 @@ def test_clicking_a_skill_row_loads_it(qapp: QApplication) -> None:
     row = next(
         r
         for r in range(table.rowCount())
-        if (table.item(r, 5) or None) and table.item(r, 5).data(ROLL_ROLE)
+        if (table.item(r, SKILL_TOTAL) or None) and table.item(r, SKILL_TOTAL).data(ROLL_ROLE)
     )
-    table.cellClicked.emit(row, 5)
+    table.cellClicked.emit(row, SKILL_TOTAL)
 
     assert len(seen) == 1
     assert seen[0].kind == "skill"
@@ -365,9 +366,10 @@ def test_double_clicking_a_skill_row_rolls_that_row(qapp: QApplication) -> None:
     row = next(
         r
         for r in range(table.rowCount())
-        if (table.item(r, 5) or None) and table.item(r, 5).data(Qt.ItemDataRole.UserRole)
+        if (table.item(r, SKILL_TOTAL) or None)
+        and table.item(r, SKILL_TOTAL).data(Qt.ItemDataRole.UserRole)
     )
-    table.cellDoubleClicked.emit(row, 5)
+    table.cellDoubleClicked.emit(row, SKILL_TOTAL)
 
     assert len(seen) == 1
     assert seen[0].kind == "skill"
@@ -514,7 +516,6 @@ def test_a_loaded_chip_stays_so_the_same_trait_can_be_rolled_again(qapp: QApplic
     panel.load_spec(RollSpec(label="Athletics", modifier=9))
 
     panel._start_roll()
-    panel._finish_roll()
 
     assert panel.current_spec().label == "Athletics"
     assert panel._spec_label.text() == f"{dice_roller.CHIP_PREFIX}Athletics +9"
@@ -602,7 +603,6 @@ def test_a_hit_offers_the_save_it_forced(qapp: QApplication) -> None:
     panel._dc_check.setChecked(True)
     panel._dc_spin.setValue(12)  # the target's Defense
     panel._start_roll()
-    panel._finish_roll()
 
     chain = _chain_buttons(history.cards()[0])
     assert len(chain) == 1
@@ -626,8 +626,7 @@ def test_a_failed_save_says_what_it_did_to_the_target(qapp: QApplication) -> Non
     panel.load_spec(
         RollSpec(label="Toughness vs. 18", dc=18, outcomes=("Dazed", "Staggered", "Incapacitated"))
     )
-    panel._start_roll()
-    panel._finish_roll()  # d20 11 vs DC 18 — two degrees of failure
+    panel._start_roll()  # d20 11 vs DC 18 — two degrees of failure
 
     lines = [lb.text() for lb in history.cards()[0].findChildren(QLabel)]
     assert "Staggered!" in lines
@@ -652,7 +651,6 @@ def test_a_save_that_held_still_reports_the_hit_it_cost(qapp: QApplication) -> N
         )
     )
     panel._start_roll()
-    panel._finish_roll()
 
     lines = [lb.text() for lb in history.cards()[0].findChildren(QLabel)]
     assert "Hit (unless Impervious)!" in lines
@@ -666,7 +664,6 @@ def test_a_save_with_nothing_to_say_on_a_success_says_nothing(qapp: QApplication
     panel._bonus_spin.setValue(20)  # cannot fail
     panel.load_spec(RollSpec(label="Will vs. 16", dc=16, outcomes=("Dazed",)))
     panel._start_roll()
-    panel._finish_roll()
 
     lines = [lb.text() for lb in history.cards()[0].findChildren(QLabel)]
     assert not any(line.endswith("!") for line in lines)
@@ -683,7 +680,6 @@ def _attack_with_die(sheet: CharacterSheet, die: int, *, dc: int = 12):
     panel._dc_spin.setValue(dc)
     dice_roller.roll_d20 = lambda *a, **k: die
     panel._start_roll()
-    panel._finish_roll()
     return sheet.dice.view._local_history.cards()[0]
 
 

@@ -85,7 +85,7 @@ class CharacterImageSection(QGroupBox):
 
     #: The portrait rescales to whatever room it is given, so it takes the height
     #: rather than sitting at the top of it (see
-    #: :meth:`~mm_companion.ui.block_frame._InnerScroll.set_section`).
+    #: :meth:`~mm_companion.ui.block_frame.InnerScroll.set_section`).
     fills_height = True
 
     edited = Signal()

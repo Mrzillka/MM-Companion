@@ -5,11 +5,11 @@
   "groups": {
     "colors": {
       "label": "Colours",
-      "order": ["surface", "text", "accent", "tint", "scene", "border", "badge", "drop", "focus", "splash", "dice"]
+      "order": ["surface", "text", "accent", "tint", "scene", "border", "badge", "drop", "focus", "splash", "dice", "paper"]
     },
     "metrics": {
       "label": "Sizes",
-      "order": ["radius", "border", "focus", "space", "card", "group", "column", "canvas", "die", "compact", "opacity"]
+      "order": ["radius", "border", "focus", "space", "card", "group", "column", "canvas", "die", "compact", "simple", "opacity"]
     },
     "typography": {
       "label": "Typography",
@@ -29,9 +29,11 @@
     "focus": "Focus ring",
     "splash": "Splash screen",
     "dice": "Dice",
+    "paper": "Paper (printing)",
     "radius": "Corner radii",
     "space": "Spacing steps",
     "card": "Power cards",
+    "simple": "Simple sheet",
     "group": "Group boxes",
     "column": "Column minimums",
     "canvas": "Canvas",
@@ -92,6 +94,7 @@
     "surface.titlebar": {"label": "Block title bar", "hint": "The drag handle above each block."},
     "surface.card": {"label": "Card", "hint": "A power card, a player card, a modifier chip."},
     "surface.field": {"label": "Input field", "hint": "Behind a spin box, combo box or line edit."},
+    "surface.toast": {"label": "Notification", "hint": "Behind a notification card — a session notice over a window, a roll in a corner of the screen. May be a palette() role."},
     "text.primary": {"label": "Primary", "hint": "Ordinary body text. Styled presets only."},
     "text.muted": {
       "label": "Muted",
@@ -126,6 +129,9 @@
     "splash.background": {"label": "Background", "hint": "The startup splash screen."},
     "splash.text": {"label": "Text", "hint": "On the splash screen."},
     "dice.face": {"label": "Die face", "hint": "The rolled number in the dice roller."},
+    "paper.background": {"label": "Paper", "hint": "The page of a printed or exported sheet, whatever the theme. A #rrggbb."},
+    "paper.ink": {"label": "Ink", "hint": "Text on a printed sheet. A #rrggbb."},
+    "paper.muted": {"label": "Muted ink", "hint": "Secondary text on a printed sheet, and its page footer. A #rrggbb."},
     "radius.card": {"label": "Card", "hint": "Also the fallback for any radius a preset leaves unstated."},
     "radius.group": {"label": "Group box"},
     "radius.canvas": {"label": "Canvas"},
@@ -169,6 +175,7 @@
       "hint": "Room around the drawing inside its button, in pixels."
     },
     "compact.width": {"label": "Window width", "hint": "What the mini roller opens at, in pixels."},
+    "toast.width": {"label": "Notification width", "hint": "A roll or session notice card, in pixels."},
     "compact.height": {"label": "Window height", "hint": "In pixels."},
     "compact.min-width": {
       "label": "Minimum width",
@@ -222,6 +229,14 @@
       "label": "Hero point pip",
       "hint": "The medallion is square, so this is its height too."
     },
+    "column.use-pip": {
+      "label": "Advantage use dot",
+      "hint": "One dot per use of an advantage spent at the table (Luck, Determination). Round, so this is its height too."
+    },
+    "column.rank-pip": {
+      "label": "Power rank pip",
+      "hint": "One pip per rank on a power card's rank scale (a Growth's sizes, a Dynamic member's share). Round, so this is its height too; a narrow card shrinks them."
+    },
     "column.status-dot": {
       "label": "Connection dot",
       "hint": "The dot beside the connection state in the menu bar corner. Round, so this is its height too."
@@ -232,6 +247,21 @@
     },
     "size.card-name": {"label": "Power name"},
     "size.terms": {"label": "Game terms", "hint": "The small print under a power's effects."},
+    "size.simple-name": {"label": "Simple sheet: hero name", "hint": "The character's name across the top of the simple sheet."},
+    "size.simple-value": {"label": "Simple sheet: key values", "hint": "The numbers a player reads mid-fight — ability and defence totals, skill bonuses, a power's rank and DC."},
+    "size.simple-label": {"label": "Simple sheet: names", "hint": "What a value belongs to — a skill, an advantage, a power."},
+    "size.simple-heading": {"label": "Simple sheet: box headings"},
+    "size.simple-term": {"label": "Simple sheet: game terms", "hint": "The small italic print that qualifies a value — range, action, duration."},
+    "simple.gap": {"label": "Gap between boxes"},
+    "simple.margins": {"label": "Box padding"},
+    "simple.spacing": {"label": "Line spacing inside a box"},
+    "simple.page-margin": {"label": "Page margin"},
+    "simple.value-box": {"label": "Stat box width"},
+    "simple.portrait": {"label": "Portrait height"},
+    "simple.box-min": {"label": "Narrowest box in a row", "hint": "Below this a row of boxes stacks them one under another."},
+    "simple.line-column": {"label": "List column width", "hint": "The narrowest a column of skills or advantages gets before the list drops to fewer columns."},
+    "simple.column-floor": {"label": "List column floor", "hint": "How narrow a single list column may be dragged before it clips rather than refusing."},
+    "opacity.term": {"label": "Game terms", "hint": "How strongly the simple sheet's game terms are drawn next to the values they qualify."},
     "size.version": {"label": "Version line", "hint": "The app version under the launcher's buttons."},
     "size.cost-total": {"label": "Cost total"},
     "size.dice-face": {"label": "Die face"},

@@ -85,10 +85,10 @@ data-first; nothing below names a trait, an effect or a column in Python.
   player's `rank_dial` overrule it in either direction. A size effect used to get its
   dial whatever the constructor's checkbox said, which made that box a control that
   changed nothing on exactly the card it mattered most on. **A Dynamic array member's
-  ladder is its share**: the card carries one slider, still captioned "Size", whose
+  ladder is its share**: the card carries one pip scale, still captioned "Size", whose
   notches spend points instead of naming a rank the player is free to pick — the pool
-  decides the rank there, and two sliders claiming it deadlocked (see "A Dynamic member
-  has exactly one slider" in [The powers layer](powers.md)).
+  decides the rank there, and two dials claiming it deadlocked (see "A Dynamic member
+  has exactly one dial" in [The powers layer](powers.md)).
 
   Two rules that are easy to re-break: ranks the Size
   Table **clamps** fold into the step that first reached them (`last_rank` closes the
@@ -99,45 +99,53 @@ data-first; nothing below names a trait, an effect or a column in Python.
   the array's `active_child_id`. That pair is `effect_stands`, split out of `size_steps`
   because the dial has to position itself by the same answer the ladder lit a rung by.
   The dial spends the span rather than collapsing it: it carries a notch per **rank**,
-  labelled from these steps, so the handle can stop wherever the player puts it and
-  simply repeats the category where the table ran out.
-- **`_RankDial` is the slider on the card** (`ui/sections/powers.py`), one notch per
-  rank from `0` upwards, under the effect's term grid and above the dice footer with the
-  rest of the mid-play controls. It replaced a strip of checkable buttons, one per rung:
-  the strip could not serve an ordinary Damage (ten buttons reading "Rank 1"…"Rank 10"
-  is not a control), and the two would have been separate answers to one question. Five
-  things it does that a plain slider does not. **Zero is off, and off is where it sits
+  labelled from these steps, so the player can stop on any rank and the label simply
+  repeats the category where the table ran out — the pip scale opens a wider gap where a
+  repeated category changes, so the stretch of a ladder spent at one size is visible.
+- **`_RankDial` is the rank scale on the card** (`ui/sections/powers.py`): one pip per
+  rank (`ui/rank_pips.py`'s `RankPips`, a single painted widget) and a label naming it,
+  under the effect's term grid and above the dice footer with the rest of the mid-play
+  controls. It has been two other things. A strip of checkable buttons, one per rung,
+  could not serve an ordinary Damage (ten buttons reading "Rank 1"…"Rank 10" is not a
+  control). A `QSlider` then served both, but looked like a stray form control on a card
+  and spent most of its code working around the drag — committing on release, deferring a
+  groove click's commit until the mouse grab was over — because every commit rebuilds the
+  card under it. A pip is picked by one click, which is the whole gesture, so none of
+  that survives; hovering a pip only names it in the label and previews it on the scale.
+  The pips shrink toward a floor on a narrow card and clip past it, and report no minimum
+  width. **Zero is off, and off is where it sits
   while the power is** — the dial says where the power *is*, and off is nowhere, not
   rank 1. **A move does whatever a click on the card body would have done, then lands
   where it was asked**: from zero it wakes the power at that notch (flipping the
-  switches, or becoming the array's live alternate), so dormant → Huge is one gesture,
-  and **sliding back to zero switches the power off** — the dial is a whole control, not
-  one that can only turn a power on. The one exception is an array's *live* member,
-  where a card click is deliberately a no-op, so zero there just puts the handle back.
-  It **commits on release**, never per tick: every runtime setter ends in
-  `_rebuild_list`, so a slider that wrote on each notch would delete itself under the
-  player's thumb — `valueChanged` moves only the label while `isSliderDown`, and a
-  keyboard or groove step (which leaves the handle up) commits at once. It **stays live
+  switches, or becoming the array's live alternate), so dormant → Huge is one click,
+  and **reaching zero switches the power off** — the dial is a whole control, not one
+  that can only turn a power on. There is **no Off button**: clicking the *last lit pip*
+  puts that pip out, a rank down, so a power held at rank 1 goes off on that click (the
+  user's call — an Off chip beside the pips read as clutter). Every other pip jumps
+  straight there, so a click always changes the dial and a rebuild is never spent on
+  nothing; hover names the notch the click would land on, "Off" included. The one
+  exception is an array's *live* member, where a card click is deliberately a no-op, so
+  zero there just redraws the dial where it was. It **stays live
   in the locked sheet** and emits `runtimeChanged`, never `changed`, like every other
   card switch — which, the notch being saved, does now mark the sheet unwritten (see
   "Runtime is saved" in [The powers layer](powers.md)). And a **single-rank effect gets
   no dial at all**: a Growth 1's one notch *is* the card's own on/off switch, and a
-  slider of one would be a second way to press it. **How the handle is positioned
+  scale of one would be a second way to press it. **Where the dial stands
   differs by effect**, and has to: a size effect reads `effect_stands`, since a Growth
   that is switched off is nowhere — but an *instant* effect never stands at all
   (`effect_is_active` is False for a Damage by pattern), so asking it there would peg
   every blast card at Off. Those read whether the card is simply switched on. Screenshot
   it with `driver.py size-ladder`, and the notch coming back off disk with `driver.py
   size-ladder-reload`.
-- **The slider is `NoFocus`, and `_rebuild_list` runs inside `rebuilding`.** Two
+- **The dial is `NoFocus`, and `_rebuild_list` runs inside `rebuilding`.** Two
   halves of one bug: every runtime setter rebuilds the whole card tree, so the block is
   briefly empty *and* whatever held focus inside it is destroyed — Qt hands focus to the
   next widget in the tab order, which is a table in some other block, and a `QScrollArea`
   scrolls to show a child that has just taken focus. The page jumped away from the card
-  under the cursor. `NoFocus` closes the cause (the slider is destroyed by its own
+  under the cursor. `NoFocus` closes the cause (the dial is destroyed by its own
   commit, so focus could never usefully rest there, and the card body it sits on is not
-  focusable either) — and it must be set **after** `guard_wheel`, which asks for
-  `StrongFocus` so a focused widget keeps its own wheel; `widgets.rebuilding` closes the
+  focusable either); `widgets.rebuilding`
+  closes the
   rest — it restores the bar **twice**, now and on the next turn of the event loop,
   because the range is only recomputed on the following layout pass and an immediate
   `setValue` is clamped by the stale one. (It also freezes painting across the rebuild,

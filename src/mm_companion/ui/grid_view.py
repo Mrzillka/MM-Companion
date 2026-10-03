@@ -102,7 +102,36 @@ class GridSplitter(QSplitter):
         self._mark: _DetentMark | None = None
         # The panes currently warned as too small to keep (see below).
         self._collapsing: list[QWidget] = []
+        # Whether this splitter has been laid out at a real size yet — see
+        # :attr:`has_real_sizes` — judged against the placeholder box it was born in.
+        self._laid_out = False
+        self._born = self.size()
         self.splitterMoved.connect(lambda *_: self.sizesSettled.emit())
+
+    @property
+    def has_real_sizes(self) -> bool:
+        """Whether :meth:`sizes` describes the page yet, or only a placeholder.
+
+        A splitter built by a rebuild lives at Qt's default geometry until its row
+        is laid out, and in that box it scales the sizes it was handed down to fit
+        — under the block floor, so the proportions bend (``[432, 459, 270]`` came
+        back as ``[27, 29, 24]``). Anything that read those back into the tree in
+        that moment — a layout snapshot right after a gesture, which is when every
+        snapshot is taken — saved the bent proportions, and the next render scaled
+        *them* up to the full width: showing one block reshaped every row on the
+        page. Until a splitter has been resized while on screen, the tree is the
+        truth and :meth:`~mm_companion.ui.block_canvas.BlockCanvas._absorb_sizes`
+        leaves it alone.
+        """
+        return self._laid_out
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        super().resizeEvent(event)
+        # Any size other than the box it was born in is one a layout gave it. Not
+        # "while visible": Qt delivers a widget's held-back first resize *before* it
+        # counts as shown, so that test missed the one resize that mattered.
+        if not event.size().isEmpty() and event.size() != self._born:
+            self._laid_out = True
 
     def createHandle(self) -> GridHandle:  # noqa: N802 - Qt override
         return GridHandle(self.orientation(), self)
@@ -531,6 +560,9 @@ class RowStack(QWidget):
         # first drag and destroyed on release (see :class:`_DetentMark`).
         self._mark: _DetentMark | None = None
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        # Top-down like the canvas holding it, and for the canvas's reason (see
+        # BlockCanvas.__init__): a row changing height must not repaint the rows above.
+        self.setAttribute(Qt.WidgetAttribute.WA_StaticContents, True)
 
     def set_rows(self, rows: Sequence[QWidget], heights: Sequence[int]) -> None:
         """Show *rows*, the nth at ``heights[n]`` pixels (or its content at zero)."""

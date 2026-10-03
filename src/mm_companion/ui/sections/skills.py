@@ -65,14 +65,23 @@ from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData, Skill
 from mm_companion.core.rules import (
     PIN_SKILL,
+    ROW_FOCUS,
+    ROW_SKILL,
+    TRAIT_QUALIFIER_SEP,
     PinRef,
     SkillModifiers,
     effective_ability,
+    focus_row_id,
     granted_skill_rows,
+    own_skill_rows,
+    skill_allows_untrained,
+    skill_for_row,
     skill_modifiers,
     skill_points_spent,
     skill_roll,
     skill_total,
+    skill_usable,
+    specialized_row_id,
     split_trait_key,
     trait_display_name,
 )
@@ -104,8 +113,14 @@ from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box, readonly_item
 
 RANK_MIN, RANK_MAX = 0, 20
-COL_NAME, COL_ABILITY, COL_ABILITY_RANK, COL_RANKS, COL_MODS, COL_TOTAL = range(6)
-HEADERS = ["Skill", "Ability", "ABL", "Rank", "+", "Total"]
+COL_NAME, COL_UNTRAINED, COL_ABILITY, COL_ABILITY_RANK, COL_RANKS, COL_MODS, COL_TOTAL = range(7)
+HEADERS = ["Skill", "Untrained?", "Ability", "ABL", "Rank", "+", "Total"]
+
+#: What the Untrained? column says for a skill that can be tried without ranks, and
+#: for one that cannot. It is a build-time fact — which skills are worth ranks — so
+#: the column shows only while unlocked; locked, the rows that cannot be used are
+#: muted instead (see :meth:`SkillsSection._mute_unusable`).
+UNTRAINED_YES, UNTRAINED_NO = "✓", "✕"
 
 # Sort modes for the skills list (UI-only state, not persisted; the *order* they
 # write is). SORT_MANUAL is the shared one — see row_table, which only lets rows be
@@ -185,6 +200,10 @@ class SkillRow(NamedTuple):
     mod_item: QTableWidgetItem
     total_item: QTableWidgetItem
     name_item: QTableWidgetItem | None
+    #: Where the row sits, so a pass over the whole row (muting one that cannot be
+    #: used) reaches every cell without re-deriving it.
+    table: QTableWidget | None = None
+    row: int = -1
 
 
 class SkillsSection(ColumnFlowPanels, TitledSection):
@@ -315,7 +334,7 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         header = table.horizontalHeader()
         header.setSectionResizeMode(COL_NAME, QHeaderView.ResizeMode.Stretch)
-        for col in (COL_ABILITY, COL_ABILITY_RANK, COL_RANKS, COL_MODS, COL_TOTAL):
+        for col in (COL_UNTRAINED, COL_ABILITY, COL_ABILITY_RANK, COL_RANKS, COL_MODS, COL_TOTAL):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
         # Worst first. The governing ability's *name* goes before its rank, which
         # goes before the situational modifier, and **Rank goes last** — what
@@ -326,7 +345,11 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         # ranks are typed once at a width the player chooses, and the total is read
         # at whatever width the page has left. Past this the name wraps, then
         # elides, then the block scrolls; widening it brings the spins back.
-        table.set_shed_order([COL_ABILITY, COL_ABILITY_RANK, COL_MODS, COL_RANKS])
+        #
+        # The Untrained? flag goes before all of them: it is a reference fact about
+        # the ruleset, read once while choosing where to put ranks, and it is the
+        # only column here a player can work out for themselves.
+        table.set_shed_order([COL_UNTRAINED, COL_ABILITY, COL_ABILITY_RANK, COL_MODS, COL_RANKS])
         # The panels fit their content and never scroll, so keep them out of the
         # focus chain; the wheel then always falls through to the page scroll.
         table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -382,6 +405,12 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         if not isinstance(payload, tuple) or not payload:
             return None
         return PinRef(PIN_SKILL, str(payload[0]))
+
+    @property
+    def pin_state(self) -> PinMenuState:
+        """Whether this sheet can pin, and what is already pinned — read by the simple
+        sheet's own views of this block, which offer the same right-click."""
+        return self._pins
 
     def set_pin_target(self, enabled: bool) -> None:
         """Whether this block's rows offer to pin at all."""
@@ -445,7 +474,8 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
             table.clearSpans()
             table.setRowCount(len(specs))
             self._render_side(table, specs)
-            table.setColumnHidden(COL_MODS, not self._show_mods)
+            table.set_column_absent(COL_MODS, not self._show_mods)
+            table.set_column_absent(COL_UNTRAINED, self._locked)
             table.updateGeometry()
 
         self._apply_lock()
@@ -518,7 +548,13 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         )
         mods = mod_width() if self._show_mods else 0
         numeric = NUMERIC_PADDING + spin_width() + self._ability_col_width()
-        return name_width + numeric + mods + FRAME_PADDING
+        return name_width + numeric + mods + self._untrained_col_width() + FRAME_PADDING
+
+    def _untrained_col_width(self) -> int:
+        """The Untrained? column, while it shows (unlocked) — its header is the width."""
+        if self._locked:
+            return 0
+        return self.fontMetrics().horizontalAdvance(HEADERS[COL_UNTRAINED]) + ABILITY_PADDING
 
     def _panel_floor_width(self) -> int:
         """The narrowest a panel knows how to reach: a skill name and its total.
@@ -602,16 +638,15 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         for skill in skills:
             if skill.focused:
                 specs.append(("header", skill))
-                for focus in self._focuses.get(skill.name, []):
-                    display = f"{skill.name}: {focus}"
-                    row_id = f"{skill.name}::{focus}"
-                    specs.append(("focus", skill, display, row_id, focus))
-            else:
-                specs.append(("skill", skill, skill.name, skill.name))
-            for spec in self._specializations.get(skill.name, []):
-                display = f"{skill.name}: {spec} (specialized)"
-                row_id = f"{skill.name}::spec::{spec}"
-                specs.append(("spec", skill, display, row_id, spec))
+            for row in own_skill_rows(self._character, skill):
+                if row.kind == ROW_SKILL:
+                    specs.append(("skill", skill, skill.name, skill.name))
+                elif row.kind == ROW_FOCUS:
+                    display = f"{skill.name}: {row.qualifier}"
+                    specs.append(("focus", skill, display, row.row_id, row.qualifier))
+                else:
+                    display = f"{skill.name}: {row.qualifier} (specialized)"
+                    specs.append(("spec", skill, display, row.row_id, row.qualifier))
             for row_id, source in granted.items():
                 if split_trait_key(row_id)[0] == skill.name:
                     display = trait_display_name(self._data, row_id)
@@ -713,6 +748,10 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         else:
             self._row_refs.add(table, row, SkillRowKey("skill", skill.name, "", row_id))
 
+        # Filled by _refresh_totals, which runs whenever an advantage might have
+        # opened a trained-only skill up (Jack-of-All-Trades).
+        table.setItem(row, COL_UNTRAINED, readonly_item("", center=True))
+
         abbr = self._ability_abbrs.get(skill.ability, skill.ability)
         table.setItem(row, COL_ABILITY, readonly_item(abbr, center=True))
 
@@ -756,7 +795,16 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
             if name_item is not None:
                 name_item.setToolTip(f"{display} — granted by {granted_source}")
         self._rows.append(
-            SkillRow(skill.ability, row_id, ability_rank_item, mod_item, total_item, name_item)
+            SkillRow(
+                skill.ability,
+                row_id,
+                ability_rank_item,
+                mod_item,
+                total_item,
+                name_item,
+                table,
+                row,
+            )
         )
 
     def _render_name_cell(
@@ -843,7 +891,7 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         if focus not in focuses:
             return
         focuses.remove(focus)
-        self._ranks.pop(f"{skill.name}::{focus}", None)
+        self._ranks.pop(focus_row_id(skill.name, focus), None)
         self._rebuild()
         self.changed.emit()
 
@@ -881,7 +929,7 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         specs.remove(spec_name)
         if not specs:  # keep the model tidy — drop the now-empty entry
             self._specializations.pop(skill.name, None)
-        self._ranks.pop(f"{skill.name}::spec::{spec_name}", None)
+        self._ranks.pop(specialized_row_id(skill.name, spec_name), None)
         self._rebuild()
         self.changed.emit()
 
@@ -923,7 +971,7 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
 
         if self._focuses.get(name) or self._specializations.get(name):
             return True
-        prefix = f"{name}::"
+        prefix = f"{name}{TRAIT_QUALIFIER_SEP}"
         return any(
             rank
             for row_id, rank in self._ranks.items()
@@ -958,7 +1006,7 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         self._character.hidden_skills.append(name)
         self._focuses.pop(name, None)
         self._specializations.pop(name, None)
-        prefix = f"{name}::"
+        prefix = f"{name}{TRAIT_QUALIFIER_SEP}"
         for row_id in [k for k in self._ranks if k == name or k.startswith(prefix)]:
             del self._ranks[row_id]
         self._rebuild()
@@ -1029,10 +1077,9 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         """Every rank-buying row this skill owns — its own, its focuses, its pools."""
 
         skill = self._skill_by_name(name)
-        rows = [] if skill is not None and skill.focused else [name]
-        rows += [f"{name}::{focus}" for focus in self._focuses.get(name, [])]
-        rows += [f"{name}::spec::{spec}" for spec in self._specializations.get(name, [])]
-        return rows
+        if skill is None:
+            return [name]
+        return [row.row_id for row in own_skill_rows(self._character, skill)]
 
     def _best_of(self, name: str, of_row) -> int:
         """The highest reading over the skill's rows — a focused skill has no own row."""
@@ -1159,8 +1206,49 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
             effect = mod.condition
             row.total_item.setText(str(effect.apply(total) if effect.active else total))
             self._style_condition(row.total_item, row.name_item, effect, total)
+            self._fill_untrained_cell(row)
+            if not effect.active:
+                self._mute_unusable(row)
         # Keep the section title's running point cost current.
         self.set_priced_title("Skills", skill_points_spent(self._character, self._data))
+
+    def _fill_untrained_cell(self, row: SkillRow) -> None:
+        """Say whether this row's skill can be tried without ranks, by this character."""
+
+        item = None if row.table is None else row.table.item(row.row, COL_UNTRAINED)
+        skill = skill_for_row(self._data, row.row_id)
+        if item is None or skill is None:
+            return
+        if skill_allows_untrained(self._character, self._data, skill):
+            item.setText(UNTRAINED_YES)
+            opened = " (an advantage opens it up)" if skill.trained_only else ""
+            item.setToolTip(f"{skill.name} can be used untrained{opened}")
+        else:
+            item.setText(UNTRAINED_NO)
+            item.setToolTip(f"{skill.name} is trained only — it can't be used without ranks")
+
+    def _mute_unusable(self, row: SkillRow) -> None:
+        """Mute a trained-only skill the character cannot use — while locked.
+
+        Unlocked, the Untrained? column says which skills need ranks, and a row with
+        none is exactly the row a player is deciding whether to buy, so it is drawn
+        like any other. Locked, the sheet is being *played*, the column is gone, and
+        a total printed at full strength for a skill that cannot be attempted is a
+        number someone will roll. So it is drawn the way a granted row is — in the
+        muted text colour — with its name saying why.
+        """
+
+        if not self._locked or skill_usable(self._character, self._data, row.row_id):
+            return
+        muted = QBrush(QColor(theme.color("text.muted.rich")))
+        for column in range(len(HEADERS)):
+            item = row.table.item(row.row, column)
+            if item is not None:
+                item.setForeground(muted)
+        if row.name_item is not None:
+            row.name_item.setToolTip(
+                f"{row.name_item.text().strip()} — trained only, and no ranks: it can't be used"
+            )
 
     @staticmethod
     def _fill_modifier_cell(mod_item: QTableWidgetItem, mod: SkillModifiers) -> None:

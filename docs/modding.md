@@ -219,6 +219,20 @@ handler, replace=False)`), so extending them is the same call everywhere:
 | `ui.power_constructor.REPEATABLE_CELL_KINDS` | ui | `repeatable` **column cells** — one row's inputs |
 | `ui.blocks.register_block(BlockDescriptor)` | ui | whole **sheet blocks** (Python) |
 | `ui.blocks.gm_registry.register_gm_block(GMBlockDescriptor)` | ui | whole **GM-window blocks** |
+| `ui.simple.registry.register_simple_view(key, factory, …)` | ui | how a block looks on the **simple sheet** (and on paper) |
+
+A block needs nothing from `register_simple_view` to appear on the simple sheet (View ▸
+Simple Sheet): an unregistered block is **borrowed** — its live section is lent out of its
+frame for as long as the simple sheet is up, looking exactly as it does on the edit page
+(minus its group-box border), and printed as a freshly built copy. Register one to give it
+a quieter look: `factory(context)` returns a widget with a `refresh()` that redraws from
+`context.character`; anything the player *does* in it should go through
+`context.section`, the block's live section, so it reaches the model, the undo history and
+the table exactly as the edit page's control would (`context.roll(spec)` /
+`context.load(spec)` throw and load a roll through the section's own signals). Pass
+`printable=False` for a block that means nothing on paper, `print_factory=` for a paper
+view of a borrowed block, and a section may instead answer `set_simple(bool)` to change
+its own look while borrowed. See `docs/notes/simple-sheet.md`.
 
 `BASE_COST_KINDS` has its own helper too, `register_base_cost_kind(mode, kind)`, and
 decides *how* a record is priced rather than what it grants. A `BaseCostKind` is a

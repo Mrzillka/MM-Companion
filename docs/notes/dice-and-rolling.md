@@ -327,7 +327,7 @@ mini strip, `Esc`, or that same button leaves.
   what stops a block's minimum climbing with every roll — see "The Dice block's height".
 - **And it takes the height the same way too** — `_build_rolls_box` states
   `fills_height` on its `QGroupBox`, which is the one thing `DiceSection` declares that
-  a hand-built box does not get for free. Without it `_InnerScroll.set_section` reads a
+  a hand-built box does not get for free. Without it `InnerScroll.set_section` reads a
   box layout with nothing expanding in it and gives the block's surplus to a trailing
   stretch, so the block the GM window pins to the strip *by default* — and therefore
   the tallest one in the app — stopped its roller at ~650px and left the rest of the
@@ -431,10 +431,23 @@ had their look. Three things fall out of it:
 - **`_abandon_roll` does not settle it.** A session roll that never came back is one
   the player will want to throw again; taking the trait away would send them back to
   the sheet to click the stat a second time.
-- **A named quick roll keeps its chip**, because it does not go through `roll_spec`:
-  its chip is the caption for slider values that stay set, so the panel genuinely
-  still *is* that quick roll once the die has settled. (Its DC is not part of that —
-  see the quick-roll notes above.)
+- **A named quick roll lets go of its chip too**, though it does not go through
+  `roll_spec`: `_apply_quick_roll` marks its caption transient itself. It used to keep
+  it, as the caption for slider values that stayed set — but the sliders are now spent
+  by the roll (below), so a chip left standing would be naming numbers that are gone.
+
+**And the sliders are spent by the roll.** Bonus and Penalty are a circumstance of
+*one* check — cover against this attack, Extra Effort's "+2 on a single check" — yet a
+value left in a slider used to ride along on every roll after it, unnoticed.
+`_spend_extras` zeroes both beside each `_settle_spec`, i.e. at the end of both paths
+that produce a number and **not** in `_abandon_roll`, for the same reason the chip
+survives there. While either holds anything, `_mark_extras` tints its label and spin
+box (`tint.better` / `tint.worse`, bold) so a pending charge is as visible as a loaded
+trait. Only `color` and weight go on the spin box — a `border`, `padding` or
+`background` there trips rule 4 of the theme notes. Note what this did to tests that
+call `_start_roll()` and then `_finish_roll()` under a zero `ROLL_DURATION_MS`: the
+first call already finishes the roll, so that pair is *two* rolls, and the second now
+has no bonus — call one or the other.
 
 The other half of the same guard is that a loaded chip is **loud** — an `accent.dice`
 fill inside an `accent.dice` border (`#specChip`, scoped to the object name, since a
@@ -489,8 +502,8 @@ clearing is precisely what `_settle_spec` does one line after the roll wrote one
   check" (p21) into the bonus slider through `DiceSection.add_bonus`. It is the one Extra
   Effort benefit that lands on the *next roll* rather than on the build, and nothing
   tracks which roll that will be — so it goes where the player would have typed it, on
-  top of whatever is already set, and dragging the slider back is how it is spent or
-  dropped. It is **not** quiet, for `load-requested`'s reason: a player who has just paid
+  top of whatever is already set, and the next roll spends it (`_spend_extras`, above);
+  dragging the slider back is how it is dropped unused. It is **not** quiet, for `load-requested`'s reason: a player who has just paid
   a rung of fatigue for it is about to roll, and putting it into a Dice block they cannot
   see would charge them for something they never got.
 - `DiceRollerPanel.roll_spec(spec)` / `load_spec(spec)` are the public way in. A
@@ -609,3 +622,47 @@ ask for a check nobody had provoked.
   `PROTOCOL_VERSION` **8**. Not GM-gated — anyone may ask. A spec that does not
   survive `sanitize_spec` is dropped rather than recorded: a card with a dead button
   is worse than no card.
+
+## Roll notifications, and a history that holds more (matters when touching a history card)
+
+A history in the pinned strip shows three or four cards, and the GM's — beside a board
+of NPCs — often fewer. Two answers, and they are independent.
+
+- **The cards are denser.** The degree of success rides on the total's line
+  (`roll_history.roll_headline`: `21 (d20 12 +9) vs DC 15 · Success (2 degrees)`)
+  rather than a line of its own, and `tighten_card` packs every card's margins. Both
+  histories build their number line from the one function — `LocalRollHistory`'s
+  `RollCard` converts its roll with `dice_roller.local_record` first — so the private
+  and the shared card cannot drift apart again.
+- **Every new entry pops up in a corner of the screen** (`ui/toasts.py`,
+  `RollToaster`): a frameless, always-on-top window that never takes focus, stacking
+  away from the corner the user chose, fading after `DWELL_MS`, and held — the whole
+  stack, as Telegram Desktop does it — while the pointer is over any of them. Clicking
+  one brings forward the window whose history it came from. On by default; on/off and
+  the corner are on the General settings page (`storage.roll_notifications()`,
+  `storage.roll_notification_corner()`).
+- **Only live entries are announced.** `RollHistoryPanel.set_rolls` is a *replay* — a
+  join, a reconnect's fresh `Welcome`, the GM's log off disk — and raises `_replaying`
+  around its loop, or every reconnect would flood the screen with the evening's rolls.
+  `add_roll` (the bridge's `rollAdded`) and `release_roll` (one's own roll, as its die
+  settles) are the news. The private history announces from all three of its `add_*`.
+- **Deduplicated by `seq`.** One session can feed several histories in one app (the GM
+  window and a sheet, two sheets), and each would announce the same roll. Only a
+  positive `seq` is a key: a negative one is a window's own off-air counter.
+- A toast is built from the record, never from the card (`toast_widgets`): no star,
+  no ✕, no follow-up chip — a notification is read at a glance, and the card in the
+  history is where those live. The edge is the outcome's colour (`toast_accent`).
+- Over the desktop a toast is a **transparent window holding a styled `QFrame`**: a
+  translucent top-level paints no stylesheet background of its own, and a `palette()`
+  role reads as see-through there, so its colours are resolved to `#rrggbb`
+  (`toasts._solid`) before they are written.
+- `tests/conftest.py` sets `toasts.SUPPRESSED` for every test, or every roll a test
+  makes would pop a real window on the developer's desktop; `tests/test_toasts.py`
+  lifts it for its own.
+
+## The Request row sits on the grid
+
+The trait combo is in the sliders' column and the DC box with its "Ask" in the spin
+boxes' column, cell for cell. It used to span both columns as one free-running line,
+which lined up with nothing above it. The DC box shows `—` for 0 (`setSpecialValueText`):
+0 means "no DC" here, and a bare `0` read as a DC of nothing.

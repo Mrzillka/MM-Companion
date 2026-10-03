@@ -45,12 +45,13 @@ from mm_companion.ui.cards.effects import (
     modifier_names,
     modifiers_column,
     role_note,
+    simple_effects_block,
     structure_header,
     terms_grid,
     terms_style,
 )
 from mm_companion.ui.cards.node_list import GroupHeader, NodeList
-from mm_companion.ui.cards.rolls import RollLine, RollsFooter
+from mm_companion.ui.cards.rolls import RollLine, RollsFooter, split_roll_label
 
 __all__ = [
     "MODIFIER_STRETCH",
@@ -71,6 +72,8 @@ __all__ = [
     "modifier_names",
     "modifiers_column",
     "role_note",
+    "simple_effects_block",
+    "split_roll_label",
     "structure_header",
     "terms_grid",
     "terms_style",

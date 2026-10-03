@@ -55,6 +55,10 @@ python .claude/skills/run-mm-companion/driver.py tab-group         # two blocks 
 python .claude/skills/run-mm-companion/driver.py settings     # the Settings window (Themes page)
 python .claude/skills/run-mm-companion/driver.py gm           # GM Mode (session, players, NPCs, rolls)
 python .claude/skills/run-mm-companion/driver.py npc          # the simplified NPC sheet
+python .claude/skills/run-mm-companion/driver.py simple-sheet # the simple sheet (play view)
+python .claude/skills/run-mm-companion/driver.py simple-sheet-custom  # ...in the Custom preset
+python .claude/skills/run-mm-companion/driver.py simple-sheet-narrow  # ...rows stacked on a narrow window
+python .claude/skills/run-mm-companion/driver.py simple-print --theme slate-dark  # page 1 of its PDF
 ```
 
 `settings-demo` goes further: it duplicates the active preset, borrows Slate

@@ -337,7 +337,7 @@ def _give_trailing_slack(section: QWidget) -> bool:
 
 def _wrap_top_aligned(section: QWidget) -> QWidget:
     """Hold *section* at its content height over a spacer, for a layout that cannot
-    hold one of its own. See :meth:`_InnerScroll.set_section`."""
+    hold one of its own. See :meth:`InnerScroll.set_section`."""
     body = QWidget()
     layout = QVBoxLayout(body)
     layout.setContentsMargins(0, 0, 0, 0)
@@ -347,7 +347,7 @@ def _wrap_top_aligned(section: QWidget) -> QWidget:
     return body
 
 
-class _InnerScroll(QScrollArea):
+class InnerScroll(QScrollArea):
     """The scroll area a block's section lives in — the frame's release valve.
 
     Two properties matter, and neither is the default:
@@ -421,7 +421,13 @@ class _InnerScroll(QScrollArea):
         layout none of that can reach keeps the old wrapper.
         """
         fills = _give_trailing_slack(section)
-        self.setWidget(section if fills else _wrap_top_aligned(section))
+        self.hold(section if fills else _wrap_top_aligned(section))
+
+    def hold(self, widget: QWidget) -> None:
+        """Hold *widget* in the viewport as it is, with none of :meth:`set_section`'s
+        dressing — for content that already knows where its slack goes (a section the
+        frame dressed once already, lent out to the simple sheet)."""
+        self.setWidget(widget)
         self._pin_content_height()
 
     def resizeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
@@ -493,7 +499,7 @@ class BlockFrame(QFrame):
     arranged itself: nothing could squash a block, because nothing was allowed to
     try. On a page the user drags, it is a refusal.
 
-    So the section lives in a :class:`_InnerScroll` and the frame's minimum is a
+    So the section lives in a :class:`InnerScroll` and the frame's minimum is a
     title bar plus ``block.min-extent``. Past that a block reflows as far as its
     section knows how, and then **scrolls inside itself** — the same trade a
     popped-out :class:`BlockWindow` and the mini roller have always made, and for
@@ -545,7 +551,7 @@ class BlockFrame(QFrame):
         # The release valve for the whole minimum chain: a scroll area does not
         # pass its child's minimum on, so whatever the section says it needs, the
         # frame can still be dragged smaller and the content scrolls instead.
-        self._scroll = _InnerScroll(self)
+        self._scroll = InnerScroll(self)
         self._scroll.set_section(section)
         # The last content height this frame told its row about — see
         # :meth:`_follow_content_height`. Seeded to a number no section reports, so
@@ -598,6 +604,38 @@ class BlockFrame(QFrame):
     def recommended_size(self) -> RecommendedSize:
         """The size this block reads well at — the divider's detent asks for this."""
         return self._size
+
+    def content_width(self) -> int:
+        """How wide this frame has to be for its section not to be cut off.
+
+        The section's own minimum (what it has left once it has reflowed as far as
+        it can) plus the frame's chrome around it. A **measurement**, not a minimum
+        the frame reports: nothing here holds a layout open, which the frame's
+        ``minimumSizeHint`` still refuses to do. What asks is the pinned strip,
+        choosing the width it *opens* at — see
+        :meth:`~mm_companion.ui.pinned_panel.PinnedBoard.fit_to_content`.
+
+        The inner scroll area never shows a horizontal bar, so a frame narrower than
+        this does not scroll sideways: it clips, which is exactly the fault this
+        number exists to avoid.
+        """
+        section = self._scroll.widget()
+        if section is None:
+            return 0
+        viewport = self._scroll.viewport().width()
+        if viewport > 0 and self.width() > viewport:
+            # Laid out: everything between the frame's edge and the section — its
+            # border, the scroll area's frame, a vertical bar if one is showing —
+            # measured rather than added up, since a preset's border is a style's.
+            chrome = self.width() - viewport
+        else:
+            margins = self.layout().contentsMargins()
+            chrome = (
+                margins.left()
+                + margins.right()
+                + 2 * (self.frameWidth() + self._scroll.frameWidth())
+            )
+        return section.minimumSizeHint().width() + chrome
 
     def content_size_hint(self) -> QSize:
         """What the section would take if nothing constrained its height.
@@ -838,6 +876,67 @@ class BlockFrame(QFrame):
         else:
             self._close_feedback.clear()
 
+    # -- lending the section out -----------------------------------------------
+
+    def lend_section(self) -> QWidget:
+        """Hand the live section out of this frame — the simple sheet borrows it.
+
+        The section is *the* block: its model bindings, its bus wiring, its card state
+        and its undo seam all live on it, so a second view of a block whose controls
+        are its whole point (the power cards) borrows this widget rather than building
+        another. The frame stays behind, empty, and :meth:`take_back_section` puts it
+        back exactly where it was.
+
+        Hidden before it leaves, and never left without a parent while visible: a
+        parentless visible widget is a top-level window, and a section flashing up as
+        one on every switch is the failure :func:`~mm_companion.ui.widgets.discard_widget`
+        exists to prevent. The borrower adds it to a layout and shows it.
+
+        The explicit minimum height :class:`InnerScroll` pinned on the section is
+        dropped as it goes: that number is the content's height *at this frame's
+        width*, and carried anywhere else it is a refusal measured for a different
+        box.
+        """
+        if self.is_lent():
+            return self.section
+        section = self.section
+        section.hide()
+        host = self._scroll.widget()
+        if host is section:
+            self._scroll.takeWidget()
+            self._lent_host = None
+        else:
+            # The frame wrapped the section to hold it top-aligned (see
+            # _wrap_top_aligned); the wrapper stays, and gets the section back.
+            self._lent_host = host
+            if host is not None and host.layout() is not None:
+                host.layout().removeWidget(section)
+        section.setMinimumHeight(0)
+        self._lent = True
+        return section
+
+    def take_back_section(self) -> None:
+        """Re-seat the section :meth:`lend_section` handed out, and re-measure it."""
+        if not self.is_lent():
+            return
+        section = self.section
+        section.hide()
+        host = getattr(self, "_lent_host", None)
+        if host is not None and host.layout() is not None:
+            host.layout().insertWidget(0, section)
+        else:
+            self._scroll.setWidget(section)
+        self._lent = False
+        self._lent_host = None
+        section.show()
+        self._scroll._pin_content_height()
+        self._content_height = -1
+        self._follow_content_height()
+
+    def is_lent(self) -> bool:
+        """Whether the section is out on loan (see :meth:`lend_section`)."""
+        return getattr(self, "_lent", False)
+
     def set_locked(self, locked: bool) -> None:
         """Forward read-only view mode to the section, and re-report the block's size.
 
@@ -866,7 +965,7 @@ class BlockWindow(QWidget):
     This window used to wrap the frame in a scroll area of its own, because that
     was the only way a floated block could be dragged smaller than its content: a
     :class:`QScrollArea` does not pass its child's minimum on. The frame carries
-    its own now (see :class:`_InnerScroll`) and every docked block makes the same
+    its own now (see :class:`InnerScroll`) and every docked block makes the same
     bargain, so the window hosts the frame directly and a second scroll area would
     only mean two sets of scrollbars for one block. What is left here is the floor
     — ``float.min-width``/``float.min-height``, exactly as the mini roller's is

@@ -557,7 +557,7 @@ def enclosing_scroll_areas(widget: QWidget) -> list[QAbstractScrollArea]:
     It used to be enough to find the nearest one, because a block had no scroll
     area of its own and the nearest was therefore whatever the block was sitting
     in — the page, the strip, or its own window. Every block carries one now (see
-    :class:`~mm_companion.ui.block_frame._InnerScroll`), so the nearest is always
+    :class:`~mm_companion.ui.block_frame.InnerScroll`), so the nearest is always
     the block's own and the page is always further up. Callers that are restoring a
     position after a rebuild want **both**: the block should stay where it was
     scrolled to, and so should the page behind it.
@@ -579,11 +579,60 @@ def enclosing_scroll_area(widget: QWidget) -> QAbstractScrollArea | None:
     return areas[0] if areas else None
 
 
+def _show_laid_out_now(widget: QWidget) -> None:
+    """Show every widget a layout under *widget* is still waiting to show.
+
+    A widget added to the layout of a parent that is **already on screen** is not
+    shown by the add. ``QLayout::addChildWidget`` only *queues* the show, for the next
+    turn of the event loop, and until then a layout passes the widget over as hidden.
+    For one pass a block that has just rebuilt every card measures as **empty**, and
+    since an undragged row is exactly as tall as its content, the row folds to a title
+    bar, the page shrinks under it, every other row is laid out against the shorter
+    page, and the next turn puts it all back. Each of those passes resizes the canvas,
+    and a resized canvas repaints every block on it. On a furnished sheet one click on a
+    power card folded the page from 3393px to 1987px and back.
+
+    So this does now what the queued call would have done: it shows, top-down, each
+    laid-out widget that is hidden only because nobody has shown it yet. Qt's own test
+    (``_q_showIfNotHidden``) is "not hidden *on purpose*", which is what
+    ``WA_WState_ExplicitShowHide`` records. A widget that is its own window (a menu, a
+    dialog) is never in a layout, but it is skipped by name anyway: showing one would
+    pop it up. Walked through the layouts rather than ``findChildren``, because only a
+    layout queues a show; a child built without one stays hidden and is meant to.
+    """
+
+    if not widget.isVisible():
+        return  # whoever shows *widget* shows what is laid out inside it
+
+    def walk(layout) -> Iterator[QWidget]:
+        for index in range(layout.count()):
+            item = layout.itemAt(index)
+            child = item.widget()
+            if child is not None:
+                yield child
+                if child.layout() is not None:
+                    yield from walk(child.layout())
+            elif item.layout() is not None:
+                yield from walk(item.layout())
+
+    if widget.layout() is None:
+        return
+    for child in walk(widget.layout()):
+        if (
+            child.isHidden()
+            and not child.testAttribute(Qt.WidgetAttribute.WA_WState_ExplicitShowHide)
+            and not child.isWindow()
+            and child.parentWidget() is not None
+            and child.parentWidget().isVisible()
+        ):
+            child.setVisible(True)
+
+
 @contextmanager
 def rebuilding(widget: QWidget) -> Iterator[None]:
     """Redraw *widget*'s contents without the page moving or the block flickering.
 
-    Two guards, both about the same moment: a block that rebuilds by deleting every
+    Three guards, all about the same moment: a block that rebuilds by deleting every
     child and making new ones is, briefly, a fraction of its own height and empty.
 
     **Painting is frozen for the duration.** Qt would otherwise repaint each
@@ -603,6 +652,12 @@ def rebuilding(widget: QWidget) -> Iterator[None]:
     ``setValue`` is clamped by the stale one. The deferred call is tied to the scroll
     area's own lifetime, so a block closed mid-rebuild does not fire it at a dead
     widget.
+
+    **The new children are shown before it returns**, not on the next turn as Qt
+    would leave them (see :func:`_show_laid_out_now`). Otherwise the first layout
+    pass after the rebuild sees an empty block, and the whole page folds up around
+    it and opens out again: every block on the sheet resized and repainted for a
+    click on one card.
     """
 
     areas = enclosing_scroll_areas(widget)
@@ -612,9 +667,44 @@ def rebuilding(widget: QWidget) -> Iterator[None]:
     widget.setUpdatesEnabled(False)
     try:
         yield
+        _show_laid_out_now(widget)
     finally:
         widget.setUpdatesEnabled(painted)
         for bar, value in values:
             bar.setValue(value)
         if areas:
             QTimer.singleShot(0, areas[0], lambda: [bar.setValue(value) for bar, value in values])
+
+
+class HeldRebuild:
+    """For a block that redraws itself whole: hold that redraw across several changes.
+
+    A card block rebuilds its whole tree on every setter that changes how it draws, so
+    two setters in a row — locked, then dressed for the simple sheet — are two full
+    rebuilds, the first thrown away at once; on a well-stocked character each is
+    the expensive part of switching views. Inside :meth:`held_rebuild` a rebuild is
+    only noted, and the last hold to close does it once. Mixed in ahead of the Qt
+    base; the block's rebuild calls :meth:`rebuild_held` first and returns if it says
+    so.
+    """
+
+    _rebuild_holds = 0
+    _rebuild_pending = False
+
+    @contextmanager
+    def held_rebuild(self) -> Iterator[None]:
+        self._rebuild_holds += 1
+        try:
+            yield
+        finally:
+            self._rebuild_holds -= 1
+            if not self._rebuild_holds and self._rebuild_pending:
+                self._rebuild_pending = False
+                self._rebuild_list()
+
+    def rebuild_held(self) -> bool:
+        """Whether a rebuild asked for now should wait for the hold to close."""
+        if self._rebuild_holds:
+            self._rebuild_pending = True
+            return True
+        return False

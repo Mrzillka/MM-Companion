@@ -18,7 +18,10 @@ flow through the whole sheet (see [the powers notes](docs/notes/powers.md)). **E
 that same pipeline: gear is *chosen* from a catalog rather than assembled, bought in
 a second currency (Equipment Points), worn on and off by clicking a card, and rolled
 like an attack power — including vehicles and installations, which are bought as
-traits off their own tables (see [the equipment notes](docs/notes/equipment.md)).
+traits off their own tables (see [the equipment notes](docs/notes/equipment.md)). For
+play there is a **simple sheet** (View ▸ Simple Sheet): the same character on one tight,
+printable page, borrowing the live blocks so every play-time control still works (see
+[the simple sheet notes](docs/notes/simple-sheet.md)).
 
 ## Commands
 
@@ -86,6 +89,7 @@ several of them are the only record of a bug that shaped it.
 | [Undo and redo](docs/notes/undo-and-redo.md) | adding a block, or a field to the model |
 | [The powers layer](docs/notes/powers.md) | powers |
 | [The equipment layer](docs/notes/equipment.md) | equipment, gear, vehicles or installations |
+| [The simple sheet](docs/notes/simple-sheet.md) | the play view, printing, or any block's look on it |
 | [Size and movement](docs/notes/size-and-movement.md) | size, speed, or a movement effect |
 | [The Notes block](docs/notes/notes-block.md) | Notes, or adding a block there can be more than one of |
 | [The session layer](docs/notes/session.md) | GM Mode or online play |

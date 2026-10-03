@@ -551,7 +551,7 @@ def build(target: str):
     elif target in ("dynamic-array", "dynamic-array-split"):
         # A Dynamic array on the sheet, in both of the two regimes it has. Unsplit, the
         # header states the pool and says it is *not* split, the cards are still
-        # clickable, and each member's slider is seated where the member is actually
+        # clickable, and each member's pip scale is seated where the member is actually
         # running with no price on that one notch. Split, the header counts the pool
         # down, a hand-back button appears beside it, and every member runs at once.
         # The System block rides along for its Limits row and its Size readout.
@@ -593,13 +593,13 @@ def build(target: str):
                 for d in sheet.powers._list_host.findChildren(_RankDial)
                 if any("PP" in text for text in d._labels.values())
             ]
-            dials[1]._slider.setValue(2)  # some Flight...
+            dials[1].pick(2)  # some Flight...
             dials = [
                 d
                 for d in sheet.powers._list_host.findChildren(_RankDial)
                 if any("PP" in text for text in d._labels.values())
             ]
-            dials[2]._slider.setValue(2)  # ...and some Force Field, at the same time
+            dials[2].pick(2)  # ...and some Force Field, at the same time
             sheet.system_info.refresh_derived()
         for key in sheet.block_keys():
             if key not in ("powers", "system_info"):
@@ -632,7 +632,7 @@ def build(target: str):
             for d in sheet.powers._list_host.findChildren(_RankDial)
             if any("PP" in text for text in d._labels.values())
         ]
-        dials[0]._slider.setValue(2)
+        dials[0].pick(2)
         sheet.system_info.refresh_derived()
         for key in sheet.block_keys():
             if key not in ("powers", "system_info"):
@@ -660,7 +660,7 @@ def build(target: str):
         _pump(_app())
         # Large is the dial's first notch above Off for a Medium wielder. Setting the
         # value is the keyboard/groove path, which commits without a slider release.
-        sheet.powers.findChild(_RankDial)._slider.setValue(1)
+        sheet.powers.findChild(_RankDial).pick(1)
         path = library.save_character(sheet.character)
         # Left open rather than closed: the rung dirtied the sheet (which is the point
         # — a saved state that never marks the window unwritten is a state you lose),
@@ -1312,11 +1312,92 @@ def build(target: str):
             if key not in ("abilities", "system_info"):
                 sheet.hide_block(key)
         win.resize(900, 780)
+    elif target in ("simple-sheet", "simple-sheet-custom", "simple-sheet-narrow"):
+        # The simple sheet (View > Simple Sheet): the play view, over a character with
+        # something in every block — a switchable power, an attack, a Dynamic array
+        # with its share dials, worn gear, a condition. Switched on through the real
+        # bar action, so the lock standing down is in the picture too.
+        from mm_companion.core.storage import set_simple_sheet_preset
+        from mm_companion.ui.main_window import MainWindow
+
+        set_simple_sheet_preset("custom" if target == "simple-sheet-custom" else "standard")
+        win = MainWindow(character=_simple_hero(), locked=True)
+        win.resize(720 if target == "simple-sheet-narrow" else 1200, 950)
+        win.show()
+        _pump(_app())
+        win._simple_bar_action.trigger()
+    elif target == "simple-print":
+        # Page one of File > Export as PDF, rasterised back for looking at: the simple
+        # sheet on paper, light whatever the theme (try --theme slate-dark).
+        from PySide6.QtCore import QSize
+        from PySide6.QtGui import QPixmap
+        from PySide6.QtPdf import QPdfDocument
+        from PySide6.QtWidgets import QLabel
+
+        from mm_companion.ui.character_sheet import CharacterSheet
+        from mm_companion.ui.simple.printing import export_pdf
+
+        sheet = CharacterSheet(character=_simple_hero())
+        pdf = Path(tempfile.mkdtemp(prefix="mm-driver-print-")) / "sheet.pdf"
+        result = export_pdf(sheet, pdf)
+        print(f"[driver] {result.pages} page(s) -> {pdf}")
+        document = QPdfDocument(None)
+        document.load(str(pdf))
+        size = document.pagePointSize(0)
+        image = document.render(0, QSize(int(size.width() * 1.5), int(size.height() * 1.5)))
+        win = QLabel()
+        win.setPixmap(QPixmap.fromImage(image))
+        win.resize(image.size())
     else:  # pragma: no cover - guarded by argparse choices
         raise ValueError(target)
 
     win.show()
     return win
+
+
+def _simple_hero():
+    """A character with something in every block the simple sheet shows."""
+    from mm_companion.core.character import AdvantageSelection, Character, Complication
+    from mm_companion.core.data_loader import load_game_data
+    from mm_companion.core.powers import (
+        STRUCTURE_ARRAY,
+        ModifierSelection,
+        Power,
+        PowerEffectInstance,
+        PowerGroup,
+    )
+    from mm_companion.core.rules import apply_condition
+    from mm_companion.core.rules.equipment import build_item_from_entry
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.profile.update(hero_name="Ghost", character_name="Ada Vance", player_name="Sam")
+    char.profile.update(identity="Secret", group="The Night Watch", age="29")
+    for key, value in {"STR": 2, "STA": 4, "AGL": 5, "INT": 2, "AWE": 3, "PRE": 1}.items():
+        char.abilities[key] = value
+    char.resistances.update({"DODGE": 5, "WILL": 4})
+    for skill, ranks in {"Acrobatics": 8, "Athletics": 4, "Perception": 6, "Stealth": 10}.items():
+        char.skill_ranks[skill] = ranks
+    for name, rank in (("Equipment", 4), ("Improved Initiative", 1), ("Evasion", 2), ("Luck", 2)):
+        char.advantages.append(AdvantageSelection(name=name, rank=rank))
+    char.complications.append(Complication("Motivation: Justice", "Nobody else is going to do it."))
+    char.characteristics["hero_points"] = 2
+    catalog = data.equipment_catalog()
+    char.equipment.append(build_item_from_entry(catalog["leather_armor"], data))
+    armor = Power(
+        name="Shadow Cloak",
+        effects=[PowerEffectInstance("protection", rank=6, flaws=[ModifierSelection("removable")])],
+    )
+    blast = Power(name="Night Bolt", effects=[PowerEffectInstance("damage", rank=8)])
+    field = Power(name="Umbral Shield", effects=[PowerEffectInstance("protection", rank=8)])
+    flight = Power(name="Shadow Wings", effects=[PowerEffectInstance("flight", rank=3)])
+    field.dynamic = flight.dynamic = True
+    field.dynamic_points = 4
+    char.powers.extend(
+        [armor, blast, PowerGroup(mode=STRUCTURE_ARRAY, name="Umbra", children=[field, flight])]
+    )
+    apply_condition(char, "dazed", data)
+    return char
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1383,6 +1464,10 @@ def main(argv: list[str] | None = None) -> int:
             "sheet-stunt",
             "effect-array",
             "pushed-traits",
+            "simple-sheet",
+            "simple-sheet-custom",
+            "simple-sheet-narrow",
+            "simple-print",
             "all",
         ],
         help="which UI surface to launch and screenshot",

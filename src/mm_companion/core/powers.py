@@ -161,7 +161,7 @@ class PowerEffectInstance:
     ``attack_skill`` and ``size_scales_damage`` do, though the constructor drives every
     effect in a power from one checkbox.
 
-    ``rank_dial`` puts a **rank slider** on the sheet card, so an effect bought at 10 can
+    ``rank_dial`` puts a **rank dial** on the sheet card, so an effect bought at 10 can
     be used at 5 in play. It is a build decision (whether the control exists); how far
     the dial is turned is ``current_rank`` below. It is **tri-state**: ``None`` — the
     default — means nobody has decided and the ruleset answers, which gives a size
@@ -174,7 +174,7 @@ class PowerEffectInstance:
 
     ``dynamic_points`` is this effect's share of its power's Dynamic pool — *runtime*
     state, the effect-level twin of the field ``Power`` and ``PowerGroup`` carry, and
-    the number a Dynamic member's card slider writes. ``None`` means it holds no share.
+    the number a Dynamic member's card dial writes. ``None`` means it holds no share.
     See :func:`mm_companion.core.rules.dynamic_rank_share`.
 
     A **negative** share is a file no control could have written, and all three loaders

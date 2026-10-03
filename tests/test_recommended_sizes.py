@@ -95,7 +95,7 @@ def comfortable_width(sheet: CharacterSheet, key: str, qapp: QApplication) -> in
         _settle(qapp)
         frame = sheet.block_frame(key)
         # Whether the section still fits, asked of the section rather than of a
-        # scrollbar. A block scrolls vertically only now (see ``_InnerScroll``), so
+        # scrollbar. A block scrolls vertically only now (see ``InnerScroll``), so
         # there is no horizontal bar left to read; what "no longer fits" means is
         # that the section's own minimum — everything it can shed already shed —
         # is wider than the room it has.

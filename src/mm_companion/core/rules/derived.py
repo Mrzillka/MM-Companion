@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import NamedTuple
 
 from ..character import AdvantageSelection, Character
 from ..components import APPLY_BONUS
-from ..data_loader import GameData, Resistance
+from ..data_loader import GameData, Resistance, Skill
 from .advantages import advantage_by_name
 from .appliers import (
     CATEGORY_ABILITY,
@@ -20,9 +21,11 @@ from .appliers import (
     STACK_SUM,
     TraitBonus,
     TraitContribution,
+    focus_row_id,
     resolve_bonuses,
     resolve_contributions,
     skill_for_row,
+    specialized_row_id,
     split_trait_key,
 )
 from .build_cache import build_scoped
@@ -228,6 +231,46 @@ def skill_row_exists(char: Character, game_data: GameData, row_id: str) -> bool:
     return any(s.name == row_id and not s.focused for s in game_data.skills)
 
 
+#: The kinds of row a skill owns on the sheet — see :func:`own_skill_rows`.
+ROW_SKILL = "skill"
+ROW_FOCUS = "focus"
+ROW_SPECIALIZED = "spec"
+
+
+class SkillRow(NamedTuple):
+    """One row a skill has on a character's sheet."""
+
+    kind: str  # ROW_SKILL, ROW_FOCUS or ROW_SPECIALIZED
+    row_id: str
+    #: The focus or pool the row is for; ``""`` for a skill's own row.
+    qualifier: str
+
+
+def own_skill_rows(char: Character, skill: Skill) -> list[SkillRow]:
+    """The rows *skill* has on this character's sheet, in the order the sheet lists them.
+
+    Its own row — or, for a focused skill, which has none, one per focus taken — then
+    one per specialized pool. The one listing every view of the skills reads, so the
+    edit block, the simple sheet and anything a mod draws agree on which rows there
+    are and what they are called. Not the rows a power grants: those are
+    :func:`granted_skill_rows`, and follow these.
+    """
+
+    rows: list[SkillRow] = []
+    if skill.focused:
+        rows += [
+            SkillRow(ROW_FOCUS, focus_row_id(skill.name, focus), focus)
+            for focus in char.focuses.get(skill.name, [])
+        ]
+    else:
+        rows.append(SkillRow(ROW_SKILL, skill.name, ""))
+    rows += [
+        SkillRow(ROW_SPECIALIZED, specialized_row_id(skill.name, pool), pool)
+        for pool in char.specializations.get(skill.name, [])
+    ]
+    return rows
+
+
 def granted_skill_rows(char: Character, game_data: GameData) -> dict[str, TraitBonus]:
     """Skill *rows* a power or item grants that the character has no row of its own for.
 
@@ -249,6 +292,48 @@ def granted_skill_rows(char: Character, game_data: GameData) -> dict[str, TraitB
         and not skill_row_exists(char, game_data, row_id)
         and skill_for_row(game_data, row_id) is not None
     }
+
+
+def skill_allows_untrained(char: Character, game_data: GameData, skill: Skill) -> bool:
+    """Whether *skill* may be attempted with no ranks by this character.
+
+    True for any skill the data does not flag ``trainedOnly``; for one it does, only
+    while an advantage on the sheet opens trained-only skills up (``allowsUntrained`` —
+    Jack-of-All-Trades) and does not name this one among its exceptions.
+    """
+
+    if not skill.trained_only:
+        return True
+    for selection in all_advantage_selections(char, game_data):
+        advantage = advantage_by_name(game_data, selection.name)
+        if (
+            advantage is not None
+            and advantage.allows_untrained
+            and skill.name not in advantage.allows_untrained_except
+        ):
+            return True
+    return False
+
+
+def skill_usable(char: Character, game_data: GameData, row_id: str) -> bool:
+    """Whether a skill row can be used at all — ``False`` only for an untrained,
+    trained-only one.
+
+    A skill flagged ``trainedOnly`` in the data cannot be attempted without training
+    (unless :func:`skill_allows_untrained` says an advantage opens it up), and
+    *training* is read the way the simple sheet's "trained" list reads it: ranks
+    bought in the row, or any outside bonus standing on it (a power granting the
+    skill, an advantage aimed at it, a specialized pool's parent ranks). A row the
+    catalog does not know is assumed usable rather than hidden — a mod's skill with no
+    flag is an ordinary skill.
+    """
+
+    skill = skill_for_row(game_data, row_id)
+    if skill is None or skill_allows_untrained(char, game_data, skill):
+        return True
+    if int(char.skill_ranks.get(row_id, 0) or 0) > 0:
+        return True
+    return skill_bonus(char, game_data, row_id) is not None
 
 
 #: How :attr:`~mm_companion.core.character.Character.extra_effort` spells one target:

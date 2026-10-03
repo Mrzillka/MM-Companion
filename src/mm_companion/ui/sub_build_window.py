@@ -35,6 +35,7 @@ from PySide6.QtWidgets import QWidget
 from mm_companion.core import storage
 from mm_companion.core.character import Character
 from mm_companion.ui.main_window import MainWindow
+from mm_companion.ui.toasts import notify_window
 
 
 class SubBuildWindow(MainWindow):
@@ -78,5 +79,5 @@ class SubBuildWindow(MainWindow):
     def _save(self) -> bool:
         """File ▸ Save says so out loud; the edits are already in the power."""
         self.committed.emit()
-        self.statusBar().showMessage("Saved into the power", 5000)
+        notify_window(self, "Saved into the power")
         return True

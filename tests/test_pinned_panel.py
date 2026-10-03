@@ -14,7 +14,7 @@ from mm_companion.ui import layout_tree as lt
 from mm_companion.ui.block_canvas import SCHEMA_VERSION
 from mm_companion.ui.block_sizes import load_block_sizes
 from mm_companion.ui.character_sheet import CharacterSheet
-from mm_companion.ui.pinned import PinSlot
+from mm_companion.ui.pinned import DEFAULT_EXTENT, PinSlot
 
 
 @pytest.fixture(scope="module")
@@ -107,7 +107,7 @@ def test_a_fresh_sheet_starts_with_the_dice_block_pinned(make_sheet) -> None:
     # default_pinned, so the die is in view beside the page from the first launch.
     sheet = make_sheet(empty_strip=False)
 
-    assert _pinned(sheet)["lines"] == [["dice"], ["scene"]]
+    assert _pinned(sheet)["lines"] == [["dice"]]
     assert sheet.is_block_pinned("dice")
     assert not sheet.board.panel.is_empty()
     assert all("dice" not in row for row in _rows(sheet))
@@ -227,16 +227,16 @@ def test_reset_layout_restores_the_default_strip(make_sheet) -> None:
     sheet.reset_layout()
     _settle()
 
-    # Back to the default strip — the Dice block and the Scene, one line each on
-    # the right edge, filling it — and the block this test pinned returned to the
+    # Back to the default strip — the Dice block alone on the right edge, filling
+    # it — and the block this test pinned returned to the
     # page. The live pixel sizes are whatever the rendered lines measure, so they
     # are not part of the default.
     pinned = _pinned(sheet)
-    assert (pinned["edge"], pinned["lines"], pinned["extent"]) == (
-        "right",
-        [["dice"], ["scene"]],
-        320,
-    )
+    assert (pinned["edge"], pinned["lines"]) == ("right", [["dice"]])
+    # The thickness is the default *or* what the roller needs, whichever is more:
+    # resetting fits the strip to its blocks, as opening a layout does.
+    assert pinned["extent"] >= DEFAULT_EXTENT
+    assert _roller_clipped(sheet) == 0
     assert any("conditions" in row for row in _rows(sheet))
 
 
@@ -459,7 +459,10 @@ def test_moving_the_strip_to_another_edge_keeps_its_own_thickness(make_sheet) ->
     sheet.pin_block("advantages", line=0, slot=1, new_line=False)
     _settle()
     panel = sheet.board.panel
-    wanted = sheet.board.desired_extent()
+    # A strip turned onto another axis starts again from the default thickness —
+    # a side strip's width means nothing as a bottom strip's depth — and a bottom
+    # strip is not fitted to its blocks, whose height is not a thing to fit to.
+    wanted = DEFAULT_EXTENT
 
     sheet.canvas.set_pin_edge("bottom")
     _wait()  # the thickness converges over a turn or two; see PinnedBoard._ask_again
@@ -747,7 +750,7 @@ def test_the_strip_survives_a_save_and_restore(make_sheet) -> None:
 
     sheet.reset_layout()
     _settle()
-    assert _pinned(sheet)["lines"] == [["dice"], ["scene"]]  # back to the default strip
+    assert _pinned(sheet)["lines"] == [["dice"]]  # back to the default strip
 
     assert sheet.restore_layout(blob) is True
     _settle()
@@ -1050,3 +1053,65 @@ class TestTheStripsOwnDetent:
         _settle()
 
         assert sheet.board._splitter.childrenCollapsible() is False
+
+
+# -- the strip opens wide enough for what is in it ----------------------------
+
+
+def _roller_clipped(sheet: CharacterSheet) -> int:
+    """How many pixels of the roller's content the strip cuts off (0 is none)."""
+    frame = sheet.block_frame("dice")
+    viewport = frame._scroll.viewport().width()
+    return max(0, frame.section.minimumSizeHint().width() - viewport)
+
+
+def test_a_fresh_sheet_opens_the_strip_wide_enough_for_the_roller(make_sheet) -> None:
+    """The default thickness is 320 and the roller needs more than that — so every
+    fresh sheet used to open with its Ask button and spin-box arrows cut off."""
+    sheet = make_sheet(empty_strip=False)
+    _wait()
+    _settle()
+
+    assert _roller_clipped(sheet) == 0
+    assert sheet.board.extent() >= sheet.board.panel.content_extent()
+
+
+def test_restoring_a_too_narrow_strip_widens_it_to_fit(make_sheet) -> None:
+    sheet = make_sheet(empty_strip=False)
+    _wait()
+    model = sheet.arrangement()
+    model["region"]["extent"] = 300  # an older save, at the old default or less
+
+    assert sheet.canvas.apply_arrangement(model)
+    _wait()
+    _settle()
+
+    assert _roller_clipped(sheet) == 0
+
+
+def test_a_strip_dragged_narrower_stays_narrower_until_a_layout_is_opened(make_sheet) -> None:
+    """Fitting is what *opening* a layout does, never a later rebuild: the user's
+    own drag is respected for the rest of the session."""
+    sheet = make_sheet(empty_strip=False)
+    _wait()
+    board = sheet.board
+    board._extent = 300  # what a drag of the handle records
+    board._apply_extent()
+    _settle()
+
+    sheet.pin_block("conditions")  # an unrelated rebuild of the strip
+    _wait()
+    _settle()
+
+    assert board.desired_extent() == 300
+
+
+def test_a_fitted_strip_never_takes_more_than_half_the_window(make_sheet) -> None:
+    sheet = make_sheet(empty_strip=False)
+    sheet.resize(600, 700)
+    _settle()
+    sheet.board.set_extent(200)
+    _wait()
+    _settle()
+
+    assert sheet.board.desired_extent() <= sheet.board.width() // 2 + 1

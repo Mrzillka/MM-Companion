@@ -29,6 +29,7 @@ from PySide6.QtCore import (
     QPoint,
     QPropertyAnimation,
     QRect,
+    Qt,
     QTimer,
     Signal,
 )
@@ -260,6 +261,14 @@ class BlockCanvas(QWidget):
     ) -> None:
         super().__init__(parent)
         self.setObjectName("blockCanvas")
+        # The page is laid out from the top, so a change in its height moves nothing
+        # above the row that changed. Qt does not know that: it repaints the whole of
+        # a resized widget, every block on it included, unless told its contents are
+        # static. Without this, a power card easing on or off (its type and padding
+        # shrink, so the row's height moves every frame) repainted the entire visible
+        # sheet on every frame of the ease. The rows that really move still repaint;
+        # they are moved, and a moved child repaints itself. Set on the RowStack too.
+        self.setAttribute(Qt.WidgetAttribute.WA_StaticContents, True)
 
         self._sizes = block_sizes
         self._default_rows = default_rows
@@ -299,6 +308,11 @@ class BlockCanvas(QWidget):
         self._hidden: set[str] = set()
         # Where each hidden block was closed from, so reopening restores it there.
         self._anchors: dict[str, Anchor] = {}
+        # The share of its row a block had when it left the page — see _detach.
+        self._shares: dict[str, float] = {}
+        # Where in the strip a block sat when it left it — a neighbour, the side of
+        # it, and the share of the run it had — so pinning it again puts it back.
+        self._strip_homes: dict[str, tuple[str, str, float]] = {}
         # The blocks currently washed as "release to close" — see _warn_closing.
         self._warned: set[str] = set()
         self._row_widgets: list[QWidget] = []
@@ -324,6 +338,9 @@ class BlockCanvas(QWidget):
         self._pin_edge = DEFAULT_EDGE
         self._pin_extent = DEFAULT_EXTENT
         self._board: PinnedBoard | None = None
+        # While set, the tree is the truth and the dividers are not read — see
+        # set_sizes_held.
+        self._sizes_held = False
 
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(6, 6, 6, 6)
@@ -745,6 +762,30 @@ class BlockCanvas(QWidget):
         if self._drag_key is not None:
             self.title_bar_released(self._drag_key, global_pos)
 
+    def set_sizes_held(self, held: bool) -> None:
+        """Stop reading the dividers back into the tree, or start again.
+
+        For while the page is put away behind another view (the simple sheet). A
+        splitter that has never been laid out reports sizes squeezed into its default
+        geometry, not the proportions it was given — it keeps those as weights and
+        only honours them once it is shown — so a sheet opened straight into the
+        simple sheet, then saved, overwrote the player's layout with slivers. While
+        held, the tree is the truth: the dividers cannot be dragged while hidden, so
+        it is taken in once on the way out (if the page was on screen to be dragged)
+        and nothing is read until the page is back.
+        """
+        held = bool(held)
+        if held and not self._sizes_held and self.isVisible():
+            self._sync_from_board()
+            if self._size_settle.isActive():
+                # A divider let go a moment ago: finish that gesture now, so it
+                # still reaches the layout history.
+                self._size_settle.stop()
+                self._flush_sizes()
+            else:
+                self._remember_sizes()
+        self._sizes_held = held
+
     def _remember_sizes(self) -> None:
         """Read the live splitter sizes back into the tree.
 
@@ -752,6 +793,8 @@ class BlockCanvas(QWidget):
         on the widgets until somebody asks. Pulling them in here is what makes a
         resize survive a save, an undo step, or the next rebuild.
         """
+        if self._sizes_held:
+            return
         heights = self._stack.heights()
         page = self._page
         if len(heights) == len(page.children):
@@ -763,6 +806,11 @@ class BlockCanvas(QWidget):
     def _absorb_sizes(self, page: lt.Node, path: tuple[int, ...], widget: QWidget) -> lt.Node:
         """Copy *widget*'s splitter sizes (and its children's) into the tree."""
         if not isinstance(widget, QSplitter):
+            return page
+        if not getattr(widget, "has_real_sizes", True):
+            # Not laid out yet: its sizes are a placeholder squeezed into Qt's
+            # default box, and the tree still holds the real ones (see
+            # GridSplitter.has_real_sizes).
             return page
         node = lt.at(page, path)
         if isinstance(node, lt.Split) and widget.count() == len(node.children):
@@ -802,7 +850,7 @@ class BlockCanvas(QWidget):
         the sizes are in the tree now, and this walks the same splitters the page
         walks with the same function.
         """
-        if self._board is None:
+        if self._board is None or self._sizes_held:
             return
         region = self._region
         for path, widget in self._board.panel.split_paths():
@@ -841,7 +889,7 @@ class BlockCanvas(QWidget):
         return {
             "version": SCHEMA_VERSION,
             "instances": [],
-            "page": lt.to_dict(lt.rows_to_page(rows)),
+            "page": lt.to_dict(self._default_page(rows)),
             "region": {
                 "edge": DEFAULT_EDGE,
                 "extent": DEFAULT_EXTENT,
@@ -850,6 +898,23 @@ class BlockCanvas(QWidget):
             "floating": {},
             "hidden": [],
         }
+
+    def _default_page(self, rows: list[list[str]]) -> lt.Split:
+        """The default rows as a page, each divided by its blocks' ``default_share``.
+
+        Only a row whose every block states a share is divided by them: a share is a
+        weight *against its neighbours*, and one block's weight beside another's
+        recommended width is a number compared with a different kind of number. A
+        splitter scales sizes to its real width, so the weights are the sizes.
+        """
+        page = lt.rows_to_page(rows)
+        children = []
+        for row, child in zip(rows, page.children, strict=True):
+            shares = [self._sizes.get(instance_template(k), RecommendedSize()).share for k in row]
+            if isinstance(child, lt.Split) and all(share > 0 for share in shares):
+                child = lt.Split(child.orientation, child.children, tuple(shares))
+            children.append(child)
+        return lt.Split(page.orientation, tuple(children), page.sizes)
 
     def arrangement(self) -> dict:
         """A snapshot of the current arrangement as a persistence model.
@@ -1091,7 +1156,21 @@ class BlockCanvas(QWidget):
             # room for its siblings, and the tree drops the sizes that described a
             # run this block was in.
             self._sync_from_board()
+            home = self._strip_home(key)
+            if home is not None:
+                self._strip_homes[key] = home
             self._region = lt.remove(self._region, key)
+        if lt.find(self._page, key) is not None:
+            # What room it had in its row, so that putting it back — unpinning,
+            # reopening, docking a floated block home — gives it the same share
+            # rather than half of whichever neighbour it lands beside. Read live
+            # first, since the dividers may have moved since the tree last asked.
+            self._remember_sizes()
+            share = lt.share_of(self._page, key)
+            if share > 0:
+                self._shares[key] = share
+            else:
+                self._shares.pop(key, None)
         self._set_page(lt.remove(self._page, key))
         frame = self._frames[key]
         frame.setParent(self)
@@ -1198,12 +1277,16 @@ class BlockCanvas(QWidget):
             return
         target_row = rows[min(row, len(rows) - 1)]
         index = max(0, min(slot.slot, len(target_row)))
+        # A block being put back where it came from gets back the room it had.
+        share = self._shares.pop(key, 0.0)
         if index < len(target_row):
-            self.place_beside(key, target_row[index], "left")
+            self.place_beside(key, target_row[index], "left", share=share)
         else:
-            self.place_beside(key, target_row[-1], "right")
+            self.place_beside(key, target_row[-1], "right", share=share)
 
-    def place_beside(self, key: str, target: str, side: str, *, extent: int = 0) -> None:
+    def place_beside(
+        self, key: str, target: str, side: str, *, extent: int = 0, share: float = 0.0
+    ) -> None:
         """Put *key* on the given side of *target*. Assumes it has been detached.
 
         The one structural move a drag makes, and the only one that can put a
@@ -1211,7 +1294,7 @@ class BlockCanvas(QWidget):
         cell's live size along the drop's axis, and asks for the pair to divide it
         — see :func:`~mm_companion.ui.layout_tree.insert_beside`.
         """
-        self._set_page(lt.insert_beside(self._page, key, target, side, extent=extent))
+        self._set_page(lt.insert_beside(self._page, key, target, side, extent=extent, share=share))
 
     def _cell_extent(self, target: str, side: str) -> int:
         """The live size, along *side*'s axis, of the cell rendering *target*.
@@ -1328,7 +1411,15 @@ class BlockCanvas(QWidget):
         self._detach(key)
         if anchor is not None:
             self._anchors[key] = anchor
-        self._place_in_region(key, beside, "bottom" if new_line or beside is None else "right")
+        home = self._strip_homes.pop(key, None)
+        if line is None and home is not None and lt.find(self._region, home[0]) is not None:
+            # Pinned again after being taken out: back where it was, at the size it
+            # had, rather than at the end of the strip with half of the last block.
+            target, side, share = home
+            self._place_in_region(key, target, side, share=share)
+        else:
+            side = "bottom" if new_line or beside is None else "right"
+            self._place_in_region(key, beside, side, share=self._strip_share(key))
         self._relayout()
         self._settled()
 
@@ -1369,8 +1460,59 @@ class BlockCanvas(QWidget):
         run = lines[max(0, min(line, len(lines) - 1))]
         return run[max(0, min(slot, len(run) - 1))]
 
-    def _place_in_region(self, key: str, target: str | None, side: str) -> None:
-        """Put *key* into the strip's tree. Assumes it has been detached."""
+    def _strip_home(self, key: str) -> tuple[str, str, float] | None:
+        """Where *key* sits in the strip, in terms that survive it leaving.
+
+        A neighbour in its run and the side of that neighbour it is on — the one
+        after it if there is one, so it goes back *above* it, else the one before —
+        and the share of the run it takes.
+        """
+        region = self._region
+        path = lt.find(region, key) if region is not None else None
+        if not path:
+            return None
+        parent = lt.at(region, path[:-1])
+        if not isinstance(parent, lt.Split) or len(parent.children) < 2:
+            return None
+        index = path[-1]
+        vertical = parent.orientation == lt.VERTICAL
+        if index + 1 < len(parent.children):
+            neighbour = lt.keys(parent.children[index + 1])[0]
+            side = "top" if vertical else "left"
+        else:
+            neighbour = lt.keys(parent.children[index - 1])[-1]
+            side = "bottom" if vertical else "right"
+        return neighbour, side, lt.share_of(region, key, root_is_run=True)
+
+    def _strip_share(self, key: str) -> float:
+        """How much of the strip's run a block pinned by its button should take.
+
+        Its recommended extent along the strip, out of the strip's length — taken
+        from every block already there in proportion, so unpinning it gives each of
+        them back exactly what it had. Halving the last block in the strip, which
+        is what a drop promises, was what made a pin and an unpin shrink the Scene
+        block for good. Capped at half: a newcomer never takes most of the strip.
+        """
+        if self._board is None:
+            return 0.0
+        vertical = is_vertical_strip(self._pin_edge)
+        panel = self._board.panel
+        length = panel.height() if vertical else panel.width()
+        size = self._sizes.get(instance_template(key), RecommendedSize())
+        wanted = (size.height if vertical else size.width) or 0
+        if length <= 0 or wanted <= 0:
+            return 0.0
+        return min(0.5, wanted / length)
+
+    def _place_in_region(
+        self, key: str, target: str | None, side: str, *, share: float = 0.0
+    ) -> None:
+        """Put *key* into the strip's tree. Assumes it has been detached.
+
+        A *share* gives the arriving block that fraction of the run, taken from every
+        block in it (see :func:`~mm_companion.ui.layout_tree.insert_beside`); without
+        one it takes half of *target*, which is what a drop's mark promised.
+        """
         if self._region is None or target is None or lt.find(self._region, target) is None:
             self._region = lt.normalize(
                 lt.Leaf((key,))
@@ -1378,7 +1520,7 @@ class BlockCanvas(QWidget):
                 else lt.Split(self._along_axis(), (self._region, lt.Leaf((key,))))
             )
             return
-        self._region = lt.normalize(lt.insert_beside(self._region, key, target, side))
+        self._region = lt.normalize(lt.insert_beside(self._region, key, target, side, share=share))
 
     def _along_axis(self) -> str:
         """The axis the strip's blocks stack along, which is its own long one."""

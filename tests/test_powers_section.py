@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 from PySide6.QtCore import QEvent, QPointF, Qt, QVariantAnimation
 from PySide6.QtGui import QEnterEvent, QFont, QFontMetrics
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QGridLayout, QLabel, QPushButton
 
 from mm_companion.core import library, storage
@@ -1067,18 +1068,18 @@ def _dial(sec: PowersSection) -> _RankDial:
 def _dial_state(sec: PowersSection) -> tuple[int, int, str]:
     """``(value, maximum, label)`` — where the dial is, how far it goes, what that is."""
     dial = _dial(sec)
-    return dial._slider.value(), dial._slider.maximum(), dial._value.text()
+    return dial.value(), dial.ceiling(), dial._label_for(dial.value())
 
 
 def _dial_labels(sec: PowersSection) -> list[str]:
     """What every notch of the dial reads, from Off upwards."""
     dial = _dial(sec)
-    return [dial._label_for(rank) for rank in range(dial._slider.maximum() + 1)]
+    return [dial._label_for(rank) for rank in range(dial.ceiling() + 1)]
 
 
 def _turn(sec: PowersSection, rank: int) -> None:
-    """Move the dial the way a keyboard or groove step does — handle up, so it commits."""
-    _dial(sec)._slider.setValue(rank)
+    """Pick a notch the way a click on its pip (or the Off chip, at zero) does."""
+    _dial(sec).pick(rank)
 
 
 def test_a_growth_card_carries_a_dial_named_by_size(qapp: QApplication) -> None:
@@ -1238,10 +1239,10 @@ def test_a_dial_inside_a_switched_off_linked_group_is_a_read_out(qapp: QApplicat
     sec = _sheet_for(char).powers
     sec._set_group_active(char.powers[0], False)
 
-    slider = _dial(sec)._slider
+    dial = _dial(sec)
     assert _dial_labels(sec) == ["Off", "Large", "Huge", "Gargantuan"]
-    assert slider.isEnabled()
-    assert slider.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+    assert dial._pips.isEnabled()
+    assert dial._pips.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
 
 def test_the_dial_makes_an_array_member_the_live_alternate(qapp: QApplication) -> None:
@@ -1340,11 +1341,7 @@ def test_turning_the_dial_leaves_the_page_where_it_was(qapp: QApplication) -> No
     before = bar.value()
     assert before > 0, "the page has to be scrollable for this to mean anything"
 
-    slider = win._sheet.powers.findChildren(_RankDial)[-1]._slider
-    slider.setFocus()
-    for _ in range(4):
-        qapp.processEvents()
-    slider.setValue(2)
+    win._sheet.powers.findChildren(_RankDial)[-1].pick(2)
     for _ in range(10):
         qapp.processEvents()
 
@@ -1357,29 +1354,78 @@ def test_the_dial_never_takes_focus(qapp: QApplication) -> None:
     could only ever be handed to another block — which is what moved the page."""
     sheet, _char, _power = _size_sheet(3)
 
-    assert _dial(sheet.powers)._slider.focusPolicy() == Qt.FocusPolicy.NoFocus
+    dial = _dial(sheet.powers)
+    assert dial._pips.focusPolicy() == Qt.FocusPolicy.NoFocus
 
 
-def test_a_drag_commits_once_on_release(qapp: QApplication) -> None:
-    """A slider that wrote on every tick would delete itself under the player's thumb.
+def test_hovering_a_pip_names_it_and_commits_nothing(qapp: QApplication) -> None:
+    """Hover is a preview: the label reads the notch under the pointer, the model waits.
 
-    The label tracks the drag so the notch under the handle is readable; only letting go
-    reaches the section — which is what makes a rebuild-per-commit survivable at all.
+    Only a click reaches the section — which is what makes a rebuild-per-commit
+    survivable — and leaving the scale puts the label back on the notch held.
     """
     sheet, _char, power = _size_sheet(3)
     dial = _dial(sheet.powers)
     committed: list[int] = []
     dial.rankPicked.connect(committed.append)
 
-    dial._slider.setSliderDown(True)
-    dial._slider.setValue(2)
-    dial._slider.setValue(1)
+    dial._pips.hovered.emit(1)
+    assert dial._value.text() == "Large"
     assert committed == []
-    assert dial._value.text() == "Large"  # but the label followed the handle
-    assert power.effects[0].current_rank is None  # nothing written yet
+    assert power.effects[0].current_rank is None  # nothing written
 
-    dial._slider.setSliderDown(False)  # QAbstractSlider emits sliderReleased itself
-    assert committed == [1]
+    dial._pips.hovered.emit(-1)
+    assert dial._value.text() == "Gargantuan"
+
+
+def _click_pip(sec: PowersSection, notch: int) -> None:
+    """A real press and release on pip *notch* (1-based) of the section's first dial."""
+    pips = _dial(sec)._pips
+    pips.resize(pips.sizeHint())
+    centre = pips._rects()[notch - 1].center().toPoint()
+    QTest.mouseClick(pips, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, centre)
+
+
+def test_clicking_a_pip_picks_that_notch(qapp: QApplication) -> None:
+    """A click on the second pip holds the Growth at Huge."""
+    sheet, _char, power = _size_sheet(3)
+    _click_pip(sheet.powers, 2)
+
+    assert power.effects[0].current_rank == 2
+    assert _dial_state(sheet.powers) == (2, 3, "Huge")
+
+
+def test_clicking_the_last_lit_pip_puts_it_out(qapp: QApplication) -> None:
+    """There is no Off button: the last lit pip steps down a rank, and at 1 goes off."""
+    sheet, _char, power = _size_sheet(3)
+    _click_pip(sheet.powers, 3)  # standing at Gargantuan
+    assert _dial_state(sheet.powers) == (2, 3, "Huge")
+
+    _click_pip(sheet.powers, 1)
+    _click_pip(sheet.powers, 1)
+    assert _dial_state(sheet.powers) == (0, 3, "Off")
+    assert not sheet.powers._power_is_active(power)
+
+
+def test_hovering_the_last_lit_pip_names_the_rank_below(qapp: QApplication) -> None:
+    sheet, _char, _power = _size_sheet(3)
+    pips = _dial(sheet.powers)._pips
+    hovered: list[int] = []
+    pips.hovered.connect(hovered.append)
+    pips._set_hover(3)
+    pips._set_hover(1)
+
+    assert hovered == [2, 1]
+
+
+def test_a_scale_with_repeating_names_is_grouped_by_them(qapp: QApplication) -> None:
+    """Groups split where a repeating name changes, and nowhere on a plain rank ladder."""
+    from mm_companion.ui.rank_pips import RankPips
+
+    sizes = RankPips(5, 0, {1: "Large", 2: "Large", 3: "Huge", 4: "Huge", 5: "Gargantuan"})
+    assert sizes._breaks == {3, 5}
+    ranks = RankPips(4, 0, {1: "Rank 1", 2: "Rank 2", 3: "Rank 3", 4: "Rank 4"})
+    assert ranks._breaks == set()
 
 
 # --- the Dynamic point pool -----------------------------------------------------------
@@ -1470,7 +1516,7 @@ def test_the_share_dials_groove_is_its_whole_ladder_however_little_is_left(
     assert sec._share_steps(flight, 6, 3) == [0, 2, 3, 4, 6]
 
 
-def test_a_member_whose_siblings_hold_the_pool_keeps_its_slider(
+def test_a_member_whose_siblings_hold_the_pool_keeps_its_dial(
     qapp: QApplication,
 ) -> None:
     """It used to vanish outright — not disabled, absent — with no way back."""
@@ -1484,17 +1530,17 @@ def test_a_member_whose_siblings_hold_the_pool_keeps_its_slider(
     assert len(dials) == 2
     # The one with nothing left is still there, ended at the single notch it can reach.
     starved = dials[1]
-    assert starved._slider.maximum() == 0
+    assert starved.ceiling() == 0
     assert flight.dynamic_points is None
 
     # Hand a point back and the starved slider gains exactly one division; hand two back
     # and it gains another. The right-hand end of the groove is what the pool has left.
     armour.dynamic_points = 6
     sheet.powers._rebuild_list()
-    assert _share_dials(sheet.powers)[1]._slider.maximum() == 1
+    assert _share_dials(sheet.powers)[1].ceiling() == 1
     armour.dynamic_points = 4
     sheet.powers._rebuild_list()
-    assert _share_dials(sheet.powers)[1]._slider.maximum() == 2
+    assert _share_dials(sheet.powers)[1].ceiling() == 2
 
 
 def test_moving_a_share_dial_moves_every_members_ranks(qapp: QApplication) -> None:
@@ -1553,8 +1599,8 @@ def test_the_last_share_dialled_to_nothing_switches_its_member_off(
 
     size_dial, reach_dial = _share_dials(sec)
     assert size_dial.caption() == "Size"
-    reach_dial._slider.setValue(0)
-    _share_dials(sec)[0]._slider.setValue(0)  # the card tree is rebuilt under each commit
+    reach_dial.pick(0)
+    _share_dials(sec)[0].pick(0)  # the card tree is rebuilt under each commit
 
     assert effective_size(char, data) == "Diminutive"
     assert not growth.activated
@@ -1563,7 +1609,7 @@ def test_the_last_share_dialled_to_nothing_switches_its_member_off(
     assert sec._node_is_inactive(growth, group, sec._activation_role(growth, group))
 
     # ...and the same handle pushed back up wakes it at the notch asked for.
-    _share_dials(sec)[0]._slider.setValue(4)
+    _share_dials(sec)[0].pick(4)
     assert growth.activated
     assert effective_size(char, data) == "Large"  # Diminutive, plus four ranks
 
@@ -1594,7 +1640,7 @@ def test_a_share_revives_every_switch_the_card_click_put_down(
     assert not sprint.activated and not sprint.item_present
     assert not sprint.effects[0].toggled_on
 
-    _share_dials(sec)[1]._slider.setValue(1)  # ...and now pay for it again
+    _share_dials(sec)[1].pick(1)  # ...and now pay for it again
 
     assert sprint.dynamic_points == 1
     assert sec._member_is_running(sprint)
@@ -1635,7 +1681,7 @@ def test_an_unsplit_arrays_share_dial_seats_where_its_member_is_running(
 
     # Left where it was drawn, the array is still unsplit — a handle that has not moved
     # is not a decision.
-    size_dial._slider.setValue(size_dial.value())
+    size_dial.pick(size_dial.value())
     assert growth.dynamic_points is None
 
     # A member dialled down mid-play is priced by the rank it is *standing* at.
@@ -1677,7 +1723,7 @@ def test_a_share_dial_can_stop_at_a_rank_its_share_overshoots(qapp: QApplication
     # unsplit), so it names the rung without quoting a price for it.
     assert dial._labels[6] == "Gargantuan"
 
-    dial._slider.setValue(5)
+    dial.pick(5)
     assert effective_size(char, data) == "Huge"
     # Now the points really are spoken for, so every notch quotes its price again.
     assert _share_dials(sec)[0]._labels[6] == "5 PP · Gargantuan"
@@ -1687,7 +1733,7 @@ def test_a_share_dial_can_stop_at_a_rank_its_share_overshoots(qapp: QApplication
 
     # The rung above spends the same points on the rank they actually buy, and stores
     # no hold at all, so only a member deliberately held below its ceiling carries one.
-    _share_dials(sec)[0]._slider.setValue(6)
+    _share_dials(sec)[0].pick(6)
     assert effective_size(char, data) == "Gargantuan"
     assert growth.dynamic_points == 5 and effect.current_rank is None
 
@@ -1881,7 +1927,7 @@ def test_the_pool_readout_is_there_before_the_first_split(qapp: QApplication) ->
 
     assert _pool_label(sec, group.id) == "Pool: 8 PP — not split"
 
-    _share_dials(sec)[1]._slider.setValue(1)  # give the Flight its first notch
+    _share_dials(sec)[1].pick(1)  # give the Flight its first notch
     assert "PP split" in _pool_label(sec, group.id)
 
 
@@ -1895,7 +1941,7 @@ def test_the_hand_back_button_clears_a_split_in_one_gesture(qapp: QApplication) 
     armour, flight = group.children
 
     assert sec._pool_release(group) is None  # nothing split: nothing to hand back
-    _share_dials(sec)[1]._slider.setValue(1)
+    _share_dials(sec)[1].pick(1)
     assert flight.dynamic_points
 
     button = sec._pool_release(group)
@@ -1926,7 +1972,7 @@ def test_a_powers_own_split_states_its_pool_on_the_card(qapp: QApplication) -> N
 
     assert _pool_label(sec, power.id) == "Pool: 8 PP — not split"
 
-    _share_dials(sec)[0]._slider.setValue(2)
+    _share_dials(sec)[0].pick(2)
     assert "PP split" in _pool_label(sec, power.id)
 
     sec._release_effect_pool(power)
@@ -1967,7 +2013,7 @@ def test_a_receded_card_keeps_its_dial_at_full_strength(qapp: QApplication) -> N
     sheet, _char, group = _pool_array(qapp)
     sec = sheet.powers
     armour, flight = group.children
-    _share_dials(sec)[1]._slider.setValue(1)  # split the pool onto the Flight alone
+    _share_dials(sec)[1].pick(1)  # split the pool onto the Flight alone
 
     card = next(c for c in sec._list_host.findChildren(_DraggableCard) if c.node_id == armour.id)
     assert card.off_progress() == pytest.approx(1.0)  # the Force Field has receded...

@@ -63,6 +63,26 @@ DICE_LAYOUT_EXTENDED = "extended"
 #: the writer below validate against this, so a fourth shape is one entry here.
 DICE_LAYOUTS = (DICE_LAYOUT_AUTO, DICE_LAYOUT_COMPACT, DICE_LAYOUT_EXTENDED)
 
+#: Which corner of the screen a roll notification appears in (see
+#: ``mm_companion.ui.toasts``). The first is the default — where Telegram Desktop and
+#: most messengers put theirs.
+TOAST_CORNER_BOTTOM_RIGHT = "bottom-right"
+TOAST_CORNER_BOTTOM_LEFT = "bottom-left"
+TOAST_CORNER_TOP_RIGHT = "top-right"
+TOAST_CORNER_TOP_LEFT = "top-left"
+TOAST_CORNERS = (
+    TOAST_CORNER_BOTTOM_RIGHT,
+    TOAST_CORNER_BOTTOM_LEFT,
+    TOAST_CORNER_TOP_RIGHT,
+    TOAST_CORNER_TOP_LEFT,
+)
+
+#: The simple sheet's two arrangements (see ``mm_companion.ui.simple.layout``). Kept here,
+#: not imported from there: this module is Qt-free and the layout module is not.
+SIMPLE_PRESET_STANDARD = "standard"
+SIMPLE_PRESET_CUSTOM = "custom"
+SIMPLE_PRESETS = (SIMPLE_PRESET_STANDARD, SIMPLE_PRESET_CUSTOM)
+
 DEFAULT_SETTINGS: dict[str, object] = {
     "version": 1,
     # Id of the visual theme preset (see :mod:`mm_companion.ui.theme`). "classic"
@@ -231,9 +251,29 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # only a way to fit a mini window, the second only what GM Mode happened to be
     # built as.
     "dice_layout": DICE_LAYOUT_AUTO,
+    # Whether a roll, a note or a request landing in the history also pops up as a
+    # small always-on-top notification in a corner of the screen, and which corner.
+    # A history in a pinned strip shows three or four cards at a time; the
+    # notification is how a roll is read without the history having to be tall.
+    "roll_notifications": True,
+    "roll_notification_corner": TOAST_CORNER_BOTTOM_RIGHT,
     # Whether the launcher asks GitHub for a newer release when the app starts. See
     # :mod:`mm_companion.core.updates`.
     "check_for_updates": True,
+    # Which arrangement the simple sheet (View > Simple Sheet) uses: "standard", the
+    # fixed one modelled on a printed sheet, or "custom", the edit sheet's own. A
+    # preference, so it is remembered. Whether a window is *showing* the simple sheet
+    # is not — it is a view switch like the lock and compact mode (see "compact").
+    "simple_sheet_preset": SIMPLE_PRESET_STANDARD,
+    # Whether a saved character opens straight into the simple sheet. Off by default:
+    # a window is otherwise a view switch like the lock, not remembered (see
+    # "compact"), and this is the one player's choice to make it a habit instead.
+    "simple_sheet_on_open": False,
+    # Which blocks a printed simple sheet carries, by block key, where the player
+    # has chosen differently from the block's own default (the roller and the Scene
+    # are off, everything else on). Only the choices made are stored, so a block
+    # added later prints by its own default.
+    "simple_print_blocks": {},
 }
 
 
@@ -504,6 +544,57 @@ def set_check_for_updates(enabled: bool) -> None:
     update_settings(check_for_updates=bool(enabled))
 
 
+def simple_sheet_preset() -> str:
+    """The simple sheet's arrangement — one of :data:`SIMPLE_PRESETS`.
+
+    Defaults to :data:`SIMPLE_PRESET_STANDARD` when unset or unrecognized, for the
+    usual reason: :func:`load_settings` returns the file verbatim, so a workspace older
+    than this key answers ``None``.
+    """
+    value = load_settings().get("simple_sheet_preset", SIMPLE_PRESET_STANDARD)
+    return value if value in SIMPLE_PRESETS else SIMPLE_PRESET_STANDARD
+
+
+def set_simple_sheet_preset(preset: str) -> None:
+    """Remember the simple sheet's arrangement; an unknown value means ``standard``."""
+    update_settings(
+        simple_sheet_preset=preset if preset in SIMPLE_PRESETS else SIMPLE_PRESET_STANDARD
+    )
+
+
+def simple_sheet_on_open() -> bool:
+    """Whether a saved character opens in the simple sheet; off unless turned on.
+
+    The accessor the standing rule asks for: a workspace older than the key reads
+    ``None`` off :func:`load_settings`, and that must mean "off", not an error.
+    """
+    return load_settings().get("simple_sheet_on_open") is True
+
+
+def set_simple_sheet_on_open(enabled: bool) -> None:
+    """Record whether saved characters open in the simple sheet."""
+    update_settings(simple_sheet_on_open=bool(enabled))
+
+
+def simple_print_choices() -> dict[str, bool]:
+    """Which blocks the player has chosen to print (or not), by block key.
+
+    Only the explicit choices; a block missing from it prints by its own default.
+    Anything malformed in the file reads as no choice at all.
+    """
+    stored = load_settings().get("simple_print_blocks")
+    if not isinstance(stored, dict):
+        return {}
+    return {str(k): v for k, v in stored.items() if isinstance(v, bool)}
+
+
+def set_simple_print_choices(choices: dict[str, bool]) -> None:
+    """Remember which blocks to print — merged over what was stored before."""
+    merged = simple_print_choices()
+    merged.update({str(k): bool(v) for k, v in choices.items()})
+    update_settings(simple_print_blocks=merged)
+
+
 def dice_layout() -> str:
     """How the dice roller arranges itself as a block — one of :data:`DICE_LAYOUTS`.
 
@@ -519,6 +610,36 @@ def dice_layout() -> str:
 def set_dice_layout(layout: str) -> None:
     """Choose how the dice roller arranges itself; an unknown value means ``auto``."""
     update_settings(dice_layout=layout if layout in DICE_LAYOUTS else DICE_LAYOUT_AUTO)
+
+
+def roll_notifications() -> bool:
+    """Whether a new history entry pops up as a corner-of-the-screen notification.
+
+    On unless turned off — through an accessor because a workspace older than the key
+    reads ``None`` off :func:`load_settings`, which would switch it off for everyone.
+    """
+    stored = load_settings().get("roll_notifications")
+    if stored is None:
+        return bool(DEFAULT_SETTINGS["roll_notifications"])
+    return bool(stored)
+
+
+def set_roll_notifications(enabled: bool) -> None:
+    """Record whether new history entries pop up as notifications."""
+    update_settings(roll_notifications=bool(enabled))
+
+
+def roll_notification_corner() -> str:
+    """Which screen corner roll notifications stack in — one of :data:`TOAST_CORNERS`."""
+    value = load_settings().get("roll_notification_corner", TOAST_CORNER_BOTTOM_RIGHT)
+    return value if value in TOAST_CORNERS else TOAST_CORNER_BOTTOM_RIGHT
+
+
+def set_roll_notification_corner(corner: str) -> None:
+    """Choose the notifications' corner; an unknown value means bottom-right."""
+    update_settings(
+        roll_notification_corner=corner if corner in TOAST_CORNERS else TOAST_CORNER_BOTTOM_RIGHT
+    )
 
 
 #: The settings keys a window's block arrangement may be stored under. One per

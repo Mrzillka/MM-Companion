@@ -38,14 +38,12 @@ from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QEasingCurve, QEvent, QPropertyAnimation, Qt, QTimer
+from PySide6.QtCore import QByteArray, QEvent, Qt
 from PySide6.QtGui import QCloseEvent, QShowEvent
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
     QFileDialog,
-    QFrame,
-    QGraphicsOpacityEffect,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -53,7 +51,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -123,6 +120,7 @@ from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.session_bridge import SessionBridge, last_session, set_active_session
 from mm_companion.ui.session_dialogs import HostOptions
 from mm_companion.ui.session_portrait import encode_scene_portrait, shrink_portrait
+from mm_companion.ui.toasts import ToastCard, ToastStack
 from mm_companion.ui.undo import absorbing
 from mm_companion.ui.widgets import (
     ConfirmButton,
@@ -421,11 +419,14 @@ class GMWindow(QMainWindow):
         full_layout = QVBoxLayout(self._full)
         full_layout.setContentsMargins(0, 0, 0, 0)
         full_layout.addWidget(self._board, stretch=1)
-        # A persistent strip along the bottom, not a draggable block: the hosting
-        # status and the reachability advice, then a transient notice line.
-        full_layout.addWidget(self._build_status_strip())
-        full_layout.addWidget(self._build_trouble())
-        full_layout.addWidget(self._build_notice())
+        # The hosting status and the reachability advice, the "cannot reach the
+        # table" card, then a transient notice line — floating over the board's
+        # bottom-right corner rather than laid out under it, so a message coming or
+        # going never moves a block (see ui/toasts.py).
+        self._notices = ToastStack(self._full)
+        self._notices.add_card(self._build_status_strip())
+        self._notices.add_card(self._build_trouble())
+        self._notices.add_card(self._build_notice())
 
         # The same compact mode a player's sheet has, over the same roller — and
         # now over the same DiceRollerView, so this window's release_roller /
@@ -561,17 +562,17 @@ class GMWindow(QMainWindow):
 
     # -- construction ------------------------------------------------------
 
-    def _build_status_strip(self) -> _Notice:
+    def _build_status_strip(self) -> ToastCard:
         """The bottom strip: the hosting status line and the reachability advice.
 
         Not a draggable block — the session controls moved to the launch dialog, so
         all that stays on the board is this feedback: whether players can reach the
         game, and the verbatim advice from ``discovery`` when they may not. The join
         code itself is copied from **Session ▸ Copy join code**. It rides in a
-        dismissible :class:`_Notice` so it can be closed and fades on its own once
+        dismissible :class:`ToastCard` so it can be closed and fades on its own once
         read, rather than sitting on the board for the whole session.
         """
-        notice = _Notice()
+        notice = ToastCard()
 
         self._status_label = _wrapped("")
         font = self._status_label.font()
@@ -726,7 +727,7 @@ class GMWindow(QMainWindow):
         # The same declaration the sheet's Dice block makes, and for the same
         # reason: the history grows into whatever height the block is given, so the
         # roller takes it all rather than being held at its hint over a trailing
-        # stretch (see :meth:`~mm_companion.ui.block_frame._InnerScroll.set_section`).
+        # stretch (see :meth:`~mm_companion.ui.block_frame.InnerScroll.set_section`).
         # It cannot be derived — this box is a ``QGroupBox``, so ``Preferred``, and
         # it is the history *inside* it that wants the room. Without it the block
         # this window pins to the strip by default showed a roller stopped at ~650px
@@ -806,20 +807,21 @@ class GMWindow(QMainWindow):
         """Take the roller and the history back into the Rolls block."""
         self._view.restore_roller()
 
-    def _build_notice(self) -> _Notice:
-        self._notice = _Notice()
+    def _build_notice(self) -> ToastCard:
+        self._notice = ToastCard()
         self._notice_label = _wrapped("")
         self._notice.add_widget(self._notice_label)
         return self._notice
 
-    def _build_trouble(self) -> _Notice:
+    def _build_trouble(self) -> ToastCard:
         """The card that says the table cannot be reached, and offers the way back.
 
-        Held rather than poked (see :class:`_Notice`): this is a condition, not a
+        Held rather than poked (see :class:`ToastCard`): this is a condition, not a
         message, and one that fades after ten seconds is one a GM will not see
         when they next look up.
         """
-        self._trouble = _Notice()
+        self._trouble = ToastCard()
+        self._trouble.set_accent(theme.color("tint.worse"))
         self._trouble_label = _wrapped("")
         self._trouble.add_widget(self._trouble_label)
         self._trouble_button = QPushButton("Reconnect now")
@@ -2762,6 +2764,7 @@ class GMWindow(QMainWindow):
     def _set_status(self, text: str, colour: str) -> None:
         self._status_label.setText(text)
         self._status_label.setStyleSheet(f"color: {colour};" if colour else "")
+        self._status_notice.set_accent(colour or None)
         self._status_notice.poke()
 
     def _show_advice(self, advice: tuple[str, ...]) -> None:
@@ -2782,6 +2785,7 @@ class GMWindow(QMainWindow):
     def _show_notice(self, text: str, colour: str) -> None:
         self._notice_label.setText(text)
         self._notice_label.setStyleSheet(f"color: {colour};" if colour else "")
+        self._notice.set_accent(colour or None)
         if text:
             self._notice.poke()
         else:
@@ -2865,122 +2869,6 @@ def _wrapped(text: str) -> QLabel:
     label.setWordWrap(True)
     label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
     return label
-
-
-class _Notice(QFrame):
-    """A dismissible message card that clears itself out after a dwell.
-
-    The GM board's feedback — the hosting status, the reachability advice, and the
-    one-off notices ("Join code copied", "A player joined") — used to sit pinned to
-    the bottom forever. Each of these is now shown in a ``_Notice`` instead: it
-    carries an ``✕`` to dismiss it immediately, and if left alone it fades itself
-    out :data:`DWELL_MS` after it was last poked, with a slow tail so it dissolves
-    rather than blinks off. Updating its contents and calling :meth:`poke` again
-    brings it back to full opacity and restarts the countdown.
-
-    :meth:`hold` is the exception, and it is the same argument that produced
-    :class:`~mm_companion.ui.connection_indicator.ConnectionIndicator`: a card
-    that says the session is unreachable is not a message, it is a *condition*,
-    and a condition that fades after ten seconds is one a GM will not see when
-    they look up mid-fight. A held card stays until :meth:`release` says the
-    condition has passed — the ``✕`` still dismisses it, because a GM who has
-    read it and decided to carry on is entitled to their screen back.
-    """
-
-    #: How long a message stays fully visible before it starts to fade.
-    DWELL_MS = 10_000
-    #: How long the fade-out itself takes — deliberately slow, so it eases away.
-    FADE_MS = 1_500
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setObjectName("gmNotice")
-
-        row = QHBoxLayout(self)
-        row.setContentsMargins(8, 2, 2, 2)
-        row.setSpacing(4)
-        self._body = QVBoxLayout()
-        self._body.setContentsMargins(0, 0, 0, 0)
-        self._body.setSpacing(0)
-        row.addLayout(self._body, stretch=1)
-
-        self._close = QToolButton()
-        self._close.setText("✕")
-        self._close.setAutoRaise(True)
-        self._close.setToolTip("Dismiss this message")
-        self._close.setCursor(Qt.CursorShape.ArrowCursor)
-        self._close.clicked.connect(self.dismiss)
-        row.addWidget(self._close, alignment=Qt.AlignmentFlag.AlignTop)
-
-        # Opacity is driven by an effect so the whole card (text and ✕ alike) can
-        # ease out together; it stays attached, which is fine for a small strip.
-        self._effect = QGraphicsOpacityEffect(self)
-        self._effect.setOpacity(1.0)
-        self.setGraphicsEffect(self._effect)
-        self._fade = QPropertyAnimation(self._effect, b"opacity", self)
-        self._fade.setDuration(self.FADE_MS)
-        self._fade.setEasingCurve(QEasingCurve.Type.InCubic)
-        self._fade.finished.connect(self._settle)
-
-        self._timer = QTimer(self)
-        self._timer.setSingleShot(True)
-        self._timer.setInterval(self.DWELL_MS)
-        self._timer.timeout.connect(self._begin_fade)
-        # Whether this card is showing a *condition* rather than a message; see
-        # the class docstring and :meth:`hold`.
-        self._held = False
-        self.hide()
-
-    def add_widget(self, widget: QWidget) -> None:
-        self._body.addWidget(widget)
-
-    def add_layout(self, layout: QVBoxLayout) -> None:
-        self._body.addLayout(layout)
-
-    def poke(self) -> None:
-        """Show the card at full opacity and restart the dwell-then-fade timer."""
-        self._fade.stop()
-        self._effect.setOpacity(1.0)
-        self.setVisible(True)
-        if not self._held:
-            self._timer.start()
-
-    def hold(self) -> None:
-        """Show the card and keep it there until :meth:`release`."""
-        self._held = True
-        self._timer.stop()
-        self._fade.stop()
-        self._effect.setOpacity(1.0)
-        self.setVisible(True)
-
-    def release(self) -> None:
-        """The condition has passed: let the card fade normally again, and go."""
-        if not self._held:
-            return
-        self._held = False
-        self.dismiss()
-
-    @property
-    def held(self) -> bool:
-        return self._held
-
-    def dismiss(self) -> None:
-        """Retire the card at once — the ✕ button, or a caller clearing it."""
-        self._held = False
-        self._timer.stop()
-        self._fade.stop()
-        self._effect.setOpacity(1.0)
-        self.setVisible(False)
-
-    def _begin_fade(self) -> None:
-        self._fade.stop()
-        self._fade.setStartValue(self._effect.opacity())
-        self._fade.setEndValue(0.0)
-        self._fade.start()
-
-    def _settle(self) -> None:
-        if self._effect.opacity() <= 0.01:
-            self.setVisible(False)
 
 
 # --------------------------------------------------------------------------

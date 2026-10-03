@@ -91,7 +91,7 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   and the selected alternate stops deciding, which is exactly what the second point of a
   Dynamic alternate buys. With nothing split an array behaves as it always has, so a
   character saved before this loads unchanged.
-- **A Dynamic member has exactly one slider, and it spends points.** The share dial
+- **A Dynamic member has exactly one dial, and it spends points.** The share dial
   *replaces* the rank dial rather than sitting beside it (`_rank_is_shared`). Two of them
   is what a Growth in a Dynamic array used to get, and they deadlocked: the rank one wrote
   a `current_rank` the share then clamped away, and because the clamp was a `min` the
@@ -99,25 +99,27 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   raising the share afterwards moved nothing. `effect_current_rank` therefore lets the cap
   *replace* the dialled rank rather than taking the smaller of the two — which is also why
   nothing clears `current_rank`: a Growth dialled to Large keeps its rung stored and gets
-  it back the moment the split is cleared. The one slider answers to the rank dial's own
+  it back the moment the split is cleared. The one dial answers to the rank dial's own
   names (`_share_caption`): "Size" on a Growth, "Rank" on a Flight — **and to the rank
   dial's own words**, so a size effect's notches are the sizes it becomes rather than bare
   ranks (`_notch_name`, sharing `_dial_labels` with the rank dial). Moving a Growth into a
   Dynamic array used to swap Large/Huge/Gargantuan for numbers, so the one control the
   player had left said less than the one it replaced. Price first, rung second:
   `5 PP · Huge`.
-- **The groove ends where the pool does.** A share slider's right-hand end *is* the most
-  that member can be set to, and it gains a division for every point a sibling hands back:
-  a Growth 6 holding all six of a six-point pool leaves an Elongation 3 with one notch,
-  and dropping the Growth a rung gives the Elongation two. The index space is the member's
-  whole ladder and what is affordable is always a **prefix** of it, so notch *n* means the
-  same points however far the end has travelled — which is what lets the end move under
-  the eye without the handle changing meaning. `_SplitGroup` is what moves it: the dials
-  report every notch they pass (`previewed`), and it re-ends every *other* dial and counts
-  the header down (`6/10 PP · 4 left`) **while a handle is still moving**, writing nothing
-  until the release so a whole gesture stays one undoable step. A member is never left
-  without a slider — it used to vanish outright once its siblings had spent the pool, with
-  no way to give it points again.
+- **The reachable pips end where the pool does.** A share dial's last hollow pip *is*
+  the most that member can be set to; the rungs beyond it are drawn **dotted** and refuse
+  a click, and one turns hollow for every point a sibling hands back: a Growth 6 holding
+  all six of a six-point pool leaves an Elongation 3 with nothing but the pip it sits
+  on, and dropping the Growth a rung gives the Elongation one more. The index space
+  is the member's whole ladder and what is affordable is always a **prefix** of it, so
+  notch *n* means the same points however far the end has travelled. `_SplitGroup` is
+  what moves it: a dial reports the notch it is set to (`previewed`), and it re-ends every
+  *other* dial and counts the header down (`6/10 PP · 4 left`). That mattered most while
+  the dial was a slider whose handle could be mid-drag; a click commits at once and the
+  rebuild that follows re-ends everything anyway, but the coordinator is still what
+  bounds the dials as they are built. A member is never left without a dial — it used to
+  vanish outright once its siblings had spent the pool, with no way to give it points
+  again.
 - **One denominator.** `dynamic_member_cost` is the single answer to "what does this member
   cost for the purpose of rationing it", asked by `dynamic_rank_cap`, by the slider's
   notches and by the label beside them. There were two: the cards priced with the wielder
@@ -125,16 +127,17 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   ran Flight 2. It is character-free, and not merely as a tie-break — pricing against the
   wielder reaches `effective_ability`, which asks what the powers contribute, which asks
   the cap, and the loop terminates today only because the cap happens to price char-free.
-- **A commit made with a button still down is deferred a turn.** Every commit ends in a
-  rebuild that deletes the slider making it, and a **groove click** reaches the commit from
-  inside `mousePressEvent` — so it tore the widget down while it still held the mouse grab,
-  the rest of the gesture went nowhere, and a queued auto-repeat could re-fire against a
-  stale reading of the pool. A release has already cleared the button and a keyboard step
-  never had one, so those still commit straight through and the dial stays synchronous
-  everywhere it was.
-- **The split is made on the members' own sliders, not in a dialog.** It was a
+- **A pip commits on release, never on press.** Every commit ends in a rebuild that
+  deletes the dial making it. When the dial was a slider, a groove click reached the
+  commit from inside `mousePressEvent` and tore the widget down while it still held the
+  mouse grab, which needed a deferred commit to survive. `RankPips` emits `picked` from
+  `mouseReleaseEvent`, the way a `QPushButton`'s `clicked` is, so the gesture is over
+  before anything is rebuilt and the commit is synchronous. It also **accepts every
+  press**, gaps between pips included — a press that fell through to the card would
+  switch the whole power on or off.
+- **The split is made on the members' own dials, not in a dialog.** It was a
   modal grid of spin boxes behind a *Split points* button, and the dialog kept having to
-  explain the thing that makes the slider the right control: a share is only ever
+  explain the thing that makes a rank scale the right control: a share is only ever
   interesting for the rank it buys. So the notches **are** the ranks and the points are
   what each one spends — `dynamic_share_steps` prices every rank with
   `dynamic_share_points` (the exact inverse of `dynamic_rank_share`) and drops the ranks
@@ -143,7 +146,7 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   A member costing 2 points a rank therefore moves the split 2 points a notch and one
   costing 1 moves it by 1, so **every stop is a legal price for every member at once**,
   which is the whole reason the steps are computed per member rather than being a plain
-  points slider. Each slider is bounded by what is left of the pool once the *others*
+  points scale. Each dial is bounded by what is left of the pool once the *others*
   are paid, so the split can be walked up to the pool and never past it and any member
   can always be turned down to free points for another. Sliding every member to nothing
   is still *a* way back to an ordinary array, and stores `None` rather than `0`, so a file
@@ -155,16 +158,16 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   alternate back on through the same `_set_array_active` a card click would have used. It
   is there only while there is a split to hand back, and it stays live in a **locked**
   sheet, like the share dials themselves: it is the same free action.
-  The header also keeps the one number no single slider can show (`_pool_readout`,
-  worded by `_SplitGroup.readout_text` so the label built before the sliders exist and the
-  one restated mid-drag cannot disagree). It is there **before** the first split too —
+  The header also keeps the one number no single dial can show (`_pool_readout`,
+  worded by `_SplitGroup.readout_text` so the label built before the dials exist and the
+  one the coordinator restates cannot disagree). It is there **before** the first split too —
   `Pool: 8 PP — not split` — which is the moment it is most needed: it used to appear only
   once something had been assigned, so the pool was invisible for exactly the gesture that
   spends it. That line is also where a Dynamic array says which of its two regimes it is
-  in — pick one alternate by clicking a card, or move a slider and run several at once.
+  in — pick one alternate by clicking a card, or pick a pip and run several at once.
   A power's **own** effect-level split gets the same pair on its card header
   (`_effect_pool_readout`, `_effect_pool_release`); an array exists at two levels and so
-  does its pool, but only the group level used to say so. A Dynamic array's sliders are
+  does its pool, but only the group level used to say so. A Dynamic array's dials are
   therefore **not optional**: the Extended-settings box that governs them is forced on
   and made read-only while the array is Dynamic, since taking them away would leave the
   split with no control at all.
@@ -173,7 +176,7 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   itself — but not the *last* one: with every share back the array falls back to its
   selected alternate **at full rank**, which is the behaviour an array saved before the
   pool existed needs on load. So a Growth parked on "Off" came straight back on, and a
-  Diminutive character read Gargantuan under a slider saying the power was off.
+  Diminutive character read Gargantuan under a dial saying the power was off.
   `_on_share_dialled` therefore flips the member's own master switches too, exactly as a
   click on its card would, and a notch above zero flips them back. **Every switch the card
   flips, and only on this member's own leaves** (`_set_member_running`): raising
@@ -191,11 +194,13 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   the *dimming* asks the same question after the pool's (`_node_is_inactive`), or the one
   member the fallback woke would be the only undimmed card on a switched-off array; and
   a commit that lands where it started now compares the **switch as well as the share**,
-  so a member the fallback woke under an "Off" handle can still be put back down by
-  clicking that handle where it already sits.
+  so stepping a fallback-woken member down to zero still puts it down even though its
+  share was already nothing. (While the dial had an Off button, re-clicking a lit Off
+  was the gesture this served; with the last lit pip stepping down instead, a click
+  always moves the dial.)
 - **And the handle sits where the member is running, share or no share.** The other end
   of the same lie: an array nobody has split still runs its selected alternate, so
-  drawing every one of its sliders on "Off" said the array was doing nothing while the
+  drawing every one of its dials on "Off" said the array was doing nothing while the
   sheet showed a Diminutive character at Gargantuan. `_fallback_share` prices what such a
   member is *standing* at through `dynamic_share_points` — the exact inverse of the share
   → rank conversion, so the handle lands on the notch that would buy what it is already
@@ -577,7 +582,7 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   control that changed nothing on exactly the card it mattered most on; making the
   ruleset supply the default rather than an exemption is what fixed that, and it needed
   no migration because an absent key was already the thing that meant "nobody decided".
-  One case overrides the player: a **Dynamic** array splits its points on these sliders,
+  One case overrides the player: a **Dynamic** array splits its points on these dials,
   so the box is forced on and made read-only while it is Dynamic (`_dial_is_forced`).
 - **Extended settings is a *power*-level panel over *effect*-level flags.** All three of
   the above, plus `size_scales_damage`, are stored per effect — that is the level they

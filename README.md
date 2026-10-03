@@ -5,45 +5,64 @@ Masterminds* tabletop RPG (3rd / 4th edition), built with Python and PySide6.
 
 ## Status
 
-🚧 **Early development (pre-alpha, `0.8.0`) — but functional.** The character
-creator is real and usable today: you can build a character point-by-point,
-assemble powers in a drag-and-drop constructor, track conditions, and save/load
-your work. The rules engine, powers layer, conditions, save/load, and mod support
-all work. A **dice roller** and **GM Mode with online play** — a GM hosts a live
-session that players join over the internet, sharing a roster, synchronised rolls,
-and NPCs — are in place on the development branch. Expect breaking changes between
-versions.
+🚧 **Early development (pre-alpha, `0.8.1`) — but functional.** You can build a
+character point by point, assemble powers in a drag-and-drop constructor, buy
+equipment, roll everything straight off the sheet, play from a one-page simple
+sheet or print it, and run a live online session with your group. The installed
+app keeps itself up to date. Expect breaking changes between versions.
 
 ## Features (available now)
 
 **Launcher.** The app opens on a standalone start window: create a new character,
 open an existing one, join an online session, open GM Mode, or pick from a
 scrollable library of saved-character cards (portrait, name, Power Level).
-Right-click a card to delete it.
+Right-click a card to delete it. The launcher shows the installed version and
+offers an **Update** button when a newer release is out — the installed app
+downloads it, closes up (asking about unsaved work first) and restarts on the new
+version.
 
-**Character sheet.** The whole sheet is one scrollable page of rearrangeable
-blocks — drag them around, float a block into its own window, redock it, or
-show/hide blocks from the **View** menu; your layout persists between sessions.
-The blocks:
+**Character sheet.** The whole sheet is one page of rearrangeable blocks on a
+resizable grid — drag them around, resize them, float a block into its own window,
+pin blocks to a side strip that stays put while the page scrolls, or show/hide
+them from the **View** menu; your layout persists between sessions. The blocks:
 
 - **Name & Details** and **Character Image** — profile fields and portrait.
 - **System / Power Level** — Power Level, the power-point pool, size, speed,
-  initiative, and hero points, with derived readouts (e.g. speed and initiative
-  recompute as abilities, advantages, and powers change).
+  initiative, and hero points, with derived readouts that recompute as abilities,
+  advantages, powers and gear change.
 - **Abilities** and **Resistances** — point-buy grids that drive the rest of the
   sheet.
-- **Conditions** — an applied-condition chip tracker.
-- **Advantages** and **Skills** — data-driven tables from the 4e catalogs.
-- **Powers** — your built powers as stat-block cards.
+- **Conditions** — an applied-condition tracker with the damage ladder.
+- **Advantages** and **Skills** — data-driven tables from the 4e catalogs, with
+  uses tracked for the advantages that have them.
+- **Powers** and **Equipment** — your powers and gear as stat-block cards.
+- **Complications**, **Notes** and **Scene** — the rest of the page, including
+  the shared scene a GM sets during a session.
+- **Dice** — the roller, pinned beside the sheet by default.
 
-A read-only **locked** viewer and an editable mode share the same sheet; unsaved
-changes are flagged in the title and prompt you on close.
+A read-only **locked** view and an editable mode share the same sheet; edits can be
+**undone and redone**; unsaved changes are flagged in the title and prompt you on
+close. The look comes from switchable **theme presets** (Classic, Slate Dark,
+Parchment Light, Crimson & Gold), or one you make in Settings.
+
+**Simple sheet & printing.** **View ▸ Simple Sheet** shows the same character on
+one tight page made for play — every roll, toggle and tracker still works there —
+and you can set saved characters to open in it. **File ▸ Print** and **Export as
+PDF** print it as real, selectable text, and let you pick which blocks go on the
+page.
+
+**Rolling.** Click an ability, resistance or skill to load it into the roller, or
+double-click to roll it at once; a power's 🎲 rolls its attack. Bonus and penalty
+sliders cover the situational extras for a single roll, a DC box grades the
+result in degrees of success, and rolls you make often can be starred into
+**quick rolls**. An attack that hits offers the save it forces right on its card in
+the history, so the target can roll it from there.
 
 **Rules engine.** A headless, pure-Python `core` layer handles d20 resolution and
 degrees of success, the mutable character model, derived character math,
 point-cost accounting, and Power Level validation. Game *content* — ability costs,
-skills, advantages, conditions, effects, modifiers, tables — lives in editable
-JSON data files, not hardcoded in Python.
+skills, advantages, conditions, effects, modifiers, equipment, tables — lives in
+editable JSON data files, not hardcoded in Python.
 
 **Powers.** There is no fixed catalog of powers. You assemble one in the
 drag-and-drop **Power Constructor**: combine base effects with extras and flaws,
@@ -51,7 +70,12 @@ set a rank, and (for multi-effect powers) choose a structure — *independent*,
 *linked*, or *array*. The engine derives the point cost, a full game-term stat
 block, effective ranks, runtime on/off state, and per-power PL validation. An
 active power's trait boosts flow through the entire sheet (e.g. Enhanced Strength
-raises your effective Strength everywhere it matters).
+raises your effective Strength everywhere it matters), and its rank can be dialled
+down in play with the pips on its card.
+
+**Equipment.** Gear is chosen from a catalog and bought with Equipment Points;
+click a card to wear or put it away, and roll a weapon like an attack power.
+Vehicles and installations are bought as traits off their own tables.
 
 **Conditions.** Apply and remove conditions from a chip tracker that understands
 umbrella bundling, supersession, Hit stacking, and debilitation cascades.
@@ -61,17 +85,15 @@ copied into the workspace so a saved character keeps its picture even if the
 original image moves. Saving, Save As, opening, and deleting are wired through the
 File menu and the launcher.
 
-**GM Mode & online play.** A GM hosts a **live session** that players join over
-the network with a short join code. Everyone shares one roster of player cards
-(portrait, name, PL, hero points, conditions), a **synchronised roll history**,
-and the GM can roll **hidden**, keep a cast of **NPCs**, and apply a condition
-straight onto a connected player's live sheet. The session **persists** — reopen
-the app and it resumes. Reaching players over the internet uses an automatic
-ladder (UPnP → a tunnel you paste in → a relay both ends dial out to), so it works
-even from behind carrier-grade NAT; a headless `python -m mm_companion.server`
-hosts the same session on an always-on box. See
-[`docs/mm-session-architecture.md`](docs/mm-session-architecture.md) and the
-[networking guide](docs/mm-session-networking.md).
+**GM Mode & online play.** A GM runs a **live session** that players join with a
+short join code. Everyone shares one roster of player cards (portrait, name, PL,
+hero points, conditions), a **synchronised roll history**, and a shared scene; the
+GM can roll **hidden**, keep a cast of **NPCs**, ask the table for a roll, and
+apply a condition straight onto a connected player's live sheet. Sessions live on
+a public **session server** by default, so a game keeps running when the GM closes
+the app and players can drop in whenever they like — or you can host on your own
+machine. See the [networking guide](docs/mm-session-networking.md) and
+[`docs/mm-session-architecture.md`](docs/mm-session-architecture.md).
 
 **Mods.** The app is data-first and moddable: the base ruleset loads through the
 same pipeline as user-installed mods, and an in-app **Mod Manager** lets you
@@ -135,23 +157,25 @@ pytest
 
 ## Playing online (GM Mode)
 
-MM-Companion has a built-in **live session**: one person hosts as the GM, and
-players join over the network to share a roster, a synchronised roll history, and
-the GM's NPCs. Rolls are resolved by the host (no one can fake a die), the GM can
-roll **hidden**, and the session is saved to the workspace so it survives closing
-the app — reopen and it resumes.
+MM-Companion has a built-in **live session**: one person runs it as the GM, and
+players join over the internet to share a roster, a synchronised roll history, a
+scene, and the GM's NPCs. Rolls are resolved by the session (no one can fake a
+die), and the GM can roll **hidden**.
 
-### Host a session (GM)
+### Run a session (GM)
+
+The app ships pointing at a public session server, so there is usually nothing to
+set up:
 
 1. From the launcher, click **Open GM Mode**.
-2. Click **Start hosting**. A **join code** appears, along with a short
-   reachability banner telling you whether players on the internet can reach you
-   and, if not, exactly what to do next.
-3. Click **Copy** and send the join code to your players (chat, email — anything).
+2. Press **New session**, name it, and press **Open**. You are its GM.
+3. **Session ▸ Copy join code**, and send the code to your players (chat, email —
+   anything).
 
-That is the whole flow when your connection is reachable. The join code encodes
-the address, port, and the session's secret, so it is the only thing a player
-needs; it is per-session and ephemeral.
+No account or password is needed. The session lives on the server, so it keeps
+running when you close GM Mode, and players can join whether or not you are
+there. Your app holds the session's GM token, which is what makes it yours — keep
+your app's settings, since the token is handed out only once.
 
 ### Join a session (player)
 
@@ -160,41 +184,34 @@ needs; it is per-session and ephemeral.
 3. Pick a display name and, optionally, one of your saved characters, then
    connect. Your card joins the shared roster.
 
-### If players can't reach you
+A join code makes somebody a player; it never makes them the GM.
 
-Home internet connections often sit behind NAT (or carrier-grade NAT, where **no**
-port forward can help). The banner under the join code names your case and the
-fix. In short, the host tries an automatic ladder and you have three options:
+### Hosting it yourself
+
+Clear the **Session server** address in GM Mode and the session is hosted on your
+own computer instead. Home connections often sit behind NAT (or carrier-grade
+NAT, where **no** port forward can help), so the host tries an automatic ladder and
+the banner under the join code tells you which case you are in and what to do:
 
 - **UPnP (automatic).** If your router allows it, the app forwards the port for
   you and players connect directly — nothing to do.
 - **A tunnel.** Run a TCP tunnel (e.g. [playit.gg](https://playit.gg), ngrok,
   Tailscale Funnel) pointed at the host port, paste its public address into the
-  **"I'm using a tunnel"** field, then host. Works from behind CGNAT; players
-  still need only the join code.
+  **"I'm using a tunnel"** field, then host. Players still need only the join code.
 - **A relay.** Put a relay's address in the **Relay address** field and tick the
-  fallback box; both ends dial *out* to it, so it works behind any NAT. You can
-  run your own with `python -m mm_companion.relay` (there is no default public
-  relay bundled yet).
+  fallback box; both ends dial *out* to it, so it works behind any NAT.
 
-You can also host headlessly on an always-on box with
-`python -m mm_companion.server` (see `--help`). The full walkthrough, tunnel and
-relay setup, and a troubleshooting table are in the
-[networking guide](docs/mm-session-networking.md); for how the pieces fit
-together, see [`docs/mm-session-architecture.md`](docs/mm-session-architecture.md).
+You can also run your own session server for your group, or host one session
+headless on an always-on box, with `python -m mm_companion.server` (see `--help`),
+and run your own relay with `python -m mm_companion.relay`. The full walkthrough
+and a troubleshooting table are in the [networking guide](docs/mm-session-networking.md).
 
 ## Future plans
 
-Direction, not commitments — roughly in priority order:
+Direction, not commitments:
 
-- **Rolling from the sheet** — wiring the roller into the sheet and powers (attack
-  and resistance checks straight off a stat block, with their DCs), building on the
-  standalone dice roller that exists today.
-- **A public relay** — a default hosted relay so online play works on download with
-  nothing to run, plus portraits travelling with a snapshot and a live GM-side view
-  of a player's sheet.
-- **More** — richer character exports, more of the rules surface flowing into the
-  displayed sheet numbers, and continued expansion of the moddable data catalogs.
+- Richer character exports, more of the rules surface flowing into the displayed
+  sheet numbers, and continued expansion of the moddable data catalogs.
 
 ## Project layout
 

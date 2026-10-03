@@ -73,7 +73,7 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
 - `BlockFrame.lend_section()` / `take_back_section()` are the seam. It **hides before
   it leaves** (a parentless visible widget is a window — the standing rule, watched by
   `test_switching_flashes_no_window`) and drops the explicit `minimumHeight`
-  `_InnerScroll` pinned on the section, which was the content height *at the frame's
+  `InnerScroll` pinned on the section, which was the content height *at the frame's
   width* and would be a refusal anywhere else. A frame the section was wrapped in
   (`_wrap_top_aligned`) keeps its wrapper and gets the section back into it.
 - **Anything a view *does* spends through the live section's funnel**, never the
@@ -136,8 +136,10 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   or print wants every box on it. Nothing on the page is dragged or resized.
 - **Standard** (`STANDARD_PAGE`) is modelled on a printed sheet: portrait · name ·
   level across the top, Abilities beside Resistances, Conditions, Skills beside
-  Advantages over Complications, then Powers, Equipment and Notes each a full row, with
-  the roller and the Scene in a strip on the right. A block it does not have is left out
+  Advantages over Complications, then Powers and Equipment each a full row, Notes beside
+  the Scene at the foot (where the edit sheet's default puts them), and the roller alone
+  in a strip on the right. The Scene used to share that strip and took the height the
+  roll history needed, as it once did on the edit sheet. A block it does not have is left out
   (its row **keeps its weights** — a missing portrait must not hand the rest a proportion
   nobody chose); a block it does not know gets a row at the end; on a **GM's NPC** the
   blocks an NPC sheet opens without (`npc_hidden_keys` — the roller, the Scene, the
@@ -159,6 +161,15 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   never lets a page be shorter than its minimum, and every row got the difference as
   blank space. The scroll area also asks `heightForWidth` at the viewport's width and
   takes the larger answer, so stating no minimum leaves the honest number deciding.
+- **A box in the strip scrolls inside itself** (`SimpleBox.scroll_body`, the edit
+  frame's `InnerScroll` through its plain `hold`). The strip hands its boxes its
+  height and never scrolls — the roller must not scroll away — so a turn order grown
+  mid-round was squeezed under its content and clipped, with nothing to scroll. The
+  scroll's `sizeHint` is the content's (`_BoxScroll`): a `QScrollArea` caps its hint at
+  a couple of dozen text lines, so two boxes sharing the strip asked for the same
+  height whatever they held, and the roller lost its history to three scene cards.
+  `release_body` drops the minimum height the scroll pinned, a refusal measured for
+  the strip's width.
 - The strip opens at its width (360, or the edit strip's own under Custom) but never
   more than 40% of the window (`STRIP_SHARE`), re-applied on every resize until the
   player drags the divider. Sizing it once was sizing it against a half-built window.

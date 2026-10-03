@@ -19,7 +19,7 @@ through rather than reinvent. When building new sheet widgets, use it:
   **Which scroll area is the whole of this module's judgement.** It used to be
   the outermost — the page — and that was right while a block was a plain frame
   with nothing between it and the page. A block is a scroll area itself now
-  (`BlockFrame._InnerScroll`), so the outermost answer sent every wheel straight
+  (`BlockFrame.InnerScroll`), so the outermost answer sent every wheel straight
   past a block the user had squashed: the block sat there with a scrollbar it
   could not be scrolled by, and the page moved instead. The target is now the
   **nearest ancestor that has a scroll range on this axis**, and the outermost
@@ -33,11 +33,11 @@ through rather than reinvent. When building new sheet widgets, use it:
   incidental, and a block is neither. The page is still reached by wheeling
   anywhere that is not a scrolling block — the gaps between rows, a title bar, any
   block short enough to have no bar at all. `has_scroll_range(area, event)` is
-  that test on its own, because `_InnerScroll` asks the identical question about
+  that test on its own, because `InnerScroll` asks the identical question about
   itself before declining a wheel it has no use for, and two spellings of one rule
   is how they drift apart. Note that *routing* the wheel is only half of it: the
   surface it lands on has to **accept** it, or Qt walks it up to the page anyway —
-  see the note on `_InnerScroll` in
+  see the note on `InnerScroll` in
   [The character sheet](sheet-and-blocks.md#block-frames-the-canvas-api-and-layout-persistence).
 - `ui/lock.py` — `set_widget_locked(widget, locked)` implements the read-only
   **view** mode. Locking is *not* `setEnabled(False)` (which greys a control

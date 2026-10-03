@@ -327,7 +327,7 @@ mini strip, `Esc`, or that same button leaves.
   what stops a block's minimum climbing with every roll — see "The Dice block's height".
 - **And it takes the height the same way too** — `_build_rolls_box` states
   `fills_height` on its `QGroupBox`, which is the one thing `DiceSection` declares that
-  a hand-built box does not get for free. Without it `_InnerScroll.set_section` reads a
+  a hand-built box does not get for free. Without it `InnerScroll.set_section` reads a
   box layout with nothing expanding in it and gives the block's surplus to a trailing
   stretch, so the block the GM window pins to the strip *by default* — and therefore
   the tallest one in the app — stopped its roller at ~650px and left the rest of the

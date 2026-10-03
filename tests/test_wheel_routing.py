@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from mm_companion.ui.block_frame import _InnerScroll
+from mm_companion.ui.block_frame import InnerScroll
 from mm_companion.ui.wheel_guard import guard_wheel, has_scroll_range
 
 
@@ -50,10 +50,10 @@ class _Nest(QWidget):
     """A page scroll area holding a block scroll area holding a guarded widget.
 
     The same shape the sheet really has: ``CharacterSheet``'s page scroll around
-    the canvas, a block's ``_InnerScroll`` around its section, and a spin box or
+    the canvas, a block's ``InnerScroll`` around its section, and a spin box or
     a table inside that.
 
-    The block is the **real** ``_InnerScroll`` and not a stand-in ``QScrollArea``,
+    The block is the **real** ``InnerScroll`` and not a stand-in ``QScrollArea``,
     which is not fussiness: a plain scroll area has none of the wheel behaviour
     under test here, so a double would have gone on passing every assertion below
     while the app misbehaved. It did, once.
@@ -70,7 +70,7 @@ class _Nest(QWidget):
         host = QWidget()
         host_layout = QVBoxLayout(host)
         host_layout.setContentsMargins(0, 0, 0, 0)
-        self.block = _InnerScroll(host)
+        self.block = InnerScroll(host)
         self.block.setFixedHeight(100)
         host_layout.addWidget(self.block)
         # Something under the block, so the page has a range of its own.

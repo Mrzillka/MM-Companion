@@ -9,7 +9,7 @@ whichever enclosing scroll area can actually use it.
 **Which one that is, is the whole of this module's judgement.** It used to be the
 outermost — the page — and that was right while a block was a plain frame with
 nothing between it and the page. A block is a scroll area itself now
-(:class:`~mm_companion.ui.block_frame._InnerScroll`), so the outermost answer sent
+(:class:`~mm_companion.ui.block_frame.InnerScroll`), so the outermost answer sent
 every wheel straight past a block the user had squashed: the block sat there with
 a scrollbar it could not be scrolled by, and the page moved instead.
 

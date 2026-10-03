@@ -557,7 +557,7 @@ def enclosing_scroll_areas(widget: QWidget) -> list[QAbstractScrollArea]:
     It used to be enough to find the nearest one, because a block had no scroll
     area of its own and the nearest was therefore whatever the block was sitting
     in — the page, the strip, or its own window. Every block carries one now (see
-    :class:`~mm_companion.ui.block_frame._InnerScroll`), so the nearest is always
+    :class:`~mm_companion.ui.block_frame.InnerScroll`), so the nearest is always
     the block's own and the page is always further up. Callers that are restoring a
     position after a rebuild want **both**: the block should stay where it was
     scrolled to, and so should the page behind it.

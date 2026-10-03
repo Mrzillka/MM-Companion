@@ -4,7 +4,8 @@ The simple sheet has two arrangements, and neither is edited *on* it:
 
 * **Standard** is fixed: the one layout this module states, modelled on a printed
   character sheet — who the character is across the top, the stat blocks under it,
-  skills beside advantages, then the long lists (powers, gear, notes) each a full row.
+  skills beside advantages, then the long lists (powers, gear) each a full row, and
+  notes beside the scene.
   A block the sheet does not have is simply left out, and one it does not know (a mod's)
   gets a row of its own at the end, so the preset never loses anything.
 * **Custom** is whatever the player arranged on the edit sheet: the same tree the
@@ -75,10 +76,15 @@ STANDARD_PAGE = Split(
         ),
         Leaf(("powers",)),
         Leaf(("equipment",)),
-        Leaf(("notes",)),
+        # Notes beside the Scene, where the edit sheet's default puts them (Complications
+        # is under Advantages here). Outside a session the Scene is left off and Notes
+        # has the row to itself.
+        _row("notes", "scene", weights=(40, 26)),
     ),
 )
-STANDARD_STRIP = Split(VERTICAL, (Leaf(("dice",)), Leaf(("scene",))))
+#: The roller alone, as on the edit sheet: the Scene shared the strip once and took
+#: the height the roll history needed.
+STANDARD_STRIP = Leaf(("dice",))
 STANDARD_EDGE = "right"
 
 

@@ -680,6 +680,11 @@ def effective_effect_stats(effect: PowerEffectInstance, game_data: GameData) -> 
 # The actor's own roll in a check/resistance phrase ("Attack vs. …", "Effect vs. …")
 # — the leading word before "vs." — is the effect's own d20 bonus, its rank.
 _ACTOR_ROLL = re.compile(r"^(?:Attack|Deflect|Effect) vs\.")
+# A check phrase whose actor is already a number — a resolved one, or one typed into a
+# Dev-mode override ("12 vs. Defense") — and a save DC written into one ("Will vs. 25",
+# "Will vs. DC 25", "DC 25").
+_LITERAL_ACTOR = re.compile(r"^([+-]?\d+) vs\.")
+_LITERAL_DC = re.compile(r"(?:\bvs\.|\bDC)\s*(?:DC\s*)?(\d+)\b")
 
 
 def _numeric_roll(text: str, actor_bonus: int, dc: int | None, *, resistance: bool) -> str:
@@ -1030,6 +1035,10 @@ class EffectRollNumbers:
     (``resistance_dc_base`` plus the *effective* rank, so a Strength-Based Damage
     folds in Strength), or ``None`` for an effect that imposes none. ``drops_check``
     is set when a modifier removed the attack roll entirely (Perception Range).
+
+    A Dev-mode override that writes a number down wins over both derivations: a check
+    reading ``"12 vs. Defense"`` rolls +12, and a resistance reading ``"Will vs. 25"``
+    (or an Effect DC reading ``"DC 25"``) sets ``dc`` to 25.
     """
 
     attack: int = 0
@@ -1091,17 +1100,46 @@ def _roll_numbers(
     else:
         attack = own_rank
     attack -= attack_cut
-    # Which of the two the check row uses is decided by the phrase, and an "after"
-    # override replaces the phrase wholesale — read the base in that case, since the
-    # override is verbatim text with no actor to substitute.
+    # A Dev-mode override that writes a DC down ("Will vs. 25", "DC 25") is that DC:
+    # the save the footer rolls is the one the card reads, not the book's.
+    typed_dc = _override_dc(effect)
+    if typed_dc is not None:
+        dc = typed_dc
+    # Which of the two the check row uses is decided by the phrase — an override's,
+    # when one replaced it. A phrase that leads with a number ("12 vs. Defense") is a
+    # bonus somebody typed, and rolls as that: as-is when it is an "after" override,
+    # which wins over the modifiers, with Accurate/Inaccurate on top when "before".
     phrase = stats.get("check") or base.get("check") or ""
-    actor = attack if phrase.startswith("Attack") else own_rank
+    bonus = impact.check_bonus
+    literal = _LITERAL_ACTOR.match(phrase)
+    if literal:
+        actor = int(literal.group(1))
+        if _override_value(effect, "check", "after") is not None:
+            bonus = 0
+    else:
+        actor = attack if phrase.startswith("Attack") else own_rank
     return EffectRollNumbers(
         attack=attack,
-        check_actor=actor + impact.check_bonus,
+        check_actor=actor + bonus,
         dc=dc,
         drops_check=impact.drops_check,
     )
+
+
+def _override_dc(effect: PowerEffectInstance) -> int | None:
+    """The save DC a Dev-mode Resistance or Effect DC override spells out, if any.
+
+    Only a written-down number counts: a picked template (``"Will vs. Effect"``) still
+    takes the effect's own DC, which is the point of storing the template.
+    """
+
+    for key in ("resistance", "effect_dc"):
+        entry = (effect.overrides or {}).get(key)
+        if entry:
+            found = _LITERAL_DC.search(str(entry.get("value", "")))
+            if found:
+                return int(found.group(1))
+    return None
 
 
 def effect_stat_rows(
@@ -1163,20 +1201,24 @@ def effect_stat_rows(
         roll = attack if phrase.startswith("Attack") else effect.rank
         return roll + (impact.check_bonus if with_mods else 0)
 
-    # An "after" override of the check/resistance is a verbatim manual value — keep
-    # it out of the numeric substitution (and the Accurate/Inaccurate re-tint) below.
+    # An "after" override of the check stands in for whatever the modifiers made of it,
+    # so it takes no Accurate/Inaccurate re-tint and no Area note below. Its numbers are
+    # still filled in from the same record the dice footer rolls: a picked template
+    # ("Attack vs. Dodge") reads the wielder's live bonus, and a typed one ("12 vs.
+    # Defense") reads back as typed — so the card can never say one number and roll
+    # another.
     check_overridden = _override_value(effect, "check", "after") is not None
-    resistance_overridden = _override_value(effect, "resistance", "after") is not None
     base["check"] = _numeric_roll(
         base["check"], _actor(base["check"], with_mods=False), dc, resistance=False
     )
     base["resistance"] = _numeric_roll(base["resistance"], effect.rank, dc, resistance=True)
-    if not check_overridden:
-        stats["check"] = _numeric_roll(
-            stats["check"], _actor(stats["check"], with_mods=True), dc, resistance=False
-        )
-    if not resistance_overridden:
-        stats["resistance"] = _numeric_roll(stats["resistance"], effect.rank, dc, resistance=True)
+    stats["check"] = _numeric_roll(
+        _LITERAL_ACTOR.sub("Effect vs.", stats["check"]),
+        numbers.check_actor,
+        dc,
+        resistance=False,
+    )
+    stats["resistance"] = _numeric_roll(stats["resistance"], effect.rank, dc, resistance=True)
 
     # Accurate/Inaccurate move the attack number — tint the check by the net sign.
     if not check_overridden and stats["check"] and impact.check_bonus:

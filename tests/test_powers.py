@@ -53,6 +53,7 @@ from mm_companion.core.rules import (
     effect_opposed_check,
     effect_per_rank_cost,
     effect_readout_rows,
+    effect_roll_numbers,
     effect_size_rank_shift,
     effect_stat_rows,
     effect_total_cost,
@@ -3521,6 +3522,48 @@ def test_after_override_of_check_is_verbatim_not_numeric() -> None:
     row = next(r for r in effect_stat_rows(effect, data) if r.key == "check")
     assert row.value == "roll a d6"
     assert row.change == "homerule"
+
+
+def test_typed_check_override_is_the_bonus_the_footer_rolls() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.abilities["ATK"] = 3
+    # Typed "after": the card and the dice both read +12, not the effect's rank 8.
+    effect = _damage_with_override("check", "12 vs. Defense")
+    row = next(r for r in effect_stat_rows(effect, data, char) if r.key == "check")
+    assert row.value == "12 vs. Defense"
+    assert effect_roll_numbers(effect, data, char).check_actor == 12
+    # Typed "before": Accurate still lands on top, on the card and on the dice.
+    effect = _damage_with_override("check", "12 vs. Defense", order="before")
+    effect.extras.append(ModifierSelection("accurate", rank=1))
+    row = next(r for r in effect_stat_rows(effect, data, char) if r.key == "check")
+    rolled = effect_roll_numbers(effect, data, char).check_actor
+    assert rolled > 12
+    assert row.value == f"{rolled} vs. Defense"
+
+
+def test_picked_check_template_override_resolves_the_wielders_attack() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.abilities["ATK"] = 3
+    effect = _damage_with_override("check", "Attack vs. Dodge")
+    row = next(r for r in effect_stat_rows(effect, data, char) if r.key == "check")
+    assert row.value == "3 vs. Dodge"
+    assert effect_roll_numbers(effect, data, char).check_actor == 3
+
+
+def test_typed_resistance_or_effect_dc_override_is_the_dc_the_footer_rolls() -> None:
+    data = load_game_data()
+    effect = _damage_with_override("resistance", "Will vs. 25")
+    assert effect_roll_numbers(effect, data).dc == 25
+    # A picked template keeps the effect's own, live DC.
+    effect = _damage_with_override("resistance", "Will vs. Effect")
+    effect.rank = 10
+    row = next(r for r in effect_stat_rows(effect, data) if r.key == "resistance")
+    assert row.value == "Will vs. 20"
+    assert effect_roll_numbers(effect, data).dc == 20
+    effect = _damage_with_override("effect_dc", "DC 25", label="Effect DC")
+    assert effect_roll_numbers(effect, data).dc == 25
 
 
 def test_custom_override_row_is_appended() -> None:

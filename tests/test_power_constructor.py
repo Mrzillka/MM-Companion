@@ -23,6 +23,7 @@ from mm_companion.core.rules import (
     effect_has_rank_dial,
     effect_total_cost,
     imposable_effects,
+    power_rolls,
     power_total_cost,
 )
 from mm_companion.ui.character_sheet import CharacterSheet
@@ -1867,12 +1868,27 @@ def test_dev_mode_seeds_auto_values_and_resolves_option_numbers(qapp: QApplicati
     assert "Will vs. 18" in items
     assert all("vs. Effect" not in it for it in items)
 
-    # Picking a resolved alternative stores it verbatim.
+    # Picking a resolved alternative stores its template, so the DC stays live.
     resistance.setCurrentText("Will vs. 18")
-    assert card.instance.overrides["resistance"]["value"] == "Will vs. 18"
+    assert card.instance.overrides["resistance"]["value"] == "Will vs. Effect"
     # Re-selecting the auto value clears the override again.
     resistance.setCurrentText("Toughness vs. 18")
     assert "resistance" not in card.instance.overrides
+
+
+def test_dev_mode_picked_resistance_follows_the_rank(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
+    card = window.canvas.add_effect("damage")
+    card._rank.setValue(8)
+    window._dev_mode.setChecked(True)
+    _editable_combos(window._terms)[5].setCurrentText("Will vs. 18")
+
+    # A picked option is not a snapshot of the number it showed: the rank goes up, the
+    # save DC goes with it — on the reopened field and on the card's dice footer alike.
+    card._rank.setValue(10)
+    assert _editable_combos(window._terms)[5].currentText() == "Will vs. 20"
+    save = next(s for s in power_rolls(window.power, window._character, window._data) if s.dc)
+    assert (save.label, save.dc) == ("Will vs. 20", 20)
 
 
 def test_edited_homerule_power_reopens_with_dev_mode_on(qapp: QApplication) -> None:

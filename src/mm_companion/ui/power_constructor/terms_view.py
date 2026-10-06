@@ -364,25 +364,31 @@ class PowerTermsView(QWidget):
         game_data: GameData,
         char: Character | None,
         attack_bonus: int | None = None,
-    ) -> list[str]:
-        """Resolved dropdown choices for a standard field.
+    ) -> list[tuple[str, str]]:
+        """Dropdown choices for a standard field, as ``(shown, stored)`` pairs.
 
         Gathers the raw candidates — the field's game-term ladder first, then every
         other value that field takes across the effect catalog (all data-driven) — and
         resolves each to this effect's concrete numbers (a resistance's save DC, a
         ``"Rank"`` range's distance), so the list offers ``"Will vs. 18"`` rather than
         the bare ``"Will vs. Effect"`` template. Order preserved, duplicates dropped.
+
+        Picking one stores the *template*, not the number shown: ``"Will vs. 18"``
+        written down would still read 18 after the rank went up, while the save the
+        footer rolls had moved on to 20.
         """
         raw = list(game_data.game_term_ladders.get(field_key, ()))
         for candidate in game_data.effects:
             value = getattr(candidate, attr, None)
             if value and value not in raw:
                 raw.append(value)
-        options: list[str] = []
+        options: list[tuple[str, str]] = []
+        shown: set[str] = set()
         for value in raw:
             resolved = resolve_stat_display(effect, game_data, field_key, value, char, attack_bonus)
-            if resolved and resolved not in options:
-                options.append(resolved)
+            if resolved and resolved not in shown:
+                shown.add(resolved)
+                options.append((resolved, value))
         return options
 
     def _make_value_combo(
@@ -400,13 +406,19 @@ class PowerTermsView(QWidget):
         options = self._field_options(effect, key, attr, game_data, char, attack_bonus)
         # The auto (un-overridden) value is always selectable, so re-picking it clears
         # the override.
-        if auto_value and auto_value not in options:
-            options.insert(0, auto_value)
-        for option in options:
-            combo.addItem(option)
+        if auto_value and all(shown != auto_value for shown, _ in options):
+            options.insert(0, (auto_value, auto_value))
+        for shown, stored in options:
+            combo.addItem(shown, stored)
         entry = effect.overrides.get(key)
-        # Start at the stored override, or the auto value when there's none.
-        combo.setCurrentText(str(entry.get("value", "")) if entry else auto_value)
+        # Start at the stored override, or the auto value when there's none. A stored
+        # template is shown resolved, the way its dropdown entry reads.
+        if entry:
+            stored = str(entry.get("value", ""))
+            current = resolve_stat_display(effect, game_data, key, stored, char, attack_bonus)
+        else:
+            current = auto_value
+        combo.setCurrentText(current)
         # A long option ("Chosen resistance vs. DC 11") must not blow the column out and
         # push the order selector off-screen — let the combo shrink and stretch instead.
         combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
@@ -443,6 +455,11 @@ class PowerTermsView(QWidget):
             value = combo.currentText().strip()
             # Leaving the field at its auto value (or blank) means "no override".
             if value and value != auto_value:
+                # A dropdown entry stores its template (see `_field_options`); text the
+                # player typed is stored as typed.
+                index = combo.findText(value, Qt.MatchFlag.MatchExactly)
+                if index >= 0:
+                    value = str(combo.itemData(index) or value)
                 effect.overrides[key] = {"value": value, "order": order.currentData()}
             else:
                 effect.overrides.pop(key, None)

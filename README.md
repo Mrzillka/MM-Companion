@@ -143,6 +143,23 @@ When a new version is out, the launcher's **Update** button opens the release pa
 (updating in place is Windows-only for now). The build needs glibc 2.35 or newer
 (Ubuntu 22.04, Debian 12, Fedora 36 or later).
 
+#### Steam Deck
+
+SteamOS is Linux, so the same tarball works — install it from **Desktop Mode**:
+
+- Open Konsole, extract the tarball and run `./install.sh` — the **per-user**
+  install. Don't use `--system`: SteamOS's system folders are read-only and are
+  replaced by OS updates. The per-user install and your characters both live in
+  your home folder, so they survive updates.
+- To play from **Game Mode**, right-click MM-Companion in the application menu and
+  choose **Add to Steam**; it then appears in your library as a non-Steam game.
+- The right trackpad works as a mouse and the touchscreen works; **Steam + X**
+  brings up the on-screen keyboard. Building a character means a lot of typing, so
+  that is easiest in Desktop Mode or with a keyboard attached; the **Simple Sheet**
+  (View ▸ Simple Sheet) suits the Deck's 1280×800 screen best at the table.
+- Game Mode shows one window at a time, so a dialog or the Power Constructor can
+  open behind the sheet — press the Steam button to switch to it.
+
 ### From source (all platforms)
 
 Requires **Python 3.10+**.

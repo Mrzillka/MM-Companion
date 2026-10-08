@@ -1,13 +1,14 @@
 ---
 name: make-release
-description: Publish a new MM-Companion GitHub Release — write the release description and changelog, commit them with the version bump, then tag and push so CI builds and uploads the shareable Windows installer (.exe) for users to download. Use after build-installer, or whenever asked to publish/cut/ship a release, write release notes or a changelog, push a version tag, or put the installer on GitHub for download.
+description: Publish a new MM-Companion GitHub Release — write the release description and changelog, commit them with the version bump, then tag and push so CI builds and uploads the shareable Windows installer (.exe) and Linux tarball for users to download. Use after build-installer, or whenever asked to publish/cut/ship a release, write release notes or a changelog, push a version tag, or put the installer on GitHub for download.
 ---
 
 # Publish an MM-Companion release
 
 Turns the current version into a downloadable **GitHub Release** with real notes.
 Pushing a `vX.Y.Z` tag fires `.github/workflows/release.yml`, which rebuilds the
-installer on a Windows runner, attaches `MM-Companion-Setup-X.Y.Z.exe`, and uses
+installer on a Windows runner and the tarball on a Linux one, attaches
+`MM-Companion-Setup-X.Y.Z.exe` and `MM-Companion-X.Y.Z-linux-x86_64.tar.gz`, and uses
 `docs/releases/vX.Y.Z.md` as the release body — a written description plus a
 changelog. The result lands at
 `https://github.com/Mrzillka/MM-Companion/releases/latest`.
@@ -141,8 +142,8 @@ gh run watch <id> --exit-status; gh release view "v$NEW" --json url --jq .url
 (Or pass `--watch` to the driver to block on it synchronously — handy when run by
 hand, but prefer backgrounding it as the agent.)
 
-The build takes ~3 min (fresh Python + PyInstaller + Inno Setup on the runner).
-When it's green, confirm both the asset **and** the notes actually landed:
+The build takes ~3 min (the Windows and Linux builds run in parallel; the release
+is only created once both pass). When it's green, confirm both assets **and** the notes actually landed:
 
 ```bash
 gh release view "v$NEW" --json assets \
@@ -181,7 +182,8 @@ Write for **players downloading the app**, not for developers.
 - <…>
 - Various visual polish and smaller fixes.
 
-**Install:** download `MM-Companion-Setup-X.Y.Z.exe` below and run it.
+**Install:** on Windows, download `MM-Companion-Setup-X.Y.Z.exe` below and run it; on
+Linux, download `MM-Companion-X.Y.Z-linux-x86_64.tar.gz`, extract it and run `./install.sh`.
 
 **Full changelog:** https://github.com/Mrzillka/MM-Companion/compare/vPREV...vX.Y.Z
 ```
@@ -211,7 +213,8 @@ Write for **players downloading the app**, not for developers.
 
 - <near-term plans — the user's, confirmed in step 2>
 
-**Install:** download `MM-Companion-Setup-X.Y.Z.exe` below and run it.
+**Install:** on Windows, download `MM-Companion-Setup-X.Y.Z.exe` below and run it; on
+Linux, download `MM-Companion-X.Y.Z-linux-x86_64.tar.gz`, extract it and run `./install.sh`.
 
 **Full changelog:** https://github.com/Mrzillka/MM-Companion/compare/vPREVMAJOR...vX.Y.Z
 ```
@@ -258,7 +261,7 @@ Write for **players downloading the app**, not for developers.
   `gh release edit vX.Y.Z --notes-file docs/releases/vX.Y.Z.md` re-uploads it
   (commit the corrected file too, so the repo and the release agree).
 - **A manual (non-tag) build** is available from the Actions tab
-  (`workflow_dispatch`) — it keeps the `.exe` as a temporary build artifact
+  (`workflow_dispatch`) — it keeps the `.exe` and the tarball as temporary build artifacts
   instead of publishing a release. Use it to smoke-test CI without shipping.
 - **First digit (`X`) / `1.0.0`** — build-installer only does `minor`/`major`
   bumps; a `1.0.0` is a manual version edit, then this skill from step 1 (it

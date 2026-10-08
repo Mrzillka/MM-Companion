@@ -2,8 +2,9 @@
 
 The app's releases are GitHub Releases on the project repository, tagged
 ``v<version>`` with ``<version>`` the SemVer in ``mm_companion.__version__`` (the
-release workflow refuses a tag that disagrees with it), each carrying one asset,
-the Inno Setup installer ``MM-Companion-Setup-<version>.exe``. So:
+release workflow refuses a tag that disagrees with it), each carrying the Inno
+Setup installer ``MM-Companion-Setup-<version>.exe`` — the only asset this module
+updates from — beside the Linux tarball, which it never touches. So:
 
 - **Checking** is one request to GitHub's "latest release" endpoint — which
   already skips drafts and pre-releases — and a comparison of that tag against the

@@ -1,4 +1,4 @@
-# Packaging: building the Windows installer
+# Packaging: the Windows installer and the Linux tarball
 
 This produces a single shareable `MM-Companion-Setup-<version>.exe` that installs
 the app on a Windows PC with no Python required. The app itself is frozen with
@@ -125,11 +125,74 @@ uninstall it before installing a real `0.7.2`, or release `0.8.0` next.
    The badge should offer v0.7.12; Update downloads it, asks for permission, and
    the app comes back as 0.7.12. Put `__version__` back before committing.
 
+## Linux: the release tarball
+
+Linux gets `MM-Companion-<version>-linux-x86_64.tar.gz`: the same PyInstaller
+one-folder build as Windows (one spec, `installer/mm_companion.spec`), with an
+install script beside it. There is no package-manager format — a tarball and a
+POSIX `sh` script work on every distribution, and an AppImage would need FUSE,
+which newer distributions no longer ship by default.
+
+| File | Purpose |
+| --- | --- |
+| `build-linux.sh` | Runs PyInstaller, adds `linux/` and the licences, packs the tarball. |
+| `linux/install.sh` | Ships in the tarball: installs, upgrades and removes the app. |
+| `linux/INSTALL.txt` | Ships in the tarball: the few commands a user needs. |
+| `linux/mm-companion.png` | The menu icon — the 256 px image from `mm.ico`. |
+
+**Build** (on Linux, inside the venv, with `pip install "pyinstaller>=6,<7"`):
+
+```bash
+bash installer/build-linux.sh
+```
+
+The release workflow does this on an **ubuntu-22.04** runner, and that choice is
+the compatibility floor: the frozen app carries its own Qt, but links against the
+build machine's glibc, so it runs only where glibc is at least as new (2.35 —
+Ubuntu 22.04, Debian 12, Fedora 36). Building on a newer runner would quietly drop
+those users. The runner also needs Qt's system libraries installed, `libxcb-cursor0`
+above all: PyInstaller can only bundle the libraries it finds, and without that one
+the xcb platform plugin fails to load on a user's machine that lacks it too. The
+workflow then installs the tarball, starts the installed app under `xvfb-run`, and
+uninstalls it, so a build that cannot start never reaches a release.
+
+**What `install.sh` does.** Per user by default — no root:
+
+| | per user (`./install.sh`) | system (`sudo ./install.sh --system`) |
+| --- | --- | --- |
+| app | `~/.local/opt/mm-companion/` | `/opt/mm-companion/` |
+| command | `~/.local/bin/mm-companion` | `/usr/local/bin/mm-companion` |
+| menu entry | `~/.local/share/applications/mm-companion.desktop` | `/usr/local/share/applications/…` |
+| icon | `~/.local/share/icons/hicolor/256x256/apps/` | `/usr/local/share/icons/hicolor/…` |
+
+- **Install / upgrade / reinstall** are one command: it copies the new build beside
+  the old one and swaps it in, then reports which of the three it did from the
+  `VERSION` file each build carries.
+- **Remove** — `install.sh --uninstall`, from the installed copy the script leaves
+  in the app folder. `--purge` also deletes the workspace, like the Windows Remove
+  checkbox; it only does so for a per-user install, since a system install has no
+  one user's data to delete.
+- The command is a **wrapper script**, not a symlink, because the frozen app finds
+  its bundled files from the path it was started by. The `.desktop` file's name
+  (`mm-companion`) is the one `__main__` gives `QGuiApplication.setDesktopFileName`
+  — that is how a Wayland desktop matches the window to its menu entry and icon.
+
+The workspace is `${XDG_DATA_HOME:-~/.local/share}/MM-Companion` (see
+`core/storage.py`), never inside the install, so an upgrade cannot touch it. A
+`portable.flag` beside the executable works as on Windows.
+
+**No in-app update on Linux** yet: `core.updates.can_self_update` is Windows-only,
+so the launcher's Update button opens the release page and the user reinstalls
+from the new tarball.
+
 ## Cutting a release
 
 1. Bump `__version__` in `src/mm_companion/__init__.py` (this is the single
    source of truth — `pyproject.toml` derives its version from it).
-2. Re-run `pwsh installer\build.ps1`.
+2. Re-run `pwsh installer\build.ps1` (and, on Linux, `bash installer/build-linux.sh`).
+
+Pushing the `v<version>` tag builds both on GitHub's runners and publishes them on
+one release; the release is only created once **both** builds have succeeded.
 
 Versions are stored as SemVer so the upgrade check orders them correctly. Map
 your shorthand accordingly:

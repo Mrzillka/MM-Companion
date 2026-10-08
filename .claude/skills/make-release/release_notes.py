@@ -180,7 +180,8 @@ MINOR_TEMPLATE = """\
      Say what was done, not how — no file, class, or branch names. -->
 - TODO
 
-**Install:** download `MM-Companion-Setup-{version}.exe` below and run it.
+**Install:** on Windows, download `MM-Companion-Setup-{version}.exe` below and run it; on
+Linux, download `MM-Companion-{version}-linux-x86_64.tar.gz`, extract it and run `./install.sh`.
 
 **Full changelog:** {compare}
 """
@@ -210,7 +211,8 @@ TODO
 <!-- TODO: near-term plans. ASK THE USER — never invent a roadmap. -->
 - TODO
 
-**Install:** download `MM-Companion-Setup-{version}.exe` below and run it.
+**Install:** on Windows, download `MM-Companion-Setup-{version}.exe` below and run it; on
+Linux, download `MM-Companion-{version}-linux-x86_64.tar.gz`, extract it and run `./install.sh`.
 
 **Full changelog:** {compare}
 """

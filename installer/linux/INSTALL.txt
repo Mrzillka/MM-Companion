@@ -1,0 +1,33 @@
+MM-Companion for Linux
+======================
+
+To install for yourself (no root needed):
+
+    ./install.sh
+
+This copies the app to ~/.local/opt/mm-companion, adds MM-Companion to your
+applications menu, and adds an `mm-companion` command to ~/.local/bin.
+
+To install for every user on this machine instead:
+
+    sudo ./install.sh --system
+
+To upgrade, extract a newer release and run its install.sh the same way. Your
+characters, mods and settings live in ~/.local/share/MM-Companion and are never
+touched by an upgrade.
+
+To remove it:
+
+    ~/.local/opt/mm-companion/install.sh --uninstall
+    sudo /opt/mm-companion/install.sh --uninstall --system     (system install)
+
+Add --purge to a per-user uninstall to delete your characters, mods and
+settings as well.
+
+You can also run the app straight from this folder without installing:
+
+    ./MM-Companion
+
+If it fails with "could not load the Qt platform plugin xcb", install your
+distribution's libxcb-cursor package (libxcb-cursor0 on Debian and Ubuntu,
+xcb-util-cursor on Fedora and Arch).

@@ -100,9 +100,9 @@ same pipeline as user-installed mods, and an in-app **Mod Manager** lets you
 enable, order, and configure both data-only mods and data+Python mods. See
 [`docs/modding.md`](docs/modding.md).
 
-**Cross-platform core; Windows installer today.** The app is Python + PySide6 and
-runs from source on Windows, macOS, and Linux. A packaged one-click installer
-currently exists for **Windows only**.
+**Cross-platform.** The app is Python + PySide6 and runs from source on Windows,
+macOS, and Linux. Packaged builds exist for **Windows** (an installer) and
+**Linux** (a tarball with an install script); macOS runs from source.
 
 ## Install
 
@@ -119,6 +119,46 @@ workspace at `%APPDATA%\MM-Companion` (or a `data\` folder beside the exe for a
 Portable install), so it is never overwritten by an upgrade. See
 [`docs/packaging.md`](docs/packaging.md) for how the installer is built and what it
 does.
+
+### Linux
+
+**[⬇ Download the latest release](https://github.com/Mrzillka/MM-Companion/releases/latest)**
+— grab `MM-Companion-<version>-linux-x86_64.tar.gz` from the **Assets**, then:
+
+```bash
+tar -xzf MM-Companion-*-linux-x86_64.tar.gz
+cd MM-Companion
+./install.sh                 # just for you, no root needed
+# or: sudo ./install.sh --system   for every user on the machine
+```
+
+That adds MM-Companion to your applications menu and an `mm-companion` command.
+No Python is required — the build carries its own. To upgrade, run a newer
+release's `install.sh` the same way; to remove it, run
+`~/.local/opt/mm-companion/install.sh --uninstall` (add `--purge` to delete your
+data too). You can also run `./MM-Companion` straight from the extracted folder.
+
+Your data lives in `~/.local/share/MM-Companion`, so an upgrade never touches it.
+When a new version is out, the launcher's **Update** button opens the release page
+(updating in place is Windows-only for now). The build needs glibc 2.35 or newer
+(Ubuntu 22.04, Debian 12, Fedora 36 or later).
+
+#### Steam Deck
+
+SteamOS is Linux, so the same tarball works — install it from **Desktop Mode**:
+
+- Open Konsole, extract the tarball and run `./install.sh` — the **per-user**
+  install. Don't use `--system`: SteamOS's system folders are read-only and are
+  replaced by OS updates. The per-user install and your characters both live in
+  your home folder, so they survive updates.
+- To play from **Game Mode**, right-click MM-Companion in the application menu and
+  choose **Add to Steam**; it then appears in your library as a non-Steam game.
+- The right trackpad works as a mouse and the touchscreen works; **Steam + X**
+  brings up the on-screen keyboard. Building a character means a lot of typing, so
+  that is easiest in Desktop Mode or with a keyboard attached; the **Simple Sheet**
+  (View ▸ Simple Sheet) suits the Deck's 1280×800 screen best at the table.
+- Game Mode shows one window at a time, so a dialog or the Power Constructor can
+  open behind the sheet — press the Steam button to switch to it.
 
 ### From source (all platforms)
 
@@ -225,7 +265,7 @@ src/mm_companion/
   relay/  # python -m mm_companion.relay  — the public relay box
 tests/    # pytest / pytest-qt tests
 docs/     # documentation, incl. modding guide and Open Game License text
-installer/# Windows installer pipeline (PyInstaller + Inno Setup)
+installer/# release builds: Windows (PyInstaller + Inno Setup), Linux (tarball)
 ```
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the rationale behind the `core` /
@@ -240,7 +280,7 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the rationale behind the `core` /
 - [`docs/mm-conditions-design.md`](docs/mm-conditions-design.md) — the conditions system.
 - [`docs/mm-session-architecture.md`](docs/mm-session-architecture.md) — GM Mode and the online session.
 - [`docs/mm-session-networking.md`](docs/mm-session-networking.md) — playing over the internet, tunnels, the relay, troubleshooting.
-- [`docs/packaging.md`](docs/packaging.md) — building the Windows installer.
+- [`docs/packaging.md`](docs/packaging.md) — building the Windows installer and Linux tarball.
 
 ## License
 

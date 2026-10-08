@@ -15,6 +15,7 @@ explicitly here; PySide6's own hooks cover the Qt DLLs and plugins.
 """
 
 import os
+import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files
@@ -51,6 +52,10 @@ datas = collect_data_files(
 
 block_cipher = None
 
+# UPX only on Windows: on Linux, packing Qt's shared libraries is a known way to
+# get a build that will not start, and the tarball is compressed anyway.
+UPX = sys.platform == "win32"
+
 a = Analysis(
     [str(ROOT / "src" / "mm_companion" / "__main__.py")],
     pathex=[SRC],
@@ -81,7 +86,7 @@ if ONEFILE:
         debug=False,
         bootloader_ignore_signals=False,
         strip=False,
-        upx=True,
+        upx=UPX,
         upx_exclude=[],
         runtime_tmpdir=None,
         console=False,
@@ -98,7 +103,7 @@ else:
         debug=False,
         bootloader_ignore_signals=False,
         strip=False,
-        upx=True,
+        upx=UPX,
         console=False,
         disable_windowed_traceback=False,
         icon=ICON,
@@ -109,7 +114,7 @@ else:
         a.zipfiles,
         a.datas,
         strip=False,
-        upx=True,
+        upx=UPX,
         upx_exclude=[],
         name="MM-Companion",
     )

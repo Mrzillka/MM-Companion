@@ -57,6 +57,10 @@ def main() -> int:
     # The application icon is Qt's default for every top-level window, so no
     # window needs to set it individually.
     app.setWindowIcon(app_icon())
+    # On Linux, the name of the menu entry the installer writes
+    # (installer/linux/install.sh) — how a Wayland desktop matches the window to
+    # it, and so to its icon. Ignored elsewhere.
+    app.setDesktopFileName("mm-companion")
     # Install the theme's stylesheet before the first widget exists, so nothing —
     # not even the splash — is ever painted in the wrong look and re-dressed.
     theme.apply(app)

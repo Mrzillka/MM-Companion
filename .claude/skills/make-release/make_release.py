@@ -14,8 +14,9 @@ release, done safely and idempotently:
   3. Creates an annotated ``vX.Y.Z`` tag and pushes the branch + tag to origin.
 
 Pushing the ``v*`` tag fires ``.github/workflows/release.yml``, which rebuilds
-the installer on a Windows runner and publishes it as a GitHub Release asset
-(``MM-Companion-Setup-X.Y.Z.exe``), using ``docs/releases/vX.Y.Z.md`` as the
+the installer on a Windows runner and the tarball on a Linux one and publishes
+them as GitHub Release assets (``MM-Companion-Setup-X.Y.Z.exe``,
+``MM-Companion-X.Y.Z-linux-x86_64.tar.gz``), using ``docs/releases/vX.Y.Z.md`` as the
 release body. That workflow re-verifies the tag matches the committed package
 version; this script guarantees the match by construction (it derives the tag
 *from* the committed version), so the guard never trips.

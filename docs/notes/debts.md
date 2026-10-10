@@ -34,3 +34,22 @@ as much as the reuse is.
 Not urgent. The lag that prompted all of this was the window flash and the repeated
 gathers, both fixed; this is the remainder, and it no longer shows up as a dropped
 frame during ordinary editing.
+
+## PySide6 is capped below 6.12
+
+`pyproject.toml` pins `PySide6>=6.6,<6.12`. The cap went in on 2026-10-10, when
+PySide6 6.12.0 was released and CI — which had passed on unchanged `develop` two days
+before with 6.11.2 — failed on every Python version in two ways:
+
+- **`tests/test_input_arrow_columns.py`, 32 failures** under the Windows and Fusion
+  styles: a spin box's edit field overlaps its up arrow by one pixel. Those tests guard
+  the fix for arrows that paint but take no clicks (`theme.arrow_columns` measures the
+  style's arrow column so the stylesheet can give it back as padding), so this is
+  likely a real regression for users, not a test artefact.
+- **`Fatal Python error: Aborted` while garbage-collecting** in `test_pinned_panel.py`
+  on 3.10 and 3.11, at a different test each run.
+
+Both reproduce only on 6.12 (a local 6.11.1 passes everything), so the work is: install
+6.12 locally, find what moved the arrow column and what the collector is tearing down
+out of order, fix both, and lift the cap. Until then the release builds stay on 6.11
+too, because they install from the same file.

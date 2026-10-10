@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, Signal
@@ -79,6 +80,10 @@ class MainWindow(QMainWindow):
     pinRequested = Signal(object)
     #: The same, for a row that was already pinned.
     unpinRequested = Signal(object)
+    #: ``(topic, payload)`` for a request no block on this sheet answers — relayed
+    #: from :attr:`CharacterSheet.requestUnserved`. An NPC sheet's rolls, which go to
+    #: the GM window's roller because the sheet has none of its own.
+    requestUnserved = Signal(str, object)
 
     def __init__(
         self,
@@ -90,6 +95,7 @@ class MainWindow(QMainWindow):
         gm_view: bool = False,
         npc: bool = False,
         pin_target: bool = False,
+        exclude: Iterable[str] = (),
     ) -> None:
         super().__init__(parent)
         # A GM's read-only view of a player's snapshot: force-locked, with only the
@@ -117,7 +123,8 @@ class MainWindow(QMainWindow):
         # The settings window, likewise kept referenced while open.
         self._settings_window: QWidget | None = None
 
-        self._sheet = CharacterSheet(character=character)
+        self._sheet = CharacterSheet(character=character, exclude=exclude)
+        self._sheet.requestUnserved.connect(self.requestUnserved)
         # Opened from a GM card: its rows offer "Pin to GM card", and what they pin
         # is relayed back out to whoever opened this window.
         self._sheet.set_pin_target(pin_target)

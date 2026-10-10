@@ -126,6 +126,33 @@ def _no_roll_notifications():
 
 
 @pytest.fixture(autouse=True)
+def _no_spare_npc_sheets():
+    """Keep a GM window from building an NPC sheet ahead of time behind a test's back.
+
+    The suite opens hundreds of GM windows, and each would otherwise build a whole
+    sheet off a timer — slow, and a window nobody asked for in every test that
+    happens to wait on the event loop. The tests about the spare call
+    ``_prime_spare_npc`` themselves, or set a delay for their own duration.
+    """
+    from mm_companion.ui.gm_window import GMWindow
+
+    original = GMWindow.SPARE_NPC_DELAY_MS
+    GMWindow.SPARE_NPC_DELAY_MS = None
+    yield
+    GMWindow.SPARE_NPC_DELAY_MS = original
+
+
+@pytest.fixture(autouse=True)
+def _reset_quick_npc_memory():
+    """Start every test from a fresh run's Quick NPC dialog: PL and preset unremembered."""
+    from mm_companion.ui import npc_quick_dialog
+
+    npc_quick_dialog.reset_memory()
+    yield
+    npc_quick_dialog.reset_memory()
+
+
+@pytest.fixture(autouse=True)
 def _close_top_level_widgets():
     yield
     app = QApplication.instance()

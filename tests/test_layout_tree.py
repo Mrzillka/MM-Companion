@@ -610,3 +610,38 @@ class TestMovingAWholeCell:
 
         with pytest.raises(ValueError):
             lt.insert_node_beside(page(), Leaf(("dice",)), "skills", "sideways")
+
+
+# -- without_keys: a saved tree, minus blocks a host no longer builds ----------
+
+
+def _page(*rows: tuple[str, ...]) -> dict:
+    return lt.to_dict(Split(VERTICAL, tuple(Leaf(row) for row in rows), ()))
+
+
+def test_without_keys_drops_a_named_block_and_keeps_the_rest_in_place() -> None:
+    page = _page(("a", "b"), ("c",))
+    pruned = lt.without_keys(page, lambda key: key == "b")
+    assert lt.keys(lt.from_dict(pruned, {"a", "c"})) == ["a", "c"]
+
+
+def test_without_keys_drops_a_row_left_empty() -> None:
+    page = _page(("a",), ("gone",), ("c",))
+    pruned = lt.without_keys(page, lambda key: key == "gone")
+    node = lt.from_dict(pruned, {"a", "c"})
+    assert lt.keys(node) == ["a", "c"]
+
+
+def test_without_keys_can_empty_a_tree_entirely() -> None:
+    assert lt.without_keys(_page(("gone",)), lambda key: True) is None
+
+
+def test_without_keys_leaves_a_tree_with_nothing_to_drop_untouched() -> None:
+    page = _page(("a", "b"))
+    assert lt.without_keys(page, lambda key: False) is page
+
+
+def test_without_keys_returns_what_it_cannot_parse_for_the_validator_to_reject() -> None:
+    broken = {"type": "split", "orientation": "sideways", "children": []}
+    assert lt.without_keys(broken, lambda key: True) is broken
+    assert lt.without_keys("nonsense", lambda key: True) == "nonsense"

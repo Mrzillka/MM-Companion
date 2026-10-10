@@ -264,6 +264,7 @@
     "opacity.term": {"label": "Game terms", "hint": "How strongly the simple sheet's game terms are drawn next to the values they qualify."},
     "size.version": {"label": "Version line", "hint": "The app version under the launcher's buttons."},
     "size.cost-total": {"label": "Cost total"},
+    "size.quick-npc-level": {"label": "Quick NPC Power Level", "hint": "The Power Level box and its caption in the GM's Quick NPC dialog, the one field the rest are set from."},
     "size.dice-face": {"label": "Die face"},
     "size.dice-face.compact": {"label": "Die face (compact mode)", "hint": "On the smaller die."},
     "size.roll-readout": {"label": "Roll readout"},

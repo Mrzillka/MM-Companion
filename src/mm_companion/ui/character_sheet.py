@@ -23,6 +23,7 @@ host window can track unsaved changes.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from contextlib import ExitStack
 from dataclasses import replace
 
@@ -32,6 +33,7 @@ from PySide6.QtWidgets import QScrollArea, QVBoxLayout, QWidget
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData, load_game_data
 from mm_companion.core.rules import power_points_spent, stable_build
+from mm_companion.ui import layout_tree as lt
 from mm_companion.ui.block_canvas import BlockCanvas
 from mm_companion.ui.block_frame import BlockFrame
 from mm_companion.ui.blocks import (
@@ -47,6 +49,7 @@ from mm_companion.ui.blocks import (
 from mm_companion.ui.blocks.bus import (
     BUILD_CHANGED,
     EDITED,
+    OUTWARD_REQUESTS,
     PIN_REQUESTED,
     QUIET_REQUESTS,
     RESEED_TOPICS,
@@ -70,16 +73,27 @@ class CharacterSheet(QWidget):
     unpinRequested = Signal(object)
     #: The simple sheet was switched on or off (see :meth:`set_simple`).
     simpleChanged = Signal(bool)
+    #: A block asked for something no block on this sheet answers — ``(topic,
+    #: payload)``. Only for :data:`OUTWARD_REQUESTS`, and only on a sheet built
+    #: without the block that serves one: an NPC sheet has no roller, so its rolls
+    #: go out to the GM window's (see :meth:`_wire_sections`).
+    requestUnserved = Signal(str, object)
 
     def __init__(
         self,
         data: GameData | None = None,
         character: Character | None = None,
         parent: QWidget | None = None,
+        *,
+        exclude: Iterable[str] = (),
     ) -> None:
         super().__init__(parent)
         self._data = data or load_game_data()
         self.character = character or Character.new_default(self._data)
+        # Blocks this sheet never builds — not hidden, absent. The NPC sheet's four
+        # closed blocks: building a dice roller, a scene board and two prose blocks
+        # only to hide them was a fifth of the cost of opening a mook.
+        self._excluded = frozenset(exclude)
         self._npc = False
         self._locked = False
         # True only while :meth:`reseed` is pushing a restored model back into the
@@ -103,7 +117,7 @@ class CharacterSheet(QWidget):
         # self.skills, …) so the cross-block wiring can reach it by name. The
         # descriptor carries the dock title and size constraints; its default_row/col
         # feed the canvas's default arrangement.
-        self._descriptors = block_descriptors()
+        self._descriptors = [d for d in block_descriptors() if d.key not in self._excluded]
         self._sections_by_key: dict[str, QWidget] = {}
         # Every descriptor the sheet is currently running, keyed by block. Not the
         # same list as the registry's: a multi-instance block (Notes) has one
@@ -121,8 +135,8 @@ class CharacterSheet(QWidget):
         self._canvas = BlockCanvas(
             panels,
             sizes,
-            default_rows(),
-            default_pinned=default_pin_lines(),
+            self._without_excluded(default_rows()),
+            default_pinned=self._without_excluded(default_pin_lines()),
             instance_factory=self._build_instance,
         )
 
@@ -152,6 +166,41 @@ class CharacterSheet(QWidget):
         self._update_min_width()
 
         self._wire_sections()
+
+    def _without_excluded(self, lines: list[list[str]]) -> list[list[str]]:
+        """*lines* of block keys minus the ones this sheet does not build, emptied rows dropped."""
+        kept = [[key for key in line if key not in self._excluded] for line in lines]
+        return [line for line in kept if line]
+
+    def _is_excluded(self, key: str) -> bool:
+        """Whether *key* — or the template it is an instance of — is left off this sheet."""
+        return instance_template(key) in self._excluded
+
+    def _strip_excluded(self, model: object) -> object:
+        """A saved arrangement with the blocks this sheet does not build taken out.
+
+        The arrangement's validator is strict that it names *exactly* the live
+        blocks, so an NPC layout saved while the sheet still built its four closed
+        blocks would be rejected wholesale — and the GM's arrangement lost — the
+        first time the sheet stopped building them. Those blocks were closed, which
+        is to say in ``hidden``, so dropping them moves nothing that is on screen.
+        """
+        if not self._excluded or not isinstance(model, dict):
+            return model
+        model = dict(model)
+        if isinstance(model.get("hidden"), list):
+            model["hidden"] = [k for k in model["hidden"] if not self._is_excluded(str(k))]
+        for name in ("floating", "hidden_anchors"):
+            if isinstance(model.get(name), dict):
+                model[name] = {
+                    k: v for k, v in model[name].items() if not self._is_excluded(str(k))
+                }
+        if "page" in model:
+            model["page"] = lt.without_keys(model["page"], self._is_excluded)
+        region = model.get("region")
+        if isinstance(region, dict) and "root" in region:
+            model["region"] = dict(region, root=lt.without_keys(region["root"], self._is_excluded))
+        return model
 
     def _update_min_width(self) -> None:
         """Hold the page open by the width of one scrollbar and very little else.
@@ -262,7 +311,7 @@ class CharacterSheet(QWidget):
             model = json.loads(state)
         except (ValueError, TypeError):
             return False
-        return self._canvas.apply_arrangement(model)
+        return self._canvas.apply_arrangement(self._strip_excluded(model))
 
     def reset_layout(self) -> None:
         """Return the blocks to the default arrangement (un-float and un-hide)."""
@@ -272,7 +321,7 @@ class CharacterSheet(QWidget):
 
     def multi_templates(self) -> list:
         """The registered descriptors a second copy can be made of (Notes)."""
-        return [d for d in block_descriptors() if d.multi]
+        return [d for d in block_descriptors() if d.multi and d.key not in self._excluded]
 
     def add_block_instance(self, template: str, *, near: str | None = None) -> str:
         """Build another copy of the multi-instance block *template*.
@@ -441,6 +490,11 @@ class CharacterSheet(QWidget):
         # the sheet takes them and passes them on to whoever opened the sheet.
         self._bus.serve(PIN_REQUESTED, self.pinRequested.emit)
         self._bus.serve(UNPIN_REQUESTED, self.unpinRequested.emit)
+        # And the ones a block *would* answer, on a sheet built without it. Only
+        # then: a player's sheet has its own roller and nothing goes out of it.
+        served = {t for d in self._descriptors for t in d.serves}
+        for topic in OUTWARD_REQUESTS - served:
+            self._bus.serve(topic, lambda payload, t=topic: self.requestUnserved.emit(t, payload))
 
         for topic in {t for d in self._descriptors for t in d.serves} - QUIET_REQUESTS:
             self._bus.serve(topic, lambda _payload, t=topic: self._reveal_servers(t))
@@ -539,7 +593,15 @@ class CharacterSheet(QWidget):
         rather than left to ``arrangement_changed``, because a lock toggle is not a
         rearrangement. Nothing here writes the model or emits ``edited``: locking is
         a view switch.
+
+        A call that changes nothing does nothing. Every block is built unlocked, and
+        every window sets the lock it opens with — so an unlocked one (every NPC
+        sheet) re-rendered the Skills table and the Powers cards a second time on
+        the way up, for a switch that had not moved.
         """
+        locked = bool(locked)
+        if locked == self._locked:
+            return
         self._locked = locked
         for key in self._canvas.block_keys():
             self._canvas.block_frame(key).set_locked(locked)
@@ -767,6 +829,26 @@ class CharacterSheet(QWidget):
             self._bus.publish_all(RESEED_TOPICS)
         finally:
             self._restoring = False
+
+    def can_reseed(self) -> bool:
+        """Whether :meth:`reseed` reaches every block on this sheet.
+
+        By the same two routes :meth:`reseed` takes: a ``reseed()`` of its own, or a
+        subscription to a topic it publishes. A block with neither — a mod's Python
+        block that never needed one — would go on showing whatever it was built over.
+        Undo has lived with that gap; putting a *different* character into a built
+        sheet cannot (``NPCWindow.load``), since that block would show the blank one's
+        numbers under the creature's name. So that asks first, and builds a fresh
+        sheet when the answer is no.
+        """
+        for descriptor in self._descriptors:
+            section = self._sections_by_key.get(descriptor.key)
+            if callable(getattr(section, "reseed", None)):
+                continue
+            if set(descriptor.subscribes) & set(RESEED_TOPICS):
+                continue
+            return False
+        return True
 
     def sync_dice_layout(self) -> None:
         """Re-read the roller's layout preference, fanned out like :meth:`sync_session`."""

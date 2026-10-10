@@ -830,6 +830,26 @@ class CharacterSheet(QWidget):
         finally:
             self._restoring = False
 
+    def can_reseed(self) -> bool:
+        """Whether :meth:`reseed` reaches every block on this sheet.
+
+        By the same two routes :meth:`reseed` takes: a ``reseed()`` of its own, or a
+        subscription to a topic it publishes. A block with neither — a mod's Python
+        block that never needed one — would go on showing whatever it was built over.
+        Undo has lived with that gap; putting a *different* character into a built
+        sheet cannot (``NPCWindow.load``), since that block would show the blank one's
+        numbers under the creature's name. So that asks first, and builds a fresh
+        sheet when the answer is no.
+        """
+        for descriptor in self._descriptors:
+            section = self._sections_by_key.get(descriptor.key)
+            if callable(getattr(section, "reseed", None)):
+                continue
+            if set(descriptor.subscribes) & set(RESEED_TOPICS):
+                continue
+            return False
+        return True
+
     def sync_dice_layout(self) -> None:
         """Re-read the roller's layout preference, fanned out like :meth:`sync_session`."""
         for section in self._sections():

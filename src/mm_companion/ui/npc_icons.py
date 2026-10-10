@@ -16,13 +16,16 @@ image plugin, and one file per icon rather than per creature: ten goons share on
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
+from functools import cache
+from importlib.resources import files
 
 from PySide6.QtCore import QSize
 from PySide6.QtGui import QPixmap
 
 from mm_companion.core import storage
-from mm_companion.ui.svg_assets import svg_pixmap
+from mm_companion.ui.svg_assets import RESOURCE_PACKAGE, svg_pixmap
 
 
 @dataclass(frozen=True)
@@ -39,7 +42,7 @@ NPC_ICONS: tuple[NPCIcon, ...] = (
     NPCIcon("brute", "Brute", "assets/npc_icons/brute.svg"),
     NPCIcon("speed", "Speed", "assets/npc_icons/speed.svg"),
     NPCIcon("balance", "Balance", "assets/npc_icons/balance.svg"),
-    NPCIcon("random", "Wild card", "assets/npc_icons/random.svg"),
+    NPCIcon("random", "Random", "assets/npc_icons/random.svg"),
     NPCIcon("blaster", "Blaster", "assets/npc_icons/blaster.svg"),
     NPCIcon("mystic", "Mystic", "assets/npc_icons/mystic.svg"),
     NPCIcon("machine", "Machine", "assets/npc_icons/machine.svg"),
@@ -54,8 +57,10 @@ PRESET_ICONS = {"brute": "brute", "speed": "speed", "balance": "balance", "rando
 #: block, which scales a portrait up to fill whatever room it is given.
 STORED_SIZE = 512
 
-#: What a stored icon's file is called inside ``images/``.
-STORED_NAME = "npc-icon-{id}.png"
+#: What a stored icon's file is called inside ``images/``. ``digest`` is a few
+#: characters of the drawing's own hash, so a later version that redraws an icon
+#: writes a new file rather than finding the old picture and keeping it forever.
+STORED_NAME = "npc-icon-{id}-{digest}.png"
 
 
 def icon(icon_id: str) -> NPCIcon:
@@ -75,17 +80,34 @@ def icon_pixmap(icon_id: str, size: int, ratio: float = 1.0) -> QPixmap:
     return svg_pixmap(icon(icon_id).resource, QSize(size, size), ratio)
 
 
-def store_icon(icon_id: str) -> str:
+@cache
+def stored_name(icon_id: str) -> str:
+    """The filename icon *icon_id* is stored under — fixed by what the drawing is."""
+    chosen = icon(icon_id)
+    # Line endings normalised: a Windows checkout writes the same drawing as CRLF,
+    # and the same picture should not get two names on two machines.
+    drawing = files(RESOURCE_PACKAGE).joinpath(chosen.resource).read_bytes()
+    drawing = drawing.replace(b"\r\n", b"\n")
+    return STORED_NAME.format(id=chosen.id, digest=hashlib.sha1(drawing).hexdigest()[:8])
+
+
+def store_icon(icon_id: str) -> str | None:
     """Put icon *icon_id* in the workspace ``images/`` dir; return its bare filename.
 
     Rendered only the first time: every later creature wearing the same icon points
-    at the same file.
+    at the same file. ``None`` when it cannot be written (a read-only or full disk):
+    a creature with no portrait is better than one pointing at a file that is not
+    there.
     """
-    chosen = icon(icon_id)
-    name = STORED_NAME.format(id=chosen.id)
+    name = stored_name(icon_id)
     images = storage.get_workspace().images_dir
     target = images / name
-    if not target.is_file():
+    if target.is_file():
+        return name
+    try:
         images.mkdir(parents=True, exist_ok=True)
-        icon_pixmap(chosen.id, STORED_SIZE).save(str(target), "PNG")
+    except OSError:
+        return None
+    if not icon_pixmap(icon(icon_id).id, STORED_SIZE).save(str(target), "PNG"):
+        return None
     return name

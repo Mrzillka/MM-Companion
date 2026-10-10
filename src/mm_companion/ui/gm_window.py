@@ -327,6 +327,10 @@ class GMWindow(QMainWindow):
         # next creature a card opens (see _prime_spare_npc). One timer, so however
         # many things ask for a new spare in a burst, one gets built.
         self._spare_npc: NPCWindow | None = None
+        # Set once a spare turns out unable to take a creature in place (a mod block
+        # with no way to restate itself — see NPCWindow.can_load). Mods only change
+        # with a restart, so nothing un-sets it.
+        self._spare_unsupported = False
         self._spare_timer = QTimer(self)
         self._spare_timer.setSingleShot(True)
         self._spare_timer.timeout.connect(self._prime_spare_npc)
@@ -2333,6 +2337,9 @@ class GMWindow(QMainWindow):
         # condition, a damage step.
         self._scene = [e for e in self._scene if e.kind != SCENE_NPC or e.source in self._npc_state]
         self._push_scene()
+        # A cast with someone in it is a cast whose sheets will be opened.
+        if self._npc_state:
+            self._schedule_spare_npc()
 
     def _ordered_npcs(self) -> list[str]:
         """The cast in render order: the GM's own arrangement, and nothing else.
@@ -2495,25 +2502,32 @@ class GMWindow(QMainWindow):
         window.requestUnserved.connect(self._on_npc_request)
         window.saved.connect(lambda w=window: self._on_npc_saved(w))
         window.closed.connect(lambda k=key: self._npc_windows.pop(k, None))
-        # Closing a sheet saves the NPC arrangement, which the spare was built from.
-        window.closed.connect(self._renew_spare_npc)
+        # Closing a sheet saves the NPC arrangement, which the spare should open with.
+        window.closed.connect(self._refresh_spare_layout)
         window.show()
         window.raise_()
 
     # -- the spare NPC sheet -------------------------------------------------
 
-    #: How long after the window shows, or after a spare is used, the next one is
-    #: built. Building one blocks the GUI thread for a fifth of a second (most of a
-    #: second the first time, while Qt warms up), so not *immediately*: not under
-    #: the pointer of a GM still settling into the window, and not straight after
-    #: a sheet has opened, while they are reading it. ``None`` builds none at all
-    #: (the test suite, which opens hundreds of GM windows and wants none of them
-    #: building a sheet behind its back).
+    #: How long after the window shows, after the first creature joins the cast, or
+    #: after a spare is used, the next one is built. Building one blocks the GUI
+    #: thread for a fifth of a second (most of a second the first time, while Qt
+    #: warms up), so not *immediately*: not under the pointer of a GM still settling
+    #: into the window, and not straight after a sheet has opened, while they are
+    #: reading it. ``None`` builds none at all (the test suite, which opens hundreds
+    #: of GM windows and wants none of them building a sheet behind its back).
     SPARE_NPC_DELAY_MS: int | None = 750
 
     def _schedule_spare_npc(self) -> None:
-        if self.SPARE_NPC_DELAY_MS is not None and self._spare_npc is None:
-            self._spare_timer.start(self.SPARE_NPC_DELAY_MS)
+        """Arm the timer for a spare, unless one is ready, coming, or pointless."""
+        if (
+            self.SPARE_NPC_DELAY_MS is None
+            or self._spare_npc is not None
+            or self._spare_unsupported
+            or self._spare_timer.isActive()
+        ):
+            return
+        self._spare_timer.start(self.SPARE_NPC_DELAY_MS)
 
     def _prime_spare_npc(self) -> None:
         """Build the NPC sheet the next card will open, before anyone asks for it.
@@ -2524,9 +2538,29 @@ class GMWindow(QMainWindow):
         The first one built in a run also pays Qt's one-off warm-up, which used to be
         what made the first sheet of a session the slowest. Never shown and never
         parented: it is a top-level window that has simply not been opened yet.
+
+        Not for an empty cast — a GM running a session with no creatures would pay
+        the warm-up for nothing; :meth:`_refresh_npcs` asks again when one joins. And
+        not under an open dialog: the timer fires inside its event loop too, and a
+        freeze while the GM types a Quick NPC's name is the one place it shows. It
+        waits the dialog out instead.
         """
-        if self._spare_npc is None and self.isVisible():
-            self._spare_npc = NPCWindow(pin_target=True)
+        if self._spare_npc is not None or self._spare_unsupported or not self.isVisible():
+            return
+        if not self._npc_state:
+            return
+        if QApplication.activeModalWidget() is not None:
+            if self.SPARE_NPC_DELAY_MS is not None:
+                self._spare_timer.start(self.SPARE_NPC_DELAY_MS)
+            return
+        spare = NPCWindow(pin_target=True)
+        if not spare.can_load():
+            # A block on it cannot be handed another creature; every sheet is built
+            # fresh, as it always was, rather than one showing stale numbers.
+            self._spare_unsupported = True
+            spare.deleteLater()
+            return
+        self._spare_npc = spare
 
     def _take_spare_npc(self, character: Character, path: Path) -> NPCWindow:
         """The sheet for *character*: the spare if one is ready, a new one if not."""
@@ -2539,10 +2573,16 @@ class GMWindow(QMainWindow):
         self._schedule_spare_npc()
         return window
 
-    def _renew_spare_npc(self) -> None:
-        """Throw the spare away and build another — its arrangement has gone stale."""
-        self._discard_spare_npc()
-        self._schedule_spare_npc()
+    def _refresh_spare_layout(self) -> None:
+        """An NPC sheet closed and saved its arrangement: the spare takes it up.
+
+        Re-applied rather than rebuilt — re-reading a layout is a twentieth of the
+        cost of a sheet, and this runs on every close.
+        """
+        if self._spare_npc is not None:
+            self._spare_npc.reapply_saved_layout()
+        else:
+            self._schedule_spare_npc()
 
     def _discard_spare_npc(self) -> None:
         """Drop the spare without closing it: closing a sheet saves its layout."""

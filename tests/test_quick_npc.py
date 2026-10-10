@@ -275,3 +275,127 @@ def test_a_pair_over_its_cap_says_so(dialog) -> None:
     dialog._spins["attack"].setValue(15)
     assert label.text() == "25 / 20"
     assert label.styleSheet()
+
+
+def test_a_fill_pair_may_be_led_by_either_of_its_stats() -> None:
+    """A preset naming the *second* stat of a pair used to be silently ignored."""
+    from dataclasses import replace
+
+    from mm_companion.core.data_loader import QuickNPCPreset
+
+    data = load_game_data()
+    sniper = QuickNPCPreset(id="sniper", name="Sniper", shares=(("attack", "high"),))
+    rules = replace(data.system.quick_npc, presets=(*data.system.quick_npc.presets, sniper))
+    data = replace(data, system=replace(data.system, quick_npc=rules))
+    stats = preset_stats(data, "sniper", 10)
+    assert (stats.attack, stats.effect) == (14, 6)
+
+
+# -- the icons -----------------------------------------------------------------
+
+
+def test_an_icon_is_stored_once_under_a_name_that_follows_its_drawing(qapp) -> None:
+    from mm_companion.core import storage
+    from mm_companion.ui import npc_icons
+
+    name = npc_icons.store_icon("machine")
+    assert name == npc_icons.stored_name("machine")
+    assert name.startswith("npc-icon-machine-") and name.endswith(".png")
+    stored = storage.get_workspace().images_dir / name
+    assert stored.is_file()
+    stamp = stored.stat().st_mtime_ns
+    assert npc_icons.store_icon("machine") == name
+    assert stored.stat().st_mtime_ns == stamp  # not rendered twice
+    # Different drawings, different names.
+    assert len({npc_icons.stored_name(i.id) for i in npc_icons.NPC_ICONS}) == 8
+
+
+def test_an_icon_that_cannot_be_written_leaves_no_portrait(qapp, monkeypatch) -> None:
+    from PySide6.QtGui import QPixmap
+
+    from mm_companion.ui import npc_icons
+
+    monkeypatch.setattr(QPixmap, "save", lambda self, *a, **k: False)
+    assert npc_icons.store_icon("beast") is None
+
+
+# -- the wizard, by keyboard ---------------------------------------------------
+
+
+def test_the_dialog_opens_in_the_name_with_it_selected(dialog, qapp) -> None:
+    dialog.show()
+    dialog.activateWindow()
+    qapp.processEvents()
+    assert dialog.focusWidget() is dialog._name
+    assert dialog._name.selectedText() == dialog._name.text()
+
+
+def test_enter_after_clicking_a_preset_creates_rather_than_clicking_it_again(dialog, qapp) -> None:
+    """Every push button in a dialog is auto-default — a clicked preset took Enter."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QPushButton
+
+    dialog.show()
+    qapp.processEvents()
+    auto = {b.text() for b in dialog.findChildren(QPushButton) if b.autoDefault()}
+    assert auto == {"Create NPC", "Cancel"}
+    QTest.mouseClick(dialog._preset_buttons["random"], Qt.MouseButton.LeftButton)
+    QTest.mouseClick(dialog._next_icon, Qt.MouseButton.LeftButton)
+    assert dialog.focusWidget() is dialog._name  # a click does not take the cursor
+    QTest.keyClick(dialog.focusWidget(), Qt.Key.Key_Return)
+    assert dialog.result() == dialog.DialogCode.Accepted
+
+
+def test_a_picked_icon_survives_a_preset_and_carries_to_the_next_dialog(qapp) -> None:
+    from mm_companion.ui.npc_quick_dialog import QuickNPCDialog
+
+    first = QuickNPCDialog()
+    first._pick_icon("machine")
+    first._preset_buttons["brute"].click()
+    assert first.value().icon == "machine"  # a robot brute, not a fist
+    first.accept()
+
+    second = QuickNPCDialog()
+    assert second.value().icon == "machine"
+    second._preset_buttons["speed"].click()
+    assert second.value().icon == "machine"
+    for made in (first, second):
+        made.deleteLater()
+
+
+def test_an_icon_that_followed_the_preset_is_not_remembered(qapp) -> None:
+    from mm_companion.ui.npc_quick_dialog import QuickNPCDialog
+
+    first = QuickNPCDialog()
+    first._preset_buttons["brute"].click()
+    first.accept()
+    second = QuickNPCDialog()
+    second._preset_buttons["speed"].click()
+    assert second.value().icon == "speed"
+    for made in (first, second):
+        made.deleteLater()
+
+
+def test_a_hand_edit_marks_the_lit_preset_until_it_is_applied_again(dialog) -> None:
+    from mm_companion.ui.npc_quick_dialog import EDITED_MARK
+
+    button = dialog._preset_buttons["balance"]
+    assert not button.text().endswith(EDITED_MARK)
+    dialog._spins["will"].setValue(2)
+    assert button.text().endswith(EDITED_MARK)
+    assert "Edited by hand" in button.toolTip()
+    button.click()
+    assert not button.text().endswith(EDITED_MARK)
+    assert dialog.value().will == 6
+    # A level change re-applies too, and so clears the mark.
+    dialog._spins["will"].setValue(2)
+    dialog._power_level.setValue(9)
+    assert not button.text().endswith(EDITED_MARK)
+
+
+def test_a_preset_that_rolls_says_so_on_its_button(dialog) -> None:
+    from mm_companion.ui.npc_quick_dialog import RANDOM_MARK
+
+    assert dialog._preset_buttons["random"].text() == "Random" + RANDOM_MARK
+    assert dialog._preset_buttons["brute"].text() == "Brute"

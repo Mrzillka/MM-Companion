@@ -87,9 +87,18 @@ HELP_TEXT = (
 #: depending on a sibling purely for a number.
 PORTRAIT_SIZE = 96
 
-#: What the last accepted dialog of this run chose — the Power Level and the preset.
-#: Process memory on purpose, not a setting (see the module docstring).
+#: What the last accepted dialog of this run chose — the Power Level, the preset,
+#: and an icon the GM picked by hand (absent when the icon simply followed the
+#: preset). Process memory on purpose, not a setting (see the module docstring).
 _memory: dict[str, object] = {}
+
+#: What a preset's button says when its numbers have been edited by hand since it
+#: was applied — the button is still lit, so it has to stop claiming they are its.
+EDITED_MARK = " *"
+
+#: Put after the name of a preset with a random share in it: clicking it again rolls
+#: again, and a die says so where a tooltip only might.
+RANDOM_MARK = " 🎲"
 
 
 def reset_memory() -> None:
@@ -132,9 +141,21 @@ class QuickNPCDialog(QDialog):
             self._preset = DEFAULT_PRESET
         else:
             self._preset = presets[0] if presets else ""
-        self._icon = npc_icons.PRESET_ICONS.get(self._preset, npc_icons.NPC_ICONS[0].id)
+        # An icon the GM chose with the arrows sticks: a preset clicked afterwards
+        # changes the numbers, not the face — and the next dialog this run wears it too.
+        picked = _memory.get("icon")
+        self._icon_picked = isinstance(picked, str)
+        self._icon = (
+            npc_icons.icon(str(picked)).id
+            if self._icon_picked
+            else npc_icons.PRESET_ICONS.get(self._preset, npc_icons.NPC_ICONS[0].id)
+        )
         self._spins: dict[str, QSpinBox] = {}
         self._readouts: list[tuple[QLabel, str, str, str]] = []
+        # True while _apply_preset writes the boxes, so its writes are not hand edits.
+        self._applying = False
+        # Whether a box has been edited by hand since the preset was last applied.
+        self._edited = False
 
         layout = QVBoxLayout(self)
         help_label = QLabel(HELP_TEXT)
@@ -151,7 +172,7 @@ class QuickNPCDialog(QDialog):
         )
         self._power_level.setToolTip("Every number below is set from this.")
         font = self._power_level.font()
-        font.setPointSizeF(theme.font_size("size.cost-total"))
+        font.setPointSizeF(theme.font_size("size.quick-npc-level"))
         font.setBold(True)
         self._power_level.setFont(font)
         pl_caption = QLabel("Power Level:")
@@ -177,8 +198,36 @@ class QuickNPCDialog(QDialog):
         self._sync_ok()
         self._show_icon()
         self._apply_preset()
+        self._set_tab_order()
+        # Open where the GM starts: the suggested name, selected, so typing replaces it.
+        self._name.setFocus()
+        self._name.selectAll()
 
     # -- construction --------------------------------------------------------
+
+    @staticmethod
+    def _side_button(text: str, tooltip: str) -> QPushButton:
+        """A button that does something *inside* the dialog, never the dialog's job.
+
+        Not auto-default — in a dialog every push button is, so a clicked preset or
+        arrow took the Enter key from Create NPC and Enter re-applied the preset (or,
+        on Random, re-rolled it). And reached by Tab but not given focus by a click,
+        so clicking a preset leaves the cursor in the field the GM was typing in.
+        """
+        button = QPushButton(text)
+        button.setToolTip(tooltip)
+        button.setAutoDefault(False)
+        button.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        return button
+
+    def _set_tab_order(self) -> None:
+        """Name, level, presets, the six numbers, then the icon — the order they matter."""
+        chain: list[QWidget] = [self._name, self._reroll, self._power_level]
+        chain += list(self._preset_buttons.values())
+        chain += [self._spins[key] for row in STAT_ROWS for key, _caption in row]
+        chain += [self._previous_icon, self._next_icon, self._ok_button]
+        for before, after in zip(chain, chain[1:], strict=False):
+            QWidget.setTabOrder(before, after)
 
     def _build_name_row(self) -> QWidget:
         """The name box, pre-filled, beside the button that offers another one.
@@ -193,8 +242,7 @@ class QuickNPCDialog(QDialog):
         line.setSpacing(int(theme.metric("space.sm")))
         self._name = QLineEdit(random_npc_name())
         line.addWidget(self._name, stretch=1)
-        reroll = QPushButton("🎲")
-        reroll.setToolTip("Suggest another name")
+        reroll = self._reroll = self._side_button("🎲", "Suggest another name")
         reroll.setFixedWidth(int(theme.metric("column.roll-button")))
         reroll.clicked.connect(lambda: self._name.setText(random_npc_name(self._name.text())))
         line.addWidget(reroll)
@@ -209,14 +257,12 @@ class QuickNPCDialog(QDialog):
         row = QHBoxLayout()
         row.setSpacing(int(theme.metric("space.sm")))
         width = int(theme.metric("column.roll-button"))
-        previous = QPushButton("◀")
-        previous.setToolTip("Previous icon")
+        previous = self._previous_icon = self._side_button("◀", "Previous icon")
         previous.setFixedWidth(width)
-        previous.clicked.connect(lambda: self._set_icon(npc_icons.step(self._icon, -1)))
-        following = QPushButton("▶")
-        following.setToolTip("Next icon")
+        previous.clicked.connect(lambda: self._pick_icon(npc_icons.step(self._icon, -1)))
+        following = self._next_icon = self._side_button("▶", "Next icon")
         following.setFixedWidth(width)
-        following.clicked.connect(lambda: self._set_icon(npc_icons.step(self._icon, 1)))
+        following.clicked.connect(lambda: self._pick_icon(npc_icons.step(self._icon, 1)))
         self._portrait = QLabel()
         self._portrait.setFixedSize(PORTRAIT_SIZE, PORTRAIT_SIZE)
         self._portrait.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -241,9 +287,8 @@ class QuickNPCDialog(QDialog):
         self._preset_group.setExclusive(True)
         self._preset_buttons: dict[str, QPushButton] = {}
         for preset in self._data.system.quick_npc.presets:
-            button = QPushButton(preset.name)
+            button = self._side_button(self._preset_caption(preset.id), preset.description)
             button.setCheckable(True)
-            button.setToolTip(preset.description)
             button.setChecked(preset.id == self._preset)
             # `clicked`, not `toggled`: clicking the preset already chosen must still
             # apply it — that is how Random re-rolls and how hand edits are undone.
@@ -263,6 +308,7 @@ class QuickNPCDialog(QDialog):
                 spin = make_spin_box(STAT_MIN, STAT_MAX)
                 spin.setToolTip(STAT_TIPS[key])
                 spin.valueChanged.connect(self._refresh_readouts)
+                spin.valueChanged.connect(self._on_stat_changed)
                 self._spins[key] = spin
                 grid.addWidget(QLabel(f"{caption}:"), row, column)
                 grid.addWidget(spin, row, column + 1)
@@ -281,15 +327,47 @@ class QuickNPCDialog(QDialog):
     # -- the preset ----------------------------------------------------------
 
     def _choose_preset(self, preset_id: str) -> None:
-        """Make *preset_id* the preset, wear its icon, and fill the numbers from it."""
+        """Make *preset_id* the preset, wear its icon, and fill the numbers from it.
+
+        The icon only if the GM has not picked one: choosing a robot and then the
+        Brute numbers makes a robot brute, not a fist.
+        """
         self._preset = preset_id
         button = self._preset_buttons.get(preset_id)
         if button is not None:
             button.setChecked(True)
         icon_id = npc_icons.PRESET_ICONS.get(preset_id)
-        if icon_id is not None:
+        if icon_id is not None and not self._icon_picked:
             self._set_icon(icon_id)
         self._apply_preset()
+
+    def _preset_caption(self, preset_id: str) -> str:
+        """A preset button's text: its name, a die if it rolls, a mark if edited since."""
+        preset = find_preset(self._data, preset_id)
+        if preset is None:
+            return preset_id
+        caption = preset.name
+        if any(share == "random" for _stat, share in preset.shares):
+            caption += RANDOM_MARK
+        if self._edited and preset_id == self._preset:
+            caption += EDITED_MARK
+        return caption
+
+    def _sync_preset_captions(self) -> None:
+        for preset_id, button in self._preset_buttons.items():
+            button.setText(self._preset_caption(preset_id))
+            preset = find_preset(self._data, preset_id)
+            tip = preset.description if preset is not None else ""
+            if self._edited and preset_id == self._preset and preset is not None:
+                tip += f"\n\nEdited by hand — click to set every number back to {preset.name}."
+            button.setToolTip(tip)
+
+    def _on_stat_changed(self) -> None:
+        """A box moved: by the preset, nothing to say; by hand, the preset is now edited."""
+        if self._applying or self._edited:
+            return
+        self._edited = True
+        self._sync_preset_captions()
 
     def _apply_preset(self) -> None:
         """Set all six boxes from the preset at the current Power Level.
@@ -300,8 +378,14 @@ class QuickNPCDialog(QDialog):
         if find_preset(self._data, self._preset) is None:
             return
         stats = preset_stats(self._data, self._preset, self._power_level.value())
-        for key, spin in self._spins.items():
-            spin.setValue(getattr(stats, key))
+        self._applying = True
+        try:
+            for key, spin in self._spins.items():
+                spin.setValue(getattr(stats, key))
+        finally:
+            self._applying = False
+        self._edited = False
+        self._sync_preset_captions()
         self._refresh_readouts()
 
     def _refresh_readouts(self) -> None:
@@ -321,6 +405,11 @@ class QuickNPCDialog(QDialog):
 
     # -- the icon ------------------------------------------------------------
 
+    def _pick_icon(self, icon_id: str) -> None:
+        """The GM chose an icon with the arrows: wear it, and keep it past a preset."""
+        self._icon_picked = True
+        self._set_icon(icon_id)
+
     def _set_icon(self, icon_id: str) -> None:
         self._icon = npc_icons.icon(icon_id).id
         self._show_icon()
@@ -338,9 +427,13 @@ class QuickNPCDialog(QDialog):
         self._ok_button.setEnabled(bool(self._name.text().strip()))
 
     def accept(self) -> None:
-        """Remember this run's Power Level and preset for the next dialog, then close."""
+        """Remember this run's Power Level, preset and picked icon, then close."""
         _memory["power_level"] = self._power_level.value()
         _memory["preset"] = self._preset
+        if self._icon_picked:
+            _memory["icon"] = self._icon
+        else:
+            _memory.pop("icon", None)
         super().accept()
 
     def value(self) -> QuickNPC:

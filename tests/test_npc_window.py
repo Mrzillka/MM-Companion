@@ -345,3 +345,40 @@ def test_a_sheet_with_no_roller_shows_no_shrink_button(npc: NPCWindow, qapp: QAp
     npc.show()
     qapp.processEvents()
     assert not npc._compact.button.isVisible()
+
+
+def test_an_old_layout_with_extra_notes_blocks_still_restores(qapp: QApplication) -> None:
+    """``notes#2`` is an instance of a block the NPC sheet leaves out — it goes too."""
+    player = MainWindow()
+    try:
+        player.sheet.add_block_instance("notes")
+        assert "notes#2" in player.sheet.block_keys()
+        player.sheet.hide_block("equipment")
+        old = player.sheet.save_layout()
+    finally:
+        player.close()
+    storage.set_sheet_layout(NPCWindow.LAYOUT_KEY, "", old)
+
+    reopened = NPCWindow()
+    try:
+        assert reopened.sheet.is_block_hidden("equipment")
+        assert not any(key.startswith("notes") for key in reopened.sheet.block_keys())
+    finally:
+        reopened.close()
+
+
+def test_an_npc_sheet_can_take_another_creature_in_place(npc: NPCWindow) -> None:
+    """Every block it builds can restate itself — the spare sheet depends on it."""
+    assert npc.can_load()
+
+
+def test_a_block_with_no_way_to_restate_itself_says_so(npc: NPCWindow) -> None:
+    from dataclasses import replace
+
+    descriptor = npc.sheet._descriptor_by_key["equipment"]
+    # Equipment is restated by topics; take them away and it has no route left.
+    npc.sheet._descriptors = [
+        replace(d, subscribes={}) if d.key == "equipment" else d for d in npc.sheet._descriptors
+    ]
+    assert descriptor is not None
+    assert not npc.can_load()

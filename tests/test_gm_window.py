@@ -1437,7 +1437,7 @@ def test_quick_npcs_wearing_one_icon_share_one_picture(
         window._quick_npc()
     qapp.processEvents()
 
-    expected = npc_icons.STORED_NAME.format(id="beast")
+    expected = npc_icons.stored_name("beast")
     images = storage.get_workspace().images_dir
     assert [p.name for p in images.iterdir()] == [expected]
     assert {e.character.image_path for e in window._npc_state.values()} == {expected}
@@ -1596,12 +1596,12 @@ def test_an_npc_opens_in_the_sheet_built_ahead_of_time(
     the click after, never the same window twice.
     """
     window.show()
+    path = write_npc("Ogre")
+    window._register_npc(path)
     window._prime_spare_npc()
     spare = window._spare_npc
     assert isinstance(spare, NPCWindow) and not spare.isVisible()
 
-    path = write_npc("Ogre")
-    window._register_npc(path)
     window._open_npc(path.name)
 
     (sheet,) = window._npc_windows.values()
@@ -1612,13 +1612,81 @@ def test_an_npc_opens_in_the_sheet_built_ahead_of_time(
     window._prime_spare_npc()
     assert window._spare_npc is not None and window._spare_npc is not sheet
 
-    # Closing a sheet saves the NPC arrangement the spare was built from, so the
-    # stale one goes; and closing the GM window takes the spare with it.
-    stale = window._spare_npc
-    sheet.close()
-    assert window._spare_npc is None and stale is not None
-    window._prime_spare_npc()
+    # Closing the GM window takes the spare with it.
     window.close()
+    assert window._spare_npc is None
+
+
+def test_closing_a_sheet_hands_its_arrangement_to_the_spare_without_rebuilding_it(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    """A close saves the NPC layout; the spare re-reads it rather than being rebuilt."""
+    window.show()
+    path = write_npc("Ogre")
+    window._register_npc(path)
+    window._open_npc(path.name)
+    (sheet,) = window._npc_windows.values()
+    window._prime_spare_npc()
+    spare = window._spare_npc
+    assert spare is not None and not spare.sheet.is_block_hidden("equipment")
+
+    sheet.sheet.hide_block("equipment")
+    sheet.close()
+
+    assert window._spare_npc is spare
+    assert spare.sheet.is_block_hidden("equipment")
+
+
+def test_no_spare_is_built_for_an_empty_cast(qapp: QApplication, window: GMWindow) -> None:
+    """A session with no creatures should not pay a sheet's warm-up for nothing."""
+    window.show()
+    window._prime_spare_npc()
+    assert window._spare_npc is None
+
+
+def test_the_spare_waits_out_an_open_dialog(
+    qapp: QApplication, window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The timer fires inside a modal's event loop; a freeze there is under the GM's typing."""
+    window.show()
+    window._register_npc(write_npc("Ogre"))
+    monkeypatch.setattr(QApplication, "activeModalWidget", staticmethod(lambda: window))
+    monkeypatch.setattr(GMWindow, "SPARE_NPC_DELAY_MS", 5000)
+    window._prime_spare_npc()
+    assert window._spare_npc is None
+    assert window._spare_timer.isActive()  # ...and it will try again
+    window._spare_timer.stop()
+
+
+def test_the_spare_is_built_off_its_timer_once_a_creature_joins(
+    qapp: QApplication, window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(GMWindow, "SPARE_NPC_DELAY_MS", 0)
+    window.show()
+    qapp.processEvents()
+    assert window._spare_npc is None and not window._spare_timer.isActive()
+
+    window._register_npc(write_npc("Ogre"))
+    assert window._spare_timer.isActive()
+    qapp.processEvents()
+    assert isinstance(window._spare_npc, NPCWindow)
+
+
+def test_a_sheet_a_block_of_which_cannot_reseed_is_never_kept_as_a_spare(
+    qapp: QApplication, window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A mod block with no way to restate itself would show the blank one's numbers."""
+    monkeypatch.setattr(NPCWindow, "can_load", lambda self: False)
+    window.show()
+    path = write_npc("Ogre")
+    window._register_npc(path)
+    window._prime_spare_npc()
+    assert window._spare_npc is None and window._spare_unsupported
+
+    window._open_npc(path.name)  # ...built fresh, the way it always was
+    (sheet,) = window._npc_windows.values()
+    assert sheet.sheet.character.profile["hero_name"] == "Ogre"
+    window._prime_spare_npc()
     assert window._spare_npc is None
 
 

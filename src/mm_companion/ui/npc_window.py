@@ -86,6 +86,19 @@ class NPCWindow(MainWindow):
         self._dirty = False
         self._update_title()
 
+    def can_load(self) -> bool:
+        """Whether :meth:`load` would restate every block (see ``CharacterSheet.can_reseed``)."""
+        return self.sheet.can_reseed()
+
+    def reapply_saved_layout(self) -> None:
+        """Take up the NPC arrangement and size as last saved, by another NPC sheet.
+
+        For a sheet built ahead of time that has not been opened yet: closing any
+        NPC sheet saves the shared ``npc_layout``, and the spare should open the way
+        the GM left the last one rather than the way things were when it was built.
+        """
+        self._restore_layout()
+
     def storage_dir(self) -> Path:
         """NPCs live apart from the player characters, and are never in the library."""
         return storage.get_workspace().gm_characters_dir

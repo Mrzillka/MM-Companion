@@ -1391,8 +1391,9 @@ class QuickNPCPair:
     """Two quick-NPC stats that share one Power Level cap (``system.json`` ``quick_npc``).
 
     ``cap`` names the :class:`PowerLevelCap` in ``costs.json`` whose total the pair is
-    measured against. A ``fill`` pair always sums to that total exactly: the first stat
-    takes its preset share and the second whatever is left. A pair that does not fill
+    measured against. A ``fill`` pair always sums to that total exactly: the stat the
+    preset names takes its share and the other whatever is left (the first, if a
+    preset names both). A pair that does not fill
     sets each stat on its own share, and never past the total between them.
     """
 

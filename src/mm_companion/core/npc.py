@@ -110,8 +110,8 @@ def preset_stats(
     """The six numbers preset *preset_id* gives a creature of *power_level*.
 
     Every pair in ``quick_npc.pairs`` is measured against its Power Level cap. A
-    **fill** pair always lands on that cap exactly — the first stat takes its share and
-    the second the remainder, which is what makes a PL 10 Brute effect 14 and attack
+    **fill** pair always lands on that cap exactly — the stat the preset names takes its
+    share and the other the remainder, which is what makes a PL 10 Brute effect 14 and attack
     +6 rather than 13 and 6. A pair that does not fill (Fortitude and Will) sets each
     stat on its own share, and a random second stat is held to what the first left
     under the cap. A stat no pair names is 0; an unknown preset reads as all-even.
@@ -120,15 +120,22 @@ def preset_stats(
     """
     rng = rng or random.Random()
     preset = find_preset(data, preset_id) or QuickNPCPreset(id=preset_id, name=preset_id)
+    named = dict(preset.shares)
     values = {f.name: 0 for f in fields(QuickStats)}
     for pair in data.system.quick_npc.pairs:
         total = pair_total(data, pair.cap, power_level)
         bounds = share_bounds(data, total)
         first, second = pair.stats
-        values[first] = _share_value(preset.share(first), total, bounds, rng)
         if pair.fill:
-            values[second] = total - values[first]
+            # Whichever of the two the preset names sets the split, and the other
+            # takes the rest. Reading only the first stat made ``"attack": "high"``
+            # in a mod's preset do nothing at all, with nothing to say why.
+            leads_second = second in named and first not in named
+            leader, follower = (second, first) if leads_second else (first, second)
+            values[leader] = _share_value(preset.share(leader), total, bounds, rng)
+            values[follower] = total - values[leader]
             continue
+        values[first] = _share_value(preset.share(first), total, bounds, rng)
         value = _share_value(preset.share(second), total, bounds, rng)
         values[second] = max(0, min(value, total - values[first]))
     return QuickStats(**values)

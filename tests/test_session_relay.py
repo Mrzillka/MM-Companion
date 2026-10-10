@@ -8,15 +8,14 @@ beyond ``127.0.0.1``, and none binds a fixed port.
 from __future__ import annotations
 
 import json
-import shutil
 import socket
 import ssl
-import subprocess
 import threading
 import time
 
 import pytest
 
+from mm_companion.core import tls
 from mm_companion.core.session import client as client_mod
 from mm_companion.core.session import discovery
 from mm_companion.core.session import relay as relay_transport
@@ -677,45 +676,6 @@ def test_hosting_fails_when_the_relay_is_not_there():
 # --------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="session")
-def tls_cert(tmp_path_factory):
-    """A throwaway self-signed certificate for ``localhost``.
-
-    Generated rather than checked in — a private key in the repository is a
-    liability, and a checked-in certificate expires. Skips where openssl is not
-    installed; CI has it.
-    """
-    openssl = shutil.which("openssl")
-    if openssl is None:  # pragma: no cover - depends on the machine
-        pytest.skip("openssl is not installed")
-    directory = tmp_path_factory.mktemp("relay-tls")
-    cert, key = directory / "cert.pem", directory / "key.pem"
-    result = subprocess.run(
-        [
-            openssl,
-            "req",
-            "-x509",
-            "-newkey",
-            "rsa:2048",
-            "-nodes",
-            "-keyout",
-            str(key),
-            "-out",
-            str(cert),
-            "-days",
-            "3650",
-            "-subj",
-            "/CN=localhost",
-            "-addext",
-            "subjectAltName=DNS:localhost,IP:127.0.0.1",
-        ],
-        capture_output=True,
-    )
-    if result.returncode != 0:  # pragma: no cover - depends on the machine
-        pytest.skip(f"openssl could not make a certificate: {result.stderr.decode()[:200]}")
-    return cert, key
-
-
 def test_a_session_runs_over_a_tls_relay(tls_cert):
     cert, key = tls_cert
     server_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
@@ -765,6 +725,45 @@ def test_a_relay_with_an_untrusted_certificate_is_refused(tls_cert):
         with pytest.raises(RelayError):
             transport.connect()
     finally:
+        relay_box.stop()
+        running.thread.join(timeout=TIMEOUT)
+
+
+def test_a_relay_is_trusted_through_the_system_bundle_when_openssl_found_none(
+    tls_cert, monkeypatch
+):
+    """The SteamOS case: the frozen app's OpenSSL looks where Ubuntu keeps certificates.
+
+    With no ``ssl_context`` passed, the transport must find the distribution's own
+    CA bundle — here the test certificate, standing in for it.
+    """
+    cert, key = tls_cert
+    monkeypatch.setattr(
+        tls.ssl, "get_default_verify_paths", lambda: ssl.DefaultVerifyPaths(*[None] * 6)
+    )
+    monkeypatch.setattr(tls, "SYSTEM_CA_BUNDLES", (str(cert),))
+    server_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+    server_context.load_cert_chain(str(cert), str(key))
+
+    relay_box = RelayServer("127.0.0.1", 0, ssl_context=server_context)
+    running = _run(relay_box)
+    state = new_session("Deck")
+    port = relay_box.address[1]
+    url = relay_url(f"mmrelay://localhost:{port}", state.id)
+    server = SessionServer(state, transport=RelayTransport(url), persist=False)
+    try:
+        server.start()
+        client = SessionClient(
+            url,
+            port,
+            token=state.host_token,
+            display_name="Ada",
+            transport=RelayTransport(url),
+        )
+        assert client.connect().session_name == "Deck"
+        client.close()
+    finally:
+        server.stop()
         relay_box.stop()
         running.thread.join(timeout=TIMEOUT)
 

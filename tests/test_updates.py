@@ -136,7 +136,7 @@ def test_release_from_json_rejects_what_is_not_a_release(payload: dict) -> None:
 
 
 def _fake_urlopen(payload: object):
-    def urlopen(request, timeout):  # noqa: ARG001 (signature of the real one)
+    def urlopen(request, timeout, context=None):  # noqa: ARG001 (signature of the real one)
         return io.BytesIO(json.dumps(payload).encode("utf-8"))
 
     return urlopen
@@ -157,7 +157,7 @@ def test_check_for_update_is_quiet_when_up_to_date(monkeypatch: pytest.MonkeyPat
 
 
 def test_check_for_update_is_quiet_offline(monkeypatch: pytest.MonkeyPatch) -> None:
-    def offline(request, timeout):  # noqa: ARG001
+    def offline(request, timeout, context=None):  # noqa: ARG001
         raise urllib.error.URLError("no network")
 
     monkeypatch.setattr(updates.urllib.request, "urlopen", offline)
@@ -165,7 +165,7 @@ def test_check_for_update_is_quiet_offline(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_check_for_update_is_quiet_on_a_malformed_reply(monkeypatch: pytest.MonkeyPatch) -> None:
-    def garbage(request, timeout):  # noqa: ARG001
+    def garbage(request, timeout, context=None):  # noqa: ARG001
         return io.BytesIO(b"<html>rate limited</html>")
 
     monkeypatch.setattr(updates.urllib.request, "urlopen", garbage)
@@ -222,7 +222,7 @@ def test_badge_worker_delivers_a_found_update_on_the_gui_thread(
 def test_the_feed_can_be_pointed_elsewhere(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[str] = []
 
-    def urlopen(request, timeout):  # noqa: ARG001
+    def urlopen(request, timeout, context=None):  # noqa: ARG001
         seen.append(request.full_url)
         return io.BytesIO(json.dumps(_release_json("v99.0.0")).encode("utf-8"))
 
@@ -244,7 +244,7 @@ class _Response(io.BytesIO):
 def _serve(monkeypatch: pytest.MonkeyPatch, data: bytes = PAYLOAD) -> list[str]:
     fetched: list[str] = []
 
-    def urlopen(request, timeout):  # noqa: ARG001
+    def urlopen(request, timeout, context=None):  # noqa: ARG001
         fetched.append(request.full_url)
         return _Response(data)
 
@@ -302,7 +302,7 @@ def test_a_download_that_does_not_match_is_thrown_away(
 def test_a_failed_download_is_an_update_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def offline(request, timeout):  # noqa: ARG001
+    def offline(request, timeout, context=None):  # noqa: ARG001
         raise urllib.error.URLError("no network")
 
     monkeypatch.setattr(updates.urllib.request, "urlopen", offline)

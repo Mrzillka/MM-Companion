@@ -12,6 +12,8 @@ never accumulate across the session.
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 import threading
 from dataclasses import dataclass
 
@@ -126,6 +128,33 @@ def _no_roll_notifications():
 
 
 @pytest.fixture(autouse=True)
+def _no_spare_npc_sheets():
+    """Keep a GM window from building an NPC sheet ahead of time behind a test's back.
+
+    The suite opens hundreds of GM windows, and each would otherwise build a whole
+    sheet off a timer — slow, and a window nobody asked for in every test that
+    happens to wait on the event loop. The tests about the spare call
+    ``_prime_spare_npc`` themselves, or set a delay for their own duration.
+    """
+    from mm_companion.ui.gm_window import GMWindow
+
+    original = GMWindow.SPARE_NPC_DELAY_MS
+    GMWindow.SPARE_NPC_DELAY_MS = None
+    yield
+    GMWindow.SPARE_NPC_DELAY_MS = original
+
+
+@pytest.fixture(autouse=True)
+def _reset_quick_npc_memory():
+    """Start every test from a fresh run's Quick NPC dialog: PL and preset unremembered."""
+    from mm_companion.ui import npc_quick_dialog
+
+    npc_quick_dialog.reset_memory()
+    yield
+    npc_quick_dialog.reset_memory()
+
+
+@pytest.fixture(autouse=True)
 def _close_top_level_widgets():
     yield
     app = QApplication.instance()
@@ -152,3 +181,42 @@ def _close_top_level_widgets():
     # this the widgets above are only *scheduled* to die and in fact pile up all
     # session, which is the very thing this fixture exists to prevent.
     app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+@pytest.fixture(scope="session")
+def tls_cert(tmp_path_factory):
+    """A throwaway self-signed certificate for ``localhost``.
+
+    Generated rather than checked in — a private key in the repository is a
+    liability, and a checked-in certificate expires. Skips where openssl is not
+    installed; CI has it.
+    """
+    openssl = shutil.which("openssl")
+    if openssl is None:  # pragma: no cover - depends on the machine
+        pytest.skip("openssl is not installed")
+    directory = tmp_path_factory.mktemp("relay-tls")
+    cert, key = directory / "cert.pem", directory / "key.pem"
+    result = subprocess.run(
+        [
+            openssl,
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-keyout",
+            str(key),
+            "-out",
+            str(cert),
+            "-days",
+            "3650",
+            "-subj",
+            "/CN=localhost",
+            "-addext",
+            "subjectAltName=DNS:localhost,IP:127.0.0.1",
+        ],
+        capture_output=True,
+    )
+    if result.returncode != 0:  # pragma: no cover - depends on the machine
+        pytest.skip(f"openssl could not make a certificate: {result.stderr.decode()[:200]}")
+    return cert, key

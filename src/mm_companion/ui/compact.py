@@ -136,6 +136,10 @@ class CompactOverlayButton(QToolButton):
         self.setFont(font)
         self.setStyleSheet(_overlay_style(diameter))
         self.set_compact(False)
+        # Hidden until :meth:`attach` puts it on a roller. A child shows with its
+        # window, and a sheet that never had a roller (an NPC's) never attaches —
+        # so it sat in the window's top-left corner, over the File menu.
+        self.hide()
 
     def attach(self, host: QWidget | None) -> None:
         """Move the button onto *host*, or nowhere at all.

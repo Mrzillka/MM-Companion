@@ -288,7 +288,7 @@ band is not what they are about.
   it comes from the **block registry** (`ui/blocks/`) — one `BlockDescriptor` per
   block (key, dock title, widget factory, `BlockSize`, default row/col, and
   `default_pinned` for a block that starts in the strip instead of a row, and
-  `npc_default` for whether it is *open* on a GM's NPC sheet), held in an
+  `npc_default` for whether a GM's NPC sheet builds it at all), held in an
   ordered `Registry` (`ui/blocks/registry.py`, reusing `core/registry.py`). The fourteen
   base descriptors register at import; `CharacterSheet` iterates `block_descriptors()`
   to build each section (exposing it as an attribute under its key so the name-based
@@ -632,11 +632,27 @@ band is not what they are about.
   that no longer exists, and a wrong remembered size is worse than none.
 - A **View** menu has a checkable show/hide toggle per block (kept in sync via
   `BlockCanvas.block_visibility_changed`) and a **Reset Layout** action.
-- **A GM's NPC opens with the blocks that hold no trait closed** — the roller, the
+- **A GM's NPC sheet does not build the blocks that hold no trait** — the roller, the
   Scene, Notes, Complications (`npc_hidden_keys()`, read off
-  `BlockDescriptor.npc_default` so a mod block declares its own answer). It is a
-  **default, not a mode**: `NPCWindow._restore_layout` seeds it only when nothing was
-  remembered, which is the whole reason the NPC layout needed a key of its own.
+  `BlockDescriptor.npc_default` so a mod block declares its own answer). They used to be
+  built and then *closed*, which cost a fifth of the time it took a mook's sheet to open;
+  now `NPCWindow` passes them as `CharacterSheet(exclude=…)` and they are absent — no
+  frame, no View-menu entry, no "New Notes Block". Three things follow from absent
+  rather than hidden:
+  - **A request nobody serves goes out.** `OUTWARD_REQUESTS` (roll, load, bonus, note)
+    is served by the sheet itself when no block on it does, as
+    `CharacterSheet.requestUnserved(topic, payload)`, relayed by `MainWindow`. The GM
+    window connects that to its own roller, where a card's rolls already land. A
+    player's sheet has its roller and sends nothing out.
+  - **A saved arrangement is pruned before it is validated.** The validator wants
+    exactly the live blocks, so an `npc_layout` saved while the four were still built
+    would have been thrown away whole. `_strip_excluded` drops excluded keys (and
+    their instances) from `hidden`, `floating`, `hidden_anchors` and both trees
+    (`layout_tree.without_keys`), so the GM keeps their arrangement.
+  - The simple sheet and Print already skip a block that is not there.
+- **`CharacterSheet.set_locked` does nothing when the state is not changing.** Every
+  block is built unlocked and every window sets the lock it opens with, so an unlocked
+  window (every NPC sheet) used to render Skills and Powers a second time on the way up.
 
 ## Tab groups: several blocks in one cell
 

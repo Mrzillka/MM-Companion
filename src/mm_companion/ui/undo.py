@@ -289,6 +289,22 @@ class UndoController(QObject):
         self._undo[:] = [_replay(entry, old, new) for entry in self._undo]
         self._redo[:] = [_replay(entry, old, new) for entry in self._redo]
 
+    def reset(self) -> None:
+        """Forget the whole history: the model as it now is, just loaded from disk.
+
+        For a window that is handed a *different* character in place (see
+        ``NPCWindow.load``). Whatever the stacks held were states of the creature it
+        held before, and stepping back into one would put that creature's numbers on
+        this one. Left exactly as a controller built over the new model would be —
+        including no saved marker, which a window opened on a file does not set either.
+        """
+        self._timer.stop()
+        self._undo.clear()
+        self._redo.clear()
+        self._baseline = self._snapshot()
+        self._saved = None
+        self.stateChanged.emit()
+
     # -- the saved-state marker -----------------------------------------------
 
     def mark_saved(self) -> None:

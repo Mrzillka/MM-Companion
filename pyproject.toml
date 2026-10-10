@@ -26,7 +26,11 @@ classifiers = [
     "Topic :: Games/Entertainment :: Role-Playing",
 ]
 dependencies = [
-    "PySide6>=6.6",
+    # Capped below 6.12 until the app is checked against it: 6.12.0 moves a spin
+    # box's arrow column by a pixel (tests/test_input_arrow_columns.py, which guards
+    # arrows that stop taking clicks) and aborts in garbage collection under the
+    # test suite. CI and the release builds both install from here.
+    "PySide6>=6.6,<6.12",
 ]
 
 [project.optional-dependencies]
@@ -53,7 +57,7 @@ version = { attr = "mm_companion.__version__" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-mm_companion = ["data/**/*.json", "data/**/*.yaml", "data/**/*.yml", "ui/*.json", "ui/theme/*.json", "ui/theme/themes/*.json", "ui/assets/*.ico", "ui/assets/*.png", "ui/assets/*.svg"]
+mm_companion = ["data/**/*.json", "data/**/*.yaml", "data/**/*.yml", "ui/*.json", "ui/theme/*.json", "ui/theme/themes/*.json", "ui/assets/*.ico", "ui/assets/*.png", "ui/assets/*.svg", "ui/assets/npc_icons/*.svg"]
 
 [tool.black]
 line-length = 100

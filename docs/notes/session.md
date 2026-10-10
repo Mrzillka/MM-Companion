@@ -439,10 +439,56 @@ The shape:
   live trigger on the board. The armed look is a *widget-level* stylesheet, since
   `QToolButton:checked` is in the app QSS and push buttons are not.
 - **Quick NPC opens nothing.** It used to throw the new mook's full sheet up,
-  which is exactly wrong for what the button is for: five numbers is all a mook
-  needs, and a GM making five of them wanted five cards, not five windows to close.
-  The card lands **collapsed** for the same reason. The sheet is one click on the
-  card's portrait away either way.
+  which is exactly wrong for what the button is for: a handful of numbers is all a
+  mook needs, and a GM making five of them wanted five cards, not five windows to
+  close. The card lands **collapsed** for the same reason. The sheet is one click on
+  the card's portrait away either way.
+- **Quick NPC is a Power Level and a preset.** The PL is the master field; a preset
+  (Brute, Speed, Balance, Random) turns it into all six numbers — attack, effect,
+  defence, toughness, fortitude, will — via `core.npc.preset_stats`. Everything about a
+  preset is `system.json`'s `quick_npc` block: which stats pair under which
+  `costs.json` cap, each preset's `high`/`low`/`even`/`random` share per stat, and
+  `high_share` (⅔). A **fill** pair always lands *exactly* on its cap (the stat the
+  preset names takes its share, rounded up for `high`; the other the rest), which is what makes a
+  PL 10 Brute effect 14 / attack 6. Fortitude and Will do not fill: each takes its own
+  share and the pair never passes its cap. Changing the PL re-applies the preset over
+  hand edits; clicking a preset again re-applies it (that is how Random re-rolls).
+  The last PL and preset are **process memory** (`npc_quick_dialog._memory`), not a
+  setting — a batch of goons is one run, next session's fight is another. An icon the
+  GM picked with the arrows is remembered the same way and **survives a preset click**;
+  one that only followed the preset is not. A hand edit marks the lit preset ` *` until
+  it is applied again, and a preset with a random share carries a die on its button.
+  The in-dialog buttons (presets, arrows, 🎲) are **not auto-default** and take no
+  focus on click: in a `QDialog` every push button is auto-default, so a clicked preset
+  used to take Enter from Create NPC, and on Random Enter re-rolled. It opens in the
+  Name box with the suggestion selected.
+- **An NPC icon is an ordinary portrait.** The eight badges under
+  `ui/assets/npc_icons/` (one per preset, four extra) are UI art, MIT, not `data/`.
+  `npc_icons.store_icon` renders the chosen one **once** into the workspace `images/`
+  as `npc-icon-<id>-<digest>.png` — the digest is of the drawing (line endings
+  normalised), so a redrawn icon gets a new file instead of the old picture forever —
+  and returns the bare filename for `image_path`, or `None` if it could not be written — so the card,
+  the sheet's image block, the scene thumbnail and the session portrait all read it as
+  they read any picture, ten goons share one file, and nothing downstream needs Qt's
+  SVG image plugin.
+- **The GM window keeps an NPC sheet built ahead of time.** Building a sheet is most
+  of opening one and none of it depends on which creature, so `_prime_spare_npc`
+  builds one (never shown, never parented) `SPARE_NPC_DELAY_MS` after the window shows,
+  after the first creature joins the cast, and after each is used — but **not for an
+  empty cast** (a GM with no NPCs would pay the warm-up for nothing) and **not under a
+  modal dialog** (the timer fires inside its loop; it re-arms instead); `_open_npc` hands it the creature with `NPCWindow.load` —
+  `Character.restore` + `CharacterSheet.reseed`, the path undo already uses, then
+  `UndoController.reset` and a clean title. It also absorbs Qt's one-off warm-up, which
+  made the first sheet of a run the slowest (~0.75 s → ~0.2 s; later ones ~0.3 s →
+  ~0.1 s). Closing an NPC sheet saves the `npc_layout`, and the spare **re-applies** it
+  (`reapply_saved_layout`) rather than being rebuilt — a twentieth of the cost. A spare
+  is only ever dropped with `deleteLater`, never `close()`, which would save its own
+  stale layout over the GM's. And it is only kept if **every block on it can restate
+  itself** (`CharacterSheet.can_reseed`: a `reseed()`, or a subscription to a topic
+  `reseed` publishes): a mod's Python block with neither would show the blank sheet's
+  numbers under the creature's name, so one such block turns the spare off for the run
+  and every sheet is built fresh (`docs/modding.md` asks blocks for `reseed()`).
+  The test suite turns it off (`conftest._no_spare_npc_sheets`).
 - **Players join the board by themselves**, unless `gm_scene_auto_players` says
   otherwise (Settings ▸ GM Mode; read through **`storage.gm_scene_auto_players()`**,
   never off `load_settings()`, for the reason spelled out on `gm_default_pins` — a

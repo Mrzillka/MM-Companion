@@ -183,6 +183,7 @@
     "size.terms": 8.0,
     "size.version": 8.0,
     "size.cost-total": 12.0,
+    "size.quick-npc-level": 12.0,
     "size.dice-face": 40.0,
     "size.dice-face.compact": 24.0,
     "size.roll-readout": 16.0,

@@ -156,6 +156,15 @@ the xcb platform plugin fails to load on a user's machine that lacks it too. The
 workflow then installs the tarball, starts the installed app under `xvfb-run`, and
 uninstalls it, so a build that cannot start never reaches a release.
 
+The build machine also leaks into **TLS**. The frozen app bundles Ubuntu's OpenSSL,
+which looks for trusted certificates under `/usr/lib/ssl`. Arch, SteamOS and Fedora
+keep theirs elsewhere, so there the bundled OpenSSL starts with no trusted
+certificates and rejects every certificate it is shown. That is the "unable to get
+local issuer certificate" a Steam Deck player saw joining through the relay. So
+nothing that dials out over TLS uses `ssl.create_default_context()` directly; it
+goes through `core.tls.client_context()`, which falls back to the distribution's own
+CA bundle when OpenSSL's compiled-in paths do not exist.
+
 **What `install.sh` does.** Per user by default — no root:
 
 | | per user (`./install.sh`) | system (`sudo ./install.sh --system`) |

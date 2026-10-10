@@ -176,6 +176,11 @@ BONUS_REQUESTED = "bonus-requested"
 #: charging them for something they never got.
 QUIET_REQUESTS = frozenset({NOTE_REQUESTED, PIN_REQUESTED, UNPIN_REQUESTED, HERO_POINT_REQUESTED})
 
+#: The requests a sheet passes *out* when it was built without the block that
+#: answers them (see ``CharacterSheet.requestUnserved``). All four are the roller's:
+#: an NPC sheet has none, and a roll clicked on one belongs in the GM window's.
+OUTWARD_REQUESTS = frozenset({ROLL_REQUESTED, LOAD_REQUESTED, BONUS_REQUESTED, NOTE_REQUESTED})
+
 Handler = Callable[[], None]
 RequestHandler = Callable[[object], None]
 

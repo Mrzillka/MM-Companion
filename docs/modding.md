@@ -234,6 +234,16 @@ the table exactly as the edit page's control would (`context.roll(spec)` /
 view of a borrowed block, and a section may instead answer `set_simple(bool)` to change
 its own look while borrowed. See `docs/notes/simple-sheet.md`.
 
+A Python block whose widgets hold values from the character should also answer
+**`reseed()`**: redraw everything from the character it was built over, which has just
+been changed underneath it. The sheet calls it on every block after an undo or redo, and
+the GM window calls it when it puts a *different* creature into an NPC sheet it built in
+advance. A block that only redraws when a topic it `subscribes` to is published (as the
+built-in Powers and Equipment blocks do on `facts-changed`) needs nothing more — the
+sheet publishes those too. A block with neither is left showing stale values after an
+undo, and its presence turns the GM's ready-built NPC sheet off altogether, so every NPC
+opens at the slower, build-it-now speed. Blocks declared in `blocks.json` already do this.
+
 `BASE_COST_KINDS` has its own helper too, `register_base_cost_kind(mode, kind)`, and
 decides *how* a record is priced rather than what it grants. A `BaseCostKind` is a
 `price` function and a `formula` function registered together — one returns the points,

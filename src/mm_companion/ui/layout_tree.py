@@ -42,7 +42,7 @@ Two rules are inherited deliberately from the code this replaces:
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, replace
 
 #: The two axes a split may divide its space along.
@@ -747,6 +747,40 @@ def from_dict(value: object, known: set[str]) -> Node | None:
     """
     seen: set[str] = set()
     return normalize(_from_dict(value, known, seen))
+
+
+def without_keys(value: object, drop: Callable[[str], bool]) -> object:
+    """A persisted node with every key *drop* answers True for taken out of it.
+
+    For a host that builds fewer blocks than the arrangement it saved described —
+    the NPC sheet, which no longer builds the four it used to start closed. Parsed
+    against the keys the node itself names, so it never judges whether the rest are
+    known (that is :func:`from_dict`'s job on the way in); anything it cannot parse
+    comes back unchanged, to be rejected there as it would have been anyway.
+    """
+    names: set[str] = set()
+    _collect_keys(value, names)
+    gone = [key for key in names if drop(key)]
+    if not gone:
+        return value
+    node = from_dict(value, names)
+    if node is None:
+        return value
+    for key in gone:
+        node = remove(node, key)
+    return to_dict(node)
+
+
+def _collect_keys(value: object, into: set[str]) -> None:
+    if not isinstance(value, dict):
+        return
+    keys = value.get("keys")
+    if isinstance(keys, list):
+        into.update(key for key in keys if isinstance(key, str))
+    children = value.get("children")
+    if isinstance(children, list):
+        for child in children:
+            _collect_keys(child, into)
 
 
 def _from_dict(value: object, known: set[str], seen: set[str]) -> Node | None:

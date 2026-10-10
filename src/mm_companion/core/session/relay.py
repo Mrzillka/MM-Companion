@@ -46,8 +46,8 @@ URL is public, and a stranger who guesses it reaches nothing but the session
 server's own handshake — exactly as if they had guessed an open port.
 
 **Transport security.** ``mmrelay://`` is TLS to the relay
-(:func:`ssl.create_default_context`, a real certificate on the box, no player
-configuration). ``mmrelay+tcp://`` is the same protocol in the clear, for a relay
+(:func:`~mm_companion.core.tls.client_context`, a real certificate on the box, no
+player configuration). ``mmrelay+tcp://`` is the same protocol in the clear, for a relay
 on a trusted network and for tests. TLS terminates *at* the relay, so its operator
 could in principle read the traffic — which is why running your own is one
 command.
@@ -63,6 +63,8 @@ import ssl
 import threading
 import urllib.parse
 from dataclasses import dataclass
+
+from mm_companion.core import tls
 
 from . import discovery
 from .net import CONNECT_TIMEOUT, Connection, Listener, Transport, TransportError, tune_socket
@@ -256,7 +258,7 @@ def _dial(
     tune_socket(sock)
     if not address.tls:
         return sock
-    context = ssl_context or ssl.create_default_context()
+    context = ssl_context or tls.client_context()
     try:
         return context.wrap_socket(sock, server_hostname=address.host)
     except (OSError, ssl.SSLError) as exc:

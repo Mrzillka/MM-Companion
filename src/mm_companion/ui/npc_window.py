@@ -12,12 +12,18 @@ NPCs open **unlocked**. A saved player character opens read-only because it is
 finished and worth protecting; an NPC is working material the GM is usually still
 changing, often mid-session. The lock toggle is still on the menu bar.
 
-They also arrange themselves differently, and remember that arrangement under
-their own settings key: the blocks that hold no trait start **closed** here (see
-:func:`~mm_companion.ui.blocks.registry.npc_hidden_keys`), because a GM opening a
-thug wants its numbers, not a second dice roller and the Scene board they already
-have in the GM window. Sharing the character sheet's ``layout`` key would have
-meant closing them on a mook also closed them on every hero.
+They are also **smaller**: the blocks that hold no trait (see
+:func:`~mm_companion.ui.blocks.registry.npc_hidden_keys` — the Dice roller, the
+Scene, Notes and Complications) are not built at all, because a GM opening a thug
+wants its numbers, not a second dice roller and the Scene board they already have
+in the GM window. They used to be built and then closed, which cost a fifth of the
+time it took a sheet to open and bought nothing a GM used. A roll clicked on the
+sheet goes out through :attr:`~MainWindow.requestUnserved` to whoever opened it —
+the GM window's roller, where a card's rolls already land.
+
+And they remember their arrangement under their own settings key. Sharing the
+character sheet's ``layout`` key would have meant a mook's missing blocks went
+missing from every hero too.
 """
 
 from __future__ import annotations
@@ -56,22 +62,42 @@ class NPCWindow(MainWindow):
             locked=locked,
             npc=True,
             pin_target=pin_target,
+            exclude=npc_hidden_keys(),
         )
         self.sheet.set_npc_mode(True)
 
-    def _restore_layout(self) -> bool:
-        """Restore the NPC arrangement, or seed the default one with the prose closed.
+    def load(self, character: Character, path: Path | None) -> None:
+        """Put *character* (saved at *path*) in this window, in place of what it held.
 
-        Only when nothing was remembered: once a GM has reopened the roller on an
-        NPC, that is the arrangement they get back, exactly as on a character sheet.
-        Runs from ``MainWindow.__init__`` before :meth:`set_npc_mode`, which is fine
-        — which blocks a GM wants open is not a question about the mode being on.
+        What lets the GM window keep a sheet built ahead of time (see
+        ``GMWindow._prime_spare_npc``): building one is most of the cost of opening a
+        creature, and none of it depends on *which* creature. The model is replaced
+        the way an undo replaces it — :meth:`Character.restore` keeps the object every
+        block holds, and :meth:`CharacterSheet.reseed` restates the blocks from it —
+        and then the window forgets everything it knew about the blank one it was:
+        the undo history, the dirty flag, the file.
         """
-        restored = super()._restore_layout()
-        if not restored:
-            for key in npc_hidden_keys():
-                self.sheet.hide_block(key)
-        return restored
+        self.sheet.character.restore(character.to_dict(), keep_runtime=False)
+        self.sheet.reseed()
+        self._path = Path(path) if path else None
+        if self._undo is not None:
+            self._undo.reset()
+        self._layout_history.rebase()
+        self._dirty = False
+        self._update_title()
+
+    def can_load(self) -> bool:
+        """Whether :meth:`load` would restate every block (see ``CharacterSheet.can_reseed``)."""
+        return self.sheet.can_reseed()
+
+    def reapply_saved_layout(self) -> None:
+        """Take up the NPC arrangement and size as last saved, by another NPC sheet.
+
+        For a sheet built ahead of time that has not been opened yet: closing any
+        NPC sheet saves the shared ``npc_layout``, and the spare should open the way
+        the GM left the last one rather than the way things were when it was built.
+        """
+        self._restore_layout()
 
     def storage_dir(self) -> Path:
         """NPCs live apart from the player characters, and are never in the library."""

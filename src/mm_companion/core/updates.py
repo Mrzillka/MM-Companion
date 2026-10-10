@@ -56,7 +56,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from mm_companion import __version__
-from mm_companion.core import storage
+from mm_companion.core import storage, tls
 
 #: The repository whose releases are this app's releases.
 REPOSITORY = "Mrzillka/MM-Companion"
@@ -205,7 +205,9 @@ def fetch_latest_release(timeout: float = DEFAULT_TIMEOUT) -> ReleaseInfo | None
     url = os.environ.get(FEED_ENV_VAR) or LATEST_RELEASE_URL
     try:
         with urllib.request.urlopen(
-            _request(url, "application/vnd.github+json"), timeout=timeout
+            _request(url, "application/vnd.github+json"),
+            timeout=timeout,
+            context=tls.client_context(),
         ) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except _NETWORK_ERRORS:
@@ -428,7 +430,9 @@ def download_asset(
         folder.mkdir(parents=True, exist_ok=True)
         with (
             urllib.request.urlopen(
-                _request(asset.url, "application/octet-stream"), timeout=DOWNLOAD_TIMEOUT
+                _request(asset.url, "application/octet-stream"),
+                timeout=DOWNLOAD_TIMEOUT,
+                context=tls.client_context(),
             ) as response,
             partial.open("wb") as out,
         ):

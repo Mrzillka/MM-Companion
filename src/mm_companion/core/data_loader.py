@@ -1243,6 +1243,8 @@ class TraitKeys:
     defense: str = "DEF"
     dodge: str = "DODGE"
     toughness: str = "TOUGHNESS"
+    fortitude: str = "FORTITUDE"
+    will: str = "WILL"
 
 
 @dataclass(frozen=True)
@@ -1378,6 +1380,57 @@ class ExtraEffortRules:
     pushable_traits: tuple[PushableTrait, ...] = ()
 
 
+#: The six numbers a quick NPC is written from, in the order the GM's dialog shows
+#: them. The vocabulary of ``system.json``'s ``quick_npc`` block: a pair names two of
+#: these and a preset's ``shares`` is keyed by them.
+QUICK_NPC_STATS = ("attack", "effect", "defence", "toughness", "fortitude", "will")
+
+
+@dataclass(frozen=True)
+class QuickNPCPair:
+    """Two quick-NPC stats that share one Power Level cap (``system.json`` ``quick_npc``).
+
+    ``cap`` names the :class:`PowerLevelCap` in ``costs.json`` whose total the pair is
+    measured against. A ``fill`` pair always sums to that total exactly: the stat the
+    preset names takes its share and the other whatever is left (the first, if a
+    preset names both). A pair that does not fill
+    sets each stat on its own share, and never past the total between them.
+    """
+
+    cap: str
+    stats: tuple[str, str]
+    fill: bool = True
+
+
+@dataclass(frozen=True)
+class QuickNPCPreset:
+    """One of the GM's quick-NPC presets: a share of each pair's cap, per stat.
+
+    A share is ``"high"`` (the larger part of the cap, rounded up), ``"low"`` (what
+    the high part leaves), ``"even"`` (half) or ``"random"`` (anywhere between low and
+    high). A stat a preset does not name takes ``"even"``.
+    """
+
+    id: str
+    name: str
+    description: str = ""
+    shares: tuple[tuple[str, str], ...] = ()
+
+    def share(self, stat: str) -> str:
+        return dict(self.shares).get(stat, "even")
+
+
+@dataclass(frozen=True)
+class QuickNPCRules:
+    """What the GM's Quick NPC dialog fills its numbers from (``system.json``)."""
+
+    default_power_level: int = 10
+    #: The larger share as a fraction ``(numerator, denominator)`` of a pair's cap.
+    high_share: tuple[int, int] = (2, 3)
+    pairs: tuple[QuickNPCPair, ...] = ()
+    presets: tuple[QuickNPCPreset, ...] = ()
+
+
 @dataclass(frozen=True)
 class SystemRules:
     """System-level rule references (from ``system.json``).
@@ -1406,6 +1459,8 @@ class SystemRules:
     #: quick-damage buttons walk. An id, not a rule, so a ruleset that calls its
     #: damage effect something else retargets the whole control from data.
     damage_effect: str = "damage"
+    #: The presets and cap pairs the GM's Quick NPC dialog builds a creature from.
+    quick_npc: QuickNPCRules = field(default_factory=QuickNPCRules)
 
 
 # --- Measurements & movement: the rank ↔ real-world conversion tables, the
@@ -3572,6 +3627,8 @@ def _parse_system(raw: dict) -> SystemRules:
         defense=tk_raw.get("defense", defaults.trait_keys.defense),
         dodge=tk_raw.get("dodge", defaults.trait_keys.dodge),
         toughness=tk_raw.get("toughness", defaults.trait_keys.toughness),
+        fortitude=tk_raw.get("fortitude", defaults.trait_keys.fortitude),
+        will=tk_raw.get("will", defaults.trait_keys.will),
     )
     paired_caps = tuple(
         PairedCap(cap=p["cap"], traits=tuple(p["traits"]), label=p["label"])
@@ -3607,6 +3664,46 @@ def _parse_system(raw: dict) -> SystemRules:
             DerivedTrait(key=d["key"], label=d.get("label", d["key"]))
             for d in sys.get("derived_traits", [])
         ),
+        quick_npc=_parse_quick_npc(sys.get("quick_npc"), defaults.quick_npc),
+    )
+
+
+def _parse_quick_npc(raw: object, default: QuickNPCRules) -> QuickNPCRules:
+    """Parse ``system.json``'s ``quick_npc`` block; a missing one keeps *default*.
+
+    A pair naming a stat outside :data:`QUICK_NPC_STATS` is dropped rather than
+    raising, as is a preset with no id — a mod's typo should cost the one entry.
+    """
+    if not isinstance(raw, dict):
+        return default
+    high = raw.get("high_share", default.high_share)
+    try:
+        numerator, denominator = (int(v) for v in high)
+        if denominator <= 0 or not 0 <= numerator <= denominator:
+            raise ValueError
+    except (TypeError, ValueError):
+        numerator, denominator = default.high_share
+    pairs = []
+    for p in raw.get("pairs", []):
+        stats = tuple(p.get("stats", ()))
+        if len(stats) != 2 or not set(stats) <= set(QUICK_NPC_STATS) or not p.get("cap"):
+            continue
+        pairs.append(QuickNPCPair(cap=p["cap"], stats=stats, fill=bool(p.get("fill", True))))
+    presets = tuple(
+        QuickNPCPreset(
+            id=str(p["id"]),
+            name=str(p.get("name", p["id"])),
+            description=str(p.get("description", "")),
+            shares=tuple((str(k), str(v)) for k, v in (p.get("shares") or {}).items()),
+        )
+        for p in raw.get("presets", [])
+        if p.get("id")
+    )
+    return QuickNPCRules(
+        default_power_level=int(raw.get("default_power_level", default.default_power_level)),
+        high_share=(numerator, denominator),
+        pairs=tuple(pairs),
+        presets=presets,
     )
 
 

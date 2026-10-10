@@ -38,7 +38,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QEvent, Qt
+from PySide6.QtCore import QByteArray, QEvent, Qt, QTimer
 from PySide6.QtGui import QCloseEvent, QShowEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -78,6 +78,7 @@ from mm_companion.core.session import client as session_client
 from mm_companion.core.session import discovery, store
 from mm_companion.core.session import server as session_server
 from mm_companion.core.session.model import (
+    KIND_NOTE,
     KIND_REQUEST,
     KIND_ROLL,
     PlayerSlot,
@@ -92,9 +93,15 @@ from mm_companion.core.session.protocol import (
     MAX_SCENE_ENTRIES,
     SCENE_DISPOSITIONS,
 )
-from mm_companion.ui import theme
+from mm_companion.ui import npc_icons, theme
 from mm_companion.ui.block_canvas import BlockCanvas
 from mm_companion.ui.block_sizes import RecommendedSize, load_block_sizes
+from mm_companion.ui.blocks.bus import (
+    BONUS_REQUESTED,
+    LOAD_REQUESTED,
+    NOTE_REQUESTED,
+    ROLL_REQUESTED,
+)
 from mm_companion.ui.blocks.gm_registry import (
     GMBlockDescriptor,
     gm_block_descriptors,
@@ -316,6 +323,13 @@ class GMWindow(QMainWindow):
         # NPC sheets opened from this window, keyed by the file they came from
         # (an unsaved new NPC by a placeholder key), likewise kept referenced.
         self._npc_windows: dict[str, QMainWindow] = {}
+        # An NPC sheet built ahead of time and never shown, waiting to be handed the
+        # next creature a card opens (see _prime_spare_npc). One timer, so however
+        # many things ask for a new spare in a burst, one gets built.
+        self._spare_npc: NPCWindow | None = None
+        self._spare_timer = QTimer(self)
+        self._spare_timer.setSingleShot(True)
+        self._spare_timer.timeout.connect(self._prime_spare_npc)
         # The session's cast as live cards need it: one entry per file name, with
         # the loaded model and its transient initiative. Rebuilt on every refresh
         # from disk, carrying the runtime state across.
@@ -2367,14 +2381,14 @@ class GMWindow(QMainWindow):
         self._track_npc_window(NPCWindow(locked=False))
 
     def _quick_npc(self) -> None:
-        """Build a mook from five numbers and put it straight in the cast.
+        """Build a mook from a Power Level and a preset and put it straight in the cast.
 
         Saved immediately rather than handed to an unsaved sheet: the wizard has
         already collected everything the roster needs, so the creature is in the
         cast — and rollable against — the moment the dialog closes.
 
         And **nothing opens**. It used to throw the new NPC's full sheet up, which
-        is exactly wrong for the thing this button is for: five numbers is all a
+        is exactly wrong for the thing this button is for: a handful of numbers is all a
         mook needs, and a GM making five of them wanted five cards, not five
         windows to close. It lands **collapsed** for the same reason — a batch of
         goons is a batch, and a shrunk card is what the board wants a dozen of. The
@@ -2387,11 +2401,15 @@ class GMWindow(QMainWindow):
         npc = quick_npc(
             load_game_data(),
             name=entered.name,
+            power_level=entered.power_level,
             attack=entered.attack,
             effect=entered.effect,
             defence=entered.defence,
             toughness=entered.toughness,
-            image_path=entered.image_path,
+            fortitude=entered.fortitude,
+            will=entered.will,
+            # A bare workspace filename, shared by every creature with this icon.
+            image_path=npc_icons.store_icon(entered.icon),
         )
         path = library.save_character(npc, directory=self._npc_dir())
         # Recorded before the refresh, since that is where a card reads its state.
@@ -2465,7 +2483,7 @@ class GMWindow(QMainWindow):
         if existing is not None:
             resurface(existing)
             return
-        window = NPCWindow(character=library.load_character(path), path=path, pin_target=True)
+        window = self._take_spare_npc(library.load_character(path), path)
         if entry.card is not None:
             self._attach_pin_sheet(window, entry.card)
         self._track_npc_window(window)
@@ -2474,10 +2492,99 @@ class GMWindow(QMainWindow):
         """Show an NPC sheet and keep it alive, watching for saves and its close."""
         key = id(window)
         self._npc_windows[key] = window
+        window.requestUnserved.connect(self._on_npc_request)
         window.saved.connect(lambda w=window: self._on_npc_saved(w))
         window.closed.connect(lambda k=key: self._npc_windows.pop(k, None))
+        # Closing a sheet saves the NPC arrangement, which the spare was built from.
+        window.closed.connect(self._renew_spare_npc)
         window.show()
         window.raise_()
+
+    # -- the spare NPC sheet -------------------------------------------------
+
+    #: How long after the window shows, or after a spare is used, the next one is
+    #: built. Building one blocks the GUI thread for a fifth of a second (most of a
+    #: second the first time, while Qt warms up), so not *immediately*: not under
+    #: the pointer of a GM still settling into the window, and not straight after
+    #: a sheet has opened, while they are reading it. ``None`` builds none at all
+    #: (the test suite, which opens hundreds of GM windows and wants none of them
+    #: building a sheet behind its back).
+    SPARE_NPC_DELAY_MS: int | None = 750
+
+    def _schedule_spare_npc(self) -> None:
+        if self.SPARE_NPC_DELAY_MS is not None and self._spare_npc is None:
+            self._spare_timer.start(self.SPARE_NPC_DELAY_MS)
+
+    def _prime_spare_npc(self) -> None:
+        """Build the NPC sheet the next card will open, before anyone asks for it.
+
+        Opening a creature is almost all *building a sheet*, and none of that depends
+        on which creature it is — so it is done here, in the GM's idle time, and the
+        click only has to hand the sheet a model (:meth:`NPCWindow.load`) and show it.
+        The first one built in a run also pays Qt's one-off warm-up, which used to be
+        what made the first sheet of a session the slowest. Never shown and never
+        parented: it is a top-level window that has simply not been opened yet.
+        """
+        if self._spare_npc is None and self.isVisible():
+            self._spare_npc = NPCWindow(pin_target=True)
+
+    def _take_spare_npc(self, character: Character, path: Path) -> NPCWindow:
+        """The sheet for *character*: the spare if one is ready, a new one if not."""
+        spare, self._spare_npc = self._spare_npc, None
+        if spare is None:
+            window = NPCWindow(character=character, path=path, pin_target=True)
+        else:
+            spare.load(character, path)
+            window = spare
+        self._schedule_spare_npc()
+        return window
+
+    def _renew_spare_npc(self) -> None:
+        """Throw the spare away and build another — its arrangement has gone stale."""
+        self._discard_spare_npc()
+        self._schedule_spare_npc()
+
+    def _discard_spare_npc(self) -> None:
+        """Drop the spare without closing it: closing a sheet saves its layout."""
+        self._spare_timer.stop()
+        spare, self._spare_npc = self._spare_npc, None
+        if spare is not None:
+            spare.deleteLater()
+
+    def _on_npc_request(self, topic: str, payload: object) -> None:
+        """A roll (or a line for the history) asked for on an NPC sheet.
+
+        An NPC sheet has no roller of its own, so it lands here — on this window's,
+        exactly where a roll clicked on the creature's card lands, which is the
+        roller a GM is already watching. A bad payload costs the roll, not the
+        window: a mod block can publish on these topics too.
+        """
+        if topic == ROLL_REQUESTED and isinstance(payload, RollSpec):
+            self._roller.roll_spec(payload)
+        elif topic == LOAD_REQUESTED and isinstance(payload, RollSpec):
+            self._roller.load_spec(payload)
+        elif topic == BONUS_REQUESTED and type(payload) is int and payload > 0:
+            self._roller.add_bonus(payload)
+        elif topic == NOTE_REQUESTED and isinstance(payload, str) and payload:
+            self._post_note(payload)
+
+    def _post_note(self, text: str) -> None:
+        """A line in the history: the table's while hosting, this window's off the air.
+
+        Written out here for :meth:`_request_roll`'s reason — this window owns its
+        history, so the view's own off-air fallback stands down.
+        """
+        if self._bridge.post_note(text):
+            return
+        self._offline_seq -= 1
+        self._history.add_roll(
+            {
+                "seq": self._offline_seq,
+                "player_name": self._name_of_gm(),
+                "kind": KIND_NOTE,
+                "text": text,
+            }
+        )
 
     def _on_npc_saved(self, window: NPCWindow) -> None:
         """A saved NPC joins the cast (a new one) and restates its card (an old one)."""
@@ -2840,6 +2947,7 @@ class GMWindow(QMainWindow):
         """Re-arm as the process-wide session — the window is reusable after a close."""
         set_active_session(self._bridge)
         super().showEvent(event)
+        self._schedule_spare_npc()
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 (Qt override)
         """Leave the session and give the router its port back before going away.
@@ -2857,6 +2965,7 @@ class GMWindow(QMainWindow):
         # stays open and tracked, which is fine — this window is reusable.
         for npc_window in list(self._npc_windows.values()):
             npc_window.close()
+        self._discard_spare_npc()
         self._persist_layout()
         self.stop_hosting()
         set_active_session(None)

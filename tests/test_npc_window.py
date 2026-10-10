@@ -168,17 +168,21 @@ def test_a_saved_npc_remembers_its_file(npc: NPCWindow) -> None:
 # -- the arrangement an NPC opens with, and where it is remembered ---------------
 
 
-def test_an_npc_opens_with_the_blocks_that_hold_no_trait_closed(npc: NPCWindow) -> None:
+def test_an_npc_sheet_does_not_build_the_blocks_that_hold_no_trait(npc: NPCWindow) -> None:
     """A GM opening a thug wants its numbers, not a second roller and the Scene board.
 
-    Each is one click away on the View menu; what changed is only which ones a fresh
-    NPC starts with.
+    Not closed — absent. Building four blocks only to hide them was a fifth of the
+    cost of opening a mook, and the View menu has nothing to offer for them either.
     """
-    closed = npc_hidden_keys()
-    assert "dice" in closed and "scene" in closed
-    for key in closed:
-        assert npc.sheet.is_block_hidden(key), key
-    # ...and every block that *does* hold a trait is still open.
+    missing = npc_hidden_keys()
+    assert {"dice", "scene", "notes", "complications"} <= set(missing)
+    for key in missing:
+        assert key not in npc.sheet.block_keys(), key
+        assert npc.sheet.section(key) is None, key
+    assert not set(missing) & set(npc._block_actions)
+    # Notes is the one block a second copy can be made of; not here.
+    assert not npc.sheet.multi_templates()
+    # ...and every block that *does* hold a trait is still there, and open.
     assert not npc.sheet.is_block_hidden("abilities")
     assert not npc.sheet.is_block_hidden("powers")
 
@@ -186,6 +190,7 @@ def test_an_npc_opens_with_the_blocks_that_hold_no_trait_closed(npc: NPCWindow) 
 def test_a_player_sheet_is_untouched_by_that(qapp: QApplication) -> None:
     window = MainWindow()
     try:
+        assert set(npc_hidden_keys()) <= set(window.sheet.block_keys())
         assert not window.sheet.is_block_hidden("dice")
     finally:
         window.close()
@@ -194,9 +199,9 @@ def test_a_player_sheet_is_untouched_by_that(qapp: QApplication) -> None:
 def test_an_npc_arrangement_is_remembered_apart_from_the_character_sheets(
     npc: NPCWindow, qapp: QApplication
 ) -> None:
-    """Sharing ``layout`` would mean closing the roller on a mook closed it on a hero."""
+    """Sharing ``layout`` would mean a mook's missing blocks went missing on a hero."""
     assert NPCWindow.LAYOUT_KEY != MainWindow.LAYOUT_KEY
-    npc.sheet.show_block("dice")
+    npc.sheet.hide_block("equipment")
     npc.close()
 
     assert storage.load_settings().get(NPCWindow.LAYOUT_KEY, {}).get("dock_state")
@@ -205,20 +210,138 @@ def test_an_npc_arrangement_is_remembered_apart_from_the_character_sheets(
     reopened = NPCWindow()
     try:
         # Reopened it is the GM's own arrangement, not the default one, that comes back.
-        assert not reopened.sheet.is_block_hidden("dice")
+        assert reopened.sheet.is_block_hidden("equipment")
     finally:
         reopened.close()
 
 
-def test_rolling_from_a_closed_roller_brings_it_back(npc: NPCWindow) -> None:
-    """Closing the roller by default must not roll into a void.
+def test_an_arrangement_saved_while_those_blocks_were_built_still_restores(
+    qapp: QApplication,
+) -> None:
+    """The layout a GM had before the NPC sheet stopped building its closed blocks.
 
-    ``CharacterSheet._reveal_servers`` already reopens a hidden block that serves the
-    topic — this pins that the NPC default rides on it rather than around it.
+    The arrangement validator wants exactly the live blocks, so a layout naming four
+    the sheet no longer has would be thrown away whole — and the GM's arrangement
+    with it. Those four were closed, so they come out of ``hidden`` and nothing that
+    was on screen moves. One the GM had docked comes out of the page the same way.
+    """
+    player = MainWindow()
+    try:
+        player.sheet.hide_block("equipment")
+        for key in ("scene", "notes", "complications"):
+            player.sheet.hide_block(key)
+        # The roller stays docked on the page, as a GM who reopened it would have it.
+        assert not player.sheet.is_block_hidden("dice")
+        old = player.sheet.save_layout()
+    finally:
+        player.close()
+    storage.set_sheet_layout(NPCWindow.LAYOUT_KEY, "", old)
+
+    reopened = NPCWindow()
+    try:
+        assert reopened.sheet.is_block_hidden("equipment")
+        assert not reopened.sheet.is_block_hidden("abilities")
+        assert "dice" not in reopened.sheet.block_keys()
+    finally:
+        reopened.close()
+
+
+def test_rolling_on_an_npc_sheet_goes_out_to_whoever_opened_it(npc: NPCWindow) -> None:
+    """With no roller of its own, a roll must not vanish into a void.
+
+    It leaves through ``requestUnserved`` — the GM window connects that to its own
+    roller (tests/test_gm_window.py). A player's sheet, which has a roller, sends
+    nothing out.
     """
     from mm_companion.core.rules import ability_roll
 
-    assert npc.sheet.is_block_hidden("dice")
+    sent: list[tuple[str, object]] = []
+    npc.requestUnserved.connect(lambda topic, payload: sent.append((topic, payload)))
     spec = ability_roll(npc.sheet.character, load_game_data(), "AGL")
     npc.sheet.bus.publish_request("roll-requested", spec)
-    assert not npc.sheet.is_block_hidden("dice")
+    assert sent == [("roll-requested", spec)]
+
+    player = MainWindow()
+    try:
+        player.requestUnserved.connect(lambda topic, payload: sent.append((topic, payload)))
+        player.sheet.bus.publish_request("roll-requested", spec)
+        assert len(sent) == 1
+    finally:
+        player.close()
+
+
+def test_loading_a_character_into_a_built_sheet_matches_building_one_for_it(
+    qapp: QApplication,
+) -> None:
+    """The spare sheet a GM window keeps: built blank, then handed a creature.
+
+    Every visible value on every block has to come out the same as a sheet built for
+    that creature in the first place — a block that did not restate itself would show
+    the blank one's numbers under the creature's name.
+    """
+    from collections import Counter
+
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from PySide6.QtWidgets import QAbstractButton, QComboBox, QLineEdit, QSpinBox
+
+    from mm_companion.core.character import AdvantageSelection, AppliedCondition
+    from mm_companion.core.npc import preset_stats, quick_npc
+    from mm_companion.core.powers import Power, PowerEffectInstance
+
+    data = load_game_data()
+    stats = preset_stats(data, "brute", 11)
+    creature = quick_npc(data, name="Dr Volt", power_level=11, **vars(stats))
+    creature.abilities["STR"] = 7
+    creature.skill_ranks["Stealth"] = 5
+    creature.advantages.append(AdvantageSelection("Close Attack", 2))
+    creature.conditions.append(AppliedCondition("dazed"))
+    creature.powers.append(
+        Power(name="Fire Blast", effects=[PowerEffectInstance(effect_id="damage", rank=8)])
+    )
+
+    def readout(window: NPCWindow) -> Counter:
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        seen = []
+        for key in window.sheet.block_keys():
+            section = window.sheet.section(key)
+            for kind in (QSpinBox, QLineEdit, QComboBox, QAbstractButton, QLabel):
+                for widget in section.findChildren(kind):
+                    if not widget.isVisibleTo(section):
+                        continue
+                    if isinstance(widget, QSpinBox):
+                        value = widget.value()
+                    elif isinstance(widget, QComboBox):
+                        value = widget.currentText()
+                    elif isinstance(widget, QAbstractButton):
+                        value = (widget.text(), widget.isChecked())
+                    else:
+                        value = widget.text()
+                    seen.append((key, kind.__name__, value))
+        return Counter(seen)
+
+    path = storage.get_workspace().gm_characters_dir / "volt.json"
+    built = NPCWindow(character=creature, path=path, pin_target=True)
+    spare = NPCWindow(pin_target=True)
+    try:
+        spare.sheet.character.abilities["STR"] = 3  # a blank sheet someone had touched
+        spare.load(creature, path)
+        assert readout(spare) == readout(built)
+        assert spare.sheet.character.to_dict() == built.sheet.character.to_dict()
+        assert spare.path == path
+        assert spare.windowTitle() == built.windowTitle()
+        assert not spare._dirty
+        assert not spare._router.can_undo
+    finally:
+        built.close()
+        spare.close()
+
+
+def test_a_sheet_with_no_roller_shows_no_shrink_button(npc: NPCWindow, qapp: QApplication) -> None:
+    """The compact button floats over a roller; with none it must not float anywhere.
+
+    It is a child of the window and only ever hid when moved *off* a roller, so on a
+    sheet that never had one it showed with the window — over the File menu.
+    """
+    npc.show()
+    qapp.processEvents()
+    assert not npc._compact.button.isVisible()

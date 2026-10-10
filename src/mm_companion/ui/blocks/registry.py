@@ -443,20 +443,20 @@ _BASE_BLOCKS = [
 # costs nothing.
 _PINNED_BY_DEFAULT = frozenset({"dice"})
 
-# Blocks that start *closed* on a GM's NPC sheet (see ``BlockDescriptor.npc_default``).
+# Blocks a GM's NPC sheet does not build (see ``BlockDescriptor.npc_default``).
 # The four that hold no trait: the GM already rolls from the card and the GM
-# window's own roller, the Scene is the GM window's board rather than this
-# creature's, and Notes and Complications are a hero's prose. What is left is the
-# numbers a mook is written for, on one screen instead of three. Each is one
-# click away on the View menu, and the NPC layout remembers that click.
+# window's own roller — where a roll clicked on the sheet now goes too — the Scene
+# is the GM window's board rather than this creature's, and Notes and Complications
+# are a hero's prose. What is left is the numbers a mook is written for, on one
+# screen instead of three, built in four fifths of the time.
 _CLOSED_FOR_NPCS = frozenset({"dice", "scene", "notes", "complications"})
 
 
 def npc_hidden_keys() -> list[str]:
-    """Every registered block that starts closed on an NPC sheet.
+    """Every registered block an NPC sheet leaves out.
 
     Read off the descriptors rather than off the constant above, so a mod block
-    declaring ``npc_default=False`` is closed there too.
+    declaring ``npc_default=False`` is left out there too.
     """
 
     return [d.key for d in block_descriptors() if not d.npc_default]

@@ -1378,13 +1378,23 @@ def test_saving_a_new_npc_puts_it_in_the_cast(qapp: QApplication, window: GMWind
 def test_the_quick_wizard_saves_a_playable_npc_and_opens_nothing(
     qapp: QApplication, window: GMWindow, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Five numbers, and the creature is in the cast before anything else is filled in.
+    """A level and a preset, and the creature is in the cast before anything else is filled in.
 
     And **no window**: a GM making five mooks wanted five cards, not five sheets to
     close. The card lands collapsed for the same reason — a batch of goons is a
     batch, and a shrunk card is what a board wants a dozen of.
     """
-    entered = QuickNPC(name="Bandit", attack=6, effect=5, defence=7, toughness=4, image_path=None)
+    entered = QuickNPC(
+        name="Bandit",
+        power_level=8,
+        attack=6,
+        effect=5,
+        defence=7,
+        toughness=4,
+        fortitude=5,
+        will=3,
+        icon="brute",
+    )
     monkeypatch.setattr(QuickNPCDialog, "exec", lambda self: QDialog.DialogCode.Accepted)
     monkeypatch.setattr(QuickNPCDialog, "value", lambda self: entered)
 
@@ -1398,10 +1408,41 @@ def test_the_quick_wizard_saves_a_playable_npc_and_opens_nothing(
     (card,) = npc_cards(window)
     assert card.collapsed is True
     # It is still a playable creature, carrying its two powers.
-    assert [p.name for p in window._npc_state["bandit.json"].character.powers] == [
-        "Damage",
-        "Affliction",
-    ]
+    bandit = window._npc_state["bandit.json"].character
+    assert [p.name for p in bandit.powers] == ["Damage", "Affliction"]
+    assert bandit.power_level == 8
+    assert bandit.resistances["FORTITUDE"] == 5 and bandit.resistances["WILL"] == 3
+
+
+def test_quick_npcs_wearing_one_icon_share_one_picture(
+    qapp: QApplication, window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The icon becomes an ordinary portrait — one file in images/, however many goons."""
+    from mm_companion.ui import npc_icons
+
+    monkeypatch.setattr(QuickNPCDialog, "exec", lambda self: QDialog.DialogCode.Accepted)
+    for name in ("Goon", "Other Goon"):
+        entered = QuickNPC(
+            name=name,
+            power_level=6,
+            attack=6,
+            effect=6,
+            defence=6,
+            toughness=6,
+            fortitude=4,
+            will=4,
+            icon="beast",
+        )
+        monkeypatch.setattr(QuickNPCDialog, "value", lambda self, e=entered: e)
+        window._quick_npc()
+    qapp.processEvents()
+
+    expected = npc_icons.STORED_NAME.format(id="beast")
+    images = storage.get_workspace().images_dir
+    assert [p.name for p in images.iterdir()] == [expected]
+    assert {e.character.image_path for e in window._npc_state.values()} == {expected}
+    # And the card shows it: a real picture, not the empty frame.
+    assert all(not card._portrait.pixmap().isNull() for card in npc_cards(window))
 
 
 def test_cancelling_the_quick_wizard_creates_nothing(
@@ -1520,6 +1561,65 @@ def test_opening_the_same_npc_twice_raises_the_one_window(window: GMWindow) -> N
     # Reopening must not replace the sheet the way a player's read-only one is:
     # this one is editable, and a replacement would take unsaved work with it.
     assert list(window._npc_windows.values()) == [first]
+
+
+def test_a_roll_clicked_on_an_npc_sheet_lands_on_the_gm_roller(
+    window: GMWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The NPC sheet has no roller of its own — it goes where a card's rolls go."""
+    from mm_companion.core.rules import ability_roll
+
+    path = write_npc("Ogre")
+    window._register_npc(path)
+    window._open_npc(path.name)
+    (sheet,) = window._npc_windows.values()
+    rolled: list[object] = []
+    loaded: list[object] = []
+    monkeypatch.setattr(window._roller, "roll_spec", rolled.append)
+    monkeypatch.setattr(window._roller, "load_spec", loaded.append)
+
+    spec = ability_roll(sheet.sheet.character, load_game_data(), "AGL")
+    sheet.sheet.bus.publish_request("roll-requested", spec)
+    sheet.sheet.bus.publish_request("load-requested", spec)
+    sheet.sheet.bus.publish_request("roll-requested", "not a spec")
+
+    assert rolled == [spec]
+    assert loaded == [spec]
+
+
+def test_an_npc_opens_in_the_sheet_built_ahead_of_time(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    """Building a sheet is most of opening one, so the GM window does it in advance.
+
+    The spare is handed the creature, not rebuilt — and the next one is built for
+    the click after, never the same window twice.
+    """
+    window.show()
+    window._prime_spare_npc()
+    spare = window._spare_npc
+    assert isinstance(spare, NPCWindow) and not spare.isVisible()
+
+    path = write_npc("Ogre")
+    window._register_npc(path)
+    window._open_npc(path.name)
+
+    (sheet,) = window._npc_windows.values()
+    assert sheet is spare and sheet.isVisible()
+    assert sheet.path == path
+    assert sheet.sheet.character.profile["hero_name"] == "Ogre"
+    assert window._spare_npc is None
+    window._prime_spare_npc()
+    assert window._spare_npc is not None and window._spare_npc is not sheet
+
+    # Closing a sheet saves the NPC arrangement the spare was built from, so the
+    # stale one goes; and closing the GM window takes the spare with it.
+    stale = window._spare_npc
+    sheet.close()
+    assert window._spare_npc is None and stale is not None
+    window._prime_spare_npc()
+    window.close()
+    assert window._spare_npc is None
 
 
 def test_reopening_a_minimized_npc_sheet_brings_it_back(window: GMWindow) -> None:

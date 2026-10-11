@@ -105,6 +105,12 @@ class SessionBridge(QObject):
     #: A mod at another seat asking this one's mod for something:
     #: ``(mod_id, topic, player_id, payload)``. Reaches the GM and nobody else.
     modRequest = Signal(str, str, str, object)
+    #: A seat asked the GM to run an action — ``(kind, action_id, player_id,
+    #: payload)``. Raised on the GM's side only (hosting or dialled in).
+    actionRequested = Signal(str, str, str, object)
+    #: The GM asked this seat something about an action — ``(kind, action_id,
+    #: payload)``. Raised on a player's side only.
+    actionPrompted = Signal(str, str, object)
 
     #: A player took a seat (``{"player": ..., "new": bool}``), host side only.
     playerJoined = Signal(object)
@@ -544,6 +550,57 @@ class SessionBridge(QObject):
             return False
         return server.record_mod_note(mod_id, text) is not None
 
+    # -- actions against other characters --------------------------------
+
+    def send_action_request(self, kind: str, action_id: str, payload: dict | None = None) -> bool:
+        """Ask the GM to run an action — an Impress, a resist choice. Any seat may.
+
+        Like :meth:`send_mod_request`, a GM hosting in this process has nobody to
+        ask, so this answers ``False`` there.
+        """
+        if self._client is not None:
+            return self._client.send_action_request(kind, action_id, payload)
+        return False
+
+    def prompt_action(
+        self, player_id: str, kind: str, action_id: str, payload: dict | None = None
+    ) -> bool:
+        """Ask one player something about an action in progress (a GM action)."""
+        if self._server is not None:
+            return self._server.prompt_action(player_id, kind, action_id, payload)
+        if self._client is not None:
+            return self._client.prompt_action(player_id, kind, action_id, payload)
+        return False
+
+    def group_roll(
+        self,
+        group: str,
+        lines: list[dict],
+        *,
+        lead: dict | None = None,
+        dc: int | None = None,
+        critical_bonus: int = 0,
+    ) -> bool:
+        """Have the server roll one check against several resistances (a GM action).
+
+        Every roll comes back on :attr:`rollAdded` carrying ``group``, on both
+        roads — the hosting server raises each record as an event while it
+        records it, which is why a caller gathering them must be listening
+        *before* it calls this. ``False`` with no live session, so a caller can
+        roll off the air instead.
+        """
+        if self._server is not None:
+            return bool(
+                self._server.group_roll(
+                    group, lines, lead=lead, dc=dc, critical_bonus=critical_bonus
+                )
+            )
+        if self._client is not None:
+            return self._client.group_roll(
+                group, lines, lead=lead, dc=dc, critical_bonus=critical_bonus
+            )
+        return False
+
     # -- hosting -----------------------------------------------------------
 
     def host(
@@ -792,6 +849,13 @@ class SessionBridge(QObject):
                 str(payload.get("player_id", "")),
                 payload.get("payload"),
             )
+        elif kind == session_server.EVENT_ACTION_REQUEST:
+            self.actionRequested.emit(
+                str(payload.get("kind", "")),
+                str(payload.get("action_id", "")),
+                str(payload.get("player_id", "")),
+                payload.get("payload"),
+            )
         elif kind == session_server.EVENT_REFUSED:
             self.refused.emit(payload)
         elif kind == session_server.EVENT_LISTENER_LOST:
@@ -834,6 +898,20 @@ class SessionBridge(QObject):
                 str(payload.get("mod_id", "")),
                 str(payload.get("topic", "")),
                 str(payload.get("player_id", "")),
+                payload.get("payload"),
+            )
+        elif kind == session_client.EVENT_ACTION_REQUEST:
+            # Reaches a GM client only; the same signal the hosting half raises.
+            self.actionRequested.emit(
+                str(payload.get("kind", "")),
+                str(payload.get("action_id", "")),
+                str(payload.get("player_id", "")),
+                payload.get("payload"),
+            )
+        elif kind == session_client.EVENT_ACTION_PROMPT:
+            self.actionPrompted.emit(
+                str(payload.get("kind", "")),
+                str(payload.get("action_id", "")),
                 payload.get("payload"),
             )
         elif kind == session_client.EVENT_SNAPSHOT:

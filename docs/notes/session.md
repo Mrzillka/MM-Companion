@@ -607,6 +607,11 @@ The shape:
   Adding or removing a block invalidates a stored arrangement, so enabling a mod
   that registers one resets `gm_layout` once; the canvas already falls back to
   defaults rather than breaking.
+- **Protocol v11 carries actions against other characters** — `ActionRequest`,
+  `ActionPrompt`, `GroupRollRequest` and `RollRecord.group`, with the Impress action
+  the first user. Routed like the mod channel (opaque payloads, the sender stamped by
+  the server) and rolled like any roll (by the server). The whole account is in [the
+  actions notes](actions.md).
 - Deployment lives in `deploy/` (systemd units, `deploy.sh`, runbook) — tracked
   and secret-free. The operator's addresses and key paths are in a gitignored
   `SERVER.md`.

@@ -642,14 +642,17 @@ class SessionServer:
         :func:`~mm_companion.core.dice.resolve_group`. Each roll is recorded as an
         ordinary record carrying *group*, attributed to the seat its line names (or
         to the GM, for a creature nobody plays), and published on the same path a
-        single roll takes. Returns the records in order, lead first; nothing at all
-        for a group with no lines, or with neither a lead nor a DC to roll against.
+        single roll takes. Returns the records in order, lead first. A lead with no
+        lines is the check alone — an action run as "request only", which leaves
+        each target a button to resist with instead. Nothing at all is rolled for a
+        group with neither a lead nor any lines, or with lines and nothing to roll
+        them against.
         """
         group = sanitize_action_id(group)
         checked = [line for line in map(sanitize_group_line, lines) if line is not None]
         checked = checked[:MAX_GROUP_LINES]
         lead_line = sanitize_group_line(lead) if lead is not None else None
-        if not group or not checked or (lead_line is None and dc is None):
+        if not group or (lead_line is None and (not checked or dc is None)):
             return []
         for line in (lead_line, *checked):
             if line is None:

@@ -96,6 +96,8 @@ that used to be spelled in Python:
 | `measure.mode` | `effects.json` | the movement mode a per-round speed belongs to; sources sharing one are netted into a single line (defaults to the effect's own id) |
 | `groundMode` | `movement.json` | which of those modes everybody walks in |
 | `statIntegration` | `modifiers.json`, `effect_modifiers.json` | what taking this extra or flaw *grants*, in the same shape a base effect uses |
+| `impress` | `actions.json` | the Impress action: impressions and their ladders, the interaction skills, what a target resists with, the group penalty and the GM's situational modifiers |
+| `parameters` | any `resistanceOutcomes` rung | the parameter a rung applies a condition with; `{source}` is whoever imposed it |
 
 ## How content merges
 

@@ -29,6 +29,11 @@ from mm_companion.core.session import client as session_client
 from mm_companion.core.session.protocol import CharacterSnapshot, encode, sanitize_snapshot
 from mm_companion.ui import theme
 from mm_companion.ui.blocks.bus import BUILD_CHANGED, CONDITION_CHANGED, EDITED
+from mm_companion.ui.impress import (
+    KIND_RESIST,
+    KIND_RESIST_CLOSED,
+    ResistPromptDialog,
+)
 from mm_companion.ui.session_bridge import SessionBridge, set_active_session
 from mm_companion.ui.session_portrait import encode_portrait
 from mm_companion.ui.toasts import notify_window
@@ -217,6 +222,61 @@ class ConditionReceiver(QObject):
         self._attached = False
 
 
+class ResistPromptReceiver(QObject):
+    """The GM asking this player how they resist an impression.
+
+    Opens a :class:`~mm_companion.ui.impress.ResistPromptDialog` over the window —
+    one per attempt, updated in place if the GM changes the skill being resisted —
+    sends the answer back, and closes it when the GM says the attempt is settled.
+    """
+
+    def __init__(self, window, bridge: SessionBridge, *, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._window = window
+        self._bridge = bridge
+        self._attached = True
+        self._dialogs: dict[str, ResistPromptDialog] = {}
+        bridge.actionPrompted.connect(self.handle)
+
+    @property
+    def dialogs(self) -> dict[str, ResistPromptDialog]:
+        return dict(self._dialogs)
+
+    def handle(self, kind: str, action_id: str, payload: object) -> None:
+        if not self._attached or not action_id:
+            return
+        if kind == KIND_RESIST_CLOSED:
+            dialog = self._dialogs.pop(action_id, None)
+            if dialog is not None:
+                dialog.close()
+            return
+        if kind != KIND_RESIST or not isinstance(payload, dict):
+            return
+        dialog = self._dialogs.get(action_id)
+        if dialog is not None:
+            dialog.update_prompt(payload)
+            return
+        sheet = self._window.sheet
+        dialog = ResistPromptDialog(
+            sheet.data, sheet.character, action_id=action_id, payload=payload, parent=self._window
+        )
+        dialog.answered.connect(
+            lambda answer, a=action_id: self._bridge.send_action_request(
+                KIND_RESIST, a, answer.to_dict()
+            )
+        )
+        dialog.destroyed.connect(lambda *_x, a=action_id: self._dialogs.pop(a, None))
+        self._dialogs[action_id] = dialog
+        dialog.show()
+
+    def detach(self) -> None:
+        """Stop answering — the sheet closed, or the session ended."""
+        self._attached = False
+        for dialog in list(self._dialogs.values()):
+            dialog.close()
+        self._dialogs.clear()
+
+
 def attach_player_session(window, bridge: SessionBridge) -> None:
     """Wire a joined session to a character-sheet window.
 
@@ -235,6 +295,7 @@ def attach_player_session(window, bridge: SessionBridge) -> None:
     """
     pusher = SnapshotPusher(window.sheet, bridge, parent=window)
     receiver = ConditionReceiver(window.sheet, bridge, parent=window)
+    prompts = ResistPromptReceiver(window, bridge, parent=window)
 
     indicator = getattr(window, "connection_indicator", None)
     if indicator is not None:
@@ -243,6 +304,7 @@ def attach_player_session(window, bridge: SessionBridge) -> None:
     def leave() -> None:
         pusher.detach()
         receiver.detach()
+        prompts.detach()
         bridge.stop()
         set_active_session(None)
         if indicator is not None:
@@ -286,4 +348,5 @@ def attach_player_session(window, bridge: SessionBridge) -> None:
     # Keep the wires alive for the window's lifetime.
     window._session_pusher = pusher
     window._session_receiver = receiver
+    window._session_prompts = prompts
     window._session_bridge = bridge

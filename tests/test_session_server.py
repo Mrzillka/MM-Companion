@@ -1949,7 +1949,10 @@ def test_a_group_roll_rolls_the_lead_then_each_line_against_its_total(running_se
 def test_a_group_roll_with_nothing_to_roll_against_is_dropped(running_server):
     srv = running_server()
     assert srv.group_roll("g1", [{"label": "Will"}]) == []
-    assert srv.group_roll("g1", [], lead={"label": "Impress"}) == []
+    assert srv.group_roll("g1", []) == []
+    # A lead alone is the check without the resistances — "request only".
+    alone = srv.group_roll("g3", [], lead={"label": "Impress", "bonus": 2})
+    assert len(alone) == 1 and alone[0].dc is None
     assert srv.group_roll("", [{"label": "Will"}], dc=10) == []
     fixed = srv.group_roll("g2", [{"label": "Will", "bonus": 2}], dc=15)
     assert len(fixed) == 1 and fixed[0].dc == 15

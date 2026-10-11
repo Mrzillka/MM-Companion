@@ -114,6 +114,14 @@ from mm_companion.ui.compact import CompactController
 from mm_companion.ui.connection_indicator import install_connection_indicator
 from mm_companion.ui.dice_roller import DiceRollerView
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
+from mm_companion.ui.impress import (
+    IMPRESS_ACTION,
+    KIND_IMPRESS,
+    PARTY_NPC,
+    PARTY_PLAYER,
+    ImpressParty,
+)
+from mm_companion.ui.impress_gm import ImpressController
 from mm_companion.ui.npc_card import NPCCard
 from mm_companion.ui.npc_quick_dialog import QuickNPCDialog
 from mm_companion.ui.npc_window import NPCWindow
@@ -466,6 +474,9 @@ class GMWindow(QMainWindow):
         self._restore_layout()
 
         self._connect_bridge()
+        # Runs every Impress this window resolves — a player's, or an NPC's from the
+        # roller's Action row (see mm_companion.ui.impress_gm).
+        self._impress = ImpressController(self._data, self._bridge, self, self)
         self._refresh_idle_status()
         self._refresh_trouble()
         self._refresh_rolls()
@@ -769,8 +780,90 @@ class GMWindow(QMainWindow):
         # they are character-free) and this window decides where the ask goes.
         self._roller.set_roll_choices(requested_roll_choices(self._data))
         self._roller.rollRequested.connect(self._request_roll)
+        # The Action row: the GM impresses on an NPC's behalf from here, exactly
+        # where a player's Impress button is on their sheet.
+        if self._data.impress.available:
+            self._roller.set_actions([IMPRESS_ACTION])
+        self._roller.actionRequested.connect(self._on_roller_action)
         layout.addWidget(self._view)
         return box
+
+    def _on_roller_action(self, kind: str) -> None:
+        if kind == KIND_IMPRESS:
+            self._impress.open_new()
+
+    # -- the Impress action's host surface (see ImpressHost) ------------------
+
+    def impress_parties(self) -> tuple[list[ImpressParty], list[ImpressParty]]:
+        """Who may impress (the cast, and the seats) and who may be targeted (the board).
+
+        Read fresh each time, off the same live models the board is drawn from — an
+        NPC's own :class:`Character`, so a condition applied to it lands on the model
+        the card and the file read, and a player's latest snapshot.
+        """
+        targets: list[ImpressParty] = []
+        on_board: dict[str, str] = {}
+        for entry in self._scene:
+            if entry.kind == SCENE_NPC:
+                npc = self._npc_state.get(entry.source)
+                if npc is None:
+                    continue
+                party = ImpressParty(
+                    entry.ref, npc.summary.name, PARTY_NPC, entry.source, npc.character
+                )
+            else:
+                snapshot = self._snapshots.get(entry.source)
+                party = ImpressParty(
+                    entry.ref,
+                    self._player_name(entry.source),
+                    PARTY_PLAYER,
+                    entry.source,
+                    Character.from_dict(snapshot) if snapshot else None,
+                )
+            on_board[entry.wire_source()] = entry.ref
+            targets.append(party)
+        sources: list[ImpressParty] = []
+        for name in self._ordered_npcs():
+            npc = self._npc_state.get(name)
+            if npc is None:
+                continue
+            ref = on_board.get(f"{SCENE_NPC}:{name}", f"{SCENE_NPC}:{name}")
+            sources.append(ImpressParty(ref, npc.summary.name, PARTY_NPC, name, npc.character))
+        sources += [party for party in targets if party.kind == PARTY_PLAYER]
+        return sources, targets
+
+    def impress_apply(self, party: ImpressParty, changes: list[tuple[str, str | None]]) -> bool:
+        """Put an impression's conditions on one creature.
+
+        An NPC's go straight onto its model, through the path every other condition
+        change takes (its card, an open sheet, the file, the board). A player's go to
+        their app as commands, exactly as the GM's own "+" sends one.
+        """
+        if party.kind == PARTY_NPC:
+            entry = self._npc_state.get(party.source)
+            if entry is None:
+                return False
+            for condition_id, parameter in changes:
+                apply_condition(entry.character, condition_id, self._data, parameter=parameter)
+            self._after_npc_condition_change(entry, list(changes), applying=True)
+            return True
+        delivered = True
+        for condition_id, parameter in changes:
+            delivered = (
+                bool(self._bridge.apply_condition(party.source, condition_id, parameter))
+                and delivered
+            )
+        return delivered
+
+    def impress_show_offline(self, record: dict) -> None:
+        """One roll of an Impress made off the air, as an offline card."""
+        self._offline_seq -= 1
+        self._history.add_roll(
+            {**record, "seq": self._offline_seq, "player_name": self._name_of_gm()}
+        )
+
+    def impress_notice(self, text: str, colour: str) -> None:
+        self._show_notice(text, colour)
 
     def _request_roll(self, spec: object) -> None:
         """Ask the table to roll something — the Request row's handler.
@@ -1392,6 +1485,12 @@ class GMWindow(QMainWindow):
         card = self._cards.get(player_id)
         if card is not None:
             card.set_character(character)
+        # An Impress being set up reads this player's resist options off the same
+        # snapshot, so a sheet that just changed must not leave it on stale numbers.
+        entry = self._scene_entry_for(SCENE_PLAYER, player_id)
+        if entry is not None and getattr(self, "_impress", None) is not None:
+            for window in self._impress.windows.values():
+                window.set_party_character(entry.ref, Character.from_dict(character))
         # Their conditions and their picture are on the board too, and a snapshot
         # is the only warning that either moved.
         if self._scene_entry_for(SCENE_PLAYER, player_id) is not None:

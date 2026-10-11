@@ -94,7 +94,8 @@ from typing import ClassVar
 #: v12 let the GM **reveal a hidden roll**: :class:`RevealRollRequest` and
 #: :class:`RollRevealed`. Bumped for the v10 reason once more — a v11 server drops
 #: the request without a word, so the GM would click Show and the table would
-#: never see the roll they were just told about.
+#: never see the roll they were just told about. It also added
+#: ``RollRequest.reroll``, which a v11 server would ignore and roll as an ordinary die.
 PROTOCOL_VERSION = 12
 
 #: Hard cap on one encoded message, including its trailing newline. A character
@@ -273,6 +274,10 @@ class RollRequest(Message):
     land and clicks the save straight off its card. The server treats it as opaque
     data — it validates the shape (:func:`sanitize_spec`) and records it, and never
     interprets it, so the headless server needs no game rules loaded.
+
+    ``reroll`` asks for a lucky re-roll: the server rolls a die that cannot come up
+    under 11 (:func:`~mm_companion.core.dice.reroll_d20`). The server applies it
+    rather than the client, for the reason it rolls at all.
     """
 
     TYPE: ClassVar[str] = "roll_request"
@@ -283,6 +288,7 @@ class RollRequest(Message):
     dc: int | None = None
     hidden: bool = False
     spec: dict | None = None
+    reroll: bool = False
 
 
 @_register

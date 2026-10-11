@@ -46,6 +46,23 @@ def roll_d20(rng: random.Random | None = None) -> int:
     return roller.randint(1, D20_SIDES)
 
 
+#: A lucky re-roll never comes up low (p22, Luck): a die showing this or less has
+#: this much added to it, so the re-roll always lands on 11-20.
+REROLL_FLOOR = 10
+
+
+def reroll_d20(rng: random.Random | None = None) -> int:
+    """Roll a d20 for a re-roll: a 1-10 has :data:`REROLL_FLOOR` added (11-20 always).
+
+    The Luck advantage's re-roll, and the Hero Point spent on one. The die is reported
+    as the number that counts — a 3 re-rolled reads 13 — so a reader sees one number,
+    not a face and a footnote.
+    """
+
+    die = roll_d20(rng)
+    return die + REROLL_FLOOR if die <= REROLL_FLOOR else die
+
+
 def degrees(margin: int) -> int:
     """Convert a ``check_total - dc`` margin into a signed degree count.
 

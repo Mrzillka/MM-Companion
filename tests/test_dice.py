@@ -76,3 +76,20 @@ def test_roll_d20_in_range() -> None:
     rng = random.Random(0)
     for _ in range(200):
         assert 1 <= roll_d20(rng) <= 20
+
+
+def test_a_reroll_always_lands_on_eleven_to_twenty() -> None:
+    from mm_companion.core.dice import reroll_d20
+
+    rng = random.Random(3)
+    rolls = [reroll_d20(rng) for _ in range(400)]
+    assert set(rolls) == set(range(11, 21))
+
+
+def test_a_low_reroll_counts_ten_more(monkeypatch) -> None:
+    from mm_companion.core import dice
+
+    monkeypatch.setattr(dice, "roll_d20", lambda rng=None: 3)
+    assert dice.reroll_d20() == 13
+    monkeypatch.setattr(dice, "roll_d20", lambda rng=None: 17)
+    assert dice.reroll_d20() == 17

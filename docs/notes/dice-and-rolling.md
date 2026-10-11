@@ -662,15 +662,27 @@ of NPCs — often fewer. Two answers, and they are independent.
 
 ## The Action row
 
-Under the Request row, an **Action** row of buttons for actions taken against other
-characters — Impress first. Hidden until a host calls `set_actions` with
-`(key, caption, tooltip)` triples, so a roller with nothing to offer costs no height,
-and like the Request row it only *reports* (`actionRequested(key)`): running an action
+Under the Request row, an **Action** row: **Reroll** first, then the actions taken
+against other characters — Impress — once a host calls `set_actions` with
+`(key, caption, tooltip)` triples. The row used to hide until then; Reroll is always
+there, so it no longer does. The actions only *report* (`actionRequested(key)`): running an action
 needs a dialog, a character and perhaps a session, none of which the panel has. The
 Dice block and the GM's Rolls block both offer Impress here, which is what puts the
 player's button and the GM's in the same place. See [the actions notes](actions.md),
 which also cover the two `RollSpec` additions the action brought (`KIND_BEST_OF` and
 `dc_from_total`).
+
+## Reroll
+
+`DiceRollerPanel.reroll` throws **this panel's last roll** again — the bonus, penalty,
+DC, hidden flag, label and spec it was *made* with, recorded in `_start_roll` as
+`_last_roll`, not what the inputs say now (a roll spends its sliders, so the inputs
+have usually moved on). The die is `core.dice.reroll_d20`: a 1–10 counts 10 more, so it
+lands on 11–20 — the Luck re-roll. It is reported as the boosted number, and is graded
+on that number like any die, natural-20 included. In a session the **server** rolls it
+(`RollRequest.reroll`, part of protocol v12), for the reason it rolls everything. The
+label gains "(reroll)" so the history says which die was lucky. It spends nothing — no
+Hero Point, no Luck rank — which is the player's to mark.
 
 ## The Request row sits on the grid
 

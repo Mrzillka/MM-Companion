@@ -284,6 +284,7 @@ class SessionBridge(QObject):
         dc: int | None = None,
         hidden: bool = False,
         spec: dict | None = None,
+        reroll: bool = False,
     ) -> bool:
         """Put one roll to the session, whichever end of it this app is on.
 
@@ -298,15 +299,28 @@ class SessionBridge(QObject):
         description of the roll (a serialized
         :class:`~mm_companion.core.rules.RollSpec`), which travels so that the
         *other* seats can act on it — see ``docs/mm-session-architecture.md``.
+        ``reroll`` asks the server for a lucky re-roll (a die of 11-20).
         """
         if self._server is not None:
             self._server.roll(
-                label=label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden, spec=spec
+                label=label,
+                bonus=bonus,
+                penalty=penalty,
+                dc=dc,
+                hidden=hidden,
+                spec=spec,
+                reroll=reroll,
             )
             return True
         if self._client is not None:
             return self._client.request_roll(
-                label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden, spec=spec
+                label,
+                bonus=bonus,
+                penalty=penalty,
+                dc=dc,
+                hidden=hidden,
+                spec=spec,
+                reroll=reroll,
             )
         return False
 

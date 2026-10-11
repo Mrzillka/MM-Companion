@@ -428,10 +428,22 @@ class SessionClient:
         dc: int | None = None,
         hidden: bool = False,
         spec: dict | None = None,
+        reroll: bool = False,
     ) -> bool:
-        """Ask the server to roll. The result comes back as :data:`EVENT_ROLL`."""
+        """Ask the server to roll. The result comes back as :data:`EVENT_ROLL`.
+
+        ``reroll`` asks for a lucky re-roll, whose die never comes up under 11.
+        """
         return self.send(
-            RollRequest(label=label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden, spec=spec)
+            RollRequest(
+                label=label,
+                bonus=bonus,
+                penalty=penalty,
+                dc=dc,
+                hidden=hidden,
+                spec=spec,
+                reroll=reroll,
+            )
         )
 
     def post_note(self, text: str) -> bool:

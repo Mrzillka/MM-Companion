@@ -140,6 +140,39 @@ def test_roll_with_dc_shows_degree_of_success(
     assert "Nat 20" in view.panel._readout.text()
 
 
+def test_reroll_waits_for_a_roll_to_throw_again(qapp: QApplication) -> None:
+    view = DiceRollerView()
+    assert not view.panel._reroll_button.isEnabled()
+    assert view.panel.reroll() is False
+
+
+def test_reroll_throws_the_last_roll_again_with_a_lucky_die(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 4)
+    monkeypatch.setattr(dice_roller, "reroll_d20", lambda *a, **k: 14)
+    view = DiceRollerView()
+    panel = view.panel
+    panel._bonus_spin.setValue(5)
+    panel._penalty_spin.setValue(1)
+    panel._dc_check.setChecked(True)
+    panel._dc_spin.setValue(15)
+    panel._start_roll()
+    panel._finish_roll()
+    assert panel._reroll_button.isEnabled()
+    # The roll spent its sliders, and the player has since touched the DC.
+    panel._dc_spin.setValue(25)
+
+    assert panel.reroll() is True
+    panel._finish_roll()
+
+    newest = view._local_history.cards()[0]._params
+    assert (newest["bonus"], newest["penalty"]) == (5, 1)  # the last roll's, not the inputs'
+    text = panel._readout.text()
+    assert "18" in text and "vs DC 15" in text  # die 14 + 4 against the old DC
+    assert "reroll" in text.lower()
+
+
 def test_a_roll_spends_the_bonus_and_penalty(
     qapp: QApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:

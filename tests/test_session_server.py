@@ -603,6 +603,17 @@ def test_a_roll_reaches_every_player(running_server, connect) -> None:
     assert second_events.next_of(EVENT_ROLL)["label"] == "Perception"
 
 
+def test_a_reroll_is_rolled_by_the_server_and_never_low(running_server, connect) -> None:
+    srv = running_server(rng=Random(5))
+    client, events = connect(srv, "Volt")
+
+    for _ in range(20):
+        client.request_roll("Lucky", bonus=2, dc=15, reroll=True)
+        roll = events.next_of(EVENT_ROLL)
+        assert 11 <= roll["die"] <= 20
+        assert roll["degree"] is not None  # still graded against the DC
+
+
 def test_a_player_cannot_roll_hidden(running_server, connect) -> None:
     srv = running_server(rng=Random(5))
     client, events = connect(srv, "Volt")

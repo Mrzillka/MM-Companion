@@ -31,7 +31,13 @@ from collections.abc import Callable, Iterable
 from random import Random
 
 from mm_companion.core import storage
-from mm_companion.core.dice import CheckResult, resolve_check, resolve_group, roll_d20
+from mm_companion.core.dice import (
+    CheckResult,
+    reroll_d20,
+    resolve_check,
+    resolve_group,
+    roll_d20,
+)
 
 from . import store
 from .model import PlayerSlot, RollRecord, SessionState, tokens_match, utc_now
@@ -530,6 +536,7 @@ class SessionServer:
         hidden: bool = False,
         spec: dict | None = None,
         player_id: str | None = None,
+        reroll: bool = False,
     ) -> RollRecord:
         """Resolve a roll for the GM (or for *player_id*) and publish it.
 
@@ -541,7 +548,14 @@ class SessionServer:
         if slot is None:
             raise KeyError(f"no player {player_id!r}")
         return self._resolve_roll(
-            slot, label=label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden, spec=spec
+            slot,
+            label=label,
+            bonus=bonus,
+            penalty=penalty,
+            dc=dc,
+            hidden=hidden,
+            spec=spec,
+            reroll=reroll,
         )
 
     def note(self, text: str, *, player_id: str | None = None) -> RollRecord:
@@ -1294,6 +1308,7 @@ class SessionServer:
                 # Only the GM may roll unseen; a player's flag is simply ignored.
                 hidden=message.hidden and slot.is_gm,
                 spec=message.spec,
+                reroll=message.reroll,
             )
         elif isinstance(message, NoteRequest):
             self._record_note(slot, message.text)
@@ -1391,6 +1406,7 @@ class SessionServer:
         dc: int | None,
         hidden: bool,
         spec: dict | None = None,
+        reroll: bool = False,
     ) -> RollRecord:
         bonus = _clamp(bonus, MAX_ROLL_MODIFIER)
         penalty = _clamp(penalty, MAX_ROLL_MODIFIER)
@@ -1402,11 +1418,9 @@ class SessionServer:
         spec = sanitize_spec(spec)
 
         result: CheckResult | None = None
-        if dc is None:
-            die = roll_d20(self._rng)
-        else:
-            result = resolve_check(bonus - penalty, dc, rng=self._rng)
-            die = result.die_roll
+        die = reroll_d20(self._rng) if reroll else roll_d20(self._rng)
+        if dc is not None:
+            result = resolve_check(bonus - penalty, dc, roll=die)
 
         with self._lock:
             record = self.state.record_roll(

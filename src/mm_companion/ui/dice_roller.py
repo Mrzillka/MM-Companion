@@ -68,7 +68,7 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.core import storage
-from mm_companion.core.dice import CheckResult, resolve_check, roll_d20
+from mm_companion.core.dice import CheckResult, reroll_d20, resolve_check, roll_d20
 from mm_companion.core.rules import RollSpec
 from mm_companion.core.session.model import KIND_NOTE, KIND_REQUEST, KIND_ROLL
 from mm_companion.ui import theme
@@ -454,6 +454,12 @@ class DiceRollerPanel(ReflowBox, QWidget):
         # ...but one that arrived through :meth:`roll_spec` is not — see
         # :meth:`_settle_spec`.
         self._transient = False
+        # The last roll this panel threw — its bonus, penalty, DC, hidden flag, label
+        # and spec — which is what Reroll throws again (see :meth:`reroll`). ``None``
+        # until there has been one. While :attr:`_rerolling` is set the roll in
+        # flight reads its parameters from here rather than from the inputs.
+        self._last_roll: dict | None = None
+        self._rerolling = False
         # Whether the readout holds a rolled number rather than the resting prompt,
         # which is what stops the prompt from overwriting a result — see
         # :meth:`_prompt_readout`.
@@ -710,13 +716,12 @@ class DiceRollerPanel(ReflowBox, QWidget):
         return group
 
     def _build_action_row(self, grid: QGridLayout, row: int) -> None:
-        """The Action row: buttons for actions taken against other characters.
+        """The Action row: Reroll, then the actions taken against other characters.
 
-        Impress is the first. Under the Request row because it is the same kind of
-        verb — something that involves somebody else — and on the same grid, its
-        buttons spanning the trait and spin-box columns. Hidden, like the Request
-        row, until a host says which actions it runs (:meth:`set_actions`), so a
-        roller with nothing to offer costs no height for it.
+        **Reroll** leads, and is always there: it throws this panel's last roll again
+        (:meth:`reroll`). Impress follows when a host offers it (:meth:`set_actions`).
+        Under the Request row because they are the same kind of verb, and on the same
+        grid, the buttons spanning the trait and spin-box columns.
         """
 
         self._action_part = QWidget()
@@ -724,11 +729,18 @@ class DiceRollerPanel(ReflowBox, QWidget):
         line.setContentsMargins(0, 0, 0, 0)
         line.setSpacing(int(theme.metric("space.xs")))
         self._action_line = line
+        self._reroll_button = QPushButton("Reroll")
+        self._reroll_button.setToolTip(
+            "Roll your last roll again, with the same bonus, penalty and DC. "
+            "The die can't come up low: a 1-10 counts 10 more, so it lands on 11-20."
+        )
+        self._reroll_button.setEnabled(False)  # nothing to throw again yet
+        self._reroll_button.clicked.connect(self.reroll)
+        line.addWidget(self._reroll_button)
         self._action_buttons: list[QPushButton] = []
         self._action_label = QLabel("Action")
         grid.addWidget(self._action_label, row, 0)
         grid.addWidget(self._action_part, row, 1, 1, 2)
-        self._show_action_row(False)
 
     def set_actions(self, actions: object) -> None:
         """Offer *actions* — ``(key, caption, tooltip)`` triples — on the Action row.
@@ -747,14 +759,6 @@ class DiceRollerPanel(ReflowBox, QWidget):
             button.clicked.connect(lambda _=False, k=key: self.actionRequested.emit(k))
             self._action_line.addWidget(button)
             self._action_buttons.append(button)
-        self._show_action_row(bool(self._action_buttons))
-
-    def _show_action_row(self, visible: bool) -> None:
-        """Show or hide the Action row, and say the panel changed size (see
-        :meth:`_show_request_row`)."""
-
-        self._action_label.setVisible(visible)
-        self._action_part.setVisible(visible)
         self.updateGeometry()
         self.contentChanged.emit()
 
@@ -1062,6 +1066,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
             self._request_dc,
             self._request_button,
             self._quick_container,
+            self._reroll_button,
         ]
 
     # -- rolling a trait off the sheet ---------------------------------------
@@ -1300,6 +1305,9 @@ class DiceRollerPanel(ReflowBox, QWidget):
         back into a non-negative bonus and penalty, which is the shape the wire and
         the history cards speak.
         """
+        if self._rerolling and self._last_roll is not None:
+            last = self._last_roll
+            return (last["bonus"], last["penalty"], last["dc"], last["hidden"])
         bonus = self._bonus_spin.value()
         penalty = self._penalty_spin.value()
         dc = self._dc_spin.value() if self._dc_check.isChecked() else None
@@ -1311,8 +1319,37 @@ class DiceRollerPanel(ReflowBox, QWidget):
         return (bonus, penalty, dc, self._hidden_option and self._hidden_check.isChecked())
 
     def _roll_label(self) -> str:
-        """The name this roll travels under — the loaded spec's, or nothing."""
+        """The name this roll travels under — the loaded spec's, or nothing.
+
+        A re-roll says so, since its die is not an ordinary one.
+        """
+        if self._rerolling and self._last_roll is not None:
+            label = self._last_roll["label"]
+            return f"{label} (reroll)" if label else "Reroll"
         return self._spec.label if self._spec is not None else ""
+
+    def reroll(self) -> bool:
+        """Throw the last roll again — same bonus, penalty, DC and trait — luckily.
+
+        The die is a re-roll's (:func:`~mm_companion.core.dice.reroll_d20`): one that
+        comes up 1-10 counts 10 more, so it always lands on 11-20 — the Luck
+        advantage, and the Hero Point spent on one. In a session the *server* rolls it
+        (``reroll`` on the request), for the reason it rolls everything. What it
+        throws again is the parameters the last roll was *made* with, not what the
+        inputs say now, so nudging a slider after a roll does not change its re-roll.
+        ``False`` with nothing to re-roll or a die still tumbling.
+        """
+        last = self._last_roll
+        if self._rolling or last is None:
+            return False
+        # A trait still loaded from that roll stays loaded; one brought back only to
+        # be re-rolled goes again afterwards, as a sheet roll's does (:meth:`roll_spec`).
+        if last["spec"] is not self._spec:
+            self.load_spec(last["spec"])
+            self._transient = last["spec"] is not None
+        self._rerolling = True
+        self._start_roll()
+        return True
 
     def _start_roll(self) -> None:
         """Begin a roll: lock the inputs, tumble the die, then reveal the result.
@@ -1323,6 +1360,16 @@ class DiceRollerPanel(ReflowBox, QWidget):
         """
         if self._rolling:
             return
+        if not self._rerolling:
+            bonus, penalty, dc, hidden = self._roll_parameters()
+            self._last_roll = {
+                "bonus": bonus,
+                "penalty": penalty,
+                "dc": dc,
+                "hidden": hidden,
+                "label": self._roll_label(),
+                "spec": self._spec,
+            }
         self._rolling = True
         self._die_button.setEnabled(False)
         for widget in self._input_widgets():
@@ -1361,6 +1408,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
             # it: the target's player sees the attack land and clicks the save off
             # its card. The server echoes it back on the record.
             spec=None if self._spec is None else self._spec.to_dict(),
+            reroll=self._rerolling,
         )
         if not sent:
             self._abandon_roll(NOT_SENT)
@@ -1420,7 +1468,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._rolling = False  # stops the _tick_roll chain from rescheduling
 
         bonus, penalty, dc, _hidden = self._roll_parameters()
-        die = roll_d20()
+        die = reroll_d20() if self._rerolling else roll_d20()
         self._face.setText(str(die))
 
         modifier = bonus - penalty
@@ -1445,6 +1493,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
         )
         self._unlock_inputs()
         # Last, so everything above still sees what was rolled.
+        self._rerolling = False
         self._settle_spec()
         self._spend_extras()
 
@@ -1477,6 +1526,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
         # And the window closes *after* the reveal, so the card this roll produced
         # is placed by the cue above rather than by the flush the close performs.
         self.awaitingOwnRoll.emit(False)
+        self._rerolling = False
         self._settle_spec()
         self._spend_extras()
 
@@ -1496,6 +1546,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._rolling = False
         self._awaiting = False
         self._pending = None
+        self._rerolling = False
         self._disconnect_session()
         self.awaitingOwnRoll.emit(False)
         self._face.setText("?")

@@ -31,7 +31,7 @@ from collections.abc import Callable, Iterable
 from random import Random
 
 from mm_companion.core import storage
-from mm_companion.core.dice import CheckResult, resolve_check, roll_d20
+from mm_companion.core.dice import CheckResult, resolve_check, resolve_group, roll_d20
 
 from . import store
 from .model import PlayerSlot, RollRecord, SessionState, tokens_match, utc_now
@@ -51,14 +51,18 @@ from .protocol import (
     ERROR_PROTOCOL_VERSION,
     ERROR_RATE_LIMIT,
     ERROR_SESSION_FULL,
+    MAX_GROUP_LINES,
     MAX_MOD_KEY,
     MAX_MOD_TEXT,
     MAX_SCENE_TEXT,
     PROTOCOL_VERSION,
     REASON_SESSION_CLOSED,
+    ActionPrompt,
+    ActionRequest,
     ApplyCondition,
     CharacterSnapshot,
     ErrorMessage,
+    GroupRollRequest,
     Hello,
     Kicked,
     KickRequest,
@@ -87,7 +91,10 @@ from .protocol import (
     SetScenePortrait,
     SetSessionName,
     Welcome,
+    sanitize_action_id,
+    sanitize_group_line,
     sanitize_mod_id,
+    sanitize_mod_payload,
     sanitize_scene,
     sanitize_scene_portrait,
     sanitize_scene_sources,
@@ -143,6 +150,10 @@ EVENT_MOD_STATE = "mod_state"  # {"mod_id", "key", "payload"} — payload None m
 #: A mod at some seat asking the GM's mod for something. Reaches the hosting
 #: process only, and only when it *is* the GM's — see :meth:`SessionServer._forward_mod_request`.
 EVENT_MOD_REQUEST = "mod_request"  # {"mod_id", "topic", "player_id", "payload"}
+#: A seat asking the GM to run an action (an Impress, a resist choice). Reaches the
+#: hosting process only when it *is* the GM's — see
+#: :meth:`SessionServer._forward_action_request`.
+EVENT_ACTION_REQUEST = "action_request"  # {"kind", "action_id", "player_id", "payload"}
 EVENT_REFUSED = "refused"  # {"code", "message", "address"}
 EVENT_ERROR = "error"  # {"code", "message"}
 #: The listener stopped handing out connections while we still believe we are
@@ -596,6 +607,102 @@ class SessionServer:
             self.broadcast(RollRemoved(seq=seq))
         return True
 
+    def prompt_action(
+        self, player_id: str, kind: str, action_id: str, payload: dict | None = None
+    ) -> bool:
+        """Ask one player something about an action in progress (a GM action).
+
+        Delivered to that seat alone; the payload is checked into a bounded shape
+        and otherwise carried unread, like a mod's.
+        """
+        return self.send_to(
+            player_id,
+            ActionPrompt(
+                player_id=player_id,
+                kind=sanitize_action_id(kind),
+                action_id=sanitize_action_id(action_id),
+                payload=sanitize_mod_payload(payload),
+            ),
+        )
+
+    def group_roll(
+        self,
+        group: str,
+        lines: list[dict],
+        *,
+        lead: dict | None = None,
+        dc: int | None = None,
+        critical_bonus: int = 0,
+        hidden: bool = False,
+    ) -> list[RollRecord]:
+        """Roll one check against several resistances and publish every roll (a GM action).
+
+        The lead (if any) first, then each line against the DC it sets — see
+        :class:`~.protocol.GroupRollRequest` and
+        :func:`~mm_companion.core.dice.resolve_group`. Each roll is recorded as an
+        ordinary record carrying *group*, attributed to the seat its line names (or
+        to the GM, for a creature nobody plays), and published on the same path a
+        single roll takes. Returns the records in order, lead first; nothing at all
+        for a group with no lines, or with neither a lead nor a DC to roll against.
+        """
+        group = sanitize_action_id(group)
+        checked = [line for line in map(sanitize_group_line, lines) if line is not None]
+        checked = checked[:MAX_GROUP_LINES]
+        lead_line = sanitize_group_line(lead) if lead is not None else None
+        if not group or not checked or (lead_line is None and dc is None):
+            return []
+        for line in (lead_line, *checked):
+            if line is None:
+                continue
+            line["bonus"] = _clamp(line["bonus"], MAX_ROLL_MODIFIER)
+            line["penalty"] = _clamp(line["penalty"], MAX_ROLL_MODIFIER)
+            line["dc_offset"] = _clamp(line["dc_offset"], MAX_ROLL_MODIFIER)
+            line["label"] = line["label"][:MAX_LABEL_CHARS]
+        rolled = resolve_group(
+            [(line["bonus"] - line["penalty"], line["dc_offset"]) for line in checked],
+            lead_modifier=(
+                None if lead_line is None else lead_line["bonus"] - lead_line["penalty"]
+            ),
+            dc=None if dc is None else _clamp(dc, MAX_ROLL_MODIFIER),
+            critical_bonus=_clamp(critical_bonus, MAX_ROLL_MODIFIER),
+            rng=self._rng,
+        )
+        records: list[RollRecord] = []
+        with self._lock:
+            gm = self.gm_slot()
+            entries: list[tuple[dict, int, CheckResult | None]] = []
+            if lead_line is not None and rolled.lead_die is not None:
+                entries.append((lead_line, rolled.lead_die, None))
+            entries += [
+                (line, r.die_roll, r) for line, r in zip(checked, rolled.lines, strict=True)
+            ]
+            for line, die, result in entries:
+                slot = self.state.players.get(line["player_id"]) or gm
+                if slot is None:
+                    continue
+                record = self.state.record_roll(
+                    player_id=slot.player_id,
+                    player_name=slot.display_name,
+                    die=die,
+                    bonus=line["bonus"],
+                    penalty=line["penalty"],
+                    result=result,
+                    label=line["label"],
+                    hidden=hidden,
+                    spec=line["spec"],
+                    group=group,
+                )
+                self._append_roll(record)
+                records.append(record)
+        for record in records:
+            payload = record.to_dict()
+            self._emit(EVENT_ROLL, payload)
+            if not record.hidden:
+                self.broadcast(RollAdded(roll=payload))
+            else:
+                self.send_to(self._gm_id(), RollAdded(roll=payload))
+        return records
+
     def apply_condition(
         self, player_id: str, condition_id: str, parameter: str | None = None
     ) -> bool:
@@ -786,6 +893,28 @@ class SessionServer:
         # A GM hosting in this process has no connection to send down, so the
         # event is what reaches them; ``send_to`` covers the dialled-in GM.
         self._emit(EVENT_MOD_REQUEST, stamped.to_dict())
+        self.send_to(gm_id, stamped)
+
+    def _forward_action_request(self, slot: PlayerSlot, message: ActionRequest) -> None:
+        """Pass one seat's action request on to the GM's seat, and nowhere else.
+
+        :meth:`_forward_mod_request` with another vocabulary, for the same reasons:
+        nothing stored, nothing broadcast, ``player_id`` stamped from the slot, and
+        a request from the GM's own seat dropped rather than looped back.
+        """
+        kind = sanitize_action_id(message.kind)
+        if not kind:
+            return
+        gm_id = self._gm_id()
+        if not gm_id or gm_id == slot.player_id:
+            return
+        stamped = ActionRequest(
+            kind=kind,
+            action_id=sanitize_action_id(message.action_id),
+            payload=sanitize_mod_payload(message.payload),
+            player_id=slot.player_id,
+        )
+        self._emit(EVENT_ACTION_REQUEST, stamped.to_dict())
         self.send_to(gm_id, stamped)
 
     def _record_mod_note(self, slot: PlayerSlot, mod_id: str, text: str) -> RollRecord | None:
@@ -1181,6 +1310,21 @@ class SessionServer:
             # is not: this is how a player's mod reaches the GM's, and it obliges
             # the GM's mod to do nothing at all.
             self._forward_mod_request(slot, message)
+        elif isinstance(message, ActionRequest):
+            # Any seat may ask; only the GM is told, and the GM decides.
+            self._forward_action_request(slot, message)
+        elif isinstance(message, ActionPrompt) and slot.is_gm:
+            self.prompt_action(message.player_id, message.kind, message.action_id, message.payload)
+        elif isinstance(message, GroupRollRequest) and slot.is_gm:
+            # Rolling for other seats is the GM's privilege, like a hidden roll.
+            self.group_roll(
+                message.group,
+                message.lines,
+                lead=message.lead,
+                dc=message.dc,
+                critical_bonus=message.critical_bonus,
+                hidden=message.hidden,
+            )
 
     def _forward_snapshot_to_gm(self, player_id: str, character: dict) -> None:
         """Send one player's sheet on to a GM who is dialled in over a socket.

@@ -46,6 +46,7 @@ from mm_companion.core.session.protocol import (
     ERROR_SESSION_FULL,
     MAX_MESSAGE_BYTES,
     REASON_SESSION_CLOSED,
+    ActionRequest,
     CharacterSnapshot,
     ErrorMessage,
     Hello,
@@ -1861,3 +1862,112 @@ def test_stopping_cuts_a_climbing_ladder_short(running_server, monkeypatch) -> N
 
     assert time.monotonic() - started < 5.0
     assert srv._relisten_thread is None  # noqa: SLF001
+
+
+# --------------------------------------------------------------------------
+# Actions against other characters (protocol v11)
+# --------------------------------------------------------------------------
+
+
+def test_an_action_request_reaches_the_gm_stamped_with_the_sender(running_server, connect):
+    srv = running_server(gm_in_process=False)
+    gm, gm_events = gm_connect(srv)
+    asker, _ = connect(srv, "Asker")
+    bystander, bystander_events = connect(srv, "Bystander")
+    try:
+        asker.send(
+            ActionRequest(kind="impress", action_id="a1", payload={"x": 1}, player_id="forged")
+        )
+        received = gm_events.next_of(client_mod.EVENT_ACTION_REQUEST)
+        assert received["kind"] == "impress"
+        assert received["action_id"] == "a1"
+        assert received["payload"] == {"x": 1}
+        assert received["player_id"] == asker.player_id
+        time.sleep(0.2)
+        assert client_mod.EVENT_ACTION_REQUEST not in bystander_events.kinds()
+        assert bystander is not None
+    finally:
+        gm.close()
+
+
+def test_an_in_process_gm_hears_an_action_request_as_an_event(running_server, connect):
+    events = Events()
+    srv = running_server(on_event=events)
+    asker, _ = connect(srv, "Asker")
+    asker.send_action_request("impress", "a1", {"impression": "demoralized"})
+    received = events.next_of(server_mod.EVENT_ACTION_REQUEST)
+    assert received["player_id"] == asker.player_id
+    assert received["payload"] == {"impression": "demoralized"}
+
+
+def test_an_action_prompt_reaches_only_the_player_it_names(running_server, connect):
+    srv = running_server()
+    target, target_events = connect(srv, "Target")
+    other, other_events = connect(srv, "Other")
+    assert srv.prompt_action(target.player_id, "resist", "a1", {"impression": "dazed"})
+    prompt = target_events.next_of(client_mod.EVENT_ACTION_PROMPT)
+    assert prompt["kind"] == "resist"
+    assert prompt["payload"] == {"impression": "dazed"}
+    time.sleep(0.2)
+    assert client_mod.EVENT_ACTION_PROMPT not in other_events.kinds()
+    assert other is not None
+
+
+def test_a_player_cannot_prompt_another_player(running_server, connect):
+    srv = running_server()
+    asker, _ = connect(srv, "Asker")
+    target, target_events = connect(srv, "Target")
+    asker.prompt_action(target.player_id, "resist", "a1")
+    time.sleep(0.2)
+    assert client_mod.EVENT_ACTION_PROMPT not in target_events.kinds()
+
+
+def test_a_group_roll_rolls_the_lead_then_each_line_against_its_total(running_server, connect):
+    srv = running_server(rng=Random(3))
+    target, events = connect(srv, "Target")
+    records = srv.group_roll(
+        "g1",
+        [
+            {"label": "Will", "bonus": 4, "player_id": target.player_id, "dc_offset": 0},
+            {"label": "Thug: Insight", "bonus": 1, "dc_offset": -2},
+        ],
+        lead={"label": "Impress", "bonus": 9},
+        critical_bonus=5,
+    )
+    assert [r.group for r in records] == ["g1", "g1", "g1"]
+    lead, mine, npc = records
+    assert lead.dc is None and lead.degree is None
+    dc = lead.total + (5 if lead.die == 20 else 0)
+    assert mine.dc == dc and npc.dc == dc - 2
+    # Attributed to the seat its line names, or to the GM for a creature nobody plays.
+    assert mine.player_id == target.player_id
+    assert npc.player_id == srv.gm_slot().player_id
+    seen = [events.next_of(client_mod.EVENT_ROLL) for _ in range(3)]
+    assert [r["group"] for r in seen] == ["g1", "g1", "g1"]
+
+
+def test_a_group_roll_with_nothing_to_roll_against_is_dropped(running_server):
+    srv = running_server()
+    assert srv.group_roll("g1", [{"label": "Will"}]) == []
+    assert srv.group_roll("g1", [], lead={"label": "Impress"}) == []
+    assert srv.group_roll("", [{"label": "Will"}], dc=10) == []
+    fixed = srv.group_roll("g2", [{"label": "Will", "bonus": 2}], dc=15)
+    assert len(fixed) == 1 and fixed[0].dc == 15
+
+
+def test_only_the_gm_may_ask_for_a_group_roll(running_server, connect):
+    srv = running_server(gm_in_process=False)
+    gm, gm_events = gm_connect(srv)
+    player, player_events = connect(srv, "Player")
+    try:
+        player.group_roll("g1", [{"label": "Will"}], dc=10)
+        time.sleep(0.2)
+        assert not any(r.group for r in srv.state.rolls)
+
+        gm.group_roll("g2", [{"label": "Will", "player_id": player.player_id}], dc=10)
+        roll = player_events.next_of(client_mod.EVENT_ROLL)
+        assert roll["group"] == "g2"
+        assert roll["player_id"] == player.player_id
+        assert gm_events is not None
+    finally:
+        gm.close()

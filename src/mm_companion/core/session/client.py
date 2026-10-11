@@ -57,9 +57,12 @@ from .protocol import (
     ERROR_SESSION_FULL,
     PROTOCOL_VERSION,
     REASON_SESSION_CLOSED,
+    ActionPrompt,
+    ActionRequest,
     ApplyCondition,
     CharacterSnapshot,
     ErrorMessage,
+    GroupRollRequest,
     Hello,
     Kicked,
     KickRequest,
@@ -106,6 +109,10 @@ EVENT_MOD_REQUEST = "mod_request"  # {"mod_id", "topic", "player_id", "payload"}
 # Reaches a GM client only. Named to match the hosting side's EVENT_SNAPSHOT so
 # the Qt bridge can raise one signal from either half.
 EVENT_SNAPSHOT = "snapshot"  # {"player_id", "character"}
+#: A seat asking the GM to run an action. Reaches a GM client only.
+EVENT_ACTION_REQUEST = "action_request"  # {"kind", "action_id", "player_id", "payload"}
+#: The GM asking this seat something about an action in progress.
+EVENT_ACTION_PROMPT = "action_prompt"  # {"player_id", "kind", "action_id", "payload"}
 EVENT_APPLY_CONDITION = "apply_condition"  # {"player_id", "condition_id", "parameter"}
 EVENT_REMOVE_CONDITION = "remove_condition"  # {"player_id", "condition_id", "parameter"}
 EVENT_SET_HERO_POINTS = "set_hero_points"  # {"player_id", "value"}
@@ -526,6 +533,50 @@ class SessionClient:
         """
         return self.send(ModNote(mod_id=str(mod_id), text=str(text)))
 
+    def send_action_request(
+        self, kind: str, action_id: str = "", payload: dict | None = None
+    ) -> bool:
+        """Ask the GM to run an action — an Impress, a resist choice. Any seat may.
+
+        The server stamps this seat's id onto it and forwards it to the GM alone.
+        """
+        return self.send(ActionRequest(kind=str(kind), action_id=str(action_id), payload=payload))
+
+    def prompt_action(
+        self, player_id: str, kind: str, action_id: str = "", payload: dict | None = None
+    ) -> bool:
+        """Ask one player something about an action in progress (honored only for the GM)."""
+        return self.send(
+            ActionPrompt(
+                player_id=str(player_id), kind=str(kind), action_id=str(action_id), payload=payload
+            )
+        )
+
+    def group_roll(
+        self,
+        group: str,
+        lines: list[dict],
+        *,
+        lead: dict | None = None,
+        dc: int | None = None,
+        critical_bonus: int = 0,
+        hidden: bool = False,
+    ) -> bool:
+        """Have the server roll one check against several resistances (honored only for the GM).
+
+        Every roll comes back as :data:`EVENT_ROLL` carrying ``group``.
+        """
+        return self.send(
+            GroupRollRequest(
+                group=str(group),
+                lines=list(lines),
+                lead=lead,
+                dc=dc,
+                critical_bonus=int(critical_bonus),
+                hidden=bool(hidden),
+            )
+        )
+
     # -- reading -----------------------------------------------------------
 
     def _run(self) -> None:
@@ -691,6 +742,10 @@ class SessionClient:
             self._emit(EVENT_MOD_STATE, message.to_dict())
         elif isinstance(message, ModRequest):
             self._emit(EVENT_MOD_REQUEST, message.to_dict())
+        elif isinstance(message, ActionRequest):
+            self._emit(EVENT_ACTION_REQUEST, message.to_dict())
+        elif isinstance(message, ActionPrompt):
+            self._emit(EVENT_ACTION_PROMPT, message.to_dict())
         elif isinstance(message, PlayerSnapshot):
             self._emit(
                 EVENT_SNAPSHOT,

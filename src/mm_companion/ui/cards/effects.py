@@ -272,9 +272,7 @@ def role_note(power: Power, index: int, character: Character, data: GameData) ->
 #: Everything else an effect's table says — a leap distance, an Enhanced Trait's
 #: "Toughness +4", the senses it grants — is what the effect *does*, and reads at
 #: ordinary size. Keys, not labels, because the labels are the ruleset's words.
-TERM_ROW_KEYS = frozenset(
-    {"effect_type", "range", "action", "duration", "notes", "pl_cap", "overcomeBy"}
-)
+TERM_ROW_KEYS = frozenset({"effect_type", "range", "action", "duration", "notes", "pl_cap"})
 #: The ones whose value alone is clear — "Ranged", "Standard", "Instant" — and so drop
 #: their label; any other term row keeps it ("Overcome by Fortitude").
 BARE_TERM_KEYS = frozenset({"effect_type", "range", "action", "duration", "notes"})
@@ -284,7 +282,17 @@ ROLL_ROW_KEYS = frozenset({"check", "resistance", "effect_dc"})
 
 
 def _is_term_row(key: str) -> bool:
-    return key in TERM_ROW_KEYS or key.startswith("degree") or key == "distance_rank"
+    return key in TERM_ROW_KEYS or key == "distance_rank"
+
+
+def _is_degree_row(key: str) -> bool:
+    """An Affliction's degree (``degree1``…): what the attack actually *does*.
+
+    These used to ride in the small print with the Range and the Action, and read as
+    filler there — at the table, "Dazed, then Stunned, then Incapacitated" is the power.
+    So they are printed at ordinary size, gathered onto one line in degree order.
+    """
+    return key.startswith("degree") and key[len("degree") :].isdigit()
 
 
 def simple_effects_block(power: Power, character: Character, data: GameData) -> QWidget | None:
@@ -340,8 +348,12 @@ def simple_effect_summary(
     attack_bonus = effect_attack_skill_bonus(effect, character, data)
     rows = effect_stat_rows(effect, data, character, attack_bonus)
     terms: list[str] = []
+    degrees: list[str] = []
     for row in rows:
         if row.key in ROLL_ROW_KEYS:
+            continue
+        if _is_degree_row(row.key):
+            degrees.append(f"{row.label}: {row.value}")
             continue
         if _is_term_row(row.key):
             terms.append(row.value if row.key in BARE_TERM_KEYS else f"{row.label} {row.value}")
@@ -357,6 +369,12 @@ def simple_effect_summary(
         if row.base and row.base != row.value:
             detail.setToolTip(f"Base: {row.base}")
         layout.addWidget(detail)
+    if degrees:
+        line = QLabel(" · ".join(degrees))
+        line.setWordWrap(True)
+        line.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        set_font(line, "size.simple-label")
+        layout.addWidget(line)
     if terms:
         layout.addWidget(term_label(" · ".join(term for term in terms if term)))
 

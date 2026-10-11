@@ -193,10 +193,12 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   stylesheet colour would be fixed and could not follow the paper palette.
 - On a power or item card the effect's rows are split three ways (`cards/effects.py`,
   `simple_effects_block`): the attack and save go to the roll chips; the rows that
-  *qualify* the effect — Type, Range, Action, Duration, notes, overcome-by, degrees,
-  the PL-cap note — become one term line (`TERM_ROW_KEYS`, by key, never by label);
-  every other row is what the effect *does* (a leap distance, "Enhances: Toughness +4")
-  and reads at ordinary size, tinted as the edit card tints it. The extras/flaws column
+  *qualify* the effect — Type, Range, Action, Duration, notes, the PL-cap note — become
+  one term line (`TERM_ROW_KEYS`, by key, never by label); every other row is what the
+  effect *does* (a leap distance, "Enhances: Toughness +4", "Overcome by Fortitude") and
+  reads at ordinary size, tinted as the edit card tints it. An Affliction's **degrees**
+  are what it does too, and gather onto one ordinary-size line of their own: in the
+  small print they read as filler and players missed them. The extras/flaws column
   is not repeated: the `notes` row already names every modifier with no visible effect.
 - A roll chip prints the number big and the words small (`split_roll_label`): an attack
   as its signed bonus, a save the target makes as `DC n`. The words are the spec's own

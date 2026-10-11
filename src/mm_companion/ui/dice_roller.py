@@ -339,6 +339,7 @@ class RollCard(QFrame):
             spec,
             die=die,
             degree=None if result is None else result.degree,
+            total=die + bonus - penalty,
             on_follow_up=self.rollFollowUp.emit,
             # Every card in the private history is one's own, and off the air the
             # roller is usually running both sides — so never assume the sheet in

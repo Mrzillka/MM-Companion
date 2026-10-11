@@ -734,6 +734,12 @@ class ResistanceOutcome:
     #: ``incapacitated -> dying`` and ``dying -> dead`` walks a target down the ladder
     #: one failure at a time. Pairs rather than a mapping so the record stays hashable.
     escalates: tuple[tuple[str, str], ...] = ()
+    #: The parameter each named condition is applied with, as ``(condition id,
+    #: template)`` pairs — Frightened needs an object of fear. ``{source}`` in a
+    #: template stands for whoever imposed the rung (see
+    #: :func:`mm_companion.core.rules.targeting.resolve_rung`). Pairs for the same
+    #: reason :attr:`escalates` is.
+    parameters: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -2116,6 +2122,76 @@ class BlockSpec:
 # --- Aggregate: the single record bundling every parsed list above, with the
 #     merged-catalog lookups the resolvers walk. -------------------------------
 @dataclass(frozen=True)
+class Impression:
+    """One kind of impression an Impress action can make (``actions.json``).
+
+    ``skill`` is only the skill preselected when the impression is picked — any
+    of :attr:`ImpressRules.skills` may be paired with any impression. An
+    ``advantage`` id gates it: only a character with that advantage may make it.
+    ``outcomes`` is a degree-of-failure ladder in the same shape as an effect's
+    ``resistanceOutcomes``, so the same resolver walks both.
+    """
+
+    id: str
+    name: str
+    skill: str = ""
+    advantage: str = ""
+    outcomes: tuple[ResistanceOutcome, ...] = ()
+
+
+@dataclass(frozen=True)
+class ActionModifier:
+    """One situational modifier a GM sets on an action's check.
+
+    A ``toggle`` is a checkbox worth :attr:`value`; toggles sharing an
+    :attr:`exclusive` group cannot both be on. A ``slider`` runs from
+    :attr:`minimum` to :attr:`maximum` in steps of :attr:`step` and is worth its
+    position.
+    """
+
+    id: str
+    label: str
+    kind: str = "toggle"
+    value: int = 0
+    minimum: int = 0
+    maximum: int = 0
+    step: int = 1
+    exclusive: str = ""
+
+
+@dataclass(frozen=True)
+class ResistOptions:
+    """What a target may resist an action with — see :func:`~.rules.impress.resist_choices`."""
+
+    same_skill: bool = True
+    skills: tuple[str, ...] = ()
+    resistances: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ImpressRules:
+    """The Impress action, from ``actions.json``'s ``impress`` block.
+
+    Empty when a ruleset ships none, which is how a caller knows to offer no
+    Impress button at all.
+    """
+
+    skills: tuple[str, ...] = ()
+    resist: ResistOptions = field(default_factory=ResistOptions)
+    group_penalty: int = 0
+    impressions: tuple[Impression, ...] = ()
+    modifiers: tuple[ActionModifier, ...] = ()
+
+    @property
+    def available(self) -> bool:
+        """Whether this ruleset can impress at all."""
+        return bool(self.skills and self.impressions)
+
+    def impression(self, impression_id: str) -> Impression | None:
+        return next((i for i in self.impressions if i.id == impression_id), None)
+
+
+@dataclass(frozen=True)
 class GameData:
     """The full parsed game-data content, aggregated across the data files.
 
@@ -2194,6 +2270,8 @@ class GameData:
     installation_features: tuple[PlatformFeature, ...] = ()
     #: The installation size table, its free starting points, and its own PL cap pair.
     installation_rules: InstallationRules = field(default_factory=InstallationRules)
+    #: The Impress action, from ``actions.json``.
+    impress: ImpressRules = field(default_factory=ImpressRules)
 
     def _catalog(self, key: str, build: Callable[[], dict]) -> dict:
         """Memoize one of the merged ``id ->`` lookups below, per :class:`GameData`.
@@ -2706,12 +2784,18 @@ def _parse_outcome_rung(entry: object) -> ResistanceOutcome | None:
     if not isinstance(entry, dict):
         return None
     escalates = entry.get("escalates", {})
+    parameters = entry.get("parameters", {})
     return ResistanceOutcome(
         conditions=tuple(entry.get("conditions", ())),
         config_key=entry.get("configKey", ""),
         text=entry.get("text", ""),
         note=entry.get("note", ""),
         escalates=tuple(escalates.items()) if isinstance(escalates, dict) else (),
+        parameters=(
+            tuple((str(k), str(v)) for k, v in parameters.items())
+            if isinstance(parameters, dict)
+            else ()
+        ),
     )
 
 
@@ -2737,6 +2821,56 @@ def _parse_resistance_success(raw: object) -> ResistanceOutcome | None:
     if not isinstance(raw, dict):
         return None
     return _parse_outcome_rung(raw.get("success"))
+
+
+def _parse_action_modifier(raw: dict) -> ActionModifier:
+    kind = str(raw.get("kind", "toggle"))
+    return ActionModifier(
+        id=str(raw.get("id", "")),
+        label=str(raw.get("label", raw.get("id", ""))),
+        kind=kind if kind in ("toggle", "slider") else "toggle",
+        value=int(raw.get("value", 0)),
+        minimum=int(raw.get("min", 0)),
+        maximum=int(raw.get("max", 0)),
+        step=max(1, int(raw.get("step", 1))),
+        exclusive=str(raw.get("exclusive", "")),
+    )
+
+
+def _parse_impression(raw: dict) -> Impression:
+    return Impression(
+        id=str(raw.get("id", "")),
+        name=str(raw.get("name", raw.get("id", ""))),
+        skill=str(raw.get("skill", "")),
+        advantage=str(raw.get("advantage", "")),
+        outcomes=_parse_resistance_outcomes(raw.get("outcomes")),
+    )
+
+
+def _parse_impress(raw: dict) -> ImpressRules:
+    """Parse ``actions.json``'s ``impress`` block (see :class:`ImpressRules`)."""
+
+    block = raw.get("impress")
+    if not isinstance(block, dict):
+        return ImpressRules()
+    resist = block.get("resist", {})
+    if not isinstance(resist, dict):
+        resist = {}
+    return ImpressRules(
+        skills=tuple(str(s) for s in block.get("skills", ())),
+        resist=ResistOptions(
+            same_skill=bool(resist.get("sameSkill", True)),
+            skills=tuple(str(s) for s in resist.get("skills", ())),
+            resistances=tuple(str(r) for r in resist.get("resistances", ())),
+        ),
+        group_penalty=int(block.get("groupPenalty", 0)),
+        impressions=tuple(
+            _parse_impression(i) for i in block.get("impressions", ()) if isinstance(i, dict)
+        ),
+        modifiers=tuple(
+            _parse_action_modifier(m) for m in block.get("modifiers", ()) if isinstance(m, dict)
+        ),
+    )
 
 
 def _parse_base_cost_by(raw: dict | None) -> BaseCostBy | None:
@@ -3843,6 +3977,7 @@ def _build_game_data(content: dict[str, dict]) -> GameData:
     movement_raw = content.get("movement.json", {})
     equipment_raw = content.get("equipment.json", {})
     blocks_raw = content.get("blocks.json", {})
+    actions_raw = content.get("actions.json", {})
 
     # Parsed first: an effect's own ``rangeDistance`` block overrides only the keys it
     # names, so it needs the system-wide default to lay itself over.
@@ -3902,6 +4037,7 @@ def _build_game_data(content: dict[str, dict]) -> GameData:
         installation_rules=installation_rules,
         system=system,
         blocks=tuple(_parse_block_spec(b) for b in blocks_raw.get("blocks", [])),
+        impress=_parse_impress(actions_raw),
     )
 
 

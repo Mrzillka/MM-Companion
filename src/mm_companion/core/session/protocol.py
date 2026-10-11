@@ -839,6 +839,8 @@ def sanitize_spec(raw: object, _depth: int = 0) -> dict | None:
             spec[key] = value
     if raw.get("rolled_by_target") is True:
         spec["rolled_by_target"] = True
+    if raw.get("dc_from_total") is True:
+        spec["dc_from_total"] = True
     outcomes = raw.get("outcomes")
     if isinstance(outcomes, list):
         rungs = [o[:MAX_SPEC_TEXT] for o in outcomes[:MAX_SPEC_OUTCOMES] if isinstance(o, str)]

@@ -97,3 +97,47 @@ def resolve_check(
     elif die == 1:
         degree = -1 if degree == 1 else degree - 1
     return CheckResult(die, modifier, total, dc, degree, critical)
+
+
+@dataclass(frozen=True)
+class GroupResult:
+    """One check rolled against several targets' resistances (:func:`resolve_group`).
+
+    ``lead_die``/``lead_total`` are the opposing check, ``None`` when the DC was
+    fixed; ``lines`` are each target's resistance check, in the order asked.
+    """
+
+    lead_die: int | None
+    lead_total: int | None
+    lines: tuple[CheckResult, ...]
+
+
+def resolve_group(
+    lines: list[tuple[int, int]],
+    *,
+    lead_modifier: int | None = None,
+    dc: int | None = None,
+    critical_bonus: int = 0,
+    rng: random.Random | None = None,
+) -> GroupResult:
+    """Roll one check against several resistances, the way an Impress or an area effect is.
+
+    Each of *lines* is ``(modifier, dc_offset)`` — a target's resistance and an
+    adjustment to the DC against that target alone. The DC is either fixed (*dc*) or
+    **opposed**: with a *lead_modifier* the lead check is rolled first and its total is
+    the DC, raised by *critical_bonus* on a natural 20 (an added degree of success —
+    the caller says how many points that is, so this module stays free of content).
+
+    Rules-free and seedable, so the session server (which must not load game data) and
+    a GM rolling off the air resolve a group identically.
+    """
+
+    lead_die: int | None = None
+    lead_total: int | None = None
+    base = dc if dc is not None else 0
+    if lead_modifier is not None:
+        lead_die = roll_d20(rng)
+        lead_total = lead_die + lead_modifier
+        base = lead_total + (critical_bonus if lead_die == D20_SIDES else 0)
+    results = tuple(resolve_check(modifier, base + offset, rng=rng) for modifier, offset in lines)
+    return GroupResult(lead_die, lead_total, results)

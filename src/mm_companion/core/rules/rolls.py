@@ -53,6 +53,7 @@ from .powers_terms import (
     effect_stat_rows,
     required_checks,
 )
+from .targeting import opposed_dc, rung_caption
 
 #: The slowest action an effect may take and still be readied to counter in action time:
 #: "You must be able to use the readied effect as a standard action or less" (p107).
@@ -69,6 +70,17 @@ KIND_POWER_SAVE = "power-save"
 #: An opposed effect check — ``d20 + effect rank`` against another effect's own check
 #: (p107). Countering is the usual reason for one; Nullify's second roll *is* one.
 KIND_EFFECT_CHECK = "effect-check"
+#: An Impress action's interaction skill check (see :mod:`.impress`).
+KIND_IMPRESS = "impress"
+#: A roll of whichever of several traits is highest on the roller's own sheet. Its
+#: :attr:`~RollSpec.trait_key` lists the candidates (:func:`best_of_key`); resisting
+#: an impression — the same skill, Insight or Will — is the first user.
+KIND_BEST_OF = "best-of"
+
+#: Separates the candidates in a :data:`KIND_BEST_OF` trait key, and a candidate's
+#: kind from its key.
+BEST_OF_SEPARATOR = "|"
+BEST_OF_KIND_SEPARATOR = ":"
 
 
 def _as_int(value: object) -> int | None:
@@ -125,6 +137,10 @@ class RollSpec:
     success_outcome: str = ""
     rolled_by_target: bool = False
     trait_key: str = ""
+    #: On a follow-up: its DC is the provoking roll's *total* rather than a number
+    #: known in advance — an opposed check, such as resisting an impression. Filled in
+    #: by :func:`follow_up_for_result` once that total exists.
+    dc_from_total: bool = False
 
     def with_follow_up(self, follow_up: RollSpec | None) -> RollSpec:
         """A copy of this spec that provokes *follow_up* when it succeeds."""
@@ -155,6 +171,8 @@ class RollSpec:
             raw["rolled_by_target"] = True
         if self.trait_key:
             raw["trait_key"] = self.trait_key
+        if self.dc_from_total:
+            raw["dc_from_total"] = True
         if self.follow_up is not None:
             raw["follow_up"] = self.follow_up.to_dict()
         return raw
@@ -187,6 +205,7 @@ class RollSpec:
             success_outcome=str(raw.get("success_outcome", "")),
             rolled_by_target=bool(raw.get("rolled_by_target", False)),
             trait_key=str(raw.get("trait_key", "")),
+            dc_from_total=bool(raw.get("dc_from_total", False)),
         )
 
 
@@ -268,34 +287,10 @@ def initiative_roll(char: Character, game_data: GameData) -> RollSpec:
 # -- power rolls -------------------------------------------------------------
 
 
-def _condition_names(game_data: GameData, ids: object) -> list[str]:
-    """Display names for one or more condition ids, unknown ids passing through."""
-
-    catalog = game_data.condition_catalog()
-    values = ids if isinstance(ids, (list, tuple)) else [ids]
-    names = []
-    for value in values:
-        text = str(value).strip()
-        if not text:
-            continue
-        condition = catalog.get(text)
-        names.append(condition.name if condition else text)
-    return names
-
-
 def _rung_text(rung: ResistanceOutcome, effect: PowerEffectInstance, game_data: GameData) -> str:
     """One ladder rung rendered for this effect instance (see :class:`ResistanceOutcome`)."""
 
-    if rung.config_key:
-        names = _condition_names(game_data, effect.config.get(rung.config_key, ""))
-    elif rung.conditions:
-        names = _condition_names(game_data, list(rung.conditions))
-    else:
-        names = [rung.text] if rung.text else []
-    text = " + ".join(n for n in names if n)
-    if not text:
-        return ""
-    return f"{text} ({rung.note})" if rung.note else text
+    return rung_caption(rung, game_data, effect.config)
 
 
 def effect_outcome_ladder(
@@ -377,7 +372,11 @@ def follow_up_offered(spec: RollSpec, degree: int | None) -> bool:
 
 
 def follow_up_for_result(
-    spec: RollSpec, die: int, degree: int | None, game_data: GameData
+    spec: RollSpec,
+    die: int,
+    degree: int | None,
+    game_data: GameData,
+    total: int | None = None,
 ) -> RollSpec | None:
     """*spec*'s follow-up as the roll that just happened leaves it, or ``None``.
 
@@ -403,6 +402,17 @@ def follow_up_for_result(
     if not follow_up_offered(spec, degree):
         return None
     follow_up = spec.follow_up
+    if follow_up.dc_from_total:
+        # An opposed check: this roll's total *is* the DC, and a natural 20 on it is
+        # an added degree — the same five points (see :func:`.targeting.opposed_dc`).
+        # No graze rule: a natural 1 here is simply a low total.
+        if total is None:
+            return replace(follow_up, dc_from_total=False)
+        dc = opposed_dc(total, die, game_data)
+        label = follow_up.label
+        if die == 20:
+            label = f"{label} — natural 20, DC {dc}"
+        return replace(follow_up, dc=dc, dc_from_total=False, label=label)
     if die == 20:
         bonus = game_data.system.critical_effect_bonus
         if bonus and follow_up.dc is not None:
@@ -439,6 +449,8 @@ def _own_trait_roll(spec: RollSpec, char: Character, game_data: GameData) -> Rol
     """
 
     key = spec.trait_key
+    if spec.kind == KIND_BEST_OF:
+        return _best_own_roll(key, char, game_data)
     if spec.kind == KIND_ABILITY:
         if any(a.key == key for a in game_data.abilities):
             return ability_roll(char, game_data, key)
@@ -453,6 +465,51 @@ def _own_trait_roll(spec: RollSpec, char: Character, game_data: GameData) -> Rol
         if any(t.key == key for t in game_data.system.derived_traits):
             return initiative_roll(char, game_data)
     return None
+
+
+def best_of_key(candidates: list[tuple[str, str]] | tuple[tuple[str, str], ...]) -> str:
+    """A :data:`KIND_BEST_OF` trait key naming ``(kind, trait key)`` *candidates*."""
+
+    return BEST_OF_SEPARATOR.join(
+        f"{kind}{BEST_OF_KIND_SEPARATOR}{key}" for kind, key in candidates
+    )
+
+
+def parse_best_of_key(key: str) -> tuple[tuple[str, str], ...]:
+    """The ``(kind, trait key)`` candidates a :data:`KIND_BEST_OF` key names."""
+
+    parts = []
+    for part in key.split(BEST_OF_SEPARATOR):
+        kind, sep, trait = part.partition(BEST_OF_KIND_SEPARATOR)
+        if sep and trait:
+            parts.append((kind, trait))
+    return tuple(parts)
+
+
+def best_own_rolls(key: str, char: Character, game_data: GameData) -> list[RollSpec]:
+    """Every candidate a :data:`KIND_BEST_OF` key names, as this character rolls it.
+
+    Candidates the sheet cannot answer are left out, and a candidate that is itself a
+    best-of is refused rather than followed.
+    """
+
+    rolls = []
+    for kind, trait in parse_best_of_key(key):
+        if kind == KIND_BEST_OF:
+            continue
+        own = _own_trait_roll(RollSpec(label=trait, kind=kind, trait_key=trait), char, game_data)
+        if own is not None:
+            rolls.append(replace(own, kind=kind, trait_key=trait))
+    return rolls
+
+
+def _best_own_roll(key: str, char: Character, game_data: GameData) -> RollSpec | None:
+    """The highest of the candidates *key* names on this sheet; ties go to the first."""
+
+    rolls = best_own_rolls(key, char, game_data)
+    if not rolls:
+        return None
+    return max(rolls, key=lambda r: r.modifier)
 
 
 def localize_spec(spec: RollSpec, char: Character | None, game_data: GameData) -> RollSpec:
@@ -486,6 +543,11 @@ def localize_spec(spec: RollSpec, char: Character | None, game_data: GameData) -
     own = _own_trait_roll(spec, char, game_data)
     if own is None:
         return spec
+    if spec.kind == KIND_BEST_OF:
+        # Which candidate won is worth saying: "Resist Demoralized (Will)".
+        return replace(
+            spec, modifier=spec.modifier + own.modifier, label=f"{spec.label} ({own.label})"
+        )
     return replace(spec, modifier=spec.modifier + own.modifier)
 
 

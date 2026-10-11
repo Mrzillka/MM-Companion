@@ -40,10 +40,12 @@ from mm_companion.core.session.protocol import (
     ProtocolError,
     RemoveCondition,
     RemoveRollRequest,
+    RevealRollRequest,
     RenameSessionRequest,
     RollAdded,
     RollPrompt,
     RollRemoved,
+    RollRevealed,
     RollRequest,
     Roster,
     ScenePortrait,
@@ -81,6 +83,7 @@ ROUND_TRIP_CASES = [
     RollPrompt(spec={"label": "Perception", "kind": "skill", "trait_key": "Perception", "dc": 15}),
     RollPrompt(),  # asking for nothing, which the server drops rather than records
     RemoveRollRequest(seq=3),
+    RevealRollRequest(seq=3),
     KickRequest(player_id="p1", reason="afk"),
     SetSessionName(name="Friday Game"),
     SetNpcPaths(paths=["thug.json", "boss.json"]),
@@ -130,6 +133,7 @@ ROUND_TRIP_CASES = [
     ModStateUpdate(mod_id="timers", key="t1", payload={"kind": "counter", "filled": [0, 2]}),
     ModStateUpdate(mod_id="timers", key="t1"),  # the entry is gone, not empty
     RollRemoved(seq=3),
+    RollRevealed(roll={"seq": 3, "die": 14, "hidden": False}),
     SceneUpdate(entries=[{"ref": "e1", "name": "Thug", "initiative": 14}]),
     ScenePortrait(ref="e1", portrait="AAAA"),
     ApplyCondition(player_id="p1", condition_id="dazed", parameter="Strength"),
@@ -184,11 +188,12 @@ def test_the_protocol_version_is_the_one_the_keepalive_needs() -> None:
     server drops a ``set_mod_state`` without a word and the GM runs the fight
     believing the table can see their timers. v11 adds actions against other
     characters (the Impress action), which fail the same way: a v10 server drops
-    the request and the group roll unread. Either way changing this number is a
-    decision about who can still join, so it should not be possible to do by
-    accident.
+    the request and the group roll unread. v12 lets the GM reveal a hidden roll,
+    and a v11 server would drop that request the same silent way. Either way
+    changing this number is a decision about who can still join, so it should not
+    be possible to do by accident.
     """
-    assert PROTOCOL_VERSION == 11
+    assert PROTOCOL_VERSION == 12
 
 
 def test_every_registered_type_is_reachable_by_tag() -> None:

@@ -591,7 +591,8 @@ class SessionRollCard(HistoryCard):
     the local roller's own entry and can be thrown away, while this is a line in a
     log everyone shares. Its parameters can be saved for reuse (for a roll of one's
     own), and the GM — and only the GM — can strike it from everyone's log with the
-    ``✕`` button (``can_remove``).
+    ``✕`` button (``can_remove``), and show one of their hidden rolls to the table
+    with the **Show** button beside it.
     """
 
     #: This card's star was clicked — save these parameters as a quick roll, or, if
@@ -599,6 +600,8 @@ class SessionRollCard(HistoryCard):
     #: owns the strip), so the card only reports the click and its parameters.
     saveToggled = Signal(dict)
     removeRequested = Signal(int)
+    #: The GM asked to show this hidden roll to the table, by its ``seq``.
+    revealRequested = Signal(int)
 
     #: A chain button on this card was pressed — roll the spec it carries. Only ever
     #: on one's own card, since a follow-up is read off local game data (see
@@ -614,7 +617,7 @@ class SessionRollCard(HistoryCard):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(roll.get("seq"), parent)
-        self._roll = dict(roll)
+        self.roll = dict(roll)
 
         die = int(roll.get("die", 0))
         degree = roll.get("degree")
@@ -646,8 +649,17 @@ class SessionRollCard(HistoryCard):
         self.star: QuickRollStar | None = None
         if own:
             self.star = QuickRollStar()
-            self.star.clicked.connect(lambda: self.saveToggled.emit(roll_parameters(self._roll)))
+            self.star.clicked.connect(lambda: self.saveToggled.emit(roll_parameters(self.roll)))
             layout.addWidget(self.star, alignment=Qt.AlignmentFlag.AlignVCenter)
+
+        # GM only, and only for a session roll: a pre-hosting roll (negative seq) was
+        # never in a log the table could be shown.
+        self.reveal_button: QPushButton | None = None
+        if can_remove and roll.get("hidden") and self.seq is not None and self.seq > 0:
+            self.reveal_button = QPushButton("Show")
+            self.reveal_button.setToolTip("Show this hidden roll to the table")
+            self.reveal_button.clicked.connect(lambda: self.revealRequested.emit(self.seq))
+            layout.addWidget(self.reveal_button, alignment=Qt.AlignmentFlag.AlignVCenter)
 
         if can_remove and self.seq is not None:
             # GM only — strikes the roll from the log (from every screen, in a session).
@@ -659,7 +671,7 @@ class SessionRollCard(HistoryCard):
 
     def parameters(self) -> dict:
         """The quick-roll parameters this card would save."""
-        return roll_parameters(self._roll)
+        return roll_parameters(self.roll)
 
     def set_save_state(self, saved_keys: set, room: bool) -> None:
         """Light this card's star if its roll is among *saved_keys* (a no-op without one)."""
@@ -677,6 +689,9 @@ class RollHistoryPanel(QWidget):
     #: A roll the GM struck with no live session to remove it from — so an owner
     #: (the GM window) can drop it from a persisted, off-air session too.
     rollRemovedLocally = Signal(int)
+    #: A hidden roll the GM showed with no live session to show it to — so the GM
+    #: window can mark it visible in the persisted, off-air session.
+    rollRevealedLocally = Signal(int)
 
     #: A card's follow-up button was pressed — roll this spec (see :func:`chain_widgets`).
     rollFollowUp = Signal(object)
@@ -825,6 +840,7 @@ class RollHistoryPanel(QWidget):
         self._own_id = bridge.own_player_id()
         bridge.rollAdded.connect(self.add_roll)
         bridge.rollRemoved.connect(self.remove_roll)
+        bridge.rollRevealed.connect(self.reveal_roll)
         bridge.historyReplaced.connect(self.set_rolls)
         self.set_rolls(bridge.history())
 
@@ -836,6 +852,7 @@ class RollHistoryPanel(QWidget):
         pairs = (
             (bridge.rollAdded, self.add_roll),
             (bridge.rollRemoved, self.remove_roll),
+            (bridge.rollRevealed, self.reveal_roll),
             (bridge.historyReplaced, self.set_rolls),
         )
         for signal, slot in pairs:
@@ -933,17 +950,56 @@ class RollHistoryPanel(QWidget):
             # already answers it (localizer and all).
             card.rollRequested.connect(self.rollFollowUp)
         else:
-            card = SessionRollCard(roll, own=self._is_own(roll), can_remove=self._gm)
-            card.set_save_state(self._saved_keys, self._quick_room)
-            card.saveToggled.connect(self.saveToggled)
-            card.removeRequested.connect(self._request_remove)
-            card.rollFollowUp.connect(self.rollFollowUp)
+            card = self._roll_card(roll)
         # Newest on top: insert above every existing card (the stretch is last).
         self._layout.insertWidget(0, card)
         self._trim()
         self._empty.setVisible(False)
         if not self._replaying:
             announce_entry(roll, self)
+
+    def _roll_card(self, roll: dict) -> SessionRollCard:
+        card = SessionRollCard(roll, own=self._is_own(roll), can_remove=self._gm)
+        card.set_save_state(self._saved_keys, self._quick_room)
+        card.saveToggled.connect(self.saveToggled)
+        card.removeRequested.connect(self._request_remove)
+        card.revealRequested.connect(self._request_reveal)
+        card.rollFollowUp.connect(self.rollFollowUp)
+        return card
+
+    def _request_reveal(self, seq: int) -> None:
+        """A hidden roll's Show was clicked — show it to the table (GM action).
+
+        The mirror of :meth:`_request_remove`: in a session the server flips it and
+        echoes :attr:`~SessionBridge.rollRevealed` to every screen, this one
+        included. Off the air the card is redrawn here and
+        :attr:`rollRevealedLocally` lets the owner persist it.
+        """
+        if self._bridge is not None and self._bridge.reveal_roll(seq):
+            return
+        card = next((c for c in self.cards() if c.seq == seq), None)
+        if isinstance(card, SessionRollCard):
+            self.reveal_roll({**card.roll, "hidden": False})
+            self.rollRevealedLocally.emit(seq)
+
+    def reveal_roll(self, roll: object) -> None:
+        """A hidden roll has been shown: redraw its card in place, or add it.
+
+        The GM's screen already has the card, marked hidden, and swaps it for a
+        visible one where it stands. A player's screen has never seen the roll, so
+        it simply arrives — at the top, since that is when the table learned of it.
+        """
+        if not isinstance(roll, dict):
+            return
+        seq = roll.get("seq")
+        old = next((c for c in self.cards() if seq is not None and c.seq == seq), None)
+        if old is None:
+            self.add_roll(roll)
+            return
+        index = self._layout.indexOf(old)
+        self._layout.removeWidget(old)
+        discard_widget(old)
+        self._layout.insertWidget(index, self._roll_card(roll))
 
     def _request_remove(self, seq: int) -> None:
         """A ✕ was clicked — drop the roll (GM action).

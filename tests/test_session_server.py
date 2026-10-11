@@ -31,6 +31,7 @@ from mm_companion.core.session.client import (
     EVENT_PONG,
     EVENT_ROLL,
     EVENT_ROLL_REMOVED,
+    EVENT_ROLL_REVEALED,
     EVENT_ROSTER,
     EVENT_SNAPSHOT,
     SessionClient,
@@ -754,6 +755,63 @@ def test_removing_a_hidden_roll_is_not_broadcast(running_server, connect) -> Non
     client.ping(1)
     events.next_of(EVENT_PONG)
     assert EVENT_ROLL_REMOVED not in events.kinds()
+
+
+def test_the_gm_can_reveal_a_hidden_roll_to_the_table(running_server, connect) -> None:
+    gm_events = Events()
+    srv = running_server(rng=Random(2), on_event=gm_events)
+    client, events = connect(srv, "Volt")
+
+    record = srv.roll(label="Ambush", dc=15, hidden=True)
+    gm_events.next_of(server_mod.EVENT_ROLL)
+
+    assert srv.reveal_roll(record.seq) is True
+    shown = events.next_of(EVENT_ROLL_REVEALED)
+    assert (shown["seq"], shown["label"], shown["hidden"]) == (record.seq, "Ambush", False)
+    assert shown["die"] == record.die  # the same roll, not a reroll
+    assert gm_events.next_of(server_mod.EVENT_ROLL_REVEALED)["seq"] == record.seq
+    assert [roll["seq"] for roll in client.history] == [record.seq]
+    # Stored visible, so a late joiner's welcome carries it — and so does the disk.
+    assert [roll.seq for roll in srv.state.visible_rolls()] == [record.seq]
+    assert store.load_rolls(srv.state.id)[0].hidden is False
+
+
+def test_revealing_a_visible_or_absent_roll_is_a_noop(running_server) -> None:
+    srv = running_server(rng=Random(2))
+    record = srv.roll(label="Open", dc=10)
+    assert srv.reveal_roll(record.seq) is False
+    assert srv.reveal_roll(999) is False
+
+
+def test_a_player_cannot_reveal_a_hidden_roll(running_server, connect) -> None:
+    srv = running_server(rng=Random(2))
+    client, events = connect(srv, "Volt")
+    record = srv.roll(label="Ambush", dc=15, hidden=True)
+
+    client.request_reveal_roll(record.seq)
+    client.ping(1)
+    events.next_of(EVENT_PONG)
+
+    assert EVENT_ROLL_REVEALED not in events.kinds()
+    assert srv.state.rolls[0].hidden is True
+
+
+def test_a_remote_gm_can_reveal_their_hidden_roll(running_server, connect) -> None:
+    srv = running_server(gm_in_process=False)
+    player, player_events = connect(srv, "Volt")
+    gm, gm_events = gm_connect(srv)
+    try:
+        gm.request_roll("Ambush check", hidden=True)
+        seq = gm_events.next_of(EVENT_ROLL)["seq"]
+
+        gm.request_reveal_roll(seq)
+
+        assert player_events.next_of(EVENT_ROLL_REVEALED)["label"] == "Ambush check"
+        assert gm_events.next_of(EVENT_ROLL_REVEALED)["hidden"] is False
+        # The GM's copy is replaced, not doubled.
+        assert [r["seq"] for r in gm.history].count(seq) == 1
+    finally:
+        gm.close()
 
 
 def test_a_player_cannot_remove_a_roll(running_server, connect) -> None:

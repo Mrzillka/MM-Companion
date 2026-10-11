@@ -440,6 +440,84 @@ def test_the_gm_removing_a_roll_clears_it_for_a_player(
         player.stop()
 
 
+# -- the reveal button (GM only, hidden rolls only) ---------------------------
+
+
+def _show_buttons(panel: RollHistoryPanel) -> list[QPushButton]:
+    return [b for b in panel.findChildren(QPushButton) if b.text() == "Show"]
+
+
+def test_only_a_gms_hidden_roll_offers_show(qapp: QApplication) -> None:
+    gm_panel = RollHistoryPanel(gm=True)
+    gm_panel.add_roll(roll(seq=1, hidden=True))
+    gm_panel.add_roll(roll(seq=2))
+    assert len(_show_buttons(gm_panel)) == 1
+
+    player_panel = RollHistoryPanel()
+    player_panel.add_roll(roll(seq=1, hidden=True))
+    assert _show_buttons(player_panel) == []
+
+
+def test_revealing_redraws_the_gms_card_in_place(qapp: QApplication) -> None:
+    panel = RollHistoryPanel(gm=True)
+    panel.add_roll(roll(seq=1, hidden=True, label="Ambush"))
+    panel.add_roll(roll(seq=2))
+
+    panel.reveal_roll(roll(seq=1, hidden=False, label="Ambush"))
+
+    assert [card.seq for card in panel.cards()] == [2, 1]  # same place, not the top
+    assert _show_buttons(panel) == []
+    assert HIDDEN_MARK not in card_text(panel)
+
+
+def test_a_revealed_roll_arrives_on_a_players_panel(qapp: QApplication) -> None:
+    panel = RollHistoryPanel()
+    panel.add_roll(roll(seq=2))
+
+    panel.reveal_roll(roll(seq=1, label="Ambush"))
+
+    assert [card.seq for card in panel.cards()] == [1, 2]
+    assert "Ambush" in card_text(panel)
+
+
+def test_the_gm_revealing_a_roll_reaches_a_player(
+    qapp: QApplication, hosting: SessionBridge
+) -> None:
+    gm_panel = RollHistoryPanel(gm=True)
+    gm_panel.attach(hosting)
+    player = SessionBridge()
+    player_panel = RollHistoryPanel()
+    try:
+        player.join(_code_for(hosting), "Aria")
+        player_panel.attach(player)
+
+        hosting.server.roll(label="Ambush", dc=15, hidden=True)
+        hosting.server.roll(label="open", bonus=1)
+        _pump(qapp, lambda: len(player_panel.cards()) == 1)
+
+        _show_buttons(gm_panel)[0].click()
+        _pump(qapp, lambda: len(player_panel.cards()) == 2)
+
+        assert "Ambush" in card_text(player_panel)
+        assert _show_buttons(gm_panel) == []
+        assert len(gm_panel.cards()) == 2
+    finally:
+        player_panel.detach()
+        player.stop()
+
+
+def test_an_off_air_reveal_redraws_and_reports(qapp: QApplication) -> None:
+    panel = RollHistoryPanel(gm=True)
+    seen: list[int] = []
+    panel.rollRevealedLocally.connect(seen.append)
+    panel.add_roll(roll(seq=3, hidden=True))
+
+    _show_buttons(panel)[0].click()
+
+    assert seen == [3]
+    assert _show_buttons(panel) == []
+
+
 # -- following a session ----------------------------------------------------
 
 

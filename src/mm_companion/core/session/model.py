@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import secrets
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 
 from mm_companion.core.dice import CheckResult
@@ -624,6 +624,21 @@ class SessionState:
                 del self.rolls[index]
                 self.touch()
                 return roll
+        return None
+
+    def reveal_roll(self, seq: int) -> RollRecord | None:
+        """Make the hidden roll with this sequence number visible; return it.
+
+        ``None`` when no roll carries that number *or* it was never hidden — there
+        is nothing to reveal, and a caller that broadcasts on success must not
+        send the table a second copy of a roll it already has.
+        """
+        for index, roll in enumerate(self.rolls):
+            if roll.seq == seq and roll.hidden:
+                shown = replace(roll, hidden=False)
+                self.rolls[index] = shown
+                self.touch()
+                return shown
         return None
 
     # -- housekeeping ------------------------------------------------------

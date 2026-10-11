@@ -77,9 +77,11 @@ from .protocol import (
     ProtocolError,
     RemoveCondition,
     RemoveRollRequest,
+    RevealRollRequest,
     RollAdded,
     RollPrompt,
     RollRemoved,
+    RollRevealed,
     RollRequest,
     Roster,
     ScenePortrait,
@@ -100,6 +102,7 @@ EVENT_DISCONNECTED = "disconnected"  # {"reason"}
 EVENT_ROSTER = "roster"  # {"players": [public slot dicts]}
 EVENT_ROLL = "roll"  # one roll dict
 EVENT_ROLL_REMOVED = "roll_removed"  # {"seq"}
+EVENT_ROLL_REVEALED = "roll_revealed"  # one roll dict, a hidden roll now shown
 EVENT_SCENE = "scene"  # {"entries": [scene entry dicts]}
 EVENT_SCENE_PORTRAIT = "scene_portrait"  # {"ref", "portrait"}
 EVENT_MOD_STATE = "mod_state"  # {"mod_id", "key", "payload"} — payload None means gone
@@ -455,6 +458,13 @@ class SessionClient:
         """
         return self.send(RemoveRollRequest(seq=seq))
 
+    def request_reveal_roll(self, seq: int) -> bool:
+        """Ask the server to show one hidden roll to the table (honored only for the GM).
+
+        Comes back as :data:`EVENT_ROLL_REVEALED`, to this client and every other.
+        """
+        return self.send(RevealRollRequest(seq=seq))
+
     def ping(self, nonce: int = 0) -> bool:
         """Keepalive; the answer arrives as :data:`EVENT_PONG`."""
         return self.send(Ping(nonce=nonce))
@@ -720,6 +730,13 @@ class SessionClient:
         elif isinstance(message, RollRemoved):
             self.history = [r for r in self.history if r.get("seq") != message.seq]
             self._emit(EVENT_ROLL_REMOVED, {"seq": message.seq})
+        elif isinstance(message, RollRevealed):
+            # The GM already holds this seq (hidden); a player has never seen it.
+            seq = message.roll.get("seq")
+            self.history = [r for r in self.history if r.get("seq") != seq]
+            self.history.append(message.roll)
+            self.history.sort(key=lambda r: r.get("seq", 0))
+            self._emit(EVENT_ROLL_REVEALED, message.roll)
         elif isinstance(message, SceneUpdate):
             self.scene = [dict(entry) for entry in message.entries]
             self._emit(EVENT_SCENE, {"entries": [dict(e) for e in self.scene]})

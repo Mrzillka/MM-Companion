@@ -612,6 +612,16 @@ The shape:
   the first user. Routed like the mod channel (opaque payloads, the sender stamped by
   the server) and rolled like any roll (by the server). The whole account is in [the
   actions notes](actions.md).
+- **Protocol v12 lets the GM reveal a hidden roll** — `RevealRollRequest` up (GM
+  only, like `RemoveRollRequest`) and `RollRevealed` down to *every* seat, the GM's
+  included. The record is replaced with `hidden=False` and `rolls.jsonl` rewritten, so
+  a late joiner's welcome carries it like any roll. It is its own message rather than
+  a second `RollAdded` because the two ends read it differently: the GM's history
+  already holds that `seq` and redraws the card **in place** (`RollHistoryPanel.
+  reveal_roll`), while a player's has never seen it and adds it at the top — and
+  `add_roll` drops a `seq` it has seen, so a re-sent `RollAdded` would have reached
+  nobody who already had it. The **Show** button sits beside the ✕ on a GM's hidden,
+  positive-`seq` card; off the air it flips the resumed log the way ✕ strikes it.
 - Deployment lives in `deploy/` (systemd units, `deploy.sh`, runbook) — tracked
   and secret-free. The operator's addresses and key paths are in a gitignored
   `SERVER.md`.

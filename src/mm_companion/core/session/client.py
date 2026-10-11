@@ -77,10 +77,12 @@ from .protocol import (
     ProtocolError,
     RemoveCondition,
     RemoveRollRequest,
+    RevealRollRequest,
     RollAdded,
     RollPrompt,
     RollRemoved,
     RollRequest,
+    RollRevealed,
     Roster,
     ScenePortrait,
     SceneUpdate,
@@ -100,6 +102,7 @@ EVENT_DISCONNECTED = "disconnected"  # {"reason"}
 EVENT_ROSTER = "roster"  # {"players": [public slot dicts]}
 EVENT_ROLL = "roll"  # one roll dict
 EVENT_ROLL_REMOVED = "roll_removed"  # {"seq"}
+EVENT_ROLL_REVEALED = "roll_revealed"  # one roll dict, a hidden roll now shown
 EVENT_SCENE = "scene"  # {"entries": [scene entry dicts]}
 EVENT_SCENE_PORTRAIT = "scene_portrait"  # {"ref", "portrait"}
 EVENT_MOD_STATE = "mod_state"  # {"mod_id", "key", "payload"} — payload None means gone
@@ -425,10 +428,22 @@ class SessionClient:
         dc: int | None = None,
         hidden: bool = False,
         spec: dict | None = None,
+        reroll: bool = False,
     ) -> bool:
-        """Ask the server to roll. The result comes back as :data:`EVENT_ROLL`."""
+        """Ask the server to roll. The result comes back as :data:`EVENT_ROLL`.
+
+        ``reroll`` asks for a lucky re-roll, whose die never comes up under 11.
+        """
         return self.send(
-            RollRequest(label=label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden, spec=spec)
+            RollRequest(
+                label=label,
+                bonus=bonus,
+                penalty=penalty,
+                dc=dc,
+                hidden=hidden,
+                spec=spec,
+                reroll=reroll,
+            )
         )
 
     def post_note(self, text: str) -> bool:
@@ -454,6 +469,13 @@ class SessionClient:
         it, the same as it reaches every other client.
         """
         return self.send(RemoveRollRequest(seq=seq))
+
+    def request_reveal_roll(self, seq: int) -> bool:
+        """Ask the server to show one hidden roll to the table (honored only for the GM).
+
+        Comes back as :data:`EVENT_ROLL_REVEALED`, to this client and every other.
+        """
+        return self.send(RevealRollRequest(seq=seq))
 
     def ping(self, nonce: int = 0) -> bool:
         """Keepalive; the answer arrives as :data:`EVENT_PONG`."""
@@ -720,6 +742,23 @@ class SessionClient:
         elif isinstance(message, RollRemoved):
             self.history = [r for r in self.history if r.get("seq") != message.seq]
             self._emit(EVENT_ROLL_REMOVED, {"seq": message.seq})
+        elif isinstance(message, RollRevealed):
+            # The GM already holds this seq (hidden); a player has never seen it.
+            # Either way it goes in at its own place in the log, by seq.
+            seq = message.roll.get("seq")
+            self.history = [r for r in self.history if r.get("seq") != seq]
+            at = len(self.history)
+            if isinstance(seq, int):
+                at = next(
+                    (
+                        index
+                        for index, entry in enumerate(self.history)
+                        if isinstance(entry.get("seq"), int) and entry["seq"] > seq
+                    ),
+                    at,
+                )
+            self.history.insert(at, message.roll)
+            self._emit(EVENT_ROLL_REVEALED, message.roll)
         elif isinstance(message, SceneUpdate):
             self.scene = [dict(entry) for entry in message.entries]
             self._emit(EVENT_SCENE, {"entries": [dict(e) for e in self.scene]})

@@ -16,18 +16,22 @@ Vocabulary (protocol v2):
 
 **Client → server** — :class:`Hello`, :class:`CharacterSnapshot`,
 :class:`RollRequest`, :class:`NoteRequest`, :class:`RollPrompt`,
-:class:`RemoveRollRequest`, :class:`SetModState`, :class:`ModNote`,
+:class:`RemoveRollRequest`, :class:`RevealRollRequest`, :class:`SetModState`,
+:class:`ModNote`,
 :class:`ModRequest`, :class:`Ping`.
 
 **Server → client** — :class:`Welcome`, :class:`Roster`, :class:`RollAdded`,
-:class:`RollRemoved`, :class:`ApplyCondition`, :class:`RemoveCondition`,
+:class:`RollRemoved`, :class:`RollRevealed`, :class:`ApplyCondition`,
+:class:`RemoveCondition`,
 :class:`ModStateUpdate`, :class:`ErrorMessage`, :class:`Kicked`, :class:`Pong`.
 
 A *hidden* roll is stored on the server with ``hidden: true`` and is never
 broadcast at all, so there is nothing for a player client to peek at — only the
 GM's own window renders it. Removing a roll (GM only) drops it from the log and
 tells every client with a :class:`RollRemoved`; a hidden roll's removal is never
-broadcast, matching how it was never added.
+broadcast, matching how it was never added. Revealing one (GM only, again) flips
+it visible on the server and sends the whole roll to every client as a
+:class:`RollRevealed` — the first time a player's screen hears of it.
 """
 
 from __future__ import annotations
@@ -86,7 +90,13 @@ from typing import ClassVar
 #: against several resistances) and ``RollRecord.group``. Bumped for the v10 reason:
 #: a v10 server drops all three unknown messages without a word, so a player would
 #: impress into silence and a GM's Roll would roll nothing.
-PROTOCOL_VERSION = 11
+#:
+#: v12 let the GM **reveal a hidden roll**: :class:`RevealRollRequest` and
+#: :class:`RollRevealed`. Bumped for the v10 reason once more — a v11 server drops
+#: the request without a word, so the GM would click Show and the table would
+#: never see the roll they were just told about. It also added
+#: ``RollRequest.reroll``, which a v11 server would ignore and roll as an ordinary die.
+PROTOCOL_VERSION = 12
 
 #: Hard cap on one encoded message, including its trailing newline. A character
 #: snapshot is the largest thing that legitimately travels (tens of KB); anything
@@ -264,6 +274,10 @@ class RollRequest(Message):
     land and clicks the save straight off its card. The server treats it as opaque
     data — it validates the shape (:func:`sanitize_spec`) and records it, and never
     interprets it, so the headless server needs no game rules loaded.
+
+    ``reroll`` asks for a lucky re-roll: the server rolls a die that cannot come up
+    under 11 (:func:`~mm_companion.core.dice.reroll_d20`). The server applies it
+    rather than the client, for the reason it rolls at all.
     """
 
     TYPE: ClassVar[str] = "roll_request"
@@ -274,6 +288,7 @@ class RollRequest(Message):
     dc: int | None = None
     hidden: bool = False
     spec: dict | None = None
+    reroll: bool = False
 
 
 @_register
@@ -326,6 +341,20 @@ class RemoveRollRequest(Message):
     """
 
     TYPE: ClassVar[str] = "remove_roll_request"
+
+    seq: int
+
+
+@_register
+@dataclass(frozen=True)
+class RevealRollRequest(Message):
+    """A GM request to show one of their hidden rolls to the table, by its ``seq``.
+
+    Honored only for the GM, like :class:`RemoveRollRequest`; the roll then reaches
+    every client as a :class:`RollRevealed`.
+    """
+
+    TYPE: ClassVar[str] = "reveal_roll_request"
 
     seq: int
 
@@ -702,6 +731,22 @@ class RollRemoved(Message):
     TYPE: ClassVar[str] = "roll_removed"
 
     seq: int
+
+
+@_register
+@dataclass(frozen=True)
+class RollRevealed(Message):
+    """A hidden roll the GM has shown the table — the whole roll, now visible.
+
+    Its own message rather than a second :class:`RollAdded`: the GM's window already
+    holds this ``seq`` and has to redraw it in place, while a player's has never seen
+    it and adds it. One message, two honest readings; a ``RollAdded`` for a ``seq``
+    already on screen is a duplicate and is dropped.
+    """
+
+    TYPE: ClassVar[str] = "roll_revealed"
+
+    roll: dict
 
 
 @_register

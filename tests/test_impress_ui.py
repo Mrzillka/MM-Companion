@@ -294,7 +294,7 @@ def test_request_mode_rolls_only_the_check_with_a_button_to_resist(
     assert impress._roll.isEnabled()
     impress._roll.click()
     (card,) = window._history.cards()
-    spec = RollSpec.from_dict(card._roll["spec"])
+    spec = RollSpec.from_dict(card.roll["spec"])
     assert spec.follow_up is not None and spec.follow_up.dc_from_total
 
 

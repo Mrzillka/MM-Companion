@@ -86,6 +86,9 @@ class SessionBridge(QObject):
     rollAdded = Signal(object)
     #: One roll removed from the log, by its ``seq`` (int). GM-driven either side.
     rollRemoved = Signal(int)
+    #: A hidden GM roll shown to the table, as the whole (now visible) roll dict.
+    #: The GM's screens redraw a card they already hold; a player's adds a new one.
+    rollRevealed = Signal(object)
     #: The whole roll history at once — on attach, and on a fresh join.
     historyReplaced = Signal(object)
 
@@ -281,6 +284,7 @@ class SessionBridge(QObject):
         dc: int | None = None,
         hidden: bool = False,
         spec: dict | None = None,
+        reroll: bool = False,
     ) -> bool:
         """Put one roll to the session, whichever end of it this app is on.
 
@@ -295,15 +299,28 @@ class SessionBridge(QObject):
         description of the roll (a serialized
         :class:`~mm_companion.core.rules.RollSpec`), which travels so that the
         *other* seats can act on it — see ``docs/mm-session-architecture.md``.
+        ``reroll`` asks the server for a lucky re-roll (a die of 11-20).
         """
         if self._server is not None:
             self._server.roll(
-                label=label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden, spec=spec
+                label=label,
+                bonus=bonus,
+                penalty=penalty,
+                dc=dc,
+                hidden=hidden,
+                spec=spec,
+                reroll=reroll,
             )
             return True
         if self._client is not None:
             return self._client.request_roll(
-                label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden, spec=spec
+                label,
+                bonus=bonus,
+                penalty=penalty,
+                dc=dc,
+                hidden=hidden,
+                spec=spec,
+                reroll=reroll,
             )
         return False
 
@@ -352,6 +369,19 @@ class SessionBridge(QObject):
             return self._server.remove_roll(seq)
         if self._client is not None:
             return self._client.request_remove_roll(seq)
+        return False
+
+    def reveal_roll(self, seq: int) -> bool:
+        """Show one hidden roll to the table (a GM action).
+
+        Dual-path like :meth:`remove_roll`, and it comes back the same way — as
+        :attr:`rollRevealed`, on this screen and every other. Returns False when
+        there is no live session.
+        """
+        if self._server is not None:
+            return self._server.reveal_roll(seq)
+        if self._client is not None:
+            return self._client.request_reveal_roll(seq)
         return False
 
     # -- GM commands -------------------------------------------------------
@@ -841,6 +871,8 @@ class SessionBridge(QObject):
             self.rollAdded.emit(payload)
         elif kind == session_server.EVENT_ROLL_REMOVED:
             self.rollRemoved.emit(int(payload.get("seq", 0)))
+        elif kind == session_server.EVENT_ROLL_REVEALED:
+            self.rollRevealed.emit(payload)
         elif kind == session_server.EVENT_SCENE:
             self.sceneChanged.emit(payload.get("entries", []))
         elif kind == session_server.EVENT_SCENE_PORTRAIT:
@@ -890,6 +922,8 @@ class SessionBridge(QObject):
             self.rollAdded.emit(payload)
         elif kind == session_client.EVENT_ROLL_REMOVED:
             self.rollRemoved.emit(int(payload.get("seq", 0)))
+        elif kind == session_client.EVENT_ROLL_REVEALED:
+            self.rollRevealed.emit(payload)
         elif kind == session_client.EVENT_SCENE:
             self.sceneChanged.emit(payload.get("entries", []))
         elif kind == session_client.EVENT_SCENE_PORTRAIT:

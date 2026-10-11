@@ -561,6 +561,12 @@ def _resistance_key(phrase: str, game_data: GameData) -> str:
     """
 
     text = phrase.strip().lower()
+    # "Fortitude or Will vs. 18" is a choice between two (Alternate Resistance's best
+    # or worst of, Illusion's Insight or Perception), and which one applies depends
+    # on the target's sheet and the power. Filling in the first would be a confident
+    # wrong number, so the target types it instead.
+    if " or " in text.partition(" vs")[0]:
+        return ""
     for resistance in game_data.resistances:
         if text.startswith(resistance.name.lower()):
             return resistance.key

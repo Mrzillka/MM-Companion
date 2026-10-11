@@ -441,6 +441,21 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   (`_unoffered_label` — "Athletics (needs Alternate Resistance)"), because "—" in the
   picker beside a row still reading "resisted by Athletics" is the card contradicting
   itself.
+- **Every other effect picks its alternate resistance on the chip.** Alternate
+  Resistance's own config used to be only its *cost tier* (weaker / no gain / worst of
+  two / best of two) under the label "Resisted by", so a Damage resisted by Fortitude had
+  nowhere to say Fortitude. The chip now carries "Resisted by" and "Or", both fed from
+  `resistance_targets`, with the tier kept under its old `against` key (so saved builds
+  still price) as "Worth". A **modifier's** config field with `overrides` now replaces
+  that stat just as an effect's does (`modifier_config_overrides`), several onto one
+  stat reading as alternatives ("Fortitude or Will"). It replaces only a stat the effect
+  *has* (no save invented on a Flight), and **untinted**: a best-of-two pick is a flaw, so
+  the extra's green would read it backwards. A save naming alternatives fills in no
+  trait on the target's sheet (`rolls._resistance_key`), since which one applies is not
+  something one name can say. A field the effect already answers
+  itself — Affliction's own Resisted by — is **claimed** (`modifier_field_claimed`): the
+  chip does not show it and the summary ignores it, so there is never a question of
+  which of two pickers wins. On Affliction the extra still only widens the card's field.
 - **The book's ~90 named powers are data, not a catalog.** `configurations.json` holds
   the standard power configurations (Blast, Dazzle, Snare, Force Field, Invisibility, …)
   as ready-made assemblies of records that already exist elsewhere, and

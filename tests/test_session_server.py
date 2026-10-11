@@ -31,6 +31,7 @@ from mm_companion.core.session.client import (
     EVENT_PONG,
     EVENT_ROLL,
     EVENT_ROLL_REMOVED,
+    EVENT_ROLL_REVEALED,
     EVENT_ROSTER,
     EVENT_SNAPSHOT,
     SessionClient,
@@ -602,6 +603,19 @@ def test_a_roll_reaches_every_player(running_server, connect) -> None:
     assert second_events.next_of(EVENT_ROLL)["label"] == "Perception"
 
 
+def test_a_reroll_is_rolled_by_the_server_and_never_low(running_server, connect) -> None:
+    srv = running_server(rng=Random(5))
+    client, events = connect(srv, "Volt")
+
+    for _ in range(20):
+        client.request_roll("Lucky", bonus=2, dc=15, reroll=True)
+        roll = events.next_of(EVENT_ROLL)
+        assert 11 <= roll["die"] <= 20
+        assert roll["degree"] is not None  # still graded against the DC
+        # Marked by the server, whatever the client called it.
+        assert roll["reroll"] is True and roll["label"] == "Lucky"
+
+
 def test_a_player_cannot_roll_hidden(running_server, connect) -> None:
     srv = running_server(rng=Random(5))
     client, events = connect(srv, "Volt")
@@ -754,6 +768,64 @@ def test_removing_a_hidden_roll_is_not_broadcast(running_server, connect) -> Non
     client.ping(1)
     events.next_of(EVENT_PONG)
     assert EVENT_ROLL_REMOVED not in events.kinds()
+
+
+def test_the_gm_can_reveal_a_hidden_roll_to_the_table(running_server, connect) -> None:
+    gm_events = Events()
+    srv = running_server(rng=Random(2), on_event=gm_events)
+    client, events = connect(srv, "Volt")
+
+    record = srv.roll(label="Ambush", dc=15, hidden=True)
+    gm_events.next_of(server_mod.EVENT_ROLL)
+
+    assert srv.reveal_roll(record.seq) is True
+    shown = events.next_of(EVENT_ROLL_REVEALED)
+    assert (shown["seq"], shown["label"], shown["hidden"]) == (record.seq, "Ambush", False)
+    assert shown["die"] == record.die  # the same roll, not a reroll
+    assert gm_events.next_of(server_mod.EVENT_ROLL_REVEALED)["seq"] == record.seq
+    assert [roll["seq"] for roll in client.history] == [record.seq]
+    # Stored visible, so a late joiner's welcome carries it — and so does the disk.
+    assert [roll.seq for roll in srv.state.visible_rolls()] == [record.seq]
+    assert store.load_rolls(srv.state.id)[0].hidden is False
+
+
+def test_revealing_a_visible_or_absent_roll_is_a_noop(running_server) -> None:
+    srv = running_server(rng=Random(2))
+    record = srv.roll(label="Open", dc=10)
+    assert srv.reveal_roll(record.seq) is False
+    assert srv.reveal_roll(999) is False
+
+
+def test_a_player_cannot_reveal_a_hidden_roll(running_server, connect) -> None:
+    srv = running_server(rng=Random(2))
+    client, events = connect(srv, "Volt")
+    record = srv.roll(label="Ambush", dc=15, hidden=True)
+
+    client.request_reveal_roll(record.seq)
+    client.ping(1)
+    events.next_of(EVENT_PONG)
+
+    assert EVENT_ROLL_REVEALED not in events.kinds()
+    assert srv.state.rolls[0].hidden is True
+
+
+def test_a_remote_gm_can_reveal_their_hidden_roll(running_server, connect) -> None:
+    srv = running_server(gm_in_process=False)
+    player, player_events = connect(srv, "Volt")
+    gm, gm_events = gm_connect(srv)
+    try:
+        gm.request_roll("Ambush check", hidden=True)
+        seq = gm_events.next_of(EVENT_ROLL)["seq"]
+
+        gm.request_reveal_roll(seq)
+
+        assert player_events.next_of(EVENT_ROLL_REVEALED)["label"] == "Ambush check"
+        assert gm_events.next_of(EVENT_ROLL_REVEALED)["hidden"] is False
+        # The GM's copy is replaced, not doubled, and the log stays in seq order.
+        assert [r["seq"] for r in gm.history].count(seq) == 1
+        assert [r["seq"] for r in gm.history] == sorted(r["seq"] for r in gm.history)
+    finally:
+        gm.close()
 
 
 def test_a_player_cannot_remove_a_roll(running_server, connect) -> None:
@@ -1974,3 +2046,13 @@ def test_only_the_gm_may_ask_for_a_group_roll(running_server, connect):
         assert gm_events is not None
     finally:
         gm.close()
+
+
+def test_a_lifted_reroll_is_never_a_critical(running_server) -> None:
+    from mm_companion.core.session.model import RollRecord
+
+    record = RollRecord.from_check(
+        seq=1, player_id="p", player_name="P", die=20, reroll=True, natural=False
+    )
+    assert record.critical is False and record.reroll is True
+    assert RollRecord.from_dict(record.to_dict()).reroll is True

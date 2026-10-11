@@ -767,6 +767,7 @@ class GMWindow(QMainWindow):
 
         self._history = RollHistoryPanel(gm=True)
         self._history.rollRemovedLocally.connect(self._on_local_roll_removed)
+        self._history.rollRevealedLocally.connect(self._on_local_roll_revealed)
         self._view = DiceRollerView(hidden_option=True, history=self._history)
         # Still the panel, so every card that loads or throws a spec into it (a
         # player's, an NPC's) reaches it by the same name it always did.
@@ -1302,6 +1303,21 @@ class GMWindow(QMainWindow):
         if self._bridge.hosting or self._bridge.joined:
             return
         if self._state.remove_roll(seq) is not None:
+            try:
+                store.save_session(self._state, write_rolls=True)
+            except OSError:
+                pass
+
+    def _on_local_roll_revealed(self, seq: int) -> None:
+        """Persist a hidden roll the GM showed while not hosting.
+
+        The same shape as :meth:`_on_local_roll_removed`: off the air there is no
+        table to show it to, but the resumed log is the one a later join replays, so
+        the roll is stored visible and the next table sees it.
+        """
+        if self._bridge.hosting or self._bridge.joined:
+            return
+        if self._state.reveal_roll(seq) is not None:
             try:
                 store.save_session(self._state, write_rolls=True)
             except OSError:

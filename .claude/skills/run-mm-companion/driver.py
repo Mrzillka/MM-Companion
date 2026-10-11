@@ -1389,12 +1389,22 @@ def _simple_hero():
         effects=[PowerEffectInstance("protection", rank=6, flaws=[ModifierSelection("removable")])],
     )
     blast = Power(name="Night Bolt", effects=[PowerEffectInstance("damage", rank=8)])
+    grip = PowerEffectInstance("affliction", rank=6)
+    grip.config.update(
+        resistance="Will", degree1="dazed", degree2="stunned", degree3="incapacitated"
+    )
+    dread = Power(name="Dread Grip", effects=[grip])
     field = Power(name="Umbral Shield", effects=[PowerEffectInstance("protection", rank=8)])
     flight = Power(name="Shadow Wings", effects=[PowerEffectInstance("flight", rank=3)])
     field.dynamic = flight.dynamic = True
     field.dynamic_points = 4
     char.powers.extend(
-        [armor, blast, PowerGroup(mode=STRUCTURE_ARRAY, name="Umbra", children=[field, flight])]
+        [
+            armor,
+            blast,
+            dread,
+            PowerGroup(mode=STRUCTURE_ARRAY, name="Umbra", children=[field, flight]),
+        ]
     )
     apply_condition(char, "dazed", data)
     return char

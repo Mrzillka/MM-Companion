@@ -185,10 +185,26 @@
       "flat": false,
       "config": [
         {
-          "key": "against",
+          "key": "resistance",
           "label": "Resisted by",
           "type": "select",
-          "hint": "The DC is unchanged; only which resistance is rolled differs. A generally weaker resistance is +1, no real gain is +0, the worst of two is +1, and settling for the best of two is a -1 flaw.",
+          "source": "resistance_targets",
+          "overrides": "resistance",
+          "hint": "What the effect is resisted by instead of its usual resistance: any resistance, or an ability, a skill or Damage. The DC is unchanged."
+        },
+        {
+          "key": "resistanceSecond",
+          "label": "Or",
+          "type": "select",
+          "source": "resistance_targets",
+          "overrides": "resistance",
+          "hint": "A second resistance, for an effect resisted by the worst of two (+1) or settled for as the best of two (-1). Leave unset for a plain swap."
+        },
+        {
+          "key": "against",
+          "label": "Worth",
+          "type": "select",
+          "hint": "What the swap is worth, which sets the cost: a generally weaker resistance is +1, no real gain is +0, the worst of two is +1, and settling for the best of two is a -1 flaw.",
           "options": [
             { "value": "easier", "label": "A generally weaker resistance", "costValue": 1 },
             { "value": "even", "label": "No real gain", "costValue": 0 },
@@ -197,7 +213,7 @@
           ]
         }
       ],
-      "description": "The effect is resisted by a different resistance than usual, against the same DC."
+      "description": "The effect is resisted by a different resistance than usual, against the same DC: pick any resistance (or an ability, a skill or Damage), or two for a best-of or worst-of."
     },
     {
       "id": "area_effect",

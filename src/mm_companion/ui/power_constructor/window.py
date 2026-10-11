@@ -1380,9 +1380,50 @@ class PowerConstructorWindow(QMainWindow):
 
     def _on_dev_mode_toggled(self, on: bool) -> None:
         """Flip the game-terms panel between read-only and the editable override table.
-        Dev mode only changes the editor — stored overrides always apply — so the
-        derived numbers don't shift on toggle."""
+
+        Dev mode *is* the homerule: unticking it takes every override off the build —
+        the game-term edits, the whole-power cost and an item's hand-set price — so the
+        power is back to the book the moment the box clears. They are stashed rather than
+        thrown away, though, and ticking the box again in the same window puts them back:
+        a player checking what the build costs without their edits should not have to
+        retype them. Saving with the box clear saves the book version.
+        """
+        if on:
+            self._restore_dev_overrides()
+        else:
+            self._stash_dev_overrides()
         self._terms.set_editable(on)
+        self.canvas.refresh_costs()
+        self._refresh_cost()
+        self._refresh_pl_warning()
+
+    def _stash_dev_overrides(self) -> None:
+        """Lift every Dev-mode override off the build into :attr:`_dev_stash`."""
+        power = self.power
+        self._dev_stash = (
+            power.cost_override,
+            [(effect, effect.overrides) for effect in power.effects if effect.overrides],
+            None if self.item is None else self.item.ep_override,
+        )
+        power.cost_override = None
+        for effect in power.effects:
+            effect.overrides = {}
+        if self.item is not None:
+            self.item.ep_override = None
+
+    def _restore_dev_overrides(self) -> None:
+        """Put back what :meth:`_stash_dev_overrides` lifted, for effects still here."""
+        stash = getattr(self, "_dev_stash", None)
+        if stash is None:
+            return
+        self._dev_stash = None
+        cost, effects, ep = stash
+        self.power.cost_override = cost
+        for effect, overrides in effects:
+            if any(effect is present for present in self.power.effects):
+                effect.overrides = overrides
+        if self.item is not None:
+            self.item.ep_override = ep
 
     def _on_terms_edited(self) -> None:
         """An override edit inside the table: recompute cost and warnings, but leave the

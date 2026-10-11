@@ -1283,3 +1283,24 @@ def test_a_box_in_the_strip_scrolls_inside_itself_rather_than_clipping(qapp) -> 
     released = box.release_body()
     assert released is body and body.parent() is box
     assert body.minimumHeight() == 0  # a refusal measured for the strip goes no further
+
+
+def test_an_afflictions_degrees_are_printed_at_ordinary_size(qapp: QApplication) -> None:
+    """Not in the translucent small print, where players read past them."""
+    from mm_companion.core.powers import Power, PowerEffectInstance
+    from mm_companion.ui.cards import simple_effects_block
+
+    data = load_game_data()
+    effect = PowerEffectInstance("affliction", rank=6)
+    effect.config.update(degree1="dazed", degree2="stunned", degree3="incapacitated")
+    block = simple_effects_block(
+        Power(name="Grip", effects=[effect]), Character.new_default(data), data
+    )
+
+    plain = [
+        label.text() for label in block.findChildren(QLabel) if not isinstance(label, TermLabel)
+    ]
+    line = next(text for text in plain if "1st degree" in text)
+    assert "Dazed" in line and "Stunned" in line and "Incapacitated" in line
+    terms = " ".join(label.text() for label in block.findChildren(TermLabel))
+    assert "degree" not in terms

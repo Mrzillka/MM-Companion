@@ -31,7 +31,13 @@ from collections.abc import Callable, Iterable
 from random import Random
 
 from mm_companion.core import storage
-from mm_companion.core.dice import CheckResult, resolve_check, resolve_group, roll_d20
+from mm_companion.core.dice import (
+    CheckResult,
+    reroll_d20,
+    resolve_check,
+    resolve_group,
+    roll_d20,
+)
 
 from . import store
 from .model import PlayerSlot, RollRecord, SessionState, tokens_match, utc_now
@@ -77,10 +83,12 @@ from .protocol import (
     ProtocolError,
     RemoveCondition,
     RemoveRollRequest,
+    RevealRollRequest,
     RollAdded,
     RollPrompt,
     RollRemoved,
     RollRequest,
+    RollRevealed,
     Roster,
     ScenePortrait,
     SceneUpdate,
@@ -144,6 +152,7 @@ EVENT_ROSTER = "roster"  # {"players": [roster dicts — no tokens, no character
 EVENT_SNAPSHOT = "snapshot"  # {"player_id", "character"}
 EVENT_ROLL = "roll"  # a full roll dict, hidden rolls included
 EVENT_ROLL_REMOVED = "roll_removed"  # {"seq"}
+EVENT_ROLL_REVEALED = "roll_revealed"  # the full roll dict, no longer hidden
 EVENT_SCENE = "scene"  # {"entries": [scene entry dicts]}
 EVENT_SCENE_PORTRAIT = "scene_portrait"  # {"ref", "portrait"}
 EVENT_MOD_STATE = "mod_state"  # {"mod_id", "key", "payload"} — payload None means gone
@@ -527,6 +536,7 @@ class SessionServer:
         hidden: bool = False,
         spec: dict | None = None,
         player_id: str | None = None,
+        reroll: bool = False,
     ) -> RollRecord:
         """Resolve a roll for the GM (or for *player_id*) and publish it.
 
@@ -538,7 +548,14 @@ class SessionServer:
         if slot is None:
             raise KeyError(f"no player {player_id!r}")
         return self._resolve_roll(
-            slot, label=label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden, spec=spec
+            slot,
+            label=label,
+            bonus=bonus,
+            penalty=penalty,
+            dc=dc,
+            hidden=hidden,
+            spec=spec,
+            reroll=reroll,
         )
 
     def note(self, text: str, *, player_id: str | None = None) -> RollRecord:
@@ -605,6 +622,27 @@ class SessionServer:
         self._emit(EVENT_ROLL_REMOVED, {"seq": seq})
         if not record.hidden:
             self.broadcast(RollRemoved(seq=seq))
+        return True
+
+    def reveal_roll(self, seq: int) -> bool:
+        """Show one hidden roll to the table (a GM action).
+
+        The stored record turns visible — so a late joiner's welcome carries it like
+        any other roll — and the whole roll goes to every client as a
+        :class:`RollRevealed`, the GM's seat included: a GM dialled in over a socket
+        redraws its card from that, an in-process one from
+        :data:`EVENT_ROLL_REVEALED`. Returns ``False`` when no hidden roll carried
+        that sequence number.
+        """
+        with self._lock:
+            record = self.state.reveal_roll(seq)
+            if record is not None:
+                self._rewrite_rolls()
+        if record is None:
+            return False
+        payload = record.to_dict()
+        self._emit(EVENT_ROLL_REVEALED, payload)
+        self.broadcast(RollRevealed(roll=payload))
         return True
 
     def prompt_action(
@@ -1270,6 +1308,7 @@ class SessionServer:
                 # Only the GM may roll unseen; a player's flag is simply ignored.
                 hidden=message.hidden and slot.is_gm,
                 spec=message.spec,
+                reroll=message.reroll,
             )
         elif isinstance(message, NoteRequest):
             self._record_note(slot, message.text)
@@ -1281,6 +1320,9 @@ class SessionServer:
         elif isinstance(message, RemoveRollRequest) and slot.is_gm:
             # Removing a roll is a GM privilege; a player's request is ignored.
             self.remove_roll(message.seq)
+        elif isinstance(message, RevealRollRequest) and slot.is_gm:
+            # So is revealing one: only the GM ever rolled it hidden.
+            self.reveal_roll(message.seq)
         elif isinstance(message, Ping):
             self._send_quietly(connection, Pong(nonce=message.nonce))
         elif isinstance(message, (ApplyCondition, RemoveCondition, SetHeroPoints)) and slot.is_gm:
@@ -1364,6 +1406,7 @@ class SessionServer:
         dc: int | None,
         hidden: bool,
         spec: dict | None = None,
+        reroll: bool = False,
     ) -> RollRecord:
         bonus = _clamp(bonus, MAX_ROLL_MODIFIER)
         penalty = _clamp(penalty, MAX_ROLL_MODIFIER)
@@ -1375,11 +1418,9 @@ class SessionServer:
         spec = sanitize_spec(spec)
 
         result: CheckResult | None = None
-        if dc is None:
-            die = roll_d20(self._rng)
-        else:
-            result = resolve_check(bonus - penalty, dc, rng=self._rng)
-            die = result.die_roll
+        die, natural = reroll_d20(self._rng) if reroll else (roll_d20(self._rng), True)
+        if dc is not None:
+            result = resolve_check(bonus - penalty, dc, roll=die, natural=natural)
 
         with self._lock:
             record = self.state.record_roll(
@@ -1392,6 +1433,8 @@ class SessionServer:
                 label=label,
                 hidden=hidden,
                 spec=spec,
+                reroll=reroll,
+                natural=natural,
             )
             self._append_roll(record)
 

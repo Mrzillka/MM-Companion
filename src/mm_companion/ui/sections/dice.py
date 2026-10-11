@@ -30,14 +30,18 @@ Two things about it are deliberately unlike its neighbours:
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import QGroupBox, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QDialog, QGroupBox, QVBoxLayout, QWidget
 
+from mm_companion.core import library
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.rules import RollSpec, localize_spec, requested_roll_choices
+from mm_companion.ui import theme
 from mm_companion.ui.dice_roller import DiceRollerView
+from mm_companion.ui.impress import IMPRESS_ACTION, KIND_IMPRESS, ImpressDialog, new_action_id
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.session_bridge import live_session
+from mm_companion.ui.toasts import notify_window
 
 
 class DiceSection(QGroupBox):
@@ -65,6 +69,10 @@ class DiceSection(QGroupBox):
         # purpose: a request is answered on somebody else's sheet.
         self.view.panel.set_roll_choices(requested_roll_choices(self._data))
         self.view.panel.rollRequested.connect(self.request_roll)
+        # Actions against other characters, when the ruleset has any.
+        if data.impress.available:
+            self.view.panel.set_actions([IMPRESS_ACTION])
+        self.view.panel.actionRequested.connect(self.start_action)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.view)
@@ -156,6 +164,43 @@ class DiceSection(QGroupBox):
         bridge = live_session()
         if bridge is None or not bridge.prompt_roll(spec.to_dict()):
             self.view.add_local_request(spec)
+
+    def start_action(self, kind: str) -> None:
+        """Run one of the Action row's actions — the Impress button's handler.
+
+        At a table the dialog only *declares* the impression: it goes to the GM, who
+        sets the modifiers and rolls (see :mod:`mm_companion.ui.impress_gm`). Off the
+        air there is nobody to send it to, so the check is rolled here with the
+        modifiers the dialog grew for it, and its card offers the resistance as a
+        button — the "request only" way of running it.
+        """
+        if kind != KIND_IMPRESS:
+            return
+        bridge = live_session()
+        scene = bridge.scene() if bridge is not None else None
+        own = bridge.own_player_id() if bridge is not None else ""
+        dialog = ImpressDialog(
+            self._data, self._character, scene=scene, own_player_id=own, parent=self.window()
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        name = library.display_name(self._character)
+        if bridge is not None:
+            attempt = dialog.attempt(new_action_id(), source_name=name)
+            if attempt is None:
+                return
+            if bridge.send_action_request(KIND_IMPRESS, attempt.action_id, attempt.to_dict()):
+                notify_window(self.window(), "Impress sent to the GM.", theme.color("tint.better"))
+            else:
+                notify_window(
+                    self.window(),
+                    "Could not reach the GM — the impression was not sent.",
+                    theme.color("tint.worse"),
+                )
+            return
+        spec = dialog.offline_spec(source_name=name)
+        if spec is not None:
+            self.view.panel.roll_spec(spec)
 
     def sync_session(self) -> None:
         """Re-check whether there is a session, and show the matching history.

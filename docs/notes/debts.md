@@ -35,6 +35,25 @@ Not urgent. The lag that prompted all of this was the window flash and the repea
 gathers, both fixed; this is the remainder, and it no longer shows up as a dropped
 frame during ordinary editing.
 
+## The rest of the Impress action
+
+Three pieces of the Impress action were left for later; see [the actions
+notes](actions.md) for the shape they would plug into.
+
+- **Shaking an impression off.** A condition an impression imposed should get a new
+  resistance check against the original DC at the end of each of the target's turns.
+  The conditions land, but nothing remembers the DC or prompts the save — there is no
+  turn-economy layer to hang it on yet (the conditions notes put recovery out of scope
+  for the same reason). The likely home is a per-condition "save to end" record on
+  `AppliedCondition`, written by `targeting.apply_rung`.
+- **Area effects on the targeting layer.** `targeting` and `GroupRollRequest` were
+  shaped for area Damage and Affliction (a fixed DC, one resistance per target, the
+  effect's own ladder — `rung_condition_ids` already reads an Affliction's
+  `configKey` rungs), but no power card offers it yet.
+- **Counting earlier attempts.** "Each previous attempt to Impress this scene" is a
+  slider the GM sets. The window could count attempts per target since the last New
+  scene and preset it.
+
 ## PySide6 is capped below 6.12
 
 `pyproject.toml` pins `PySide6>=6.6,<6.12`. The cap went in on 2026-10-10, when

@@ -386,6 +386,7 @@
           "conditions": ["hit"],
           "note": "unless the target's Toughness is Hardened, Impervious or Impenetrable against this attack"
         },
+        "_parameters": "A rung may also carry parameters: a condition id -> the parameter it is applied with ({source} is whoever imposed it), for a condition that needs one, as Frightened does.",
         "_escalates": "What a rung applies *instead* when the target already carries the named condition, chained: a second failure at this rung on an Incapacitated target reads incapacitated -> dying, a third dying -> dead. The book's rule, as data rather than prose.",
         "degrees": [
           {

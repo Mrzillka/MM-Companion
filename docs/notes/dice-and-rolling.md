@@ -660,6 +660,18 @@ of NPCs — often fewer. Two answers, and they are independent.
   makes would pop a real window on the developer's desktop; `tests/test_toasts.py`
   lifts it for its own.
 
+## The Action row
+
+Under the Request row, an **Action** row of buttons for actions taken against other
+characters — Impress first. Hidden until a host calls `set_actions` with
+`(key, caption, tooltip)` triples, so a roller with nothing to offer costs no height,
+and like the Request row it only *reports* (`actionRequested(key)`): running an action
+needs a dialog, a character and perhaps a session, none of which the panel has. The
+Dice block and the GM's Rolls block both offer Impress here, which is what puts the
+player's button and the GM's in the same place. See [the actions notes](actions.md),
+which also cover the two `RollSpec` additions the action brought (`KIND_BEST_OF` and
+`dc_from_total`).
+
 ## The Request row sits on the grid
 
 The trait combo is in the sliders' column and the DC box with its "Ask" in the spin

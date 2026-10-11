@@ -196,6 +196,14 @@ class RollRecord:
     kind: str = KIND_ROLL
     text: str = ""
     mod_id: str = ""
+    #: The group roll this line belongs to (see
+    #: :meth:`~.server.SessionServer.group_roll`), or ``""`` for an ordinary roll.
+    #: One check against several resistances lands as several records — a line per
+    #: creature, each attributed to its own seat — and this is how a reader puts
+    #: them back together: the GM's window to apply what the check did, and a
+    #: player's roller to know that a record bearing their name is not the answer
+    #: to the die *they* threw.
+    group: str = ""
     timestamp: str = field(default_factory=utc_now)
 
     @property
@@ -225,6 +233,7 @@ class RollRecord:
             "kind": self.kind,
             "text": self.text,
             "mod_id": self.mod_id,
+            "group": self.group,
             "timestamp": self.timestamp,
         }
 
@@ -249,6 +258,7 @@ class RollRecord:
             kind=str(raw.get("kind", "")) or KIND_ROLL,
             text=str(raw.get("text", "")),
             mod_id=str(raw.get("mod_id", "")),
+            group=str(raw.get("group", "")),
             timestamp=str(raw.get("timestamp", "")) or utc_now(),
         )
 
@@ -266,6 +276,7 @@ class RollRecord:
         label: str = "",
         hidden: bool = False,
         spec: dict | None = None,
+        group: str = "",
     ) -> RollRecord:
         """Build a record from a resolved check (``None`` when no DC was set)."""
         return cls(
@@ -281,6 +292,7 @@ class RollRecord:
             label=label,
             hidden=hidden,
             spec=spec,
+            group=group,
         )
 
 
@@ -431,6 +443,7 @@ class SessionState:
         label: str = "",
         hidden: bool = False,
         spec: dict | None = None,
+        group: str = "",
     ) -> RollRecord:
         """Build a :class:`RollRecord` from a resolved check and append it.
 
@@ -448,6 +461,7 @@ class SessionState:
             label=label,
             hidden=hidden,
             spec=spec,
+            group=group,
         )
         self.rolls.append(record)
         self.touch()

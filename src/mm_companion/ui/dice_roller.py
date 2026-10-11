@@ -339,6 +339,7 @@ class RollCard(QFrame):
             spec,
             die=die,
             degree=None if result is None else result.degree,
+            total=die + bonus - penalty,
             on_follow_up=self.rollFollowUp.emit,
             # Every card in the private history is one's own, and off the air the
             # roller is usually running both sides — so never assume the sheet in
@@ -426,6 +427,11 @@ class DiceRollerPanel(ReflowBox, QWidget):
     #: for a note (the session, or the private history), and the panel has no
     #: session of its own to answer it with.
     rollRequested = Signal(object)
+
+    #: One of the Action row's buttons was pressed — its action key (``"impress"``).
+    #: Like :attr:`rollRequested` the panel only reports it: running an action means
+    #: a dialog, a character and perhaps a session, none of which the panel has.
+    actionRequested = Signal(str)
 
     def __init__(self, parent: QWidget | None = None, *, hidden_option: bool = False) -> None:
         super().__init__(parent)
@@ -700,7 +706,57 @@ class DiceRollerPanel(ReflowBox, QWidget):
             row += 1
 
         self._build_request_row(grid, row)
+        self._build_action_row(grid, row + 1)
         return group
+
+    def _build_action_row(self, grid: QGridLayout, row: int) -> None:
+        """The Action row: buttons for actions taken against other characters.
+
+        Impress is the first. Under the Request row because it is the same kind of
+        verb — something that involves somebody else — and on the same grid, its
+        buttons spanning the trait and spin-box columns. Hidden, like the Request
+        row, until a host says which actions it runs (:meth:`set_actions`), so a
+        roller with nothing to offer costs no height for it.
+        """
+
+        self._action_part = QWidget()
+        line = QHBoxLayout(self._action_part)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(int(theme.metric("space.xs")))
+        self._action_line = line
+        self._action_buttons: list[QPushButton] = []
+        self._action_label = QLabel("Action")
+        grid.addWidget(self._action_label, row, 0)
+        grid.addWidget(self._action_part, row, 1, 1, 2)
+        self._show_action_row(False)
+
+    def set_actions(self, actions: object) -> None:
+        """Offer *actions* — ``(key, caption, tooltip)`` triples — on the Action row.
+
+        An empty list hides the row. Each button reports its key on
+        :attr:`actionRequested`.
+        """
+
+        for button in self._action_buttons:
+            self._action_line.removeWidget(button)
+            discard_widget(button)
+        self._action_buttons = []
+        for key, caption, tooltip in actions or ():
+            button = QPushButton(caption)
+            button.setToolTip(tooltip)
+            button.clicked.connect(lambda _=False, k=key: self.actionRequested.emit(k))
+            self._action_line.addWidget(button)
+            self._action_buttons.append(button)
+        self._show_action_row(bool(self._action_buttons))
+
+    def _show_action_row(self, visible: bool) -> None:
+        """Show or hide the Action row, and say the panel changed size (see
+        :meth:`_show_request_row`)."""
+
+        self._action_label.setVisible(visible)
+        self._action_part.setVisible(visible)
+        self.updateGeometry()
+        self.contentChanged.emit()
 
     def _build_request_row(self, grid: QGridLayout, row: int) -> None:
         """The Request row: a trait, a difficulty, and a button that asks the table.
@@ -1325,6 +1381,10 @@ class DiceRollerPanel(ReflowBox, QWidget):
         if not self._awaiting or not isinstance(roll, dict):
             return
         if roll.get("kind", KIND_ROLL) != KIND_ROLL:
+            return
+        # A group roll the GM made carries this seat's name on its resistance line
+        # but answers nothing this panel threw (see RollRecord.group).
+        if roll.get("group"):
             return
         if str(roll.get("player_id", "")) != self._own_id:
             return

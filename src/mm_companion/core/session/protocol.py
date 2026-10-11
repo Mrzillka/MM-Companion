@@ -79,7 +79,14 @@ from typing import ClassVar
 #: floor without a word, so a GM would run a whole fight believing the table could
 #: see their timers. Silence that reads as success is exactly what these bumps
 #: exist to prevent.
-PROTOCOL_VERSION = 10
+#:
+#: v11 added **actions against other characters** — the Impress action first, area
+#: effects later: :class:`ActionRequest` (any seat asks the GM), :class:`ActionPrompt`
+#: (the GM asks one player), :class:`GroupRollRequest` (the server rolls one check
+#: against several resistances) and ``RollRecord.group``. Bumped for the v10 reason:
+#: a v10 server drops all three unknown messages without a word, so a player would
+#: impress into silence and a GM's Roll would roll nothing.
+PROTOCOL_VERSION = 11
 
 #: Hard cap on one encoded message, including its trailing newline. A character
 #: snapshot is the largest thing that legitimately travels (tens of KB); anything
@@ -515,6 +522,79 @@ class ModRequest(Message):
 
 @_register
 @dataclass(frozen=True)
+class ActionRequest(Message):
+    """A seat asking the **GM** to run an action against other characters. Any seat.
+
+    The Impress action is the first: a player declares an impression, a skill and
+    their targets, and the GM sets the situational modifiers and resolves it. Also
+    the road back — a targeted player's choice of how to resist travels the same
+    way. ``kind`` says which (``"impress"``, ``"resist"``); ``action_id`` ties the
+    messages of one attempt together; ``payload`` is opaque here, checked into a
+    bounded shape like a mod's (:func:`sanitize_mod_payload`) and never read, since
+    what an impression *is* is a rules question this layer may not import.
+
+    Routed exactly as :class:`ModRequest` is — stored nowhere, broadcast nowhere,
+    forwarded to the GM seat alone — and ``player_id`` is likewise **stamped by the
+    server** from the sending slot.
+    """
+
+    TYPE: ClassVar[str] = "action_request"
+
+    kind: str
+    action_id: str = ""
+    payload: dict | None = None
+    player_id: str = ""
+
+
+@_register
+@dataclass(frozen=True)
+class ActionPrompt(Message):
+    """The GM asking **one player** something about an action in progress. GM only.
+
+    "You are being impressed — how do you resist?", and "that is settled now" when
+    the GM rolls or calls it off. The server delivers it to the named seat and
+    nowhere else; ``payload`` is opaque, as for :class:`ActionRequest`.
+    """
+
+    TYPE: ClassVar[str] = "action_prompt"
+
+    player_id: str
+    kind: str
+    action_id: str = ""
+    payload: dict | None = None
+
+
+@_register
+@dataclass(frozen=True)
+class GroupRollRequest(Message):
+    """One check against several resistances, rolled by the server. GM only.
+
+    Each of ``lines`` is a resistance check — ``label``, ``bonus``, ``penalty``,
+    ``spec``, a ``dc_offset`` for that target alone, and the ``player_id`` of the
+    seat it is attributed to (the GM's, for a creature nobody plays). The DC is
+    ``dc`` when it is fixed, or **opposed**: with a ``lead`` (a line of the same
+    shape, without an offset) the server rolls that first and its total is the DC,
+    raised by ``critical_bonus`` on a natural 20. Every roll lands in the log as an
+    ordinary record carrying ``group``, so nothing about drawing one changes and
+    the GM can gather them again.
+
+    The server rolls rather than trusting any client's numbers, as for every roll,
+    and stays rules-free doing it: the bonus a critical is worth comes with the
+    request, from the GM's ruleset.
+    """
+
+    TYPE: ClassVar[str] = "group_roll_request"
+
+    group: str
+    lines: list[dict] = field(default_factory=list)
+    lead: dict | None = None
+    dc: int | None = None
+    critical_bonus: int = 0
+    hidden: bool = False
+
+
+@_register
+@dataclass(frozen=True)
 class Ping(Message):
     """Keepalive; the server answers :class:`Pong` with the same ``nonce``."""
 
@@ -839,6 +919,8 @@ def sanitize_spec(raw: object, _depth: int = 0) -> dict | None:
             spec[key] = value
     if raw.get("rolled_by_target") is True:
         spec["rolled_by_target"] = True
+    if raw.get("dc_from_total") is True:
+        spec["dc_from_total"] = True
     outcomes = raw.get("outcomes")
     if isinstance(outcomes, list):
         rungs = [o[:MAX_SPEC_TEXT] for o in outcomes[:MAX_SPEC_OUTCOMES] if isinstance(o, str)]
@@ -848,6 +930,46 @@ def sanitize_spec(raw: object, _depth: int = 0) -> dict | None:
     if follow_up is not None:
         spec["follow_up"] = follow_up
     return spec
+
+
+#: Bounds on a group roll and on an action's identifiers. A group is aimed at the
+#: creatures on a scene, so it never needs more lines than a scene has entries.
+MAX_GROUP_LINES = 24
+MAX_ACTION_ID = 64
+
+
+def sanitize_action_id(raw: object) -> str:
+    """An action kind or id clipped to a short plain string, ``""`` if unusable."""
+
+    if not isinstance(raw, str):
+        return ""
+    return raw.strip()[:MAX_ACTION_ID]
+
+
+def sanitize_group_line(raw: object) -> dict | None:
+    """Check one line of a :class:`GroupRollRequest` into a known shape, or drop it.
+
+    The numbers are left for the server to clamp as it clamps any roll's; this keeps
+    the types honest and runs the spec through :func:`sanitize_spec`.
+    """
+
+    if not isinstance(raw, dict):
+        return None
+
+    def _int(key: str) -> int:
+        value = raw.get(key, 0)
+        return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+    label = raw.get("label")
+    player_id = raw.get("player_id")
+    return {
+        "label": label if isinstance(label, str) else "",
+        "bonus": _int("bonus"),
+        "penalty": _int("penalty"),
+        "dc_offset": _int("dc_offset"),
+        "player_id": player_id if isinstance(player_id, str) else "",
+        "spec": sanitize_spec(raw.get("spec")),
+    }
 
 
 # Bounds on a scene. Same reasoning as the spec bounds above and the same shape of

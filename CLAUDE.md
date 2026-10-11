@@ -21,7 +21,10 @@ like an attack power — including vehicles and installations, which are bought 
 traits off their own tables (see [the equipment notes](docs/notes/equipment.md)). For
 play there is a **simple sheet** (View ▸ Simple Sheet): the same character on one tight,
 printable page, borrowing the live blocks so every play-time control still works (see
-[the simple sheet notes](docs/notes/simple-sheet.md)).
+[the simple sheet notes](docs/notes/simple-sheet.md)). The **Impress** action runs one
+interaction check against several creatures off the scene — the GM sets the modifiers,
+the server rolls the group, and the conditions land on their own — on a targeting
+layer meant for area effects next (see [the actions notes](docs/notes/actions.md)).
 
 ## Commands
 
@@ -93,6 +96,7 @@ several of them are the only record of a bug that shaped it.
 | [Size and movement](docs/notes/size-and-movement.md) | size, speed, or a movement effect |
 | [The Notes block](docs/notes/notes-block.md) | Notes, or adding a block there can be more than one of |
 | [The session layer](docs/notes/session.md) | GM Mode or online play |
+| [Actions against other characters](docs/notes/actions.md) | Impress, `actions.json`, the roller's Action row, or resolving one check against several targets |
 | [The theme layer](docs/notes/theme.md) | writing any colour, size, radius or border |
 | [The table blocks](docs/notes/table-blocks.md) | Abilities, Resistances, Advantages or Skills |
 | [Shared UI utilities and view modes](docs/notes/ui-utilities.md) | adding widgets, or the lock |

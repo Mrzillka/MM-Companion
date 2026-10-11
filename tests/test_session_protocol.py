@@ -16,6 +16,8 @@ from mm_companion.core.session.protocol import (
     MAX_MESSAGE_BYTES,
     PROTOCOL_VERSION,
     SCENE_DISPOSITIONS,
+    ActionPrompt,
+    ActionRequest,
     ApplyCondition,
     CharacterSnapshot,
     ControlHello,
@@ -23,6 +25,7 @@ from mm_companion.core.session.protocol import (
     CreateSessionRequest,
     DeleteSessionRequest,
     ErrorMessage,
+    GroupRollRequest,
     Hello,
     Kicked,
     KickRequest,
@@ -92,6 +95,16 @@ ROUND_TRIP_CASES = [
     ModNote(mod_id="timers", text="Timer Bomb finished"),
     ModRequest(mod_id="timers", topic="nudge", payload={"id": "t1"}),
     ModRequest(mod_id="timers", topic="nudge", player_id="p1"),  # as forwarded
+    ActionRequest(kind="impress", action_id="a1", payload={"impression": "dazed"}),
+    ActionRequest(kind="resist", action_id="a1", player_id="p1"),  # as forwarded
+    ActionPrompt(player_id="p1", kind="resist", action_id="a1", payload={"skill": "Deception"}),
+    GroupRollRequest(
+        group="g1",
+        lines=[{"label": "Will", "bonus": 3, "player_id": "p1", "dc_offset": -2}],
+        lead={"label": "Impress", "bonus": 8},
+        critical_bonus=5,
+    ),
+    GroupRollRequest(group="g2", lines=[{"label": "Toughness"}], dc=15),
     Ping(nonce=7),
     Welcome(
         session_id="s1",
@@ -169,11 +182,13 @@ def test_the_protocol_version_is_the_one_the_keepalive_needs() -> None:
     type exists, and shows an empty board for the whole fight. v10 opens the wire
     to mods, and fails the same quiet way: ``_handle`` has no ``else``, so a v9
     server drops a ``set_mod_state`` without a word and the GM runs the fight
-    believing the table can see their timers. Either way changing this number is a
+    believing the table can see their timers. v11 adds actions against other
+    characters (the Impress action), which fail the same way: a v10 server drops
+    the request and the group roll unread. Either way changing this number is a
     decision about who can still join, so it should not be possible to do by
     accident.
     """
-    assert PROTOCOL_VERSION == 10
+    assert PROTOCOL_VERSION == 11
 
 
 def test_every_registered_type_is_reachable_by_tag() -> None:

@@ -256,6 +256,7 @@ def chain_widgets(
     degree: int | None,
     on_follow_up: Callable[[RollSpec], None],
     localize: bool = True,
+    total: int | None = None,
 ) -> list[QWidget]:
     """What a rolled :class:`RollSpec` adds under its history card: the chain.
 
@@ -277,6 +278,8 @@ def chain_widgets(
     knowing a single rule.
 
     Accepts the spec as a :class:`RollSpec` or as the plain dict it arrives as.
+    ``total`` is the roll's total, which an *opposed* follow-up (resisting an
+    impression) takes as its DC.
 
     ``localize`` is what decides whether the follow-up arrives with the reader's own
     resistance filled in (:func:`~mm_companion.core.rules.localize_spec`, applied
@@ -290,7 +293,7 @@ def chain_widgets(
     if resolved is None:
         return []
     widgets: list[QWidget] = []
-    follow_up = follow_up_for_result(resolved, die, degree, load_game_data())
+    follow_up = follow_up_for_result(resolved, die, degree, load_game_data(), total)
     if follow_up is not None and not localize:
         follow_up = replace(follow_up, trait_key="")
     if follow_up is not None:
@@ -630,6 +633,7 @@ class SessionRollCard(HistoryCard):
             roll.get("spec"),
             die=die,
             degree=None if degree is None else int(degree),
+            total=die + int(roll.get("bonus", 0)) - int(roll.get("penalty", 0)),
             on_follow_up=self.rollFollowUp.emit,
             localize=not own,
         ):

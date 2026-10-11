@@ -487,6 +487,45 @@ def _modifier_notes(
     return tuple(notes)
 
 
+def modifier_field_claimed(field, base_effect) -> bool:
+    """Whether a modifier's config ``field`` names a game term the effect itself picks.
+
+    Alternate Resistance chooses what an effect is resisted by — except on an effect
+    that already has its own "Resisted by" (Affliction), where the extra *widens* that
+    field instead. Two pickers for one answer would be a question of which wins, so
+    the modifier's yields: the constructor does not show it and the summary ignores it.
+    """
+
+    if not field.overrides or base_effect is None:
+        return False
+    return any(own.overrides == field.overrides for own in base_effect.config_fields)
+
+
+def modifier_config_overrides(
+    modifier, selection, base_effect, game_data: GameData | None
+) -> dict[str, str]:
+    """The game-term fields a modifier's own config choices replace.
+
+    A config field on a *modifier* naming ``overrides`` works as one on an effect does:
+    the chosen value becomes that stat — Alternate Resistance's "Resisted by" turns a
+    Damage's Toughness into Fortitude. Several fields overriding one stat read as
+    alternatives (``"Fortitude or Will"``), which is how a best-of or worst-of two is
+    written down. A field the effect claims itself (:func:`modifier_field_claimed`)
+    is skipped, and an unset one leaves the stat alone.
+    """
+
+    picked: dict[str, list[str]] = {}
+    for field in modifier.config_fields:
+        if not field.overrides or modifier_field_claimed(field, base_effect):
+            continue
+        value = selection.config.get(field.key)
+        if value:
+            shown = _config_display(field, value, game_data)
+            if shown not in picked.get(field.overrides, []):
+                picked.setdefault(field.overrides, []).append(shown)
+    return {key: " or ".join(values) for key, values in picked.items()}
+
+
 def _effective_stats(
     effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
 ) -> tuple[dict[str, str], dict[str, str], dict[str, str], EffectImpact]:
@@ -564,6 +603,13 @@ def _effective_stats(
         steps = modifier.step_by * (selection.rank if modifier.ranked else 1)
         touched = False
         for key, value in modifier.overrides.items():
+            if key in stats:
+                stats[key] = value
+                change[key] = tint
+                touched = True
+        for key, value in modifier_config_overrides(
+            modifier, selection, base_effect, game_data
+        ).items():
             if key in stats:
                 stats[key] = value
                 change[key] = tint

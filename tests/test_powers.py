@@ -802,6 +802,52 @@ def test_a_widened_resistance_still_reads_by_name_once_the_extra_comes_off() -> 
     assert [r for r in effect_stat_rows(effect, data) if r.key == "resistanceSecond"]
 
 
+def _alt_resisted(effect_id: str, **config) -> PowerEffectInstance:
+    effect = PowerEffectInstance(effect_id, rank=8)
+    effect.extras.append(ModifierSelection("alternate_resistance", config=dict(config)))
+    return effect
+
+
+def test_alternate_resistance_swaps_any_effects_resistance() -> None:
+    """Not just Affliction: a Damage resisted by Fortitude reads Fortitude, same DC."""
+    data = load_game_data()
+    rows = {r.key: r for r in effect_stat_rows(_alt_resisted("damage", resistance="Fortitude"), data)}
+    assert rows["resistance"].value == "Fortitude vs. DC 18"
+    assert rows["resistance"].change == "better"
+
+
+def test_alternate_resistance_offers_every_resistance() -> None:
+    from mm_companion.core.rules import config_source_options
+
+    data = load_game_data()
+    modifier = data.modifier_catalog()["alternate_resistance"]
+    field = next(f for f in modifier.config_fields if f.key == "resistance")
+    offered = [value for _label, value in config_source_options(field, data)]
+    assert all(res.name in offered for res in data.resistances if not res.derived)
+
+
+def test_two_alternate_resistances_read_as_either() -> None:
+    data = load_game_data()
+    effect = _alt_resisted("damage", resistance="Fortitude", resistanceSecond="Will", against="worst")
+    rows = {r.key: r for r in effect_stat_rows(effect, data)}
+    assert rows["resistance"].value == "Fortitude or Will vs. DC 18"
+
+
+def test_an_unset_alternate_resistance_leaves_the_usual_one() -> None:
+    data = load_game_data()
+    rows = {r.key: r for r in effect_stat_rows(_alt_resisted("damage", against="even"), data)}
+    assert rows["resistance"].value == "Toughness vs. 18"
+
+
+def test_affliction_keeps_its_own_resistance_picker_over_the_chips() -> None:
+    """Affliction answers "resisted by" itself; the extra widens that, not a second one."""
+    data = load_game_data()
+    effect = _alt_resisted("affliction", resistance="Will")
+    effect.config["resistance"] = "Athletics"
+    rows = {r.key: r for r in effect_stat_rows(effect, data)}
+    assert rows["resistance"].value.startswith("Athletics")
+
+
 def test_regeneration_reads_its_recovery_interval_and_resurrection_off_its_rank() -> None:
     """The book's Regeneration table (p139), which the card used to say nothing about."""
     data = load_game_data()

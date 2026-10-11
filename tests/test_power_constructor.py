@@ -2587,6 +2587,36 @@ def test_an_ordinary_effects_cost_line_hides_nothing(qapp: QApplication) -> None
     assert card._cost.toolTip() == ""
 
 
+def test_alternate_resistance_picks_the_resistance_on_its_chip(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QComboBox
+
+    window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
+    card = window.canvas.add_effect("damage")
+    card.attach_modifier("alternate_resistance")
+    combos = card._chips[0].findChildren(QComboBox)
+    # Resisted by, Or, Worth — the first two offering every resistance.
+    assert len(combos) == 3
+    picker = combos[0]
+    offered = [picker.itemData(i) for i in range(picker.count())]
+    assert {"Dodge", "Fortitude", "Toughness", "Will"} <= set(offered)
+
+    picker.setCurrentIndex(picker.findData("Will"))
+
+    assert card._chips[0].selection.config["resistance"] == "Will"
+    rows = {r.key: r for r in window._terms.effect_rows[0]}
+    assert rows["resistance"].value.startswith("Will vs.")
+
+
+def test_affliction_keeps_its_resistance_on_the_card_not_the_chip(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QComboBox
+
+    window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
+    card = window.canvas.add_effect("affliction")
+    card.attach_modifier("alternate_resistance")
+    # Only the Worth tier: the card's own Resisted by is the one that widens.
+    assert len(card._chips[0].findChildren(QComboBox)) == 1
+
+
 def test_a_narrowed_picker_still_shows_the_value_it_holds(qapp: QApplication) -> None:
     """Taking Alternate Resistance off must not leave the picker denying the card.
 

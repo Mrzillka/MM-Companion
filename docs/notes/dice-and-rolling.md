@@ -675,14 +675,22 @@ which also cover the two `RollSpec` additions the action brought (`KIND_BEST_OF`
 ## Reroll
 
 `DiceRollerPanel.reroll` throws **this panel's last roll** again — the bonus, penalty,
-DC, hidden flag, label and spec it was *made* with, recorded in `_start_roll` as
-`_last_roll`, not what the inputs say now (a roll spends its sliders, so the inputs
-have usually moved on). The die is `core.dice.reroll_d20`: a 1–10 counts 10 more, so it
-lands on 11–20 — the Luck re-roll. It is reported as the boosted number, and is graded
-on that number like any die, natural-20 included. In a session the **server** rolls it
-(`RollRequest.reroll`, part of protocol v12), for the reason it rolls everything. The
-label gains "(reroll)" so the history says which die was lucky. It spends nothing — no
-Hero Point, no Luck rank — which is the player's to mark.
+DC, hidden flag, label and spec it was *made* with, not what the inputs say now (a roll
+spends its sliders, so the inputs have usually moved on). Only a roll that **came back**
+counts: `_start_roll` parks it in `_pending_last` and a result commits it, so a roll the
+session never answered is not handed back as a free lucky one. The spec is read from the
+record (`_rolled_spec`), never re-loaded onto the chip — loading runs the localizer, which
+*adds* this sheet's number, so a re-rolled save came back at double its modifier, and it
+also unloaded whatever trait the player had picked since.
+
+The die is `core.dice.reroll_d20`: a 1–10 counts 10 more, so it lands on 11–20 — the Luck
+re-roll. It returns `(die, natural)`, because only a **natural** 20 is an added success
+(the book says so in as many words): a 10 lifted to 20 is graded as 20 but is not a
+critical, so `resolve_check` and `RollRecord.from_check` take `natural`. In a session
+the **server** rolls it (`RollRequest.reroll`, protocol v12) and stamps `reroll` on the
+record itself — a client's label is not evidence, and every seat should see which dice
+were lucky. `reroll_label` adds "(reroll)" wherever a roll is named. It spends nothing —
+no Hero Point, no Luck rank — which is the player's to mark.
 
 ## The Request row sits on the grid
 

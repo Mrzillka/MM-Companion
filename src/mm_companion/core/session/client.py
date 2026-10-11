@@ -744,10 +744,20 @@ class SessionClient:
             self._emit(EVENT_ROLL_REMOVED, {"seq": message.seq})
         elif isinstance(message, RollRevealed):
             # The GM already holds this seq (hidden); a player has never seen it.
+            # Either way it goes in at its own place in the log, by seq.
             seq = message.roll.get("seq")
             self.history = [r for r in self.history if r.get("seq") != seq]
-            self.history.append(message.roll)
-            self.history.sort(key=lambda r: r.get("seq", 0))
+            at = len(self.history)
+            if isinstance(seq, int):
+                at = next(
+                    (
+                        index
+                        for index, entry in enumerate(self.history)
+                        if isinstance(entry.get("seq"), int) and entry["seq"] > seq
+                    ),
+                    at,
+                )
+            self.history.insert(at, message.roll)
             self._emit(EVENT_ROLL_REVEALED, message.roll)
         elif isinstance(message, SceneUpdate):
             self.scene = [dict(entry) for entry in message.entries]

@@ -89,6 +89,7 @@ from mm_companion.ui.roll_history import (
     degree_label,
     escape_rich_text,
     quick_roll_key,
+    reroll_label,
     roll_headline,
     size_history_scroll,
     tighten_card,
@@ -306,6 +307,7 @@ class RollCard(QFrame):
         result: CheckResult | None,
         label: str = "",
         spec: object = None,
+        reroll: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -324,10 +326,11 @@ class RollCard(QFrame):
         headline = roll_headline(local_record(die, bonus, penalty, dc, result))
         # What was rolled leads, the way the shared history's card names the player —
         # a private history of bare numbers is unreadable a few rolls later.
-        if label:
+        shown = reroll_label(label, reroll)
+        if shown:
             headline = (
                 f"<span style='color:{theme.color('accent.dice')}'>"
-                f"{escape_rich_text(label)}</span><br>"
+                f"{escape_rich_text(shown)}</span><br>"
                 f"{headline}"
             )
         title = QLabel(headline)
@@ -459,6 +462,9 @@ class DiceRollerPanel(ReflowBox, QWidget):
         # until there has been one. While :attr:`_rerolling` is set the roll in
         # flight reads its parameters from here rather than from the inputs.
         self._last_roll: dict | None = None
+        # The roll in flight, until it has a result: only a roll that came back
+        # becomes the one Reroll throws again — an abandoned one never resolved.
+        self._pending_last: dict | None = None
         self._rerolling = False
         # Whether the readout holds a rolled number rather than the resting prompt,
         # which is what stops the prompt from overwriting a result — see
@@ -1321,12 +1327,23 @@ class DiceRollerPanel(ReflowBox, QWidget):
     def _roll_label(self) -> str:
         """The name this roll travels under — the loaded spec's, or nothing.
 
-        A re-roll says so, since its die is not an ordinary one.
+        A re-roll travels under its original's name; the ``reroll`` flag beside it
+        is what marks it (:func:`~mm_companion.ui.roll_history.reroll_label`).
         """
         if self._rerolling and self._last_roll is not None:
-            label = self._last_roll["label"]
-            return f"{label} (reroll)" if label else "Reroll"
+            return self._last_roll["label"]
         return self._spec.label if self._spec is not None else ""
+
+    def _rolled_spec(self) -> RollSpec | None:
+        """The trait the roll in flight is of: the last roll's on a re-roll.
+
+        Read from here rather than loaded onto the chip, so a re-roll neither runs
+        the localizer a second time over a spec it already filled in nor disturbs a
+        trait the player has loaded since.
+        """
+        if self._rerolling and self._last_roll is not None:
+            return self._last_roll["spec"]
+        return self._spec
 
     def reroll(self) -> bool:
         """Throw the last roll again — same bonus, penalty, DC and trait — luckily.
@@ -1339,14 +1356,8 @@ class DiceRollerPanel(ReflowBox, QWidget):
         inputs say now, so nudging a slider after a roll does not change its re-roll.
         ``False`` with nothing to re-roll or a die still tumbling.
         """
-        last = self._last_roll
-        if self._rolling or last is None:
+        if self._rolling or self._last_roll is None:
             return False
-        # A trait still loaded from that roll stays loaded; one brought back only to
-        # be re-rolled goes again afterwards, as a sheet roll's does (:meth:`roll_spec`).
-        if last["spec"] is not self._spec:
-            self.load_spec(last["spec"])
-            self._transient = last["spec"] is not None
         self._rerolling = True
         self._start_roll()
         return True
@@ -1362,7 +1373,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
             return
         if not self._rerolling:
             bonus, penalty, dc, hidden = self._roll_parameters()
-            self._last_roll = {
+            self._pending_last = {
                 "bonus": bonus,
                 "penalty": penalty,
                 "dc": dc,
@@ -1407,7 +1418,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
             # What is being rolled travels with it, so the *other* seats can act on
             # it: the target's player sees the attack land and clicks the save off
             # its card. The server echoes it back on the record.
-            spec=None if self._spec is None else self._spec.to_dict(),
+            spec=None if self._rolled_spec() is None else self._rolled_spec().to_dict(),
             reroll=self._rerolling,
         )
         if not sent:
@@ -1467,12 +1478,13 @@ class DiceRollerPanel(ReflowBox, QWidget):
         """Resolve the roll locally and report it, ending any tumble in progress."""
         self._rolling = False  # stops the _tick_roll chain from rescheduling
 
+        self._commit_last_roll()
         bonus, penalty, dc, _hidden = self._roll_parameters()
-        die = reroll_d20() if self._rerolling else roll_d20()
+        die, natural = reroll_d20() if self._rerolling else (roll_d20(), True)
         self._face.setText(str(die))
 
         modifier = bonus - penalty
-        result = resolve_check(modifier, dc, roll=die) if dc is not None else None
+        result = resolve_check(modifier, dc, roll=die, natural=natural) if dc is not None else None
         self._update_readout(
             die,
             modifier,
@@ -1488,7 +1500,8 @@ class DiceRollerPanel(ReflowBox, QWidget):
                 "dc": dc,
                 "result": result,
                 "label": self._roll_label(),
-                "spec": self._spec,
+                "spec": self._rolled_spec(),
+                "reroll": self._rerolling,
             }
         )
         self._unlock_inputs()
@@ -1497,8 +1510,14 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._settle_spec()
         self._spend_extras()
 
+    def _commit_last_roll(self) -> None:
+        """The roll in flight has a result, so it is now the one Reroll throws."""
+        if self._pending_last is not None:
+            self._last_roll, self._pending_last = self._pending_last, None
+
     def _reveal_session_roll(self, roll: dict) -> None:
         """Show the number the session rolled for us and let go of the inputs."""
+        self._commit_last_roll()
         self._rolling = False
         self._awaiting = False
         self._pending = None
@@ -1546,6 +1565,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._rolling = False
         self._awaiting = False
         self._pending = None
+        self._pending_last = None
         self._rerolling = False
         self._disconnect_session()
         self.awaitingOwnRoll.emit(False)
@@ -1576,6 +1596,8 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._dc_spin.setEnabled(self._dc_check.isChecked())
         # And the Ask button follows whether a trait is chosen, for the same reason.
         self._sync_request_button()
+        # Reroll, whether there is a roll that came back to throw again.
+        self._reroll_button.setEnabled(self._last_roll is not None)
 
     def _update_readout(
         self,
@@ -1591,7 +1613,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
         total = die + modifier
         muted = theme.color("text.muted.rich")
         html = ""
-        label = self._roll_label()
+        label = reroll_label(self._roll_label(), self._rerolling)
         if label:
             html += (
                 f"<span style='color:{theme.color('accent.dice')}'>"
@@ -1917,6 +1939,7 @@ class LocalRollHistory(QWidget):
             result=roll["result"],
             label=str(roll.get("label", "")),
             spec=roll.get("spec"),
+            reroll=bool(roll.get("reroll")),
         )
         card.set_save_state(self._saved_keys, self._quick_room)
         card.saveToggled.connect(self.saveToggled)

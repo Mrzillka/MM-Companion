@@ -53,6 +53,9 @@ from mm_companion.ui.widgets import discard_widget, muted_style, tinted_style
 #: Marks a roll only the GM can see. Shown on the GM's own history; a player's
 #: copy never receives a hidden roll at all.
 HIDDEN_MARK = "👁"
+#: How a lucky re-roll (``reroll`` on the record) is named after its label, so a
+#: die that could not come up under 11 never passes for an ordinary one.
+REROLL_MARK = "(reroll)"
 
 #: How many cards the panel keeps on screen. The log itself is unbounded and
 #: lives on the server; a few hundred widgets is already more than anyone
@@ -345,10 +348,17 @@ def request_widgets(spec: object, *, on_roll: Callable[[RollSpec], None]) -> lis
     return [button]
 
 
+def reroll_label(label: str, reroll: bool) -> str:
+    """*label* as a roll is named — with :data:`REROLL_MARK` after it for a re-roll."""
+    if not reroll:
+        return label
+    return f"{label} {REROLL_MARK}" if label else REROLL_MARK
+
+
 def roll_heading(roll: dict) -> str:
     """A roll's first line, as rich text: who rolled it, and what it was."""
     who = str(roll.get("player_name", "")) or "Someone"
-    label = str(roll.get("label", ""))
+    label = reroll_label(str(roll.get("label", "")), bool(roll.get("reroll")))
     heading = f"<b>{escape_rich_text(who)}</b>"
     if roll.get("hidden"):
         heading = f"{HIDDEN_MARK} {heading}"
@@ -975,7 +985,10 @@ class RollHistoryPanel(QWidget):
         included. Off the air the card is redrawn here and
         :attr:`rollRevealedLocally` lets the owner persist it.
         """
-        if self._bridge is not None and self._bridge.reveal_roll(seq):
+        if self._bridge is not None and self._bridge.in_session:
+            # In a session only the server's answer redraws the card: a request that
+            # failed to send must not show the GM a roll the table never saw.
+            self._bridge.reveal_roll(seq)
             return
         card = next((c for c in self.cards() if c.seq == seq), None)
         if isinstance(card, SessionRollCard):

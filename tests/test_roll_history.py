@@ -629,3 +629,31 @@ def test_a_note_is_shown_as_text_not_as_markup(qapp) -> None:
 
     label = next(child for child in card.findChildren(QLabel) if "not bold" in child.text())
     assert label.textFormat() == Qt.TextFormat.PlainText
+
+
+def test_a_reroll_is_named_on_its_card(qapp: QApplication) -> None:
+    panel = RollHistoryPanel()
+    panel.add_roll(roll(seq=1, label="Athletics", reroll=True))
+    assert "Athletics (reroll)" in card_text(panel)
+
+
+def test_a_reveal_that_did_not_reach_the_server_changes_nothing(qapp: QApplication) -> None:
+    """In a session only the server's answer redraws the card."""
+
+    class _Dropping:
+        in_session = True
+
+        def reveal_roll(self, seq: int) -> bool:
+            return False  # the socket is going down
+
+    panel = RollHistoryPanel(gm=True)
+    seen: list[int] = []
+    panel.rollRevealedLocally.connect(seen.append)
+    panel.add_roll(roll(seq=3, hidden=True))
+    panel._bridge = _Dropping()
+
+    _show_buttons(panel)[0].click()
+
+    assert seen == []
+    assert len(_show_buttons(panel)) == 1  # still hidden on this screen too
+    panel._bridge = None

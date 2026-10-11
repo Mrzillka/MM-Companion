@@ -815,7 +815,8 @@ def test_alternate_resistance_swaps_any_effects_resistance() -> None:
         r.key: r for r in effect_stat_rows(_alt_resisted("damage", resistance="Fortitude"), data)
     }
     assert rows["resistance"].value == "Fortitude vs. DC 18"
-    assert rows["resistance"].change == "better"
+    # A choice rather than a win: a best-of-two pick is a flaw.
+    assert rows["resistance"].change == ""
 
 
 def test_alternate_resistance_offers_every_resistance() -> None:
@@ -4265,3 +4266,21 @@ def test_a_share_round_trips_and_is_written_only_when_set() -> None:
     restored = PowerGroup.from_dict(group.to_dict())
     assert restored.dynamic_points == 0
     assert restored.children[0].dynamic_points == 3
+
+
+def test_alternate_resistance_invents_no_save_on_an_effect_without_one() -> None:
+    data = load_game_data()
+    rows = {r.key for r in effect_stat_rows(_alt_resisted("flight", resistance="Fortitude"), data)}
+    assert "resistance" not in rows
+
+
+def test_a_save_naming_two_resistances_fills_in_neither() -> None:
+    """The target's sheet cannot know which applies, so it does not guess the first."""
+    from mm_companion.core.powers import Power
+    from mm_companion.core.rules import power_rolls
+
+    data = load_game_data()
+    effect = _alt_resisted("damage", resistance="Fortitude", resistanceSecond="Will")
+    save = next(s for s in power_rolls(Power(effects=[effect]), None, data) if s.dc)
+    assert save.label.startswith("Fortitude or Will")
+    assert save.trait_key == ""

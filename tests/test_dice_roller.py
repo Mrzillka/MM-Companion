@@ -150,7 +150,7 @@ def test_reroll_throws_the_last_roll_again_with_a_lucky_die(
     qapp: QApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 4)
-    monkeypatch.setattr(dice_roller, "reroll_d20", lambda *a, **k: 14)
+    monkeypatch.setattr(dice_roller, "reroll_d20", lambda *a, **k: (14, False))
     view = DiceRollerView()
     panel = view.panel
     panel._bonus_spin.setValue(5)
@@ -1157,3 +1157,62 @@ def test_a_dc_the_player_typed_is_left_alone(qapp) -> None:
     panel.load_spec(None)
     assert panel._dc_check.isChecked()
     assert panel._dc_spin.value() == 15
+
+
+def test_a_lifted_twenty_is_not_read_as_a_natural_one(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 4)
+    monkeypatch.setattr(dice_roller, "reroll_d20", lambda *a, **k: (20, False))
+    view = DiceRollerView()
+    view.panel._dc_check.setChecked(True)
+    view.panel._dc_spin.setValue(15)
+    view.panel._start_roll()
+    view.panel._finish_roll()
+
+    view.panel.reroll()
+    view.panel._finish_roll()
+
+    assert "Nat 20" not in view.panel._readout.text()
+
+
+def test_an_abandoned_roll_is_not_offered_for_a_reroll(qapp: QApplication) -> None:
+    view = DiceRollerView()
+    panel = view.panel
+    panel._start_roll()
+    panel._rolling = True  # the tumble is still running when the session gives up
+    panel._abandon_roll("No answer")
+
+    assert panel._last_roll is None
+    assert not panel._reroll_button.isEnabled()
+    assert panel.reroll() is False
+
+
+def test_a_reroll_leaves_the_loaded_trait_alone(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """It neither re-localizes the last roll's spec nor drops what is loaded now."""
+    from dataclasses import replace
+
+    from mm_companion.core.rules import RollSpec
+
+    monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 4)
+    monkeypatch.setattr(dice_roller, "reroll_d20", lambda *a, **k: (15, True))
+    view = DiceRollerView()
+    panel = view.panel
+    panel.set_localizer(lambda spec: replace(spec, modifier=spec.modifier + 8))
+    rolled: list[dict] = []
+    panel.localRoll.connect(rolled.append)
+
+    panel.roll_spec(RollSpec(label="Will", trait_key="will"))
+    panel._finish_roll()
+    stealth = RollSpec(label="Stealth")
+    panel.load_spec(stealth)
+
+    panel.reroll()
+    panel._finish_roll()
+
+    assert rolled[-1]["spec"].modifier == 8  # localized once, not twice
+    assert rolled[-1]["reroll"] is True
+    assert rolled[-1]["bonus"] == 8
+    assert panel.current_spec().label == "Stealth"  # still loaded

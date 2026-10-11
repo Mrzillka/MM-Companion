@@ -6,6 +6,8 @@ mutation methods the drop handlers delegate to (``add_effect`` / ``attach_modifi
 
 from __future__ import annotations
 
+import html
+
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QLabel
@@ -1999,7 +2001,8 @@ def test_palette_bricks_hint_their_description(qapp: QApplication) -> None:
     _search, effect_bricks = window._search_tabs["effects"]
     damage = next(b for b in effect_bricks if b.search_key == "damage")
     record = next(e for e in data.effects if e.id == "damage")
-    assert record.description in damage.toolTip()
+    # Rich text, so the description arrives escaped (an apostrophe is &#x27;).
+    assert html.escape(record.description) in damage.toolTip()
     assert record.name in damage.toolTip()
 
     _search, extra_bricks = window._search_tabs["extras"]

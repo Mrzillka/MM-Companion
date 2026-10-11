@@ -1418,9 +1418,9 @@ class SessionServer:
         spec = sanitize_spec(spec)
 
         result: CheckResult | None = None
-        die = reroll_d20(self._rng) if reroll else roll_d20(self._rng)
+        die, natural = reroll_d20(self._rng) if reroll else (roll_d20(self._rng), True)
         if dc is not None:
-            result = resolve_check(bonus - penalty, dc, roll=die)
+            result = resolve_check(bonus - penalty, dc, roll=die, natural=natural)
 
         with self._lock:
             record = self.state.record_roll(
@@ -1433,6 +1433,8 @@ class SessionServer:
                 label=label,
                 hidden=hidden,
                 spec=spec,
+                reroll=reroll,
+                natural=natural,
             )
             self._append_roll(record)
 

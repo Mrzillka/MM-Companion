@@ -448,7 +448,11 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   `resistance_targets`, with the tier kept under its old `against` key (so saved builds
   still price) as "Worth". A **modifier's** config field with `overrides` now replaces
   that stat just as an effect's does (`modifier_config_overrides`), several onto one
-  stat reading as alternatives ("Fortitude or Will"). A field the effect already answers
+  stat reading as alternatives ("Fortitude or Will"). It replaces only a stat the effect
+  *has* (no save invented on a Flight), and **untinted**: a best-of-two pick is a flaw, so
+  the extra's green would read it backwards. A save naming alternatives fills in no
+  trait on the target's sheet (`rolls._resistance_key`), since which one applies is not
+  something one name can say. A field the effect already answers
   itself — Affliction's own Resisted by — is **claimed** (`modifier_field_claimed`): the
   chip does not show it and the summary ignores it, so there is never a question of
   which of two pickers wins. On Affliction the extra still only widens the card's field.

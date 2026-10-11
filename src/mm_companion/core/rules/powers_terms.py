@@ -610,9 +610,13 @@ def _effective_stats(
         for key, value in modifier_config_overrides(
             modifier, selection, base_effect, game_data
         ).items():
-            if key in stats:
+            # Only a stat the effect has: Alternate Resistance on a Flight swaps
+            # nothing in, rather than inventing a save nobody makes. And untinted,
+            # like an effect's own config choice — a best-of-two pick is a flaw, so
+            # the extra's green would read it backwards; its cost says which it was.
+            if stats.get(key):
                 stats[key] = value
-                change[key] = tint
+                change[key] = ""
                 touched = True
         if modifier.step_field == "action":
             action_step += steps

@@ -612,6 +612,8 @@ def test_a_reroll_is_rolled_by_the_server_and_never_low(running_server, connect)
         roll = events.next_of(EVENT_ROLL)
         assert 11 <= roll["die"] <= 20
         assert roll["degree"] is not None  # still graded against the DC
+        # Marked by the server, whatever the client called it.
+        assert roll["reroll"] is True and roll["label"] == "Lucky"
 
 
 def test_a_player_cannot_roll_hidden(running_server, connect) -> None:
@@ -819,8 +821,9 @@ def test_a_remote_gm_can_reveal_their_hidden_roll(running_server, connect) -> No
 
         assert player_events.next_of(EVENT_ROLL_REVEALED)["label"] == "Ambush check"
         assert gm_events.next_of(EVENT_ROLL_REVEALED)["hidden"] is False
-        # The GM's copy is replaced, not doubled.
+        # The GM's copy is replaced, not doubled, and the log stays in seq order.
         assert [r["seq"] for r in gm.history].count(seq) == 1
+        assert [r["seq"] for r in gm.history] == sorted(r["seq"] for r in gm.history)
     finally:
         gm.close()
 
@@ -2043,3 +2046,13 @@ def test_only_the_gm_may_ask_for_a_group_roll(running_server, connect):
         assert gm_events is not None
     finally:
         gm.close()
+
+
+def test_a_lifted_reroll_is_never_a_critical(running_server) -> None:
+    from mm_companion.core.session.model import RollRecord
+
+    record = RollRecord.from_check(
+        seq=1, player_id="p", player_name="P", die=20, reroll=True, natural=False
+    )
+    assert record.critical is False and record.reroll is True
+    assert RollRecord.from_dict(record.to_dict()).reroll is True

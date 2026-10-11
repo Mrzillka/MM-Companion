@@ -173,6 +173,11 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
 - The strip opens at its width (360, or the edit strip's own under Custom) but never
   more than 40% of the window (`STRIP_SHARE`), re-applied on every resize until the
   player drags the divider. Sizing it once was sizing it against a half-built window.
+  It is re-divided from the **splitter's** own `resizeEvent`, ahead of `QSplitter`'s
+  pass (`_StripSplitter`), not after it from the sheet's: a shrinking splitter takes
+  all of the loss out of the page and keeps the strip whole, so restoring a maximised
+  window handed the page a sliver for one layout, the rows stacked, and the width they
+  then got back sat in their dead-band — stacked until the divider was dragged.
 - A block may say it has nothing to show (`is_empty()`) and is then left out, on screen
   and on paper, its room going to its neighbours: a portrait never loaded, no powers, no
   gear, no advantages, no complications, a printed Notes block with nothing open, the

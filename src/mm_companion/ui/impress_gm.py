@@ -135,9 +135,12 @@ class ImpressController(QObject):
             existing.raise_()
             return existing
         sources, targets = self._host.impress_parties()
-        source = next(
-            (p for p in sources if p.kind == PARTY_PLAYER and p.source == player_id), None
-        )
+        if self._bridge.is_gm and player_id == self._bridge.own_player_id():
+            source = self._own_sheet_source(sources, attempt)
+        else:
+            source = next(
+                (p for p in sources if p.kind == PARTY_PLAYER and p.source == player_id), None
+            )
         if source is None:
             source = ImpressParty(
                 ref=attempt.source_ref or f"player:{player_id}",
@@ -147,6 +150,25 @@ class ImpressController(QObject):
             )
         targets = [t for t in targets if t.ref != source.ref]
         return self._open(attempt.action_id, [source], targets, attempt)
+
+    @staticmethod
+    def _own_sheet_source(sources: list[ImpressParty], attempt: ImpressAttempt) -> ImpressParty:
+        """Who impressed from a sheet the GM has open — one of their NPCs, by name.
+
+        The sheet's Impress button reaches this window rather than the wire (see
+        :meth:`~mm_companion.ui.session_bridge.SessionBridge.send_action_request`), and
+        the creature is whichever cast NPC goes by the sheet's name. One that is not in
+        the cast still impresses, as a creature nobody plays — the GM's own roll.
+        """
+        found = next(
+            (p for p in sources if p.kind == PARTY_NPC and p.name == attempt.source_name), None
+        )
+        if found is not None:
+            return found
+        name = attempt.source_name or "An NPC"
+        return ImpressParty(
+            ref=attempt.source_ref or f"sheet:{name}", name=name, kind=PARTY_NPC, source=""
+        )
 
     def _open(
         self,
@@ -166,12 +188,16 @@ class ImpressController(QObject):
         self._windows[action_id] = window
         window.promptNeeded.connect(lambda party, w=window: self._prompt(w, party))
         window.promptsChanged.connect(lambda w=window: self._reprompt(w))
+        window.promptWithdrawn.connect(
+            lambda party, w=window: self._bridge.prompt_action(
+                party.source, KIND_RESIST_CLOSED, w.action_id, None
+            )
+        )
         window.rollRequested.connect(self._roll)
         window.cancelled.connect(lambda w=window: self._finish_window(w))
         window.destroyed.connect(lambda *_a, a=action_id: self._windows.pop(a, None))
-        for row in window.included():
-            if row.party.kind == PARTY_PLAYER:
-                self._prompt(window, row.party)
+        for party in window.players_to_prompt():
+            self._prompt(window, party)
         window.show()
         return window
 
@@ -262,14 +288,14 @@ class ImpressController(QObject):
         )
         group = f"{plan.action_id}-{uuid.uuid4().hex[:4]}"
         critical = self._data.system.critical_effect_bonus
-        if self._bridge.hosting or self._bridge.joined:
-            # Listen before asking: a hosting server raises each record while it
-            # records it, inside the call below.
+        if self._bridge.in_session:
+            # In session even through a blip: a roll the table never saw would be
+            # one the players could not check, so it must fail visibly rather than
+            # quietly roll here. Listen before asking: a hosting server raises each
+            # record while it records it, inside the call below.
             self._pending[group] = (plan, 1 + len(lines), [])
             if not self._bridge.group_roll(group, lines, lead=lead, critical_bonus=critical):
                 self._pending.pop(group, None)
-                # Not rolled here instead: a table is running, and a roll it never
-                # saw would be one the players could not check.
                 self._host.impress_notice(
                     f"The {plan.impression.name} roll did not reach the session.",
                     theme.color("tint.worse"),

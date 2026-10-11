@@ -555,9 +555,16 @@ class SessionBridge(QObject):
     def send_action_request(self, kind: str, action_id: str, payload: dict | None = None) -> bool:
         """Ask the GM to run an action — an Impress, a resist choice. Any seat may.
 
-        Like :meth:`send_mod_request`, a GM hosting in this process has nobody to
-        ask, so this answers ``False`` there.
+        The GM's own seat asking — the Impress button on an NPC's sheet the GM has
+        open — is answered right here: the server forwards nothing from the GM to
+        the GM, so it is raised on :attr:`actionRequested` as though it had arrived,
+        stamped with this seat's id, and the GM window opens it like a player's.
         """
+        if self.is_gm:
+            self.actionRequested.emit(
+                str(kind), str(action_id), self.own_player_id(), dict(payload or {})
+            )
+            return True
         if self._client is not None:
             return self._client.send_action_request(kind, action_id, payload)
         return False

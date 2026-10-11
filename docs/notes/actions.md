@@ -60,6 +60,13 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   another; their answer comes back with their own numbers, which the GM window then
   trusts over the snapshot's. The GM can override either way, and can roll without
   waiting — an unanswered player resists with their highest off the snapshot.
+- **A prompt lives exactly as long as the question does.** Players are asked only in
+  *resolve* mode (request mode asks nobody — they roll from the card), and switching
+  to resolve asks whoever is ticked. Unticking a player who was asked withdraws their
+  prompt (``resist-closed``) and ignores a late answer. Changing the impresser's skill
+  voids every answer — the same skill is one of the ways to resist — and asks again.
+  The window settles in ``done()``, not ``closeEvent``: **Esc rejects a dialog with no
+  close event**, and that once left players staring at a prompt nobody would roll.
 - **Two modes.** *Resolve* rolls the check and every resistance as one server-side
   group, and applies the rung each failure lands on: straight onto an NPC's model
   (through `_after_npc_condition_change`, the path every NPC condition change takes),
@@ -68,6 +75,14 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   whose spec carries the resistance as a `dc_from_total` follow-up — every card offers
   "🎲 Resist Demoralized vs. DC 23", and clicking it rolls the *clicker's* best
   option (`KIND_BEST_OF`, below).
+- **The GM's own sheets** (an NPC's, opened from the cast) have the same Impress
+  button, and its declaration must not go on the wire: the server forwards nothing
+  from the GM's seat to the GM's seat. ``SessionBridge.send_action_request`` raises it
+  locally on ``actionRequested`` instead, and the controller takes the impresser to be
+  the cast NPC of the sheet's name — a creature nobody plays, rolled as the GM's.
+- **A blip is still a session.** The controller asks ``bridge.in_session``, not
+  ``joined``: a roll made while the socket is down fails with a notice rather than
+  quietly rolling off the air where the table never sees it.
 - **Off the air** a player's Impress is request-only by necessity — there is no GM
   and no board — so the dialog grows the modifiers itself and the check is rolled on
   the sheet's own roller. A GM off the air still resolves fully against their NPCs:

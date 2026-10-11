@@ -10,22 +10,25 @@ from __future__ import annotations
 
 import random
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtWidgets import QApplication, QComboBox, QWidget
 
 from mm_companion.core import library, storage
 from mm_companion.core.character import Character
-from mm_companion.core.data_loader import load_game_data
+from mm_companion.core.data_loader import ActionModifier, load_game_data
 from mm_companion.core.dice import CheckResult, GroupResult
 from mm_companion.core.rules import (
     KIND_IMPRESS,
     MODE_REQUEST,
+    MODE_RESOLVE,
     ImpressAttempt,
     ResistAnswer,
     RollSpec,
+    TraitChoice,
 )
 from mm_companion.core.session import client as client_mod
 from mm_companion.core.session import discovery
@@ -34,10 +37,14 @@ from mm_companion.ui import impress_gm
 from mm_companion.ui.gm_window import SCENE_NPC, GMWindow
 from mm_companion.ui.impress import (
     IMPRESS_ACTION,
+    PARTY_NPC,
+    PARTY_PLAYER,
     ImpressDialog,
+    ImpressParty,
     ImpressWindow,
     ModifiersPanel,
     ResistPromptDialog,
+    _fill_impressions,
 )
 from mm_companion.ui.sections.dice import DiceSection
 from mm_companion.ui.session_bridge import set_active_session
@@ -124,11 +131,29 @@ def test_the_modifiers_panel_is_built_from_data_and_sums_like_the_rules(qapp, da
     panel._toggles["full_action"].setChecked(True)
     assert panel.values()["simple_action"] is False
     assert panel.total() == 5 + 3
-    # A slider only stops on its own steps.
+    # A slider only stops on its own steps, counted up from its minimum (-20).
     slider, readout, _ = panel._sliders["previous_attempts"]
-    slider.setValue(-2)
+    assert panel.values()["previous_attempts"] == 0
+    slider.setValue(2)
     assert panel.values()["previous_attempts"] == -10
     assert readout.text() == "-10"
+    panel.set_values({"previous_attempts": -15})
+    assert slider.value() == 1
+
+
+def test_a_slider_whose_range_is_off_its_step_still_lands_on_values_it_may_take(qapp, data) -> None:
+    """-3..3 in twos: positions are -3, -1, 1, 3, and 0 snaps down to -1."""
+    odd = ActionModifier(
+        id="odd", label="Odd", kind="slider", value=0, minimum=-3, maximum=3, step=2, exclusive=""
+    )
+    data = replace(data, impress=replace(data.impress, modifiers=(odd,)))
+    panel = ModifiersPanel(data)
+    slider, _readout, _ = panel._sliders["odd"]
+    assert (slider.minimum(), slider.maximum()) == (0, 3)
+    assert panel.values()["odd"] == -1
+    slider.setValue(slider.maximum())
+    assert panel.values()["odd"] == 3
+    assert panel.total() == 3
 
 
 # -- the impresser's dialog ----------------------------------------------------------
@@ -278,6 +303,155 @@ def test_the_gm_needs_a_cast_to_impress_with(qapp, window: GMWindow) -> None:
     assert "NPC" in window._notice_label.text()
 
 
+# -- the GM window's prompts ---------------------------------------------------------------
+
+
+def _gm_window(data, *, mode: str = "") -> tuple[ImpressWindow, list[tuple[str, object]]]:
+    """An NPC Thug impressing a player Nova and an NPC Mook; every signal it sends."""
+    thug = talker(data, "Thug")
+    thug.skill_ranks["Deception"] = 4
+    nova = talker(data, "Nova")
+    window = ImpressWindow(
+        data,
+        action_id="w1",
+        sources=[ImpressParty("s-thug", "Thug", PARTY_NPC, "thug.json", thug)],
+        targets=[
+            ImpressParty("s-nova", "Nova", PARTY_PLAYER, "p-nova", nova),
+            ImpressParty("s-mook", "Mook", PARTY_NPC, "mook.json", talker(data, "Mook")),
+        ],
+    )
+    if mode:
+        window.set_mode(mode)
+    said: list[tuple[str, object]] = []
+    window.promptNeeded.connect(lambda party: said.append(("ask", party.ref)))
+    window.promptsChanged.connect(lambda: said.append(("re-ask", None)))
+    window.promptWithdrawn.connect(lambda party: said.append(("withdraw", party.ref)))
+    window.cancelled.connect(lambda: said.append(("cancelled", None)))
+    return window, said
+
+
+def _answer(window: ImpressWindow, modifier: int = 9) -> ResistAnswer:
+    return ResistAnswer(
+        action_id=window.action_id,
+        use_highest=False,
+        choice="resistance:WILL",
+        label="Will",
+        modifier=modifier,
+        options=(TraitChoice("resistance", "WILL", "Will", modifier),),
+    )
+
+
+def test_escape_settles_the_window_like_cancel_does(qapp, data) -> None:
+    """Esc rejects a dialog without a close event — the prompts must still be closed."""
+    window, said = _gm_window(data)
+    window.show()
+    window.reject()
+    assert said == [("cancelled", None)]
+
+
+def test_changing_the_skill_voids_the_answers_given_against_the_old_one(qapp, data) -> None:
+    window, said = _gm_window(data)
+    nova = window._row("s-nova")
+    nova.include.setChecked(True)
+    window.mark_prompted("s-nova", True)
+    window.set_answer("p-nova", _answer(window))
+    assert nova.answered and nova.status.text() == "Answered"
+
+    other = next(i for i in range(window._skill.count()) if i != window._skill.currentIndex())
+    window._skill.setCurrentIndex(other)
+    # Same-skill is one way to resist, so the old answer no longer applies: the window
+    # reads the sheet again and asks once more.
+    assert not nova.answered
+    assert nova.status.text() == "Waiting…"
+    assert ("re-ask", None) in said
+    assert {c.label for c in nova.choices} >= {"Insight", "Will"}
+
+
+def test_untargeting_a_player_withdraws_their_prompt(qapp, data) -> None:
+    window, said = _gm_window(data)
+    nova = window._row("s-nova")
+    nova.include.setChecked(True)
+    window.mark_prompted("s-nova", True)
+    nova.include.setChecked(False)
+    assert ("withdraw", "s-nova") in said
+    assert window.prompted_parties() == []
+    # An answer arriving after that is to nothing.
+    window.set_answer("p-nova", _answer(window))
+    assert not nova.answered
+
+
+def test_request_mode_asks_nobody_and_locks_the_per_target_controls(qapp, data) -> None:
+    window, said = _gm_window(data, mode=MODE_REQUEST)
+    nova = window._row("s-nova")
+    nova.include.setChecked(True)
+    assert said == []
+    assert not nova.bonus.isEnabled() and not nova.highest.isEnabled()
+    window.set_mode(MODE_RESOLVE)
+    assert said == [("ask", "s-nova")]
+    assert nova.bonus.isEnabled() and nova.highest.isEnabled()
+
+
+def test_an_unreachable_player_stays_marked_as_such(qapp, data) -> None:
+    window, _said = _gm_window(data)
+    nova = window._row("s-nova")
+    nova.include.setChecked(True)
+    window.mark_prompted("s-nova", False)
+    nova.bonus.setValue(2)  # any later redraw of the row
+    window._sync_row(nova)
+    assert nova.status.text().startswith("Not connected")
+
+
+def test_an_impression_the_impresser_cannot_make_is_not_kept_selected(qapp, data) -> None:
+    combo = QComboBox()
+    _fill_impressions(combo, data, talker(data), current="dazed")
+    assert combo.currentData() != "dazed"
+    # With nobody to ask (a player's declared attempt) the GM is the judge.
+    _fill_impressions(combo, data, None, current="dazed")
+    assert combo.currentData() == "dazed"
+
+
+def test_a_roll_during_a_blip_fails_visibly_rather_than_rolling_here(qapp, data) -> None:
+    class Bridge(QObject):
+        actionRequested = Signal(str, str, str, object)
+        rollAdded = Signal(object)
+        in_session = True  # in a session, but the socket is down for a moment
+        joined = False
+        hosting = False
+        is_gm = True
+
+        def group_roll(self, *args, **kwargs) -> bool:
+            return False
+
+        def prompt_action(self, *args, **kwargs) -> bool:
+            return False
+
+    class Host:
+        def __init__(self) -> None:
+            self.offline: list[dict] = []
+            self.notices: list[str] = []
+
+        def impress_parties(self):
+            return [], []
+
+        def impress_apply(self, party, changes) -> bool:
+            return True
+
+        def impress_show_offline(self, record: dict) -> None:
+            self.offline.append(record)
+
+        def impress_notice(self, text: str, colour: str) -> None:
+            self.notices.append(text)
+
+    parent = QWidget()
+    host = Host()
+    controller = impress_gm.ImpressController(data, Bridge(), host, parent)
+    window, _said = _gm_window(data)
+    window._row("s-mook").include.setChecked(True)
+    controller._roll(window.plan())
+    assert host.offline == []
+    assert host.notices and "did not reach" in host.notices[0]
+
+
 # -- a whole attempt, through a real session ------------------------------------------------
 
 
@@ -417,3 +591,25 @@ def test_a_targeted_player_is_asked_and_their_answer_reaches_the_gm(
         )
     finally:
         player.close()
+
+
+def test_impress_from_a_sheet_the_gm_has_open_reaches_the_gm_window(
+    qapp, window: GMWindow, data
+) -> None:
+    """The server forwards nothing from the GM to the GM, so the bridge answers it here."""
+    _host(qapp, window)
+    thug, mook = _cast(window, data)
+    attempt = ImpressAttempt(
+        action_id="own1",
+        impression="demoralized",
+        skill_row="Intimidation",
+        skill_label="Intimidation",
+        skill_modifier=8,
+        targets=(next(e.ref for e in window._scene if e.source == mook),),
+        source_name="Thug",
+    )
+    assert window.bridge.send_action_request(KIND_IMPRESS, "own1", attempt.to_dict())
+    impress = window._impress.windows["own1"]
+    # The sheet's creature is the cast NPC of that name: a creature nobody plays.
+    assert impress.source().kind == PARTY_NPC and impress.source().source == thug
+    assert [r.party.source for r in impress.included()] == [mook]

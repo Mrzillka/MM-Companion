@@ -1831,7 +1831,7 @@ def test_dev_mode_makes_the_terms_panel_editable_and_cost_flows(qapp: QApplicati
     assert window.power.cost_override is None
 
 
-def test_dev_mode_term_override_flows_to_the_read_only_summary(qapp: QApplication) -> None:
+def test_turning_dev_mode_off_takes_the_overrides_off_the_build(qapp: QApplication) -> None:
     from mm_companion.core.powers import power_is_homerule
 
     window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
@@ -1842,14 +1842,26 @@ def test_dev_mode_term_override_flows_to_the_read_only_summary(qapp: QApplicatio
     combos = _editable_combos(window._terms)
     # _OVERRIDE_STD_FIELDS order: effect_type, range, action, ... — index 1 is Range.
     combos[1].setCurrentText("Planetary")
+    window._terms._cost_override_check.setChecked(True)
+    window._terms._cost_override_spin.setValue(30)
     assert card.instance.overrides["range"]["value"] == "Planetary"
     assert power_is_homerule(window.power)
 
-    # Turning Dev mode off re-renders the read-only summary, which shows the override.
+    # Off: the build is back to the book — the summary, the cost and the flag.
     window._dev_mode.setChecked(False)
     rows = {r.key: r for r in window._terms.effect_rows[0]}
-    assert rows["range"].value == "Planetary"
-    assert rows["range"].change == "homerule"
+    assert rows["range"].value != "Planetary"
+    assert rows["range"].change != "homerule"
+    assert window.power.cost_override is None
+    assert "homerule" not in window._cost.text()
+    assert not power_is_homerule(window.power)
+
+    # On again in the same window: the edits come back rather than being retyped.
+    window._dev_mode.setChecked(True)
+    assert card.instance.overrides["range"]["value"] == "Planetary"
+    assert window.power.cost_override == 30
+    assert "30 PP" in window._cost.text()
+
 
 
 def test_dev_mode_seeds_auto_values_and_resolves_option_numbers(qapp: QApplication) -> None:

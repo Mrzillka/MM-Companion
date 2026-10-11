@@ -811,7 +811,9 @@ def _alt_resisted(effect_id: str, **config) -> PowerEffectInstance:
 def test_alternate_resistance_swaps_any_effects_resistance() -> None:
     """Not just Affliction: a Damage resisted by Fortitude reads Fortitude, same DC."""
     data = load_game_data()
-    rows = {r.key: r for r in effect_stat_rows(_alt_resisted("damage", resistance="Fortitude"), data)}
+    rows = {
+        r.key: r for r in effect_stat_rows(_alt_resisted("damage", resistance="Fortitude"), data)
+    }
     assert rows["resistance"].value == "Fortitude vs. DC 18"
     assert rows["resistance"].change == "better"
 
@@ -828,7 +830,9 @@ def test_alternate_resistance_offers_every_resistance() -> None:
 
 def test_two_alternate_resistances_read_as_either() -> None:
     data = load_game_data()
-    effect = _alt_resisted("damage", resistance="Fortitude", resistanceSecond="Will", against="worst")
+    effect = _alt_resisted(
+        "damage", resistance="Fortitude", resistanceSecond="Will", against="worst"
+    )
     rows = {r.key: r for r in effect_stat_rows(effect, data)}
     assert rows["resistance"].value == "Fortitude or Will vs. DC 18"
 

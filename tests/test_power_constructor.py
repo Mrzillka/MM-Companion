@@ -1863,7 +1863,6 @@ def test_turning_dev_mode_off_takes_the_overrides_off_the_build(qapp: QApplicati
     assert "30 PP" in window._cost.text()
 
 
-
 def test_dev_mode_seeds_auto_values_and_resolves_option_numbers(qapp: QApplication) -> None:
     window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
     card = window.canvas.add_effect("damage")

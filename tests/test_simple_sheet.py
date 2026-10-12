@@ -661,6 +661,40 @@ def test_a_row_stacks_its_boxes_when_they_would_be_slivers(qapp, data) -> None:
     assert top.is_row
 
 
+def test_the_page_never_sees_a_width_narrower_than_its_share_when_the_window_shrinks(
+    qapp, data
+) -> None:
+    """The strip is cut to its share of the window *before* the page is handed its width.
+
+    Restoring a maximised window used to shrink the page by all of it while the strip
+    kept its full width, and only then re-divide. That one sliver of a layout stacked the
+    rows, and the width they were given back sat in their dead-band, so they stayed
+    stacked until the divider was dragged.
+    """
+    sheet = _simple(qapp, data)
+    sheet.resize(1500, 900)
+    _settle(qapp, sheet)
+    scroll = sheet.simple_sheet.scroll_area
+    widths: list[int] = []
+
+    class Watch(QObject):
+        def eventFilter(self, _obj, event) -> bool:  # noqa: N802 - Qt override
+            if event.type() == QEvent.Type.Resize:
+                widths.append(event.size().width())
+            return False
+
+    watch = Watch()
+    scroll.installEventFilter(watch)
+    try:
+        sheet.resize(700, 900)
+        _settle(qapp, sheet)
+    finally:
+        scroll.removeEventFilter(watch)
+
+    assert widths
+    assert min(widths) == scroll.width()
+
+
 def test_the_speed_line_flips_its_units(qapp, data) -> None:
     sheet = _simple(qapp, data)
     view = sheet.simple_sheet.view("system_info")

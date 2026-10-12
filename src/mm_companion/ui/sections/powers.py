@@ -119,9 +119,10 @@ from mm_companion.core.rules import (
     power_effects_are_array,
     power_has_custom_modifier,
     power_has_standing_effect,
+    power_offers_area,
     power_pool_points,
     power_roll_lines,
-    power_rolls,
+    power_rolls_with_area,
     power_runtime_gates,
     power_total_cost,
     power_violations,
@@ -1262,8 +1263,10 @@ class PowersSection(HeldRebuild, TitledSection):
         readied nor pushed — gets no menu rather than an empty one.
         """
 
-        if not counter_rolls(power, self._character, self._data) and not pushable_effects(
-            power, self._data
+        if (
+            not counter_rolls(power, self._character, self._data)
+            and not pushable_effects(power, self._data)
+            and not self._offers_area_switch(power)
         ):
             return
         card.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -1294,7 +1297,36 @@ class PowersSection(HeldRebuild, TitledSection):
         if specs and offered:
             menu.addSeparator()
         self.fill_counter_menu(menu, specs)
+        offered = offered or bool(specs)
+        if self._offers_area_switch(power):
+            if offered:
+                menu.addSeparator()
+            area = menu.addAction("Use as an area attack")
+            area.setCheckable(True)
+            area.setChecked(power.area_use)
+            area.setToolTip(
+                "Lets this attack be used on an area without buying the Area extra — the "
+                "GM's call, as for an attacker far larger than its target. The area's "
+                "rank is capped at your Power Level."
+            )
+            area.toggled.connect(lambda on, p=power: self.set_area_use(p, on))
         return menu
+
+    def _offers_area_switch(self, power: Power) -> bool:
+        """Whether the card offers the free area use — an attack, or one already switched on."""
+        return power.area_use or power_offers_area(power, self._data)
+
+    def set_area_use(self, power: Power, on: bool) -> None:
+        """Switch the free area use on or off — runtime state, priced at nothing.
+
+        It rides the runtime signal a card toggle does, so it is saved with the sheet and
+        is an undoable step, and the card is redrawn with (or without) its area line.
+        """
+        if power.area_use == on:
+            return
+        power.area_use = on
+        self._rebuild_list()
+        self.runtimeChanged.emit()
 
     def _show_card_menu(self, card: DraggableCard, power: Power, pos) -> None:
         self.card_menu(card, power).exec(card.mapToGlobal(pos))
@@ -2765,7 +2797,7 @@ class PowersSection(HeldRebuild, TitledSection):
     def _rolls(self, power: Power):
         """Every roll the power calls for, as specs; see :func:`~mm_companion.core.
         rules.power_rolls`."""
-        return power_rolls(power, self._character, self._data)
+        return power_rolls_with_area(power, self._character, self._data)
 
     def _rolls_lines(self, power: Power) -> list[str]:
         """One entry per die roll the power calls for; see module-level

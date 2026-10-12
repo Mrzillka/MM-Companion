@@ -7,7 +7,12 @@
     "groupPenaltyNote": "Applied once to the impress check when it is aimed at more than one target (a group impression).",
     "impressionsNote": "Each impression: an id, a display name, an optional suggested skill (preselected when it is chosen), an optional advantage id the impresser must have, and an outcomes ladder in the same shape as an effect's resistanceOutcomes (one rung per degree of failure, the last covering every deeper one). A rung's parameters map a condition id to the parameter it is applied with; '{source}' is replaced by the impresser's name.",
     "modifiersNote": "The situational modifiers the GM sets on an impress check. kind 'toggle' is a checkbox worth value; toggles sharing an exclusive group cannot both be on. kind 'slider' runs from min to max in steps of step and is worth its position.",
-    "provenance": "Impress action, impression effects and impress check modifiers: Mutants & Masterminds core rules, Action and Adventure chapter. Mechanics only; labels paraphrased."
+    "areaNote": "Area attacks. modifiers lists the modifier ids that make an effect an area effect; their shape, applications and spread config is read by core.rules.area. A creature in the area makes a resistance check (dodge, a resistance key) against dcBase + the area rank; making it gives Resistance, which halves the rank they then resist the effect at (halve: 'up' rounds up). The one creature targeted directly and hit by the attack check makes no Dodge check and resists the full rank.",
+    "areaShapesNote": "How each shape's size reads. {d} is the measurement of the shape's distance rank (baseDistanceRank, plus one per application past the first); {n} is a Shapeable area's spaces (the effect rank, doubled per application past the first).",
+    "areaEvasionNote": "An advantage that helps against areas: dodgeBonus is added to the Dodge check, and at negateAtRank or more ranks a made Dodge check means no effect at all.",
+    "areaFreeUseNote": "Any attack may be used as an area at the table without buying the extra (the GM's call, as for an attacker far larger than its target). Its area rank is capped at the Power Level when freeUsePlCap is true.",
+    "areaCoverNote": "Cover a creature has from the area's origin, as the GM sets it per creature: value is added to its Dodge check. Total cover keeps a creature out of the area entirely, so it is simply not included.",
+    "provenance": "Area Effect extra (targeting, shapes, Dodge resistance), cover against areas and the Evasion advantage: Mutants & Masterminds core rules, Powers, Advantages and Action and Adventure chapters. Impress action, impression effects and impress check modifiers: Mutants & Masterminds core rules, Action and Adventure chapter. Mechanics only; labels paraphrased."
   },
   "impress": {
     "skills": ["deception", "intimidation", "persuasion"],
@@ -78,6 +83,29 @@
       {"id": "surprised", "label": "Target is surprised", "kind": "toggle", "value": 2},
       {"id": "damaged", "label": "Target has suffered damage or a similar condition", "kind": "toggle", "value": 2},
       {"id": "complications", "label": "Plays on a target's complications", "kind": "slider", "min": 0, "max": 10, "step": 1}
+    ]
+  },
+  "area": {
+    "modifiers": ["area_effect"],
+    "dodge": "DODGE",
+    "dcBase": 10,
+    "halve": "up",
+    "baseDistanceRank": 1,
+    "shapes": {
+      "sphere": "{d} across",
+      "cone": "{d} long, wide and high",
+      "cube": "{d} on each side",
+      "cylinder": "{d} across and high",
+      "line": "{d} long",
+      "shapeable": "{n} spaces"
+    },
+    "defaultShape": "sphere",
+    "evasion": {"advantage": "evasion", "dodgeBonus": 5, "negateAtRank": 2},
+    "freeUsePlCap": true,
+    "cover": [
+      {"id": "none", "label": "No cover", "value": 0},
+      {"id": "partial", "label": "Partial cover", "value": 2},
+      {"id": "full", "label": "Full cover", "value": 5}
     ]
   }
 }

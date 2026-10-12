@@ -47,7 +47,14 @@ def _modifier_selections(
     """
 
     return _split_by_category(
-        (ModifierSelection(modifier_id=ref.modifier, rank=ref.rank or 1) for ref in refs),
+        (
+            ModifierSelection(
+                modifier_id=ref.modifier,
+                rank=ref.rank or 1,
+                config=dict(getattr(ref, "config", {})),
+            )
+            for ref in refs
+        ),
         game_data,
     )
 
@@ -275,6 +282,10 @@ def item_effective_build(item: EquipmentItem, game_data: GameData) -> Power:
         structure=item.build.structure,
         cost_override=item.build.cost_override,
         effects=effects,
+        # The host's own id, so a roll line naming the build (an area use's) still
+        # finds it once something is fitted.
+        id=item.build.id,
         activated=item.build.activated,
         item_present=item.build.item_present,
+        area_use=item.build.area_use,
     )

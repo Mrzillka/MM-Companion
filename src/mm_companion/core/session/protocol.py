@@ -96,7 +96,14 @@ from typing import ClassVar
 #: the request without a word, so the GM would click Show and the table would
 #: never see the roll they were just told about. It also added
 #: ``RollRequest.reroll``, which a v11 server would ignore and roll as an ordinary die.
-PROTOCOL_VERSION = 12
+#:
+#: v13 carried **area attacks** on the spec: ``dc_if_resisted``, ``note_if_resisted``,
+#: ``follow_up_always``, ``targets``, ``action_id`` and ``title``. Nothing new on the
+#: wire but six spec keys — and that is exactly the danger, because a v12 server's
+#: :func:`sanitize_spec` strips keys it does not know without a word. A caught player
+#: would be offered the full-rank save after a made Dodge, or no save at all after a
+#: failed one, and nobody would know the card was wrong.
+PROTOCOL_VERSION = 13
 
 #: Hard cap on one encoded message, including its trailing newline. A character
 #: snapshot is the largest thing that legitimately travels (tens of KB); anything
@@ -931,8 +938,19 @@ MAX_SPEC_DEPTH = 4
 # Everything a spec may carry, and how each value is coerced. Anything else in the
 # dict is dropped: a whitelist, so a field added to RollSpec later does not silently
 # start crossing the wire unchecked.
-_SPEC_TEXT_KEYS = ("label", "kind", "hint", "success_outcome", "trait_key")
-_SPEC_INT_KEYS = ("modifier", "dc")
+_SPEC_TEXT_KEYS = (
+    "label",
+    "kind",
+    "hint",
+    "success_outcome",
+    "trait_key",
+    "note_if_resisted",
+    "action_id",
+    "title",
+)
+_SPEC_INT_KEYS = ("modifier", "dc", "dc_if_resisted")
+#: How many names a spec's ``targets`` may carry — a scene's worth.
+MAX_SPEC_TARGETS = 24
 
 
 def sanitize_spec(raw: object, _depth: int = 0) -> dict | None:
@@ -966,6 +984,13 @@ def sanitize_spec(raw: object, _depth: int = 0) -> dict | None:
         spec["rolled_by_target"] = True
     if raw.get("dc_from_total") is True:
         spec["dc_from_total"] = True
+    if raw.get("follow_up_always") is True:
+        spec["follow_up_always"] = True
+    targets = raw.get("targets")
+    if isinstance(targets, list):
+        names = [t[:MAX_SPEC_TEXT] for t in targets[:MAX_SPEC_TARGETS] if isinstance(t, str) and t]
+        if names:
+            spec["targets"] = names
     outcomes = raw.get("outcomes")
     if isinstance(outcomes, list):
         rungs = [o[:MAX_SPEC_TEXT] for o in outcomes[:MAX_SPEC_OUTCOMES] if isinstance(o, str)]

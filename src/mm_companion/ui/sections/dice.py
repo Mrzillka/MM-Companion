@@ -35,8 +35,15 @@ from PySide6.QtWidgets import QDialog, QGroupBox, QVBoxLayout, QWidget
 from mm_companion.core import library
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
-from mm_companion.core.rules import RollSpec, localize_spec, requested_roll_choices
+from mm_companion.core.rules import (
+    KIND_AREA,
+    RollSpec,
+    find_area_power,
+    localize_spec,
+    requested_roll_choices,
+)
 from mm_companion.ui import theme
+from mm_companion.ui.area import KIND_AREA_ATTACK, AreaDialog
 from mm_companion.ui.dice_roller import DiceRollerView
 from mm_companion.ui.impress import IMPRESS_ACTION, KIND_IMPRESS, ImpressDialog, new_action_id
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
@@ -99,8 +106,13 @@ class DiceSection(QGroupBox):
         rather than raising: the payload comes off a bus a mod block can publish on
         too, and a bad payload should cost a roll, not the sheet.
         """
-        if isinstance(spec, RollSpec):
-            self.view.panel.roll_spec(spec)
+        if not isinstance(spec, RollSpec):
+            return
+        if spec.kind == KIND_AREA:
+            # The area line is not a die: it opens the window that aims the area.
+            self.start_area(spec.trait_key)
+            return
+        self.view.panel.roll_spec(spec)
 
     def load_roll(self, spec: object) -> None:
         """Put what another block named in the chip, without throwing the die — the
@@ -111,7 +123,7 @@ class DiceSection(QGroupBox):
         on a stat line asks for, so the sliders can be nudged and the DC set before
         anything is rolled.
         """
-        if isinstance(spec, RollSpec):
+        if isinstance(spec, RollSpec) and spec.kind != KIND_AREA:
             self.view.panel.load_spec(spec)
 
     def add_bonus(self, amount: object) -> None:
@@ -201,6 +213,55 @@ class DiceSection(QGroupBox):
         spec = dialog.offline_spec(source_name=name)
         if spec is not None:
             self.view.panel.roll_spec(spec)
+
+    def start_area(self, power_id: str) -> None:
+        """Use a power on an area — the area line's handler.
+
+        At a table the dialog declares it: the attempt goes to the GM, the history gets a
+        line saying who is caught, and the attack against the primary (if any) is rolled
+        here like any attack, carrying the attempt's id so the GM's window picks its
+        total up. Off the air there is nobody to resolve it, so the attack is rolled and
+        the history is left a request to dodge (see :mod:`mm_companion.ui.area`).
+        """
+        power = find_area_power(self._character, self._data, power_id)
+        if power is None:
+            return
+        bridge = live_session()
+        scene = bridge.scene() if bridge is not None else None
+        own = bridge.own_player_id() if bridge is not None else ""
+        dialog = AreaDialog(
+            self._data,
+            self._character,
+            power,
+            scene=scene,
+            own_player_id=own,
+            parent=self.window(),
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        name = library.display_name(self._character)
+        action_id = new_action_id()
+        attack = dialog.attack_spec(action_id, source_name=name)
+        if bridge is None:
+            if attack is not None:
+                self.view.panel.roll_spec(attack)
+            for request in dialog.offline_requests(source_name=name):
+                self.view.add_local_request(request)
+            return
+        attempt = dialog.attempt(action_id, source_name=name)
+        if attempt is None:
+            return
+        if not bridge.send_action_request(KIND_AREA_ATTACK, action_id, attempt.to_dict()):
+            notify_window(
+                self.window(),
+                "Could not reach the GM — the area attack was not sent.",
+                theme.color("tint.worse"),
+            )
+            return
+        bridge.post_note(dialog.note_text(source_name=name))
+        if attack is not None:
+            self.view.panel.roll_spec(attack)
+        notify_window(self.window(), "Area attack sent to the GM.", theme.color("tint.better"))
 
     def sync_session(self) -> None:
         """Re-check whether there is a session, and show the matching history.

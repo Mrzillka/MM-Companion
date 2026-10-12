@@ -222,8 +222,43 @@
       "costFormula": "+1 point per rank",
       "costValue": 1,
       "flat": false,
-      "checkNote": "area; Dodge for half",
-      "description": "Expands the effect to hit an area instead of a single target."
+      "config": [
+        {
+          "key": "shape",
+          "label": "Shape",
+          "type": "select",
+          "hint": "The shape the area fills, chosen when the effect is configured.",
+          "options": [
+            { "value": "sphere", "label": "Sphere" },
+            { "value": "cone", "label": "Cone" },
+            { "value": "cube", "label": "Cube" },
+            { "value": "cylinder", "label": "Cylinder" },
+            { "value": "line", "label": "Line" },
+            { "value": "shapeable", "label": "Shapeable" }
+          ]
+        },
+        {
+          "key": "applications",
+          "label": "Applications",
+          "type": "points",
+          "min": 1,
+          "max": 20,
+          "default": 1,
+          "hint": "Each application is +1 point per rank. Past the first, each one widens every distance of the shape by one rank, or doubles a Shapeable area's spaces."
+        },
+        {
+          "key": "spread",
+          "label": "Spread",
+          "type": "select",
+          "hint": "How the area fills its shape. From a point, cover between a target and the origin protects as usual. Emanation (+1 per rank) fills the shape at once and ignores cover. Sensory (+0) affects whoever in the shape can perceive it with one sense.",
+          "options": [
+            { "value": "point", "label": "From a point" },
+            { "value": "emanation", "label": "Emanation", "costDelta": 1 },
+            { "value": "sensory", "label": "Sensory" }
+          ]
+        }
+      ],
+      "description": "Expands the effect to hit everyone in an area instead of a single target. Targets in the area make a Dodge check against 10 + rank; success halves the rank they resist. One creature may instead be targeted directly with an attack check, and a hit gives them no Dodge."
     },
     {
       "id": "attack",

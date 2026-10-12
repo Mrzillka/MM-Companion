@@ -109,7 +109,7 @@ from mm_companion.core.rules import (
     platform_trait_rows,
     power_has_custom_modifier,
     power_pl_violations,
-    power_rolls,
+    power_rolls_with_area,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.cards import (
@@ -965,7 +965,7 @@ class EquipmentSection(HeldRebuild, TitledSection):
         build fact — refusing the die here would only teach people to click the card
         twice first.
         """
-        specs = power_rolls(build, self._character, self._data)
+        specs = power_rolls_with_area(build, self._character, self._data)
         if not specs:
             return None
         footer = RollsFooter(

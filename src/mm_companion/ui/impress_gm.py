@@ -24,6 +24,7 @@ window's own 3000 lines need know nothing about how an impression is resolved.
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 from typing import Protocol
 
 from PySide6.QtCore import QObject
@@ -245,6 +246,8 @@ class ImpressController(QObject):
         label = impress_label(plan.impression, plan.skill.label)
         if plan.source.kind != PARTY_PLAYER:
             label = f"{plan.source.name}: {label}"
+        # The table card the group lands as is headed by this.
+        spec = replace(spec, title=f"{plan.source.name}: {plan.impression.name}")
         return {
             "label": label,
             "bonus": max(0, plan.check_modifier),
@@ -266,6 +269,9 @@ class ImpressController(QObject):
             modifier=modifier,
             kind=resist.kind if resist is not None else "",
             outcomes=impression_outcomes(self._data, plan.impression),
+            # The row of the group's table card this line fills.
+            targets=(target.party.name,),
+            title=f"{plan.source.name}: {plan.impression.name}",
         )
         return {
             "label": label,

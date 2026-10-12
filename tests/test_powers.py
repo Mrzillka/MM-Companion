@@ -1759,11 +1759,15 @@ def test_offensive_control_effects_read_as_attack_type() -> None:
     assert effect_makes_attack(PowerEffectInstance("move_object", rank=4), data) is True
 
 
-def test_effect_stat_rows_area_keeps_the_attack_roll_with_a_note() -> None:
+def test_effect_stat_rows_area_keeps_the_attack_roll_and_states_the_area() -> None:
+    # The attack check stays — an area may be aimed at one creature — and the area's
+    # size and Dodge DC get a row of their own beside the range.
     data = load_game_data()
     effect = PowerEffectInstance("damage", rank=8, extras=[ModifierSelection("area_effect")])
-    check = next(r for r in effect_stat_rows(effect, data) if r.key == "check")
-    assert check.value == "8 vs. Defense (area; Dodge for half)"
+    rows = {r.key: r for r in effect_stat_rows(effect, data)}
+    assert rows["check"].value == "8 vs. Defense"
+    assert rows["area"].value == "Sphere, 15 feet across; Dodge DC 18 for half"
+    assert "notes" not in rows
 
 
 def test_effect_stat_rows_increased_duration_steps_up_the_ladder() -> None:

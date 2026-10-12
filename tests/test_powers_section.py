@@ -252,7 +252,10 @@ def test_the_counter_menu_asks_the_roller_rather_than_rolling(qapp: QApplication
     # One entry per effect that could be readied, each naming which one it is — below
     # the separator that divides them from the card's Extra Effort entries.
     actions = menu.actions()
-    counters = actions[[a.isSeparator() for a in actions].index(True) + 1 :]
+    separators = [i for i, a in enumerate(actions) if a.isSeparator()]
+    # Between the Extra Effort entries and the area switch the card ends on.
+    counters = actions[separators[0] + 1 : separators[1]]
+    assert actions[-1].text() == "Use as an area attack"
     labels = [action.text() for action in counters]
     assert len(labels) == len(counter_rolls(blast, char, data)) == 2
     assert "Damage" in labels[0] and "+6" in labels[0]

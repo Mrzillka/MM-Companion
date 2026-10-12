@@ -30,6 +30,7 @@ from dataclasses import dataclass, replace
 from ..character import Character
 from ..data_loader import Effect, GameData, ResistanceOutcome
 from ..powers import Power, PowerEffectInstance
+from .area import area_dodge_bonus
 from .conditions import (
     condition_check_penalty,
     condition_scope_penalty,
@@ -76,6 +77,14 @@ KIND_IMPRESS = "impress"
 #: :attr:`~RollSpec.trait_key` lists the candidates (:func:`best_of_key`); resisting
 #: an impression — the same skill, Insight or Will — is the first user.
 KIND_BEST_OF = "best-of"
+#: A power used as an **area**: not a die at all, but the footer line that opens the
+#: area window. Its :attr:`~RollSpec.trait_key` is the power's id (see
+#: :mod:`.area_attack`).
+KIND_AREA = "area"
+#: The Dodge check a creature in an area makes — a resistance roll whose follow-up is
+#: the effect's own save at full or halved rank. Localized like a resistance, plus the
+#: area's Dodge bonus (Evasion).
+KIND_AREA_DODGE = "area-dodge"
 
 #: Separates the candidates in a :data:`KIND_BEST_OF` trait key, and a candidate's
 #: kind from its key.
@@ -141,6 +150,23 @@ class RollSpec:
     #: known in advance — an opposed check, such as resisting an impression. Filled in
     #: by :func:`follow_up_for_result` once that total exists.
     dc_from_total: bool = False
+    #: On a follow-up: the DC to use instead when the provoking roll *succeeded* — an
+    #: area's save at half rank after a made Dodge check. ``None`` for every other spec.
+    dc_if_resisted: int | None = None
+    #: On a follow-up: words added to its label when :attr:`dc_if_resisted` was chosen
+    #: ("no effect with Evasion 2").
+    note_if_resisted: str = ""
+    #: Offer :attr:`follow_up` whatever the degree. A missed attack provokes nothing,
+    #: but a *failed* Dodge against an area is exactly when the save is due.
+    follow_up_always: bool = False
+    #: Who this roll concerns, by display name — the creatures an area caught, or the
+    #: one row of a group table this line belongs to.
+    targets: tuple[str, ...] = ()
+    #: The action this roll belongs to (an area attack's id), so the GM's history can
+    #: offer to resolve it from the card.
+    action_id: str = ""
+    #: What a group of rolls is called, as one table card heads it.
+    title: str = ""
 
     def with_follow_up(self, follow_up: RollSpec | None) -> RollSpec:
         """A copy of this spec that provokes *follow_up* when it succeeds."""
@@ -173,6 +199,18 @@ class RollSpec:
             raw["trait_key"] = self.trait_key
         if self.dc_from_total:
             raw["dc_from_total"] = True
+        if self.dc_if_resisted is not None:
+            raw["dc_if_resisted"] = self.dc_if_resisted
+        if self.note_if_resisted:
+            raw["note_if_resisted"] = self.note_if_resisted
+        if self.follow_up_always:
+            raw["follow_up_always"] = True
+        if self.targets:
+            raw["targets"] = list(self.targets)
+        if self.action_id:
+            raw["action_id"] = self.action_id
+        if self.title:
+            raw["title"] = self.title
         if self.follow_up is not None:
             raw["follow_up"] = self.follow_up.to_dict()
         return raw
@@ -194,6 +232,7 @@ class RollSpec:
         if not label:
             return None
         outcomes = raw.get("outcomes")
+        targets = raw.get("targets")
         return cls(
             label=label,
             modifier=_as_int(raw.get("modifier")) or 0,
@@ -206,6 +245,16 @@ class RollSpec:
             rolled_by_target=bool(raw.get("rolled_by_target", False)),
             trait_key=str(raw.get("trait_key", "")),
             dc_from_total=bool(raw.get("dc_from_total", False)),
+            dc_if_resisted=_as_int(raw.get("dc_if_resisted")),
+            note_if_resisted=str(raw.get("note_if_resisted", "")),
+            follow_up_always=bool(raw.get("follow_up_always", False)),
+            targets=(
+                tuple(str(t) for t in targets if isinstance(t, str))
+                if isinstance(targets, list)
+                else ()
+            ),
+            action_id=str(raw.get("action_id", "")),
+            title=str(raw.get("title", "")),
         )
 
 
@@ -368,7 +417,9 @@ def follow_up_offered(spec: RollSpec, degree: int | None) -> bool:
     and lets them decide; only a roll that visibly failed withholds it.
     """
 
-    return spec.follow_up is not None and (degree is None or degree > 0)
+    if spec.follow_up is None:
+        return False
+    return spec.follow_up_always or degree is None or degree > 0
 
 
 def follow_up_for_result(
@@ -402,6 +453,21 @@ def follow_up_for_result(
     if not follow_up_offered(spec, degree):
         return None
     follow_up = spec.follow_up
+    if spec.follow_up_always:
+        # An area's save after the Dodge check: no critical, no graze — an area
+        # effect makes no attack check (p195) — only the rank a made Dodge halves.
+        if degree is not None and degree > 0 and follow_up.dc_if_resisted is not None:
+            label = follow_up.label
+            if follow_up.note_if_resisted:
+                label = f"{label} — {follow_up.note_if_resisted}"
+            return replace(
+                follow_up,
+                dc=follow_up.dc_if_resisted,
+                dc_if_resisted=None,
+                note_if_resisted="",
+                label=f"{label} (Dodge made, DC {follow_up.dc_if_resisted})",
+            )
+        return replace(follow_up, dc_if_resisted=None, note_if_resisted="")
     if follow_up.dc_from_total:
         # An opposed check: this roll's total *is* the DC, and a natural 20 on it is
         # an added degree — the same five points (see :func:`.targeting.opposed_dc`).
@@ -454,7 +520,7 @@ def _own_trait_roll(spec: RollSpec, char: Character, game_data: GameData) -> Rol
     if spec.kind == KIND_ABILITY:
         if any(a.key == key for a in game_data.abilities):
             return ability_roll(char, game_data, key)
-    elif spec.kind in (KIND_RESISTANCE, KIND_POWER_SAVE, ""):
+    elif spec.kind in (KIND_RESISTANCE, KIND_POWER_SAVE, KIND_AREA_DODGE, ""):
         if any(r.key == key for r in game_data.resistances):
             return resistance_roll(char, game_data, key)
     elif spec.kind == KIND_SKILL:
@@ -548,6 +614,11 @@ def localize_spec(spec: RollSpec, char: Character | None, game_data: GameData) -
         return replace(
             spec, modifier=spec.modifier + own.modifier, label=f"{spec.label} ({own.label})"
         )
+    if spec.kind == KIND_AREA_DODGE:
+        # Dodging an area takes whatever helps against areas (Evasion's +5) on top.
+        bonus = area_dodge_bonus(char, game_data)
+        label = f"{spec.label} (+{bonus} Evasion)" if bonus else spec.label
+        return replace(spec, modifier=spec.modifier + own.modifier + bonus, label=label)
     return replace(spec, modifier=spec.modifier + own.modifier)
 
 

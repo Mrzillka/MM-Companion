@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from mm_companion.core.rules import PinRef, RollSpec
+from mm_companion.core.rules import KIND_AREA, PinRef, RollSpec
 from mm_companion.ui import theme
 from mm_companion.ui.cards.card import card_ancestors_of, hand_back_highlight
 from mm_companion.ui.sections.stat_table import PinMenuState
@@ -34,6 +34,10 @@ def split_roll_label(spec: RollSpec) -> tuple[str, str]:
     layer wrote is lost — the label already says "10 vs. Defense (area; Dodge for half)".
     """
     label = spec.label
+    if spec.kind == KIND_AREA:
+        # Not a roll at all, so no number to print large: the word is the handle.
+        head, _sep, rest = label.partition(": ")
+        return head, rest
     if spec.dc is not None and (spec.rolled_by_target or not spec.modifier):
         pattern = rf"\s*(vs\.?)?\s*(DC\s*)?{spec.dc}\b"
         words = re.sub(pattern, "", label, count=1)
@@ -217,7 +221,9 @@ class RollsFooter(QWidget):
         """
         rollable = not spec.rolled_by_target
         row = RollLine(rollable)
-        if self._pin_ref is not None:
+        # The area line opens a window rather than naming a roll, so there is nothing
+        # for a GM card to pin.
+        if self._pin_ref is not None and spec.kind != KIND_AREA:
             row.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             row.customContextMenuRequested.connect(
                 lambda pos, r=row, i=index: self._show_pin_menu(r, pos, i)

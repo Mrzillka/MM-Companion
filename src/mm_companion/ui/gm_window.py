@@ -61,6 +61,7 @@ from mm_companion.core.data_loader import GameData, load_game_data
 from mm_companion.core.dice import roll_d20
 from mm_companion.core.npc import quick_npc
 from mm_companion.core.rules import (
+    KIND_AREA,
     KIND_INITIATIVE,
     PinRef,
     RollSpec,
@@ -70,6 +71,7 @@ from mm_companion.core.rules import (
     damage_steps,
     decrement_condition,
     default_pins,
+    find_area_power,
     initiative_modifier,
     parse_pins,
     requested_roll_choices,
@@ -94,6 +96,7 @@ from mm_companion.core.session.protocol import (
     SCENE_DISPOSITIONS,
 )
 from mm_companion.ui import npc_icons, theme
+from mm_companion.ui.area_gm import AreaController
 from mm_companion.ui.block_canvas import BlockCanvas
 from mm_companion.ui.block_sizes import RecommendedSize, load_block_sizes
 from mm_companion.ui.blocks.bus import (
@@ -477,6 +480,9 @@ class GMWindow(QMainWindow):
         # Runs every Impress this window resolves — a player's, or an NPC's from the
         # roller's Action row (see mm_companion.ui.impress_gm).
         self._impress = ImpressController(self._data, self._bridge, self, self)
+        # And every area attack: a player's declaration lands in the history with a
+        # Resolve button, and an NPC's starts from its sheet (mm_companion.ui.area_gm).
+        self._area = AreaController(self._data, self._bridge, self, self)
         self._refresh_idle_status()
         self._refresh_trouble()
         self._refresh_rolls()
@@ -865,6 +871,16 @@ class GMWindow(QMainWindow):
 
     def impress_notice(self, text: str, colour: str) -> None:
         self._show_notice(text, colour)
+
+    # -- the area attack's two extra host methods (see AreaHost) ------------------
+
+    def area_add_card(self, card) -> None:
+        """Put an area attack's reminder — its Resolve button — in the GM's history."""
+        self._history.add_card(card)
+
+    def area_roll_attack(self, spec: RollSpec) -> None:
+        """Roll an NPC's attack against the primary on this window's roller."""
+        self._roller.roll_spec(spec)
 
     def _request_roll(self, spec: object) -> None:
         """Ask the table to roll something — the Request row's handler.
@@ -2614,7 +2630,9 @@ class GMWindow(QMainWindow):
         """Show an NPC sheet and keep it alive, watching for saves and its close."""
         key = id(window)
         self._npc_windows[key] = window
-        window.requestUnserved.connect(self._on_npc_request)
+        window.requestUnserved.connect(
+            lambda topic, payload, w=window: self._on_npc_request(topic, payload, w)
+        )
         window.saved.connect(lambda w=window: self._on_npc_saved(w))
         window.closed.connect(lambda k=key: self._npc_windows.pop(k, None))
         # Closing a sheet saves the NPC arrangement, which the spare should open with.
@@ -2706,7 +2724,7 @@ class GMWindow(QMainWindow):
         if spare is not None:
             spare.deleteLater()
 
-    def _on_npc_request(self, topic: str, payload: object) -> None:
+    def _on_npc_request(self, topic: str, payload: object, window=None) -> None:
         """A roll (or a line for the history) asked for on an NPC sheet.
 
         An NPC sheet has no roller of its own, so it lands here — on this window's,
@@ -2715,6 +2733,14 @@ class GMWindow(QMainWindow):
         window: a mod block can publish on these topics too.
         """
         if topic == ROLL_REQUESTED and isinstance(payload, RollSpec):
+            if payload.kind == KIND_AREA:
+                # Not a die: the NPC uses a power on an area, and the GM picks who is in it.
+                if window is not None:
+                    character = window.sheet.character
+                    power = find_area_power(character, self._data, payload.trait_key)
+                    if power is not None:
+                        self._area.start_for_npc(character, power, library.display_name(character))
+                return
             self._roller.roll_spec(payload)
         elif topic == LOAD_REQUESTED and isinstance(payload, RollSpec):
             self._roller.load_spec(payload)

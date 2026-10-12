@@ -17,6 +17,10 @@ unchanged. Submodules form a dependency DAG: ``appliers`` → ``runtime``/``adva
 ``targeting`` (one check against several targets' ladders) sits on ``damage``, whose
 rung resolver it shares, and under ``rolls``; ``impress`` sits on ``rolls``.
 
+``area`` (an area's shape, size and Dodge DC) sits below ``powers_terms``, which states
+an area's size on the card; ``area_attack`` (resolving one against a scene) sits on
+``rolls``, beside ``impress``.
+
 ``costs`` moved above ``powers_terms`` (it used to sit beside it) when Morph's Metamorph
 needed a note saying what its alternate forms cost: the rules put that budget at "the
 same point total as you" (p136), which is ``power_points_spent`` and lives in ``costs``.
@@ -43,6 +47,8 @@ reaches ``derived`` back.
 from .accessories import *  # noqa: F401,F403
 from .advantages import *  # noqa: F401,F403
 from .appliers import *  # noqa: F401,F403
+from .area import *  # noqa: F401,F403
+from .area_attack import *  # noqa: F401,F403
 from .build_cache import *  # noqa: F401,F403
 from .conditions import *  # noqa: F401,F403
 from .configurations import *  # noqa: F401,F403

@@ -891,6 +891,10 @@ class ActionCard(HistoryCard):
     owns the action and shown only in the GM window's history, where the rolls it
     is about land too. Its one button reopens the action's window; once resolved
     it says so and the button goes.
+
+    While it waits it is :attr:`pending`, and the panel **keeps** a pending card through
+    a replay (a reconnect's ``Welcome``) and past :data:`MAX_CARDS`: it is the only way
+    back to the action, and losing it would leave an attack nobody can resolve.
     """
 
     actionRequested = Signal(str)
@@ -915,6 +919,7 @@ class ActionCard(HistoryCard):
         info.addWidget(self._status)
         self._status.hide()
         layout.addLayout(info, stretch=1)
+        self.pending = True
 
     def text(self) -> str:
         return self._text.text()
@@ -924,6 +929,7 @@ class ActionCard(HistoryCard):
 
     def set_done(self, text: str) -> None:
         """The action is settled: say how, and take the button away."""
+        self.pending = False
         self.button.hide()
         self._status.setText(text)
         self._status.show()
@@ -1123,14 +1129,18 @@ class RollHistoryPanel(QWidget):
         if self._bridge is not None:
             self._own_id = self._bridge.own_player_id()
         self.clear()
-        if not isinstance(rolls, list):
-            return
-        self._replaying = True
-        try:
-            for roll in rolls[-MAX_CARDS:]:
-                self.add_roll(roll)
-        finally:
-            self._replaying = False
+        if isinstance(rolls, list):
+            self._replaying = True
+            try:
+                for roll in rolls[-MAX_CARDS:]:
+                    self.add_roll(roll)
+            finally:
+                self._replaying = False
+        # What clear() kept back — an action still waiting on the GM — goes back on top,
+        # where it was before the replay buried it under the log.
+        for card in reversed(self._waiting()):
+            self._layout.removeWidget(card)
+            self._layout.insertWidget(0, card)
 
     def add_roll(self, roll: object) -> None:
         """Put one entry at the top of the list.
@@ -1245,8 +1255,8 @@ class RollHistoryPanel(QWidget):
     def add_card(self, card: HistoryCard) -> None:
         """Put a card the owner built at the top — a GM's :class:`ActionCard`.
 
-        Not a record: nothing is added to the log, so a reconnect's replay does not
-        bring it back and nothing of it is saved.
+        Not a record: nothing is added to the log and nothing of it is saved. A replay
+        keeps it rather than bringing it back (:meth:`clear`), for as long as it waits.
         """
         self._layout.insertWidget(0, card)
         self._trim()
@@ -1338,12 +1348,24 @@ class RollHistoryPanel(QWidget):
             self._empty.setVisible(True)
 
     def clear(self) -> None:
+        """Drop every card — except an :class:`ActionCard` still waiting on the GM.
+
+        That one is no record, so nothing would bring it back, and it is the only way
+        to the action it stands for.
+        """
+        waiting = self._waiting()
         for card in self.cards():
+            if card in waiting:
+                continue
             self._layout.removeWidget(card)
             discard_widget(card)
         self._seen.clear()
         self._held.clear()
-        self._empty.setVisible(True)
+        self._empty.setVisible(not waiting)
+
+    def _waiting(self) -> list[HistoryCard]:
+        """The action cards on screen still waiting on the GM, newest first."""
+        return [c for c in self.cards() if isinstance(c, ActionCard) and c.pending]
 
     def cards(self) -> list[HistoryCard]:
         """The cards on screen, newest first — rolls and notes alike.
@@ -1368,7 +1390,8 @@ class RollHistoryPanel(QWidget):
         bottom of the stack as cards are inserted above it, which is exactly where a
         positional "the oldest one is second from the end" rule would have found it.
         """
-        cards = self.cards()
+        # A waiting action card is never the one to go — see ActionCard.
+        cards = [c for c in self.cards() if not (isinstance(c, ActionCard) and c.pending)]
         for card in cards[MAX_CARDS:]:
             self._layout.removeWidget(card)
             discard_widget(card)

@@ -26,7 +26,7 @@ from __future__ import annotations
 import html
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from PySide6.QtCore import QObject
@@ -37,17 +37,13 @@ from mm_companion.core.data_loader import GameData
 from mm_companion.core.dice import resolve_group
 from mm_companion.core.powers import Power
 from mm_companion.core.rules import (
-    KIND_AREA_DODGE,
-    KIND_POWER_SAVE,
     AreaAttempt,
     AreaEffect,
     RollSpec,
-    area_dodge_modifier,
-    area_effect_ladder,
     area_effect_rung,
+    area_npc_dodge_spec,
+    area_npc_save_specs,
     area_request_specs,
-    area_resist_modifier,
-    area_stage_rank,
     power_area_use,
     resolve_rung,
     rung_caption,
@@ -134,13 +130,18 @@ class AreaController(QObject):
         self._tables: dict[str, str] = {}
         self._parts: dict[str, int] = {}
         bridge.actionRequested.connect(self._on_action_request)
-        bridge.rollAdded.connect(self._on_roll)
+        bridge.rollAdded.connect(self.take_roll)
 
     # -- being told -----------------------------------------------------------
 
     @property
     def declared(self) -> dict[str, _Declared]:
         return dict(self._declared)
+
+    @property
+    def windows(self) -> dict[str, AreaWindow]:
+        """The windows open now, by action id — for a player's fresher snapshot."""
+        return {aid: d.window for aid, d in self._declared.items() if d.window is not None}
 
     def _on_action_request(
         self, kind: str, action_id: str, player_id: str, payload: object
@@ -213,16 +214,24 @@ class AreaController(QObject):
             text += "<br>Caught: " + html.escape(", ".join(caught))
         declared.card.set_text(text)
 
-    def start_for_npc(self, character: Character, power: Power, name: str) -> AreaWindow | None:
-        """The GM used an NPC's power on an area, from its sheet: open it straight away."""
-        use = power_area_use(power, character, self._data)
+    def start_for_npc(
+        self, character: Character, power: Power, key: str, *, name: str = ""
+    ) -> AreaWindow | None:
+        """The GM used an NPC's power on an area, from its sheet: open it straight away.
+
+        *key* is the NPC's cast key (its file), which is how it is found among the
+        parties — never by *name*, which two identical minions share. *name* is what to
+        call it when it is not in the cast at all.
+        """
+        use = power_area_use(power, character, self._data, npc=True)
         if use is None:
             return None
         sources, _targets = self._host.impress_parties()
+        name = name or key or "An NPC"
         source = next(
-            (p for p in sources if p.kind == PARTY_NPC and p.name == name), None
-        ) or ImpressParty(ref=f"sheet:{name}", name=name, kind=PARTY_NPC, source="")
-        attempt = AreaAttempt(new_action_id(), use, source_name=name, source_ref=source.ref)
+            (p for p in sources if p.kind == PARTY_NPC and key and p.source == key), None
+        ) or ImpressParty(ref=f"sheet:{key or name}", name=name, kind=PARTY_NPC, source=key)
+        attempt = AreaAttempt(new_action_id(), use, source_name=source.name, source_ref=source.ref)
         self._note(attempt, source)
         return self.open(attempt.action_id)
 
@@ -255,7 +264,12 @@ class AreaController(QObject):
 
     # -- the rolls coming back ----------------------------------------------------
 
-    def _on_roll(self, roll: object) -> None:
+    def take_roll(self, roll: object) -> None:
+        """One roll in the history: a stage's line, or the attack against a primary.
+
+        Fed by the session's ``rollAdded``, and by the GM window for a roll it made off
+        the air, which no session reports: an NPC's attack rolled from the area window.
+        """
         if not isinstance(roll, dict):
             return
         group = str(roll.get("group", "") or "")
@@ -301,38 +315,56 @@ class AreaController(QObject):
             declared.card.set_done("Resolved — the table is in the history.")
         self._ask_players(plan)
         dodging = [t for t in plan.targets if t.party.kind != PARTY_PLAYER and not t.primary]
-        lines = []
-        for target in dodging:
-            modifier = (
-                area_dodge_modifier(target.party.character, self._data)
-                + target.cover
-                + target.adjust
+        lines = [
+            self._line(
+                plan,
+                target,
+                area_npc_dodge_spec(
+                    plan.use,
+                    target.party.character,
+                    self._data,
+                    cover=target.cover,
+                    adjust=target.adjust,
+                ),
             )
-            lines.append(
-                self._line(
-                    plan,
-                    target,
-                    "Dodge",
-                    modifier,
-                    plan.use.dodge_dc(self._data),
-                    RollSpec(label="Dodge", kind=KIND_AREA_DODGE),
-                )
-            )
+            for target in dodging
+        ]
         if not lines:
             self._saves(plan, [])
             return
         self._roll_stage(plan, lines, dodging, self._saves)
 
     def _ask_players(self, plan: AreaPlan) -> None:
-        """Leave the caught players a request to roll — they apply what it does."""
+        """Leave the caught players a request to roll — they apply what it does.
+
+        One request per set of numbers the GM chose: the cover and the bonus or penalty
+        set on a player's row ride on the request they are asked with, so two players
+        set differently are asked separately.
+        """
         players = [t for t in plan.targets if t.party.kind == PARTY_PLAYER]
-        if not players:
-            return
-        caught = tuple(t.party.name for t in players if not t.primary)
-        primary = next((t.party.name for t in players if t.primary), "")
-        for spec in area_request_specs(
-            plan.use, self._data, source=plan.source.name, caught=caught, primary=primary
-        ):
+        asks: list[RollSpec] = []
+        groups: dict[tuple[int, int], list[str]] = {}
+        for target in players:
+            if target.primary:
+                asks += area_request_specs(
+                    plan.use,
+                    self._data,
+                    source=plan.source.name,
+                    primary=target.party.name,
+                    adjust=target.adjust,
+                )
+            else:
+                groups.setdefault((target.cover, target.adjust), []).append(target.party.name)
+        for (cover, adjust), names in groups.items():
+            asks += area_request_specs(
+                plan.use,
+                self._data,
+                source=plan.source.name,
+                caught=tuple(names),
+                cover=cover,
+                adjust=adjust,
+            )
+        for spec in asks:
             if not self._bridge.prompt_roll(spec.to_dict()):
                 self._host.impress_notice(
                     "The request for the players' rolls did not reach the session.",
@@ -350,47 +382,21 @@ class AreaController(QObject):
         lines: list[dict] = []
         about: list[tuple[AreaTarget, AreaEffect]] = []
         shrugged: list[str] = []
-        many = len(plan.use.effects) > 1
         for target in plan.targets:
             if target.party.kind == PARTY_PLAYER:
                 continue
-            character = target.party.character
-            if target.primary:
-                rank_for = {e.effect_id: e.rank for e in plan.use.effects}
-            else:
-                dodge = made.get(target.party.ref, False)
-                ranks = {
-                    e.effect_id: area_stage_rank(e.rank, dodge, character, self._data)
-                    for e in plan.use.effects
-                }
-                if all(r is None for r in ranks.values()):
-                    shrugged.append(target.party.name)
-                    continue
-                rank_for = ranks
-            for effect in plan.use.effects:
-                rank = rank_for.get(effect.effect_id)
-                base = next((e for e in self._data.effects if e.id == effect.effect_id), None)
-                if rank is None or base is None or base.resistance_dc_base is None:
-                    continue
-                what = effect.resistance_label or "Resist"
-                if many:
-                    what = f"{what} ({effect.name})"
-                spec = RollSpec(
-                    label=what,
-                    kind=KIND_POWER_SAVE,
-                    outcomes=area_effect_ladder(effect, self._data),
-                    success_outcome=(
-                        rung_caption(base.resistance_success, self._data, effect.config)
-                        if base.resistance_success is not None
-                        else ""
-                    ),
-                )
-                modifier = (
-                    area_resist_modifier(character, self._data, effect.resistance) + target.adjust
-                )
-                lines.append(
-                    self._line(plan, target, what, modifier, base.resistance_dc_base + rank, spec)
-                )
+            saves = area_npc_save_specs(
+                plan.use,
+                target.party.character,
+                self._data,
+                dodged=None if target.primary else made.get(target.party.ref, False),
+                adjust=target.adjust,
+            )
+            if saves is None:
+                shrugged.append(target.party.name)
+                continue
+            for effect, spec in saves:
+                lines.append(self._line(plan, target, spec))
                 about.append((target, effect))
         if shrugged:
             self._host.impress_notice(
@@ -438,33 +444,19 @@ class AreaController(QObject):
     # -- rolling ----------------------------------------------------------------------
 
     @staticmethod
-    def _line(
-        plan: AreaPlan,
-        target: AreaTarget,
-        what: str,
-        modifier: int,
-        dc: int,
-        spec: RollSpec,
-    ) -> dict:
+    def _line(plan: AreaPlan, target: AreaTarget, spec: RollSpec) -> dict:
+        """One creature's roll as a group line: *spec* carries its number and its DC."""
         name = target.party.name
-        spec = RollSpec(
-            label=spec.label,
-            modifier=modifier,
-            kind=spec.kind,
-            outcomes=spec.outcomes,
-            success_outcome=spec.success_outcome,
-            targets=(name,),
-            title=plan.title,
-        )
+        modifier = spec.modifier
         return {
-            "label": f"{name}: {what}",
+            "label": f"{name}: {spec.label}",
             "bonus": max(0, modifier),
             "penalty": max(0, -modifier),
             # No lead: each line's whole DC rides as its offset from a DC of 0, which is
             # what lets every creature roll against a DC of its own in one group.
-            "dc_offset": dc,
+            "dc_offset": spec.dc or 0,
             "player_id": "",
-            "spec": spec.to_dict(),
+            "spec": replace(spec, targets=(name,), title=plan.title).to_dict(),
         }
 
     def _roll_stage(

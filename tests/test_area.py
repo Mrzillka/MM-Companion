@@ -10,18 +10,27 @@ from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstan
 from mm_companion.core.rules import (
     KIND_AREA,
     KIND_AREA_DODGE,
+    KIND_BEST_OF,
+    KIND_WORST_OF,
     AreaAttempt,
     AreaUse,
     RollSpec,
     area_dodge_bonus,
     area_dodge_modifier,
+    area_effect_ladder,
     area_effect_rung,
+    area_npc_dodge_spec,
+    area_npc_save_specs,
     area_request_specs,
+    area_resist_modifier,
     area_resisted_rank,
     area_size_text,
     area_stage_rank,
+    effect_area_rank,
+    effect_area_text,
     effect_game_terms,
     effect_stat_rows,
+    estimated_power_level,
     evasion_negates,
     follow_up_for_result,
     localize_spec,
@@ -32,7 +41,7 @@ from mm_companion.core.rules import (
     power_rolls_with_area,
     power_total_cost,
 )
-from mm_companion.core.session.protocol import sanitize_spec
+from mm_companion.core.session.protocol import sanitize_mod_payload, sanitize_spec
 
 
 @pytest.fixture(scope="module")
@@ -240,3 +249,167 @@ def test_the_new_spec_fields_survive_the_wire(data) -> None:
     )
     raw = sanitize_spec(spec.to_dict())
     assert RollSpec.from_dict(raw) == spec
+
+
+# -- what the review turned up ----------------------------------------------------------
+
+
+def _affliction_area(rank: int = 8) -> PowerEffectInstance:
+    return PowerEffectInstance(
+        "affliction",
+        rank=rank,
+        extras=[ModifierSelection("area_effect")],
+        config={
+            "resistance": "Will",
+            "overcomeBy": "Will",
+            "degree1": "dazed",
+            "degree2": "stunned",
+            "degree3": "incapacitated",
+        },
+    )
+
+
+def test_an_attempt_keeps_its_ladder_through_the_session_sanitizer(data) -> None:
+    # The server runs a player's attempt through the mod-payload sanitizer, which keeps
+    # four levels: nested one deeper, an Affliction lost every condition on its ladder.
+    use = power_area_use(Power(name="Haze", effects=[_affliction_area()]), _hero(), data)
+    attempt = AreaAttempt("abc", use, targets=("s1",), source_name="Ana")
+    raw = attempt.to_dict()
+    assert sanitize_mod_payload(raw) == raw
+    again = AreaAttempt.from_dict(sanitize_mod_payload(raw))
+    assert again == attempt
+    assert any(area_effect_ladder(again.use.effects[0], data))
+
+
+def test_a_list_valued_config_stays_home_rather_than_breaking_the_payload(data) -> None:
+    effect = _affliction_area()
+    effect.config["extra"] = ["a", "b"]
+    use = power_area_use(Power(name="Haze", effects=[effect]), _hero(), data)
+    raw = AreaAttempt("abc", use).to_dict()
+    assert sanitize_mod_payload(raw) == raw
+    assert "extra" not in raw["effects"][0]["config"]
+
+
+def _either(against: str) -> PowerEffectInstance:
+    return PowerEffectInstance(
+        "damage",
+        rank=8,
+        extras=[
+            ModifierSelection("area_effect"),
+            ModifierSelection(
+                "alternate_resistance",
+                config={"resistance": "Fortitude", "resistanceSecond": "Will", "against": against},
+            ),
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    ("against", "kind", "expected"), [("best", KIND_BEST_OF, 7), ("worst", KIND_WORST_OF, 6)]
+)
+def test_a_choice_of_two_resistances_is_rolled_as_the_better_or_the_worse(
+    data, against, kind, expected
+) -> None:
+    # An NPC's save used to be rolled at +0 whenever the card named two resistances.
+    use = power_area_use(Power(name="Burst", effects=[_either(against)]), _hero(), data)
+    effect = use.effects[0]
+    assert effect.resistance_kind == kind
+    npc = _hero()
+    npc.resistances["FORTITUDE"] = 7
+    npc.resistances["WILL"] = 6
+    assert area_resist_modifier(npc, data, effect) == expected
+    # A caught player's request fills in their own number the same way.
+    (dodge,) = area_request_specs(use, data, caught=("Bo",))
+    assert localize_spec(dodge.follow_up, npc, data).modifier == expected
+
+
+def test_a_skill_in_a_resistances_place_is_rolled_too(data) -> None:
+    effect = PowerEffectInstance(
+        "damage",
+        rank=8,
+        extras=[
+            ModifierSelection("area_effect"),
+            ModifierSelection("alternate_resistance", config={"resistance": "Athletics"}),
+        ],
+    )
+    use = power_area_use(Power(name="Burst", effects=[effect]), _hero(), data)
+    assert use.effects[0].resistance_kind == KIND_BEST_OF
+    npc = Character.new_default(data)
+    npc.skill_ranks["Athletics"] = 4
+    plain = Character.new_default(data)
+    assert area_resist_modifier(npc, data, use.effects[0]) == (
+        area_resist_modifier(plain, data, use.effects[0]) + 4
+    )
+
+
+def test_a_hard_capped_area_is_held_to_its_rank_cap(data) -> None:
+    # At PL 10 with Attack 4, a rank 14 area used to pass: the hard cap only trimmed
+    # attack + rank to 20, while the rule for an area is its rank alone.
+    hero = _hero(pl=10)
+    hero.abilities[data.system.trait_keys.attack] = 4
+    effect = _area(rank=14)
+    for side in ("attack", "effect"):
+        effect.pl_cap = side
+        assert effect_area_rank(effect, data, hero) == 10
+        assert power_pl_violations(Power(effects=[effect]), hero, data) == []
+
+
+def test_the_pl_estimate_reads_an_area_as_the_validator_does(data) -> None:
+    hero = _hero(pl=10)
+    hero.abilities[data.system.trait_keys.attack] = 4
+    hero.powers.append(Power(effects=[_area(rank=14)]))
+    assert estimated_power_level(hero, data) == 14
+
+
+def test_a_beneficial_area_offers_no_dodge(data) -> None:
+    healing = PowerEffectInstance("healing", rank=6, extras=[ModifierSelection("area_effect")])
+    text = effect_area_text(healing, data)
+    assert text.startswith("Sphere") and "Dodge" not in text
+
+
+def test_the_free_use_cap_rises_with_size(data) -> None:
+    hero = Character.new_default(data)
+    hero.power_level = 10
+    hero.characteristics["size"] = "Huge"  # +2 to a Damage's rank, and to its cap
+    stomp = Power(name="Stomp", effects=[PowerEffectInstance("damage", rank=10)], area_use=True)
+    use = power_area_use(stomp, hero, data)
+    assert use is not None and use.rank == 12
+
+
+def test_an_npcs_free_use_is_capped_at_its_estimated_level(data) -> None:
+    npc = _hero(pl=20)  # the level on file is no rule for an NPC
+    npc.abilities[data.system.trait_keys.attack] = 10
+    blast = Power(name="Blast", effects=[PowerEffectInstance("damage", rank=14)], area_use=True)
+    npc.powers.append(blast)
+    assert power_area_use(blast, npc, data).rank == 14
+    estimate = estimated_power_level(npc, data)
+    assert estimate < 14
+    assert power_area_use(blast, npc, data, npc=True).rank == estimate
+
+
+def test_the_gms_cover_and_adjustment_ride_on_the_request(data) -> None:
+    use = power_area_use(Power(name="Burst", effects=[_area()]), _hero(), data)
+    (dodge,) = area_request_specs(use, data, caught=("Bo",), cover=5, adjust=2)
+    assert dodge.modifier == 7 and "+5 cover" in dodge.label
+    assert dodge.follow_up.modifier == 2  # cover counts on the Dodge alone
+    (save,) = area_request_specs(use, data, primary="Cy", adjust=-1)
+    assert save.modifier == -1
+
+
+def test_a_linked_areas_further_saves_stay_the_targets_to_roll(data) -> None:
+    use = power_area_use(Power(name="Haze", effects=[_area(), _affliction_area()]), _hero(), data)
+    _dodge, further = area_request_specs(use, data, caught=("Bo",))
+    assert further.rolled_by_target and "if you made the Dodge" in further.label
+
+
+def test_the_gms_table_lines_carry_each_creatures_number_and_dc(data) -> None:
+    use = power_area_use(Power(name="Burst", effects=[_area(rank=8)]), _hero(), data)
+    mook = _hero()
+    dodge = area_npc_dodge_spec(use, mook, data, cover=2, adjust=1)
+    assert dodge.dc == 18 and dodge.modifier == area_dodge_modifier(mook, data) + 3
+    ((_effect, made),) = area_npc_save_specs(use, mook, data, dodged=True)
+    assert made.dc == 14
+    ((_effect, hit),) = area_npc_save_specs(use, mook, data, dodged=None, adjust=-2)
+    assert hit.dc == 18
+    assert hit.modifier == area_resist_modifier(mook, data, use.effects[0]) - 2
+    assert area_npc_save_specs(use, _hero(evasion=2), data, dodged=True) is None

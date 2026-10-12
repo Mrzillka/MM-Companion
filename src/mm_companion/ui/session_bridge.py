@@ -38,6 +38,7 @@ from mm_companion.core.session import relay as session_relay
 from mm_companion.core.session import server as session_server
 from mm_companion.core.session.model import SessionState, new_session
 from mm_companion.core.session.net import DEFAULT_PORT
+from mm_companion.core.session.protocol import sanitize_mod_payload
 
 #: How long :meth:`SessionBridge.stop` waits for a publish still in flight.
 _PUBLISH_JOIN_TIMEOUT = 10.0
@@ -589,10 +590,17 @@ class SessionBridge(QObject):
         open — is answered right here: the server forwards nothing from the GM to
         the GM, so it is raised on :attr:`actionRequested` as though it had arrived,
         stamped with this seat's id, and the GM window opens it like a player's.
+
+        It goes through the sanitizer the server runs on a player's, so the GM's own
+        declaration arrives in the shape a player's does: an area's attempt once lost
+        its effects' config on the wire and nowhere else, which is why no test saw it.
         """
         if self.is_gm:
             self.actionRequested.emit(
-                str(kind), str(action_id), self.own_player_id(), dict(payload or {})
+                str(kind),
+                str(action_id),
+                self.own_player_id(),
+                sanitize_mod_payload(dict(payload or {})) or {},
             )
             return True
         if self._client is not None:

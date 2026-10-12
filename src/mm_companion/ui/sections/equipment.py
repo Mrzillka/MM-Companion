@@ -255,6 +255,8 @@ class EquipmentSection(HeldRebuild, TitledSection):
     #: :class:`~mm_companion.core.rules.RollSpec` to whichever block answers rolls.
     #: Rolling a weapon is a play action like wearing one, so it marks nothing dirty.
     rollRequested = Signal(object)
+    #: An item's area line was pressed — use it on an area. Carries the build's id.
+    areaRequested = Signal(str)
     #: A GM asked for one of an item's rolls on (or off) the card beside this sheet.
     pinRequested = Signal(object)  # PinRef
     unpinRequested = Signal(object)  # PinRef
@@ -965,7 +967,7 @@ class EquipmentSection(HeldRebuild, TitledSection):
         build fact — refusing the die here would only teach people to click the card
         twice first.
         """
-        specs = power_rolls_with_area(build, self._character, self._data)
+        specs = power_rolls_with_area(build, self._character, self._data, npc=self._npc)
         if not specs:
             return None
         footer = RollsFooter(
@@ -975,9 +977,18 @@ class EquipmentSection(HeldRebuild, TitledSection):
             simple=self._simple,
         )
         footer.rollRequested.connect(self.rollRequested)
+        footer.areaRequested.connect(self.areaRequested)
         footer.pinRequested.connect(self.pinRequested)
         footer.unpinRequested.connect(self.unpinRequested)
         return footer
+
+    def set_npc_mode(self, npc: bool) -> None:
+        """As for any priced block, and redraw the cards: an NPC's free area use is
+        capped at its *estimated* Power Level (see the Powers block's)."""
+        changed = npc != self._npc
+        super().set_npc_mode(npc)
+        if changed:
+            self._rebuild_list()
 
     def set_pin_target(self, enabled: bool) -> None:
         """Whether an item's roll lines offer to pin at all."""

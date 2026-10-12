@@ -10,7 +10,8 @@
     "areaNote": "Area attacks. modifiers lists the modifier ids that make an effect an area effect; their shape, applications and spread config is read by core.rules.area. A creature in the area makes a resistance check (dodge, a resistance key) against dcBase + the area rank; making it gives Resistance, which halves the rank they then resist the effect at (halve: 'up' rounds up). The one creature targeted directly and hit by the attack check makes no Dodge check and resists the full rank.",
     "areaShapesNote": "How each shape's size reads. {d} is the measurement of the shape's distance rank (baseDistanceRank, plus one per application past the first); {n} is a Shapeable area's spaces (the effect rank, doubled per application past the first).",
     "areaEvasionNote": "An advantage that helps against areas: dodgeBonus is added to the Dodge check, and at negateAtRank or more ranks a made Dodge check means no effect at all.",
-    "areaFreeUseNote": "Any attack may be used as an area at the table without buying the extra (the GM's call, as for an attacker far larger than its target). Its area rank is capped at the Power Level when freeUsePlCap is true.",
+    "areaFreeUseNote": "Any attack may be used as an area at the table without buying the extra (the GM's call, as for an attacker far larger than its target). Its area rank is capped at the Power Level when freeUsePlCap is true, raised by whatever the wielder's size adds to the effect, as the rank cap is.",
+    "areaWorstOfNote": "An effect resisted by either of two traits is resisted with the better one, unless a modifier choice listed in worstOf says the target takes the worse (modifier id, config key, chosen value). This is how the GM's table rolls a creature nobody plays against an Alternate Resistance's worst of two.",
     "areaCoverNote": "Cover a creature has from the area's origin, as the GM sets it per creature: value is added to its Dodge check. Total cover keeps a creature out of the area entirely, so it is simply not included.",
     "provenance": "Area Effect extra (targeting, shapes, Dodge resistance), cover against areas and the Evasion advantage: Mutants & Masterminds core rules, Powers, Advantages and Action and Adventure chapters. Impress action, impression effects and impress check modifiers: Mutants & Masterminds core rules, Action and Adventure chapter. Mechanics only; labels paraphrased."
   },
@@ -102,6 +103,7 @@
     "defaultShape": "sphere",
     "evasion": {"advantage": "evasion", "dodgeBonus": 5, "negateAtRank": 2},
     "freeUsePlCap": true,
+    "worstOf": [{"modifier": "alternate_resistance", "key": "against", "value": "worst"}],
     "cover": [
       {"id": "none", "label": "No cover", "value": 0},
       {"id": "partial", "label": "Partial cover", "value": 2},

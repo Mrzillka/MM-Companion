@@ -2231,6 +2231,10 @@ class AreaRules:
     evasion: AreaEvasion | None = None
     free_use_pl_cap: bool = True
     cover: tuple[AreaCover, ...] = ()
+    #: ``(modifier id, config key, value)`` choices that make an effect resisted by
+    #: either of two traits take the *worse* of them (Alternate Resistance's worst of
+    #: two). Without one, a choice between two is the better one.
+    worst_of: tuple[tuple[str, str, str], ...] = ()
 
     @property
     def available(self) -> bool:
@@ -2951,6 +2955,11 @@ def _parse_area(raw: dict) -> AreaRules:
             AreaCover(str(c["id"]), str(c.get("label", c["id"])), int(c.get("value", 0)))
             for c in block.get("cover", ())
             if isinstance(c, dict) and c.get("id")
+        ),
+        worst_of=tuple(
+            (str(w["modifier"]), str(w.get("key", "")), str(w.get("value", "")))
+            for w in block.get("worstOf", ())
+            if isinstance(w, dict) and w.get("modifier")
         ),
     )
 

@@ -24,6 +24,7 @@ from mm_companion.core.rules import (
     KIND_AREA_DODGE,
     AreaAttempt,
     RollSpec,
+    area_attack_spec,
     power_area_use,
 )
 from mm_companion.ui import area_gm
@@ -282,10 +283,10 @@ def _cast(window: GMWindow, data) -> tuple[str, str, Character]:
 def test_the_gm_resolves_an_npcs_area_in_two_stages(
     qapp, window: GMWindow, data, monkeypatch
 ) -> None:
-    _thug, mook, thug_sheet = _cast(window, data)
+    thug, mook, thug_sheet = _cast(window, data)
     # The Mook fails its Dodge, then fails its Toughness save by two degrees.
     monkeypatch.setattr(area_gm, "resolve_group", stages([-1], [-2]))
-    area = window._area.start_for_npc(thug_sheet, thug_sheet.powers[0], "Thug")
+    area = window._area.start_for_npc(thug_sheet, thug_sheet.powers[0], thug)
     assert area is not None
     (row,) = area._rows
     row.include.setChecked(True)
@@ -304,7 +305,7 @@ def test_the_gm_resolves_an_npcs_area_in_two_stages(
 def test_a_made_dodge_rolls_the_save_at_half_rank(
     qapp, window: GMWindow, data, monkeypatch
 ) -> None:
-    _thug, _mook, thug_sheet = _cast(window, data)
+    thug, _mook, thug_sheet = _cast(window, data)
     seen: list[list] = []
     fake = stages([1], [1])
 
@@ -313,7 +314,7 @@ def test_a_made_dodge_rolls_the_save_at_half_rank(
         return fake(lines, **kwargs)
 
     monkeypatch.setattr(area_gm, "resolve_group", spy)
-    area = window._area.start_for_npc(thug_sheet, thug_sheet.powers[0], "Thug")
+    area = window._area.start_for_npc(thug_sheet, thug_sheet.powers[0], thug)
     area._rows[0].include.setChecked(True)
     area._resolve.click()
     dodge, save = seen
@@ -356,7 +357,7 @@ def test_a_declaration_waits_in_the_gm_history_and_picks_up_the_attack(
 
     # The attack against the primary arrives as an ordinary roll carrying the id.
     spec = RollSpec(label="Fire Burst: area attack", action_id="act")
-    window._area._on_roll({"seq": 9, "die": 15, "bonus": 6, "penalty": 0, "spec": spec.to_dict()})
+    window._area.take_roll({"seq": 9, "die": 15, "bonus": 6, "penalty": 0, "spec": spec.to_dict()})
     assert window._area.declared["act"].attack == (21, 15)
     assert "attack 21" in action.text()
     area = window._area.open("act")
@@ -407,9 +408,9 @@ def test_a_hosted_resolve_rolls_both_stages_on_the_server(qapp, window: GMWindow
     window.start_hosting(HostOptions(name="Table", port=0, tunnel="", relay="", use_relay=False))
     _wait(qapp, lambda: window.bridge.hosting)
     window.bridge.server._rng = random.Random(3)
-    _thug, _mook, thug_sheet = _cast(window, data)
+    thug, _mook, thug_sheet = _cast(window, data)
 
-    area = window._area.start_for_npc(thug_sheet, thug_sheet.powers[0], "Thug")
+    area = window._area.start_for_npc(thug_sheet, thug_sheet.powers[0], thug)
     area._rows[0].include.setChecked(True)
     area._resolve.click()
 
@@ -423,6 +424,175 @@ def test_a_hosted_resolve_rolls_both_stages_on_the_server(qapp, window: GMWindow
     assert save["dc"] == (14 if dodge["degree"] > 0 else 18)
     tables = [c for c in window._history.cards() if isinstance(c, GroupTableCard)]
     assert len(tables) == 1 and len(tables[0].lines()) == 2
+
+
+def test_a_hosted_npc_affliction_lands_its_conditions(qapp, window: GMWindow, data) -> None:
+    """The review's worst find: through the session an Affliction lost its ladder."""
+    import random
+
+    from mm_companion.core.session import discovery
+    from mm_companion.ui.session_dialogs import HostOptions
+
+    window.bridge._publish_session = lambda port, **kw: discovery.Reachability(
+        host="127.0.0.1", port=port, method=discovery.METHOD_LAN
+    )
+    window.start_hosting(HostOptions(name="Table", port=0, tunnel="", relay="", use_relay=False))
+    _wait(qapp, lambda: window.bridge.hosting)
+    haze = Power(
+        name="Haze",
+        effects=[
+            PowerEffectInstance(
+                "affliction",
+                rank=30,  # nobody makes a DC 40 save
+                extras=[ModifierSelection("area_effect")],
+                config={
+                    "resistance": "Will",
+                    "overcomeBy": "Will",
+                    "degree1": "dazed",
+                    "degree2": "stunned",
+                    "degree3": "incapacitated",
+                },
+            )
+        ],
+    )
+    source, targets = _parties(data)
+    mook = targets[1]
+    window.impress_parties = lambda: ([source], targets)
+    applied: list = []
+    window.impress_apply = lambda party, changes: applied.append((party.name, changes)) or True
+    use = power_area_use(haze, source.character, data)
+    # The GM's own seat goes through the server's sanitizer too, so this is the wire.
+    window.bridge.send_action_request(
+        "area", "act", AreaAttempt("act", use, targets=("s1",)).to_dict()
+    )
+    _wait(qapp, lambda: "act" in window._area.declared)
+    window.bridge.server._rng = random.Random(1)
+    area = window._area.open("act")
+    assert [r.party.name for r in area.included()] == [mook.name]
+    area._resolve.click()
+    _wait(qapp, lambda: bool(applied))
+    (name, changes), *_ = applied
+    assert name == "Mook" and changes
+
+
+# -- the review's fixes in the windows ---------------------------------------------------------
+
+
+def test_a_waiting_action_card_survives_a_replay_and_the_trim(qapp, monkeypatch) -> None:
+    from mm_companion.ui import roll_history
+
+    panel = RollHistoryPanel(gm=True)
+    waiting = ActionCard("act", "Ana uses Fire Burst", "Resolve Area Attack")
+    done = ActionCard("old", "Bo uses Haze", "Resolve Area Attack")
+    done.set_done("Resolved")
+    panel.add_card(done)
+    panel.add_card(waiting)
+    # A reconnect's Welcome replays the log over the panel.
+    panel.set_rolls([{"seq": 1, "kind": "note", "player_name": "GM", "text": "hello"}])
+    cards = panel.cards()
+    assert cards[0] is waiting and done not in cards
+    # And a full log never pushes it off the bottom.
+    monkeypatch.setattr(roll_history, "MAX_CARDS", 2)
+    for seq in range(2, 6):
+        panel.add_roll({"seq": seq, "kind": "note", "player_name": "GM", "text": f"n{seq}"})
+    assert waiting in panel.cards()
+
+
+def test_the_area_line_asks_for_an_area_not_a_roll(qapp) -> None:
+    from mm_companion.ui.cards.rolls import RollLine, RollsFooter
+
+    footer = RollsFooter([RollSpec(label="Area: Sphere", kind=KIND_AREA, trait_key="p1")])
+    rolled: list = []
+    aimed: list = []
+    footer.rollRequested.connect(rolled.append)
+    footer.areaRequested.connect(aimed.append)
+    footer.findChild(RollLine).clicked.emit()
+    assert aimed == ["p1"] and rolled == []
+
+
+def test_the_sheet_opens_the_area_dialog_without_blocking_the_board(qapp, data) -> None:
+    char = creature(data, "Ana")
+    char.powers.append(burst())
+    sheet = CharacterSheet(data, char)
+    dice = sheet.section("dice")
+    # The Powers block's area line reaches the roller through its own topic.
+    sheet.powers.areaRequested.emit(char.powers[0].id)
+    dialog = dice._area_dialog
+    assert dialog is not None and dialog.isVisible()
+    # Modal would swallow the press that drags a scene card into it.
+    assert not dialog.isModal()
+    dialog.close()
+    assert dice._area_dialog is None
+
+
+def test_an_offline_npc_attack_reaches_the_area_window(qapp, window: GMWindow, data) -> None:
+    thug, mook, thug_sheet = _cast(window, data)
+    area = window._area.start_for_npc(thug_sheet, thug_sheet.powers[0], thug)
+    area.set_primary(window._scene_entry_for(SCENE_NPC, mook).ref)
+    assert area._roll_attack.isVisibleTo(area)
+    spec = area_attack_spec(area.attempt.use, action_id=area.action_id, target="Mook")
+    # What the GM's roller hands the window off the air: no rollAdded will follow.
+    window._show_offline_roll(
+        {"die": 15, "bonus": 6, "penalty": 0, "dc": None, "label": "", "spec": spec.to_dict()}
+    )
+    assert area._attack == (21, 15)
+    assert not area._roll_attack.isVisibleTo(area)
+
+
+def test_a_fresher_snapshot_rereads_the_hit_unless_the_gm_set_it(qapp, data) -> None:
+    source, targets = _parties(data)
+    use = power_area_use(burst(), source.character, data)
+    window = AreaWindow(
+        data, attempt=AreaAttempt("act", use, primary="s2"), source=source, targets=targets
+    )
+    window.set_attack(14, 9)
+    assert window.hit()  # against a fresh creature's Defense
+    tougher = creature(data, "Nova")
+    tougher.resistances[data.system.trait_keys.defense] = 10
+    window.set_party_character("s2", tougher)
+    assert not window.hit()
+    window._hit.click()  # the GM overrules it
+    window.set_party_character("s2", creature(data, "Nova"))
+    window.set_party_character("s2", tougher)
+    assert window.hit()
+    window.close()
+
+
+def test_namesakes_on_the_board_are_numbered_and_found_by_file(
+    qapp, window: GMWindow, data
+) -> None:
+    first = write_npc(data, "Thug", power=burst())
+    second = write_npc(data, "Thug", power=burst())
+    for path in (first, second):
+        window._register_npc(path)
+        window._set_in_scene(SCENE_NPC, path.name, True)
+    _sources, targets = window.impress_parties()
+    assert sorted(p.name for p in targets) == ["Thug (1)", "Thug (2)"]
+
+    sheet = library.load_character(second)
+    area = window._area.start_for_npc(sheet, sheet.powers[0], second.name, name="Thug")
+    # The second Thug attacks: the first is a target, and the attacker is not.
+    assert [r.party.source for r in area._rows] == [first.name]
+    assert area._source.name in ("Thug (1)", "Thug (2)")
+    area.close()
+
+
+def test_a_players_cover_and_adjustment_reach_their_request(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    source, targets = _parties(data)
+    monkeypatch.setattr(window, "impress_parties", lambda: ([source], targets))
+    asked: list[dict] = []
+    monkeypatch.setattr(window.bridge, "prompt_roll", lambda spec: asked.append(spec) or True)
+    use = power_area_use(burst(), source.character, data)
+    window._area.declare("p1", AreaAttempt("act", use, targets=("s2",)).to_dict())
+    area = window._area.open("act")
+    (row,) = area.included()
+    row.cover.setCurrentIndex(row.cover.findData(5))
+    row.bonus.setValue(2)
+    area._resolve.click()
+    (request,) = (RollSpec.from_dict(s) for s in asked)
+    assert request.modifier == 7 and request.follow_up.modifier == 2
 
 
 def test_a_request_says_who_it_is_for_and_calls_out_the_reader(qapp) -> None:

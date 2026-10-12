@@ -25,6 +25,7 @@ from .area import (
     area_shape,
     area_size_text,
     area_spread_label,
+    effect_is_area,
 )
 from .costs import power_points_spent
 from .derived import effective_ability, skill_total
@@ -1010,7 +1011,9 @@ def effect_pl_cap_shift(
     onto the other, so the cap always actually holds.
 
     An **auto-hit** effect has no attack bonus to trade, so it is always the rank that
-    falls — against ``PL`` alone, the cap that applies to it.
+    falls — against ``PL`` alone, the cap that applies to it. So is an **area**, whose
+    rank alone is capped (:func:`~.validation.power_pl_violations`) whether or not it
+    can also be aimed with an attack check.
     """
 
     if effect.pl_cap not in PL_CAPS or char is None:
@@ -1023,7 +1026,7 @@ def effect_pl_cap_shift(
         return 0, 0
 
     rank = effect_effective_rank(effect, game_data, char)
-    if not effect_makes_attack(effect, game_data):
+    if effect_is_area(effect, game_data) or not effect_makes_attack(effect, game_data):
         return max(0, rank - char.power_level), 0
 
     attack = effect_base_attack_bonus(effect, game_data, char)
@@ -2035,7 +2038,8 @@ def effect_area_text(
     """An area effect's size and Dodge DC in words, or ``""`` for an effect that is not one.
 
     ``"Sphere, 15 feet across; Dodge DC 18 for half"`` — the spread is named too when it
-    is not the default (``"Cone, …, Emanation; …"``).
+    is not the default (``"Cone, …, Emanation; …"``). Only an effect someone resists
+    offers a Dodge for half: an area Healing or Environment is just a size.
     """
 
     selection = area_selection(effect, game_data)
@@ -2050,7 +2054,8 @@ def effect_area_text(
     spread = area_spread_label(selection, game_data)
     if spread:
         parts[0] = f"{parts[0]}, {spread}"
-    if game_data.area.dodge:
+    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if game_data.area.dodge and base is not None and base.resistance_dc_base is not None:
         parts.append(f"Dodge DC {area_dodge_dc(rank, game_data)} for half")
     return "; ".join(parts)
 

@@ -77,6 +77,9 @@ KIND_IMPRESS = "impress"
 #: :attr:`~RollSpec.trait_key` lists the candidates (:func:`best_of_key`); resisting
 #: an impression — the same skill, Insight or Will — is the first user.
 KIND_BEST_OF = "best-of"
+#: :data:`KIND_BEST_OF`'s opposite: whichever of the candidates is *lowest* — an effect
+#: resisted by the worst of two (Alternate Resistance's worst-of choice).
+KIND_WORST_OF = "worst-of"
 #: A power used as an **area**: not a die at all, but the footer line that opens the
 #: area window. Its :attr:`~RollSpec.trait_key` is the power's id (see
 #: :mod:`.area_attack`).
@@ -517,6 +520,8 @@ def _own_trait_roll(spec: RollSpec, char: Character, game_data: GameData) -> Rol
     key = spec.trait_key
     if spec.kind == KIND_BEST_OF:
         return _best_own_roll(key, char, game_data)
+    if spec.kind == KIND_WORST_OF:
+        return _best_own_roll(key, char, game_data, worst=True)
     if spec.kind == KIND_ABILITY:
         if any(a.key == key for a in game_data.abilities):
             return ability_roll(char, game_data, key)
@@ -556,12 +561,12 @@ def best_own_rolls(key: str, char: Character, game_data: GameData) -> list[RollS
     """Every candidate a :data:`KIND_BEST_OF` key names, as this character rolls it.
 
     Candidates the sheet cannot answer are left out, and a candidate that is itself a
-    best-of is refused rather than followed.
+    best-of (or a worst-of) is refused rather than followed.
     """
 
     rolls = []
     for kind, trait in parse_best_of_key(key):
-        if kind == KIND_BEST_OF:
+        if kind in (KIND_BEST_OF, KIND_WORST_OF):
             continue
         own = _own_trait_roll(RollSpec(label=trait, kind=kind, trait_key=trait), char, game_data)
         if own is not None:
@@ -569,13 +574,17 @@ def best_own_rolls(key: str, char: Character, game_data: GameData) -> list[RollS
     return rolls
 
 
-def _best_own_roll(key: str, char: Character, game_data: GameData) -> RollSpec | None:
-    """The highest of the candidates *key* names on this sheet; ties go to the first."""
+def _best_own_roll(
+    key: str, char: Character, game_data: GameData, *, worst: bool = False
+) -> RollSpec | None:
+    """The highest of the candidates *key* names on this sheet (the lowest, *worst*);
+    ties go to the first."""
 
     rolls = best_own_rolls(key, char, game_data)
     if not rolls:
         return None
-    return max(rolls, key=lambda r: r.modifier)
+    pick = min if worst else max
+    return pick(rolls, key=lambda r: r.modifier)
 
 
 def localize_spec(spec: RollSpec, char: Character | None, game_data: GameData) -> RollSpec:
@@ -609,7 +618,7 @@ def localize_spec(spec: RollSpec, char: Character | None, game_data: GameData) -
     own = _own_trait_roll(spec, char, game_data)
     if own is None:
         return spec
-    if spec.kind == KIND_BEST_OF:
+    if spec.kind in (KIND_BEST_OF, KIND_WORST_OF):
         # Which candidate won is worth saying: "Resist Demoralized (Will)".
         return replace(
             spec, modifier=spec.modifier + own.modifier, label=f"{spec.label} ({own.label})"

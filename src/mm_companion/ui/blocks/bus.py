@@ -150,6 +150,11 @@ PIN_REQUESTED = "pin-requested"
 UNPIN_REQUESTED = "unpin-requested"
 HERO_POINT_REQUESTED = "hero-point-requested"
 BONUS_REQUESTED = "bonus-requested"
+#: Use a power on an area — the area line on a power or gear card. The payload is the
+#: build's id, not a :class:`~mm_companion.core.rules.RollSpec`: the line throws no die,
+#: it opens the window that aims the area. Its own topic so nothing that serves
+#: ``roll-requested`` (a mod's roller included) is ever handed one and rolls a +0 d20.
+AREA_REQUESTED = "area-requested"
 
 #: Request topics whose server is **not** brought into view when they are raised.
 #: A note is a side effect of an edit somewhere else on the sheet, so reopening a
@@ -177,9 +182,12 @@ BONUS_REQUESTED = "bonus-requested"
 QUIET_REQUESTS = frozenset({NOTE_REQUESTED, PIN_REQUESTED, UNPIN_REQUESTED, HERO_POINT_REQUESTED})
 
 #: The requests a sheet passes *out* when it was built without the block that
-#: answers them (see ``CharacterSheet.requestUnserved``). All four are the roller's:
-#: an NPC sheet has none, and a roll clicked on one belongs in the GM window's.
-OUTWARD_REQUESTS = frozenset({ROLL_REQUESTED, LOAD_REQUESTED, BONUS_REQUESTED, NOTE_REQUESTED})
+#: answers them (see ``CharacterSheet.requestUnserved``). All five are the roller's:
+#: an NPC sheet has none, and a roll clicked on one belongs in the GM window's — as
+#: does an NPC's area, which the GM resolves.
+OUTWARD_REQUESTS = frozenset(
+    {ROLL_REQUESTED, LOAD_REQUESTED, BONUS_REQUESTED, NOTE_REQUESTED, AREA_REQUESTED}
+)
 
 Handler = Callable[[], None]
 RequestHandler = Callable[[object], None]

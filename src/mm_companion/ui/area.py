@@ -516,6 +516,9 @@ class AreaWindow(QDialog):
         self._hit.setToolTip("A primary target that is hit makes no Dodge check: full rank.")
         self._hit.setChecked(use.attack is None)
         self._hit.toggled.connect(lambda _on: self._sync())
+        #: The GM ticked or unticked Hit themselves, so a fresher Defense must not undo it.
+        self._hit_by_hand = False
+        self._hit.clicked.connect(lambda _on: setattr(self, "_hit_by_hand", True))
         self._attack_note = QLabel()
         self._attack_note.setWordWrap(True)
         self._roll_attack = QPushButton("🎲 Roll attack")
@@ -632,11 +635,19 @@ class AreaWindow(QDialog):
         return [row for row in self._rows if row.include.isChecked()]
 
     def set_party_character(self, ref: str, character: Character | None) -> None:
-        """A fresher model for one party (a player's new snapshot)."""
+        """A fresher model for one party (a player's new snapshot).
+
+        The primary's Defense decides the Hit tick, so a new one re-reads it — unless the
+        GM has set Hit by hand, which a changed sheet does not overrule.
+        """
         row = self._row(ref)
-        if row is not None:
-            row.party.character = character
-            self._sync()
+        if row is None:
+            return
+        row.party.character = character
+        if ref == self.primary_ref() and self._attack is not None and not self._hit_by_hand:
+            self.set_attack(*self._attack)
+            return
+        self._sync()
 
     # -- the primary and its attack ----------------------------------------------
 
@@ -671,6 +682,8 @@ class AreaWindow(QDialog):
         row = self._row(self.primary_ref())
         if row is not None:
             row.include.setChecked(True)
+        # A new primary has a Defense of its own; the attack is judged afresh against it.
+        self._hit_by_hand = False
         if self._attack is not None:
             self.set_attack(*self._attack)
         self._sync()
@@ -750,9 +763,12 @@ class AreaWindow(QDialog):
                 row.role.setText("Hit — no Dodge")
                 row.role.setStyleSheet(tinted_style("tint.worse", bold=False))
             else:
-                dodge = area_dodge_modifier(row.party.character, self._data)
-                total = dodge + int(row.cover.currentData() or 0)
-                total += row.bonus.value() - row.penalty.value()
+                total = area_dodge_modifier(
+                    row.party.character,
+                    self._data,
+                    cover=int(row.cover.currentData() or 0),
+                    adjust=row.bonus.value() - row.penalty.value(),
+                )
                 row.role.setText(f"Dodge {_signed(total)} vs. DC {use.dodge_dc(self._data)}")
                 row.role.setStyleSheet("")
         count = len(self.included())

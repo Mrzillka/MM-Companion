@@ -171,9 +171,14 @@ class RollsFooter(QWidget):
     :class:`~mm_companion.core.rules.PinRef` naming that roll. A footer built without
     one — or on a sheet with no card behind it (:attr:`PinMenuState.enabled`) — has no
     context menu.
+
+    The **area line** (:data:`~mm_companion.core.rules.KIND_AREA`) is drawn like a roll
+    but is not one: clicking it raises :attr:`areaRequested` with the build's id, never
+    :attr:`rollRequested`, so nothing that throws dice is ever handed it.
     """
 
     rollRequested = Signal(object)  # RollSpec
+    areaRequested = Signal(str)  # the build's id
     pinRequested = Signal(object)  # PinRef
     unpinRequested = Signal(object)  # PinRef
 
@@ -236,7 +241,10 @@ class RollsFooter(QWidget):
 
         if rollable:
             row.setToolTip(spec.hint or f"Roll {spec.label}")
-            row.clicked.connect(lambda s=spec: self.rollRequested.emit(s))
+            if spec.kind == KIND_AREA:
+                row.clicked.connect(lambda s=spec: self.areaRequested.emit(s.trait_key))
+            else:
+                row.clicked.connect(lambda s=spec: self.rollRequested.emit(s))
             glyph = QLabel("🎲")
             glyph.setFixedWidth(glyph_width)
             glyph.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)

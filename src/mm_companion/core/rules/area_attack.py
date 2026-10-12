@@ -24,7 +24,7 @@ resistance or a condition: those are data.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from ..character import Character
 from ..data_loader import GameData, ResistanceOutcome
@@ -43,6 +43,7 @@ from .area import (
     effect_is_area,
     evasion_negates,
 )
+from .powers_cost import effect_size_rank_shift
 from .powers_terms import (
     effect_area_rank,
     effect_attack_skill_bonus,
@@ -51,17 +52,24 @@ from .powers_terms import (
     effect_stat_rows,
 )
 from .rolls import (
+    KIND_ABILITY,
     KIND_AREA,
     KIND_AREA_DODGE,
+    KIND_BEST_OF,
     KIND_POWER_CHECK,
     KIND_POWER_SAVE,
+    KIND_RESISTANCE,
+    KIND_SKILL,
+    KIND_WORST_OF,
     RollSpec,
     _resistance_key,
+    best_of_key,
+    localize_spec,
     power_rolls,
     resistance_roll,
 )
 from .targeting import ladder_captions, outcome_rung, rung_caption
-from .validation import leaf_powers
+from .validation import estimated_power_level, leaf_powers
 
 __all__ = [
     "AreaEffect",
@@ -76,7 +84,10 @@ __all__ = [
     "area_request_specs",
     "area_dodge_modifier",
     "area_resist_modifier",
+    "area_save_dc",
     "area_stage_rank",
+    "area_npc_dodge_spec",
+    "area_npc_save_specs",
     "area_effect_rung",
     "area_effect_ladder",
     "area_effect_rung_caption",
@@ -95,14 +106,40 @@ def _int(raw: Mapping[str, object], key: str, default: int = 0) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else default
 
 
+def _scalar_config(config: object) -> dict:
+    """The plain values of an effect's config — what its ladder reads, and all that travels.
+
+    An area's attempt crosses the wire as a session payload, whose sanitizer keeps only
+    four levels of nesting (:data:`~..session.protocol.MAX_MOD_DEPTH`). An effect's
+    config sits at the third, so a value of its own may not be a list or a dict. No
+    resistance ladder reads one (an Affliction's rungs name one condition each), so the
+    rest — an Illusion's senses — stays home rather than going missing on the way.
+    """
+
+    if not isinstance(config, Mapping):
+        return {}
+    return {
+        k: v
+        for k, v in config.items()
+        if isinstance(k, str) and (v is None or isinstance(v, (str, int, float, bool)))
+    }
+
+
 @dataclass(frozen=True)
 class AreaEffect:
     """One resisted effect an area carries, as the GM needs it to resolve it.
 
-    ``rank`` is the **area** rank (capped for a free use), ``resistance`` the key of
-    what it is resisted with (``""`` when the target picks between two — an Alternate
-    Resistance best-of), and ``config`` the effect instance's choices, which is where
-    an Affliction's rungs read their conditions from.
+    ``rank`` is the **area** rank (capped for a free use).
+
+    ``resistance`` is the trait key it is resisted with, read the way
+    ``resistance_kind`` says. It is a resistance key for an ordinary save, or a
+    :func:`~.rolls.best_of_key` when the target resists with the better
+    (:data:`~.rolls.KIND_BEST_OF`) or the worse (:data:`~.rolls.KIND_WORST_OF`) of two
+    — a skill or an ability in a resistance's place is a choice of one.
+
+    ``dc_base`` is what the rank is added to for the save's DC, as the wielder's sheet
+    worked it out (``None``: the base effect's own). ``config`` is the effect
+    instance's choices, which is where an Affliction's rungs read their conditions from.
     """
 
     effect_id: str
@@ -110,30 +147,40 @@ class AreaEffect:
     rank: int
     resistance: str = ""
     resistance_label: str = ""
+    resistance_kind: str = KIND_POWER_SAVE
+    dc_base: int | None = None
     config: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        return {
+        raw = {
             "effect_id": self.effect_id,
             "name": self.name,
             "rank": self.rank,
             "resistance": self.resistance,
             "resistance_label": self.resistance_label,
-            "config": dict(self.config),
+            "resistance_kind": self.resistance_kind,
+            "config": _scalar_config(self.config),
         }
+        if self.dc_base is not None:
+            raw["dc_base"] = self.dc_base
+        return raw
 
     @classmethod
     def from_dict(cls, raw: object) -> AreaEffect | None:
         if not isinstance(raw, Mapping) or not _text(raw, "effect_id"):
             return None
-        config = raw.get("config", {})
+        dc_base = raw.get("dc_base")
         return cls(
             effect_id=_text(raw, "effect_id"),
             name=_text(raw, "name") or _text(raw, "effect_id"),
             rank=max(0, _int(raw, "rank")),
             resistance=_text(raw, "resistance"),
             resistance_label=_text(raw, "resistance_label"),
-            config=dict(config) if isinstance(config, Mapping) else {},
+            resistance_kind=_text(raw, "resistance_kind") or KIND_POWER_SAVE,
+            dc_base=(
+                dc_base if isinstance(dc_base, int) and not isinstance(dc_base, bool) else None
+            ),
+            config=_scalar_config(raw.get("config", {})),
         )
 
 
@@ -262,19 +309,67 @@ def power_offers_area(power: Power, game_data: GameData) -> bool:
     return any(_resisted(e, game_data) and effect_makes_attack(e, game_data) for e in power.effects)
 
 
+def _trait_named(name: str, game_data: GameData) -> tuple[str, str] | None:
+    """``(kind, trait key)`` of the trait a card's resistance phrase names, or ``None``.
+
+    A resistance first, then an ability, then a skill — Alternate Resistance may swap in
+    any of them.
+    """
+
+    wanted = name.strip().lower()
+    for resistance in game_data.resistances:
+        if resistance.name.lower() == wanted:
+            return KIND_RESISTANCE, resistance.key
+    for ability in game_data.abilities:
+        if ability.name.lower() == wanted:
+            return KIND_ABILITY, ability.key
+    for skill in game_data.skills:
+        if skill.name.lower() == wanted:
+            return KIND_SKILL, skill.name
+    return None
+
+
+def _takes_the_worse(effect: PowerEffectInstance, game_data: GameData) -> bool:
+    """Whether a modifier choice on *effect* makes a choice of two the worse one."""
+
+    for selection in (*effect.extras, *effect.flaws):
+        for modifier_id, key, value in game_data.area.worst_of:
+            if selection.modifier_id == modifier_id and selection.config.get(key) == value:
+                return True
+    return False
+
+
 def _resistance_of(
     effect: PowerEffectInstance, game_data: GameData, char: Character | None
-) -> tuple[str, str]:
-    """``(key, label)`` of what *effect* is resisted by — the label as the card reads it."""
+) -> tuple[str, str, str]:
+    """``(kind, key, label)`` of what *effect* is resisted by — the label as the card reads it.
+
+    One resistance is an ordinary save (:data:`~.rolls.KIND_POWER_SAVE`). A phrase
+    naming two (``"Fortitude or Will"``), or a skill or an ability in a resistance's
+    place, is a choice among candidates. It is rolled as the better of them, or as the
+    worse when a modifier says so (``area.worstOf``). The key is ``""`` when the card
+    names nothing this ruleset knows, and the number is then typed by hand.
+    """
 
     attack_bonus = effect_attack_skill_bonus(effect, char, game_data)
     rows = {r.key: r for r in effect_stat_rows(effect, game_data, char, attack_bonus)}
     row = rows.get("resistance") or rows.get("effect_dc")
     if row is None:
-        return "", ""
+        return KIND_POWER_SAVE, "", ""
+    phrase = row.value.partition(" vs")[0].strip()
     key = _resistance_key(row.value, game_data)
-    name = next((r.name for r in game_data.resistances if r.key == key), "")
-    return key, name or row.value.partition(" vs")[0].strip()
+    if key:
+        name = next((r.name for r in game_data.resistances if r.key == key), "")
+        return KIND_POWER_SAVE, key, name or phrase
+    candidates = [
+        found
+        for found in (_trait_named(part, game_data) for part in phrase.split(" or "))
+        if found is not None
+    ]
+    if not candidates:
+        return KIND_POWER_SAVE, "", phrase
+    kind = KIND_WORST_OF if _takes_the_worse(effect, game_data) else KIND_BEST_OF
+    return kind, best_of_key(candidates), phrase
 
 
 def power_area_use(
@@ -283,13 +378,23 @@ def power_area_use(
     game_data: GameData,
     *,
     shape: str = "",
+    npc: bool = False,
 ) -> AreaUse | None:
     """What *power* offers as an area on *char*'s sheet, or ``None`` if nothing.
 
     *shape* picks the shape of a **free** use (one with no extra to have chosen it);
-    an area bought with the extra keeps its own. A free use's rank is capped at the
-    Power Level when the ruleset says so — an area's rank is, and a free one is not a
-    way around that.
+    an area bought with the extra keeps its own.
+
+    A free use's rank is capped at the Power Level when the ruleset says so — an
+    area's rank is, and a free one is not a way around that. The cap rises by whatever
+    the wielder's **size** adds to the effect
+    (:func:`~.powers_cost.effect_size_rank_shift`), as the validator's rank cap does:
+    being large is the book's own reason for the free use, so it must not be what the
+    use is cut back for.
+
+    *npc* reads the Power Level the way a GM's NPC has one: estimated from what it
+    can do (:func:`~.validation.estimated_power_level`), not the number on file, which
+    nothing treats as a rule for an NPC.
     """
 
     effects = _area_effects(power, game_data)
@@ -298,22 +403,31 @@ def power_area_use(
     lead = effects[0]
     selection = area_selection(lead, game_data)
     free = selection is None
-    cap = char.power_level if free and char is not None and game_data.area.free_use_pl_cap else None
-
-    def capped(rank: int) -> int:
-        return min(rank, cap) if cap is not None else rank
+    level: int | None = None
+    if free and char is not None and game_data.area.free_use_pl_cap:
+        level = estimated_power_level(char, game_data) if npc else char.power_level
 
     carried = []
     for effect in effects:
         base = _base(game_data, effect.effect_id)
-        key, label = _resistance_of(effect, game_data, char)
+        kind, key, label = _resistance_of(effect, game_data, char)
+        rank = effect_area_rank(effect, game_data, char)
+        attack_bonus = effect_attack_skill_bonus(effect, char, game_data)
+        dc = effect_roll_numbers(effect, game_data, char, attack_bonus).dc
+        # What the rank is added to: the base effect's own, or what a DC written over
+        # the card's makes of it. The save is the card's, at whatever rank it is rolled.
+        dc_base = dc - rank if dc is not None else None
+        if level is not None:
+            rank = min(rank, level + effect_size_rank_shift(effect, game_data, char))
         carried.append(
             AreaEffect(
                 effect_id=effect.effect_id,
                 name=effect.label or (base.name if base else effect.effect_id),
-                rank=capped(effect_area_rank(effect, game_data, char)),
+                rank=rank,
                 resistance=key,
                 resistance_label=label,
+                resistance_kind=kind,
+                dc_base=dc_base,
                 config=dict(effect.config),
             )
         )
@@ -362,16 +476,17 @@ def area_line_spec(use: AreaUse, game_data: GameData) -> RollSpec:
 
 
 def power_rolls_with_area(
-    power: Power, char: Character | None, game_data: GameData
+    power: Power, char: Character | None, game_data: GameData, *, npc: bool = False
 ) -> list[RollSpec]:
     """:func:`~.rolls.power_rolls`, with the area line last when the power offers one.
 
     Last, so a pin — which names a roll by its index in this list — keeps pointing at
-    the roll it was made on when an area switch is flipped.
+    the roll it was made on when an area switch is flipped. *npc* is as for
+    :func:`power_area_use`.
     """
 
     specs = power_rolls(power, char, game_data)
-    use = power_area_use(power, char, game_data)
+    use = power_area_use(power, char, game_data, npc=npc)
     if use is not None:
         specs.append(area_line_spec(use, game_data))
     return specs
@@ -402,6 +517,31 @@ def area_attack_spec(
     )
 
 
+def area_save_dc(effect: AreaEffect, rank: int, game_data: GameData) -> int | None:
+    """The DC of *effect*'s save at *rank* — full, or what a made Dodge left.
+
+    ``None`` for an effect nobody resists. The one place an area's save DC is worked
+    out, so the request a player answers and the line the GM's table rolls agree.
+    """
+
+    base = effect.dc_base
+    if base is None:
+        record = _base(game_data, effect.effect_id)
+        base = record.resistance_dc_base if record is not None else None
+    return None if base is None else base + rank
+
+
+def _adjusted(label: str, *, cover: int = 0, adjust: int = 0) -> str:
+    """*label*, naming what the GM set for these creatures alone."""
+
+    said = []
+    if cover:
+        said.append(f"{cover:+d} cover")
+    if adjust:
+        said.append(f"{adjust:+d} from the GM")
+    return f"{label} ({', '.join(said)})" if said else label
+
+
 def area_resist_spec(
     use: AreaUse,
     effect: AreaEffect,
@@ -410,32 +550,35 @@ def area_resist_spec(
     full: bool = False,
     source: str = "",
     targets: tuple[str, ...] = (),
+    adjust: int = 0,
 ) -> RollSpec | None:
     """The save one of the area's effects calls for — at full rank, or after a Dodge.
 
     With *full* it is a plain save at the full rank (a primary target that was hit).
     Otherwise it is a follow-up of the Dodge check: full rank on a failed Dodge,
-    :attr:`~.rolls.RollSpec.dc_if_resisted` on a made one.
+    :attr:`~.rolls.RollSpec.dc_if_resisted` on a made one. *adjust* is the GM's bonus
+    or penalty on these creatures' checks; it rides as the modifier, which the
+    clicker's own resistance is added to (:func:`~.rolls.localize_spec`).
     """
 
+    dc = area_save_dc(effect, effect.rank, game_data)
     base = _base(game_data, effect.effect_id)
-    if base is None or base.resistance_dc_base is None:
+    if dc is None or base is None:
         return None
     by = f" {source}'s" if source else ""
     label = effect.resistance_label or "Resist"
-    dc = base.resistance_dc_base + effect.rank
-    outcomes = area_effect_ladder(effect, game_data)
     success = (
         rung_caption(base.resistance_success, game_data, effect.config)
         if base.resistance_success is not None
         else ""
     )
     spec = RollSpec(
-        label=f"{label} vs.{by} {effect.name}",
+        label=_adjusted(f"{label} vs.{by} {effect.name}", adjust=adjust),
+        modifier=adjust,
         dc=dc,
-        kind=KIND_POWER_SAVE,
+        kind=effect.resistance_kind,
         hint="Apply what it does to you on your own sheet.",
-        outcomes=outcomes,
+        outcomes=area_effect_ladder(effect, game_data),
         success_outcome=success,
         rolled_by_target=True,
         trait_key=effect.resistance,
@@ -443,24 +586,15 @@ def area_resist_spec(
     )
     if full:
         return spec
-    halved = base.resistance_dc_base + area_resisted_rank(effect.rank, game_data)
     note = ""
     evasion = game_data.area.evasion
     if evasion is not None and evasion.negate_at_rank:
         record = next((a for a in game_data.advantages if a.id == evasion.advantage), None)
         if record is not None:
             note = f"no effect at all with {record.name} {evasion.negate_at_rank}"
-    return RollSpec(
-        label=spec.label,
-        dc=spec.dc,
-        kind=spec.kind,
-        hint=spec.hint,
-        outcomes=spec.outcomes,
-        success_outcome=spec.success_outcome,
-        rolled_by_target=True,
-        trait_key=spec.trait_key,
-        targets=targets,
-        dc_if_resisted=halved,
+    return replace(
+        spec,
+        dc_if_resisted=area_save_dc(effect, area_resisted_rank(effect.rank, game_data), game_data),
         note_if_resisted=note,
     )
 
@@ -471,17 +605,23 @@ def area_dodge_spec(
     *,
     source: str = "",
     targets: tuple[str, ...] = (),
+    cover: int = 0,
+    adjust: int = 0,
 ) -> RollSpec:
     """The Dodge check against the area, with the lead effect's save as its follow-up.
 
     Offered whatever the degree (:attr:`~.rolls.RollSpec.follow_up_always`): a failed
     Dodge is when the save is due at full rank, and a made one when it is due halved.
+    *cover* counts on the Dodge alone; *adjust* on the Dodge and on the save.
     """
 
     by = f"{source}'s " if source else ""
-    follow_up = area_resist_spec(use, use.effects[0], game_data, source=source, targets=targets)
+    follow_up = area_resist_spec(
+        use, use.effects[0], game_data, source=source, targets=targets, adjust=adjust
+    )
     return RollSpec(
-        label=f"Dodge {by}{use.power_name} (area)",
+        label=_adjusted(f"Dodge {by}{use.power_name} (area)", cover=cover, adjust=adjust),
+        modifier=cover + adjust,
         dc=use.dodge_dc(game_data),
         kind=KIND_AREA_DODGE,
         hint="Making it halves the rank you resist the effect at.",
@@ -501,6 +641,8 @@ def area_request_specs(
     source: str = "",
     caught: tuple[str, ...] = (),
     primary: str = "",
+    cover: int = 0,
+    adjust: int = 0,
 ) -> list[RollSpec]:
     """What the history asks the caught **players** to roll, one request each.
 
@@ -508,32 +650,30 @@ def area_request_specs(
     area, and a plain full-rank save for a player who was the primary target and was
     hit. Any further effect of a linked area gets a request of its own, whose label
     gives both DCs — one card can only chain one save, and both are due on one Dodge.
+
+    *cover* and *adjust* are what the GM set for these players (see
+    :func:`area_dodge_spec`), so players the GM set differently are asked separately.
     """
 
     specs: list[RollSpec] = []
     if caught:
-        specs.append(area_dodge_spec(use, game_data, source=source, targets=caught))
+        specs.append(
+            area_dodge_spec(
+                use, game_data, source=source, targets=caught, cover=cover, adjust=adjust
+            )
+        )
         for effect in use.effects[1:]:
-            spec = area_resist_spec(use, effect, game_data, full=True, source=source)
+            spec = area_resist_spec(
+                use, effect, game_data, full=True, source=source, targets=caught, adjust=adjust
+            )
             if spec is None:
                 continue
-            halved = spec.dc - effect.rank + area_resisted_rank(effect.rank, game_data)
-            specs.append(
-                RollSpec(
-                    label=f"{spec.label} (DC {halved} if you made the Dodge)",
-                    dc=spec.dc,
-                    kind=spec.kind,
-                    hint=spec.hint,
-                    outcomes=spec.outcomes,
-                    success_outcome=spec.success_outcome,
-                    trait_key=spec.trait_key,
-                    targets=caught,
-                )
-            )
+            halved = area_save_dc(effect, area_resisted_rank(effect.rank, game_data), game_data)
+            specs.append(replace(spec, label=f"{spec.label} (DC {halved} if you made the Dodge)"))
     if primary:
         for effect in use.effects:
             spec = area_resist_spec(
-                use, effect, game_data, full=True, source=source, targets=(primary,)
+                use, effect, game_data, full=True, source=source, targets=(primary,), adjust=adjust
             )
             if spec is not None:
                 specs.append(spec)
@@ -543,22 +683,99 @@ def area_request_specs(
 # -- the numbers the GM's table rolls -------------------------------------------------
 
 
-def area_dodge_modifier(char: Character | None, game_data: GameData) -> int:
-    """*char*'s Dodge against an area — the resistance total plus Evasion, conditions in."""
+def area_dodge_modifier(
+    char: Character | None, game_data: GameData, *, cover: int = 0, adjust: int = 0
+) -> int:
+    """*char*'s Dodge against an area — the resistance total plus Evasion, conditions in.
+
+    *cover* and *adjust* are the GM's for this creature, added in.
+    """
 
     if char is None or not game_data.area.dodge:
+        return cover + adjust
+    own = resistance_roll(char, game_data, game_data.area.dodge).modifier
+    return own + area_dodge_bonus(char, game_data) + cover + adjust
+
+
+def area_resist_modifier(char: Character | None, game_data: GameData, effect: AreaEffect) -> int:
+    """*char*'s number against *effect* — its resistance, or the better or worse of two.
+
+    0 when either is unknown: the save is then rolled at the GM's adjustment alone.
+    """
+
+    if char is None or not effect.resistance:
         return 0
-    return resistance_roll(char, game_data, game_data.area.dodge).modifier + area_dodge_bonus(
-        char, game_data
+    probe = RollSpec(label="", kind=effect.resistance_kind, trait_key=effect.resistance)
+    return localize_spec(probe, char, game_data).modifier
+
+
+def area_npc_dodge_spec(
+    use: AreaUse,
+    char: Character | None,
+    game_data: GameData,
+    *,
+    cover: int = 0,
+    adjust: int = 0,
+) -> RollSpec:
+    """One creature's Dodge against the area as the GM's table rolls it: its number in."""
+
+    return RollSpec(
+        label="Dodge",
+        modifier=area_dodge_modifier(char, game_data, cover=cover, adjust=adjust),
+        dc=use.dodge_dc(game_data),
+        kind=KIND_AREA_DODGE,
     )
 
 
-def area_resist_modifier(char: Character | None, game_data: GameData, key: str) -> int:
-    """*char*'s number for the resistance *key* names — 0 when either is unknown."""
+def area_npc_save_specs(
+    use: AreaUse,
+    char: Character | None,
+    game_data: GameData,
+    *,
+    dodged: bool | None,
+    adjust: int = 0,
+) -> list[tuple[AreaEffect, RollSpec]] | None:
+    """Each save one creature makes once its Dodge is in, as the GM's table rolls it.
 
-    if char is None or not any(r.key == key for r in game_data.resistances):
-        return 0
-    return resistance_roll(char, game_data, key).modifier
+    *dodged* is whether it made its Dodge check, or ``None`` for the primary target the
+    attack hit — no Dodge, full rank. ``None`` back means a made Dodge left it no effect
+    at all (Evasion's second rank). Each spec carries the creature's own number and the
+    DC its rank leaves; an effect nobody resists is left out.
+    """
+
+    many = len(use.effects) > 1
+    saves: list[tuple[AreaEffect, RollSpec]] = []
+    for effect in use.effects:
+        rank = (
+            effect.rank if dodged is None else area_stage_rank(effect.rank, dodged, char, game_data)
+        )
+        if rank is None:
+            return None
+        dc = area_save_dc(effect, rank, game_data)
+        base = _base(game_data, effect.effect_id)
+        if dc is None or base is None:
+            continue
+        what = effect.resistance_label or "Resist"
+        if many:
+            what = f"{what} ({effect.name})"
+        saves.append(
+            (
+                effect,
+                RollSpec(
+                    label=what,
+                    modifier=area_resist_modifier(char, game_data, effect) + adjust,
+                    dc=dc,
+                    kind=KIND_POWER_SAVE,
+                    outcomes=area_effect_ladder(effect, game_data),
+                    success_outcome=(
+                        rung_caption(base.resistance_success, game_data, effect.config)
+                        if base.resistance_success is not None
+                        else ""
+                    ),
+                ),
+            )
+        )
+    return saves
 
 
 def area_stage_rank(
@@ -616,6 +833,12 @@ class AreaAttempt:
     carrying :attr:`action_id`; the GM's controller pairs the two up, which is how the
     attack's total reaches the window. ``use`` is the area as the attacker's own sheet
     worked it out — the one copy guaranteed current.
+
+    **Flat on the wire**: the use's keys sit beside the attempt's own rather than under
+    a ``"use"`` key. The session's payload sanitizer keeps four levels of nesting
+    (:data:`~..session.protocol.MAX_MOD_DEPTH`), and one more level put every value of
+    an effect's config past it. An Affliction then arrived with no conditions on its
+    ladder, and every creature that failed its save was reported to have resisted.
     """
 
     action_id: str
@@ -627,8 +850,8 @@ class AreaAttempt:
 
     def to_dict(self) -> dict:
         return {
+            **self.use.to_dict(),
             "action_id": self.action_id,
-            "use": self.use.to_dict(),
             "primary": self.primary,
             "targets": list(self.targets),
             "source_name": self.source_name,
@@ -642,7 +865,7 @@ class AreaAttempt:
         if not isinstance(raw, Mapping):
             return None
         action_id = _text(raw, "action_id")
-        use = AreaUse.from_dict(raw.get("use"))
+        use = AreaUse.from_dict(raw)
         if not action_id or use is None:
             return None
         targets = raw.get("targets", [])

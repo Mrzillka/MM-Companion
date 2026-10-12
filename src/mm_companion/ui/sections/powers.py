@@ -721,6 +721,9 @@ class PowersSection(HeldRebuild, TitledSection):
     #: :class:`~mm_companion.core.rules.RollSpec`. Neither a build change nor a
     #: runtime one: rolling a power changes nothing about the power.
     rollRequested = Signal(object)
+    #: A card's area line was pressed — use that power on an area. Carries the power's
+    #: id; it is no roll, so it never travels as one (see ``bus.AREA_REQUESTED``).
+    areaRequested = Signal(str)
 
     #: A sentence for the roll history — what a use of Extra Effort bought and what it
     #: cost. Carries the text, like the System block's own note.
@@ -1311,6 +1314,14 @@ class PowersSection(HeldRebuild, TitledSection):
             )
             area.toggled.connect(lambda on, p=power: self.set_area_use(p, on))
         return menu
+
+    def set_npc_mode(self, npc: bool) -> None:
+        """As for any priced block, and redraw the cards: an NPC's free area use is
+        capped at its *estimated* Power Level, so the area line's rank may move."""
+        changed = npc != self._npc
+        super().set_npc_mode(npc)
+        if changed:
+            self._rebuild_list()
 
     def _offers_area_switch(self, power: Power) -> bool:
         """Whether the card offers the free area use — an attack, or one already switched on."""
@@ -2782,6 +2793,7 @@ class PowersSection(HeldRebuild, TitledSection):
             simple=self._simple,
         )
         footer.rollRequested.connect(self.rollRequested)
+        footer.areaRequested.connect(self.areaRequested)
         footer.pinRequested.connect(self.pinRequested)
         footer.unpinRequested.connect(self.unpinRequested)
         return footer
@@ -2797,7 +2809,7 @@ class PowersSection(HeldRebuild, TitledSection):
     def _rolls(self, power: Power):
         """Every roll the power calls for, as specs; see :func:`~mm_companion.core.
         rules.power_rolls`."""
-        return power_rolls_with_area(power, self._character, self._data)
+        return power_rolls_with_area(power, self._character, self._data, npc=self._npc)
 
     def _rolls_lines(self, power: Power) -> list[str]:
         """One entry per die roll the power calls for; see module-level

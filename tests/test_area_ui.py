@@ -27,7 +27,8 @@ from mm_companion.core.rules import (
     area_attack_spec,
     power_area_use,
 )
-from mm_companion.ui import area_gm
+from mm_companion.ui import action_run
+from mm_companion.ui.action_ui import KIND_OUTCOME, KIND_ROLL_ASK, KIND_ROLL_CLOSED
 from mm_companion.ui.area import AreaDialog, AreaWindow, TargetDropField
 from mm_companion.ui.cards.card import DraggableCard
 from mm_companion.ui.character_sheet import CharacterSheet
@@ -285,7 +286,7 @@ def test_the_gm_resolves_an_npcs_area_in_two_stages(
 ) -> None:
     thug, mook, thug_sheet = _cast(window, data)
     # The Mook fails its Dodge, then fails its Toughness save by two degrees.
-    monkeypatch.setattr(area_gm, "resolve_group", stages([-1], [-2]))
+    monkeypatch.setattr(action_run, "resolve_group", stages([-1], [-2]))
     area = window._area.start_for_npc(thug_sheet, thug_sheet.powers[0], thug)
     assert area is not None
     (row,) = area._rows
@@ -313,7 +314,7 @@ def test_a_made_dodge_rolls_the_save_at_half_rank(
         seen.append(lines)
         return fake(lines, **kwargs)
 
-    monkeypatch.setattr(area_gm, "resolve_group", spy)
+    monkeypatch.setattr(action_run, "resolve_group", spy)
     area = window._area.start_for_npc(thug_sheet, thug_sheet.powers[0], thug)
     area._rows[0].include.setChecked(True)
     area._resolve.click()
@@ -322,15 +323,61 @@ def test_a_made_dodge_rolls_the_save_at_half_rank(
     assert save[0][1] == 10 + 4  # the save at half of rank 8
 
 
+class Asked:
+    """Everything the GM's bridge was asked to put to a player, captured."""
+
+    def __init__(self, window: GMWindow, monkeypatch) -> None:
+        self.cards: list[dict] = []
+        self.prompts: list[tuple[str, str, str, dict]] = []
+        self.removed: list[int] = []
+        bridge = window.bridge
+        monkeypatch.setattr(bridge, "prompt_roll", lambda spec: self.cards.append(spec) or True)
+        monkeypatch.setattr(
+            bridge,
+            "prompt_action",
+            lambda pid, kind, aid, payload=None: self.prompts.append((pid, kind, aid, payload))
+            or True,
+        )
+        monkeypatch.setattr(bridge, "remove_roll", lambda seq: self.removed.append(seq) or True)
+
+    def specs(self) -> list[RollSpec]:
+        return [RollSpec.from_dict(spec) for spec in self.cards]
+
+    def kinds(self) -> list[str]:
+        return [kind for _pid, kind, _aid, _payload in self.prompts]
+
+
+def _answer(spec: RollSpec, *, die: int, seq: int = 50) -> dict:
+    """The roll a player's sheet makes off a request, as the history records it."""
+    return {
+        "seq": seq,
+        "kind": "roll",
+        "player_id": "p2",
+        "player_name": "Nova",
+        "label": spec.label,
+        "die": die,
+        "bonus": max(0, spec.modifier),
+        "penalty": max(0, -spec.modifier),
+        "dc": spec.dc,
+        "degree": None if spec.dc is None else (1 if die + spec.modifier >= spec.dc else -2),
+        "spec": spec.to_dict(),
+    }
+
+
 def test_a_player_in_the_area_is_asked_rather_than_rolled_for(
     qapp, window: GMWindow, data, monkeypatch
 ) -> None:
     source, targets = _parties(data)
     monkeypatch.setattr(window, "impress_parties", lambda: ([source], targets))
-    asked: list[dict] = []
-    monkeypatch.setattr(window.bridge, "prompt_roll", lambda spec: asked.append(spec) or True)
+    asked = Asked(window, monkeypatch)
     rolled: list = []
-    monkeypatch.setattr(area_gm, "resolve_group", lambda lines, **kw: rolled.append(lines))
+    monkeypatch.setattr(action_run, "resolve_group", lambda lines, **kw: rolled.append(lines))
+    applied: list = []
+    monkeypatch.setattr(
+        window,
+        "impress_apply",
+        lambda party, changes: applied.append((party.name, changes)) or True,
+    )
 
     use = power_area_use(burst(), source.character, data)
     declared = window._area.declare("p1", AreaAttempt("act", use, targets=("s2",)).to_dict())
@@ -340,9 +387,51 @@ def test_a_player_in_the_area_is_asked_rather_than_rolled_for(
     area._resolve.click()
 
     assert rolled == []  # nobody the GM plays was in it
-    (request,) = (RollSpec.from_dict(s) for s in asked)
-    assert request.kind == KIND_AREA_DODGE and request.targets == ("Nova",)
-    assert request.follow_up is not None and request.follow_up_always
+    # Asked twice over: a prompt on their screen, and a request in the history.
+    assert asked.kinds() == [KIND_ROLL_ASK]
+    (dodge,) = asked.specs()
+    assert dodge.kind == KIND_AREA_DODGE and dodge.targets == ("Nova",)
+    assert dodge.action_id == "act" and dodge.follow_up is None
+    assert area.isVisible() and area._roll_waiting.isVisible()
+    assert "Nova" in area.summary.text()
+
+    # Their Dodge comes back — failed — and the save is asked for at full rank.
+    window._area.take_roll({**_answer(dodge, die=1), "kind": "request", "seq": 7})
+    window._area.take_roll(_answer(dodge, die=1))
+    assert KIND_ROLL_CLOSED in asked.kinds() and asked.removed == [7]
+    save = asked.specs()[-1]
+    assert save.dc == 10 + 8 and save.targets == ("Nova",)
+    assert "Dodge" in area.result_text("s2")
+
+    # The save fails: the GM applies what it did, and tells the player.
+    window._area.take_roll(_answer(save, die=1, seq=51))
+    assert applied and applied[0][0] == "Nova"
+    assert KIND_OUTCOME in asked.kinds()
+    assert "act" not in window._area.declared or not area._roll_waiting.isVisible()
+    action = next(c for c in window._history.cards() if isinstance(c, ActionCard))
+    assert action.button.isHidden()
+    area.close()
+
+
+def test_the_gm_can_roll_for_a_player_who_does_not_answer(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    source, targets = _parties(data)
+    monkeypatch.setattr(window, "impress_parties", lambda: ([source], targets))
+    Asked(window, monkeypatch)
+    monkeypatch.setattr(window, "impress_apply", lambda party, changes: True)
+    monkeypatch.setattr(action_run, "resolve_group", stages([1]))
+    use = power_area_use(burst(), source.character, data)
+    window._area.declare("p1", AreaAttempt("act", use, targets=("s2",)).to_dict())
+    area = window._area.open("act")
+    area._resolve.click()
+    declared = window._area.declared["act"]
+    assert declared.run.waiting() == ["Nova"]
+    area._roll_waiting.click()
+    # The Dodge is in (made, off their snapshot); the half-rank save is asked for next.
+    assert "Dodge" in area.result_text("s2")
+    assert declared.run.waiting() == ["Nova"]
+    area.close()
 
 
 def test_a_declaration_waits_in_the_gm_history_and_picks_up_the_attack(
@@ -582,8 +671,8 @@ def test_a_players_cover_and_adjustment_reach_their_request(
 ) -> None:
     source, targets = _parties(data)
     monkeypatch.setattr(window, "impress_parties", lambda: ([source], targets))
-    asked: list[dict] = []
-    monkeypatch.setattr(window.bridge, "prompt_roll", lambda spec: asked.append(spec) or True)
+    asked = Asked(window, monkeypatch)
+    monkeypatch.setattr(window, "impress_apply", lambda party, changes: True)
     use = power_area_use(burst(), source.character, data)
     window._area.declare("p1", AreaAttempt("act", use, targets=("s2",)).to_dict())
     area = window._area.open("act")
@@ -591,8 +680,13 @@ def test_a_players_cover_and_adjustment_reach_their_request(
     row.cover.setCurrentIndex(row.cover.findData(5))
     row.bonus.setValue(2)
     area._resolve.click()
-    (request,) = (RollSpec.from_dict(s) for s in asked)
-    assert request.modifier == 7 and request.follow_up.modifier == 2
+    (dodge,) = asked.specs()
+    assert dodge.modifier == 7  # cover and the GM's bonus, on the Dodge
+    # A made Dodge: the save is asked for at half rank, with the bonus alone.
+    window._area.take_roll(_answer(dodge, die=20))
+    save = asked.specs()[-1]
+    assert save.modifier == 2 and save.dc == 10 + 4
+    area.close()
 
 
 def test_a_request_says_who_it_is_for_and_calls_out_the_reader(qapp) -> None:
@@ -607,3 +701,144 @@ def test_a_request_says_who_it_is_for_and_calls_out_the_reader(qapp) -> None:
     mine = RequestCard(request, own_names=frozenset({"Nova"}))
     theirs = RequestCard(request, own_names=frozenset({"Cy"}))
     assert mine.for_reader and not theirs.for_reader
+
+
+# -- the reworked flow -----------------------------------------------------------------------
+
+
+def test_an_answered_request_joins_its_actions_table(qapp) -> None:
+    panel = RollHistoryPanel(gm=True)
+    panel.add_roll(_record(1, "act.1", "Mook: Dodge", "Mook", -1))
+    asked = RollSpec(
+        label="Dodge Ana's Fire Burst (area)",
+        kind=KIND_AREA_DODGE,
+        targets=("Nova",),
+        action_id="act",
+        title="GM: Fire Burst (area)",
+    )
+    panel.add_roll(
+        {
+            "seq": 2,
+            "kind": "roll",
+            "player_name": "Nova",
+            "label": asked.label,
+            "die": 12,
+            "bonus": 3,
+            "penalty": 0,
+            "dc": 18,
+            "degree": -1,
+            "spec": asked.to_dict(),
+        }
+    )
+    (table,) = panel.cards()
+    assert isinstance(table, GroupTableCard)
+    assert any("Nova" in line and "Dodge" in line for line in table.lines())
+
+
+def test_an_npc_card_offers_area_and_impress(qapp, window: GMWindow, data) -> None:
+    thug, mook, _sheet = _cast(window, data)
+    card = window._npc_state[thug].card
+    assert card.area_builds() and not card._area_button.isHidden()
+    plain = window._npc_state[mook].card
+    assert plain.area_builds() == [] and plain._area_button.isHidden()
+
+    opened: list = []
+    window._area.start_for_npc = lambda *args, **kw: opened.append(args) or None
+    card._area_button.click()  # one attack: straight to the window
+    assert opened and opened[0][2] == thug
+    menu = card.build_context_menu()
+    assert any(a.text() == "Impress…" for a in menu.actions())
+
+
+def test_any_npc_attack_can_be_spread_from_its_card(qapp, window: GMWindow, data) -> None:
+    blast = Power(name="Blast", effects=[PowerEffectInstance("damage", rank=6)])
+    thug = write_npc(data, "Thug", power=blast)
+    window._register_npc(thug)
+    entry = window._npc_state[thug.name]
+    # A plain attack, its free-use switch off: the card still offers it.
+    assert [b.name for b in entry.card.area_builds()] == ["Blast"]
+    window._start_card_area(thug.name, entry.character.powers[0].id)
+    (area,) = window._area.windows.values()
+    assert area.use.free and area._shape.isEnabled()
+    area._shape.setCurrentIndex(area._shape.findData("line"))
+    assert area.use.shape == "line"
+    area.close()
+
+
+def test_a_bare_declaration_leaves_the_gm_every_choice(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    source, targets = _parties(data)
+    source.character.powers.append(burst())
+    monkeypatch.setattr(window, "impress_parties", lambda: ([source], targets))
+    use = power_area_use(burst(), source.character, data)
+    window._area.declare("p1", AreaAttempt("act", use, source_name="Ana").to_dict())
+    action = next(c for c in window._history.cards() if isinstance(c, ActionCard))
+    assert "yours to set" in action.text()
+    area = window._area.open("act")
+    assert area.included() == []
+    # The GM picks a primary; a player's attack is asked of them.
+    asked = Asked(window, monkeypatch)
+    area.set_primary("s1")
+    assert area._roll_attack.text().startswith("🎲 Ask")
+    area._roll_attack.click()
+    (attack,) = asked.specs()
+    assert attack.action_id == "act" and attack.targets == ("Mook",)
+    assert not area._roll_attack.isVisibleTo(area)
+    window._area.take_roll({**_answer(attack, die=18), "dc": None, "degree": None})
+    assert area._attack is not None and area._attack[1] == 18
+    area.close()
+
+
+def test_the_sheet_sends_an_area_bare_unless_the_player_chooses(qapp, data, monkeypatch) -> None:
+    from mm_companion.ui import action_ui
+    from mm_companion.ui.sections import dice as dice_module
+
+    class Bridge:
+        in_session = True
+        is_gm = False
+
+        def __init__(self) -> None:
+            self.sent: list = []
+            self.notes: list = []
+            self.rules: dict = {}
+
+        def mod_state(self, mod_id=""):
+            return self.rules
+
+        def scene(self):
+            return list(SCENE)
+
+        def own_player_id(self):
+            return "me"
+
+        def send_action_request(self, kind, action_id, payload=None):
+            self.sent.append((kind, payload))
+            return True
+
+        def post_note(self, text):
+            self.notes.append(text)
+            return True
+
+    bridge = Bridge()
+    monkeypatch.setattr(dice_module, "live_session", lambda: bridge)
+    char = creature(data, "Ana")
+    char.powers.append(burst())
+    sheet = CharacterSheet(data, char)
+    dice = sheet.section("dice")
+
+    # Off by default: no window, the power goes to the GM as it stands.
+    assert dice.start_area(char.powers[0].id) is None
+    ((kind, payload),) = bridge.sent
+    attempt = AreaAttempt.from_dict(payload)
+    assert kind == "area" and attempt.targets == () and attempt.primary == ""
+    assert bridge.notes and "sets it up" in bridge.notes[0]
+
+    # The player wants to choose, and the table lets them: the window opens.
+    storage.set_resolve_actions_myself(True)
+    dialog = dice.start_area(char.powers[0].id)
+    assert dialog is not None
+    dialog.close()
+    # ...unless the GM keeps the choosing.
+    bridge.rules = {action_ui.TABLE_ACTIONS_KEY: {"players_choose": False}}
+    assert dice.start_area(char.powers[0].id) is None

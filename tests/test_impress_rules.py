@@ -249,7 +249,11 @@ def test_an_attempt_round_trips_and_rejects_junk() -> None:
         source_ref="s0",
     )
     assert ImpressAttempt.from_dict(attempt.to_dict()) == attempt
-    assert ImpressAttempt.from_dict({"action_id": "x"}) is None
+    assert not attempt.bare
+    # An id alone is a bare declaration: the GM chooses everything else.
+    bare = ImpressAttempt.from_dict({"action_id": "x", "source_name": "Nova"})
+    assert bare is not None and bare.bare and bare.source_name == "Nova"
+    assert ImpressAttempt.from_dict({"impression": "demoralized"}) is None
     assert ImpressAttempt.from_dict("nope") is None
     odd = ImpressAttempt.from_dict({"action_id": "x", "impression": "y", "mode": "?", "targets": 3})
     assert odd.mode == "resolve" and odd.targets == ()

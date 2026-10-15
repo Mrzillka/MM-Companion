@@ -1,19 +1,26 @@
-"""The Impress action's windows: declaring one, resisting one, and resolving one.
+"""The Impress action's windows: declaring one, and setting one up and resolving it.
 
-Three seats see three different windows, and none of them computes a number — every
-total, option and ladder comes from :mod:`mm_companion.core.rules.impress`:
+Two seats see two different windows, and neither computes a number — every total,
+option and ladder comes from :mod:`mm_companion.core.rules.impress`:
 
 * :class:`ImpressDialog` — the **impresser** picks an impression, a skill and their
   targets off the scene, and sends that to the GM. Off the air there is no GM, so it
   carries the modifiers itself and rolls the check straight into the history, leaving
-  a button to resist with (the "request only" way of running it).
-* :class:`ResistPromptDialog` — a **targeted player** says how they resist: their
-  highest option by default, or one they pick.
+  a button to resist with (the "request only" way of running it). At a table a player
+  only sees it when both they and the GM want them to choose
+  (:func:`~mm_companion.ui.action_ui.sets_up_own_actions`); otherwise the Impress goes
+  to the GM bare.
 * :class:`ImpressWindow` — the **GM** sets the situational modifiers (always theirs to
-  set, whoever is impressing), sees and overrides each target's resistance, adjusts
-  the check per target, and rolls. What happens next — the server rolling the group,
-  the conditions landing — is :mod:`mm_companion.ui.impress_gm`'s, which owns the
-  session plumbing this module stays out of.
+  set, whoever is impressing) and a bonus or penalty on the impresser's check, sees and
+  overrides each target's resistance, adjusts the check per target, and rolls; then
+  watches each roll come back in it. What happens in between — the server rolling,
+  players being asked, the conditions landing — is
+  :mod:`mm_companion.ui.impress_gm`'s, which owns the session plumbing this module stays
+  out of.
+
+A targeted player is not asked anything before the roll: once the check is in, they are
+asked to roll their resistance (:class:`~mm_companion.ui.action_ui.RollPromptDialog`),
+picking how they resist there.
 """
 
 from __future__ import annotations
@@ -35,11 +42,8 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
     QPushButton,
     QRadioButton,
-    QScrollArea,
     QSlider,
     QVBoxLayout,
     QWidget,
@@ -51,7 +55,6 @@ from mm_companion.core.rules import (
     MODE_REQUEST,
     MODE_RESOLVE,
     ImpressAttempt,
-    ResistAnswer,
     RollSpec,
     TraitChoice,
     best_choice,
@@ -66,18 +69,22 @@ from mm_companion.core.rules import (
     resist_choices,
 )
 from mm_companion.ui import theme
+from mm_companion.ui.action_ui import (
+    PHASE_SETUP,
+    ActionRow,
+    ActionWindow,
+    BodyScroll,
+    TargetsBox,
+    fit_to_screen,
+)
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box, muted_style, tinted_style
 
 #: What the history and the windows call the action.
 ACTION_NAME = "Impress"
 
-#: The ``ActionRequest`` / ``ActionPrompt`` kinds this action travels as: a player's
-#: declared attempt, a target's resist choice, and the GM's "how do you resist?" and
-#: "that is settled now".
+#: The ``ActionRequest`` kind a declared Impress travels as.
 KIND_IMPRESS = "impress"
-KIND_RESIST = "resist"
-KIND_RESIST_CLOSED = "resist-closed"
 
 
 #: The roller's Action-row button, as the sheet and the GM window both offer it:
@@ -287,6 +294,10 @@ class ImpressDialog(QDialog):
     modifiers and rolls. Off the air there is nobody to send it to, so the dialog
     grows the modifiers itself and :meth:`offline_spec` is the check to roll, carrying
     the resistance as a button for whoever is on the receiving end.
+
+    Targets are picked the way an area's are: scene cards dragged into the field, or
+    picked off its Add button. Modeless, for the reason the area's dialog is — a modal
+    one swallows the press that starts dragging a card off the board behind it.
     """
 
     def __init__(
@@ -302,9 +313,23 @@ class ImpressDialog(QDialog):
         self._data = data
         self._character = character
         self._online = scene is not None
+        self._fitted = False
+        self._names: dict[str, str] = {}
+        for entry in scene or []:
+            ref = str(entry.get("ref", ""))
+            if not ref or (own_player_id and entry.get("player_id") == own_player_id):
+                continue
+            self._names[ref] = str(entry.get("name", "")) or "Someone"
         self.setWindowTitle(ACTION_NAME)
 
-        layout = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        body = QWidget()
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(0, 0, 0, 0)
+        scroll = BodyScroll()
+        scroll.setWidget(body)
+        outer.addWidget(scroll, stretch=1)
+
         form = QFormLayout()
         self._impression = QComboBox()
         guard_wheel(self._impression)
@@ -325,31 +350,22 @@ class ImpressDialog(QDialog):
         self._outcome.setStyleSheet(muted_style())
         layout.addWidget(self._outcome)
 
-        self._targets = QListWidget()
         self._group_note = QLabel()
         self._group_note.setStyleSheet(tinted_style("tint.warning"))
         self._mode_buttons: dict[str, QRadioButton] = {}
         self._modifiers: ModifiersPanel | None = None
+        self.targets: TargetsBox | None = None
         if self._online:
-            targets_box = QGroupBox("Targets")
-            targets_layout = QVBoxLayout(targets_box)
-            for entry in scene or []:
-                ref = str(entry.get("ref", ""))
-                if not ref or (own_player_id and entry.get("player_id") == own_player_id):
-                    continue
-                item = QListWidgetItem(str(entry.get("name", "")) or "Someone")
-                item.setData(Qt.ItemDataRole.UserRole, ref)
-                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                item.setCheckState(Qt.CheckState.Unchecked)
-                self._targets.addItem(item)
-            if self._targets.count() == 0:
-                empty = QLabel("Nobody else is on the scene yet.")
-                empty.setStyleSheet(muted_style(italic=True))
-                targets_layout.addWidget(empty)
-            self._targets.itemChanged.connect(lambda _item: self._sync())
-            targets_layout.addWidget(self._targets)
-            targets_layout.addWidget(self._group_note)
-            layout.addWidget(targets_box)
+            self.targets = TargetsBox(
+                "Targets",
+                "impressTargets",
+                resolve=self._resolve,
+                choices=lambda: list(self._names.items()),
+                placeholder="Drop the cards of everyone you are impressing here",
+            )
+            self.targets.field.changed.connect(self._sync)
+            layout.addWidget(self.targets, stretch=1)
+            layout.addWidget(self._group_note)
 
             mode_box = QGroupBox("Resolve")
             mode_layout = QVBoxLayout(mode_box)
@@ -378,7 +394,7 @@ class ImpressDialog(QDialog):
             layout.addWidget(hint)
 
         self._total = QLabel()
-        layout.addWidget(self._total)
+        outer.addWidget(self._total)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
         self._ok = QPushButton("Send to GM" if self._online else "Roll")
@@ -386,7 +402,7 @@ class ImpressDialog(QDialog):
         buttons.addButton(self._ok, QDialogButtonBox.ButtonRole.AcceptRole)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        outer.addWidget(buttons)
 
         _preselect_skill(self._skill, self.impression(), data)
         self._sync()
@@ -401,18 +417,15 @@ class ImpressDialog(QDialog):
         return next((c for c in self._skills if c.ref == ref), None)
 
     def target_refs(self) -> list[str]:
-        refs = []
-        for row in range(self._targets.count()):
-            item = self._targets.item(row)
-            if item.checkState() == Qt.CheckState.Checked:
-                refs.append(str(item.data(Qt.ItemDataRole.UserRole)))
-        return refs
+        return self.targets.field.refs() if self.targets is not None else []
 
     def set_targets(self, refs: list[str]) -> None:
-        for row in range(self._targets.count()):
-            item = self._targets.item(row)
-            wanted = item.data(Qt.ItemDataRole.UserRole) in refs
-            item.setCheckState(Qt.CheckState.Checked if wanted else Qt.CheckState.Unchecked)
+        if self.targets is None:
+            return
+        self.targets.field.clear_refs(notify=False)
+        for ref in refs:
+            self.targets.field.add_ref(ref)
+        self._sync()
 
     def mode(self) -> str:
         if self._mode_buttons.get(MODE_REQUEST) and self._mode_buttons[MODE_REQUEST].isChecked():
@@ -463,6 +476,10 @@ class ImpressDialog(QDialog):
 
     # -- reacting ----------------------------------------------------------
 
+    def _resolve(self, ref: str) -> tuple[str, str] | None:
+        name = self._names.get(ref)
+        return None if name is None else (ref, name)
+
     def _on_impression(self) -> None:
         _preselect_skill(self._skill, self.impression(), self._data)
         self._sync()
@@ -496,102 +513,11 @@ class ImpressDialog(QDialog):
         extra = " before the GM's modifiers" if self._online else ""
         self._total.setText(f"Impress check: <b>{_signed(total)}</b>{extra}")
 
-
-# -- the target's prompt -----------------------------------------------------------
-
-
-class ResistPromptDialog(QDialog):
-    """A targeted player saying how they resist an impression.
-
-    Non-modal — the game goes on around it — and answered with one click: "Use
-    highest" is on by default, and turning it off lets the player pick. The GM
-    can still override whatever comes back.
-    """
-
-    answered = Signal(object)  # ResistAnswer
-
-    def __init__(
-        self,
-        data: GameData,
-        character: Character,
-        *,
-        action_id: str,
-        payload: dict,
-        parent: QWidget | None = None,
-    ) -> None:
-        super().__init__(parent)
-        self._data = data
-        self._character = character
-        self.action_id = action_id
-        self.setWindowTitle(f"Resist {ACTION_NAME}")
-        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-
-        layout = QVBoxLayout(self)
-        self._what = QLabel()
-        self._what.setWordWrap(True)
-        layout.addWidget(self._what)
-
-        self._highest = QCheckBox()
-        self._highest.setChecked(True)
-        self._highest.toggled.connect(self._sync)
-        layout.addWidget(self._highest)
-        self._choice = QComboBox()
-        guard_wheel(self._choice)
-        layout.addWidget(self._choice)
-
-        buttons = QDialogButtonBox()
-        send = QPushButton("Send to GM")
-        send.setDefault(True)
-        buttons.addButton(send, QDialogButtonBox.ButtonRole.AcceptRole)
-        buttons.addButton(QDialogButtonBox.StandardButton.Close)
-        buttons.accepted.connect(self._send)
-        buttons.rejected.connect(self.close)
-        layout.addWidget(buttons)
-        self._choices: list[TraitChoice] = []
-        self.update_prompt(payload)
-
-    def update_prompt(self, payload: dict) -> None:
-        """Show what is being resisted — again, if the GM changed the skill."""
-        source = str(payload.get("source_name", "")) or "Someone"
-        impression = str(payload.get("impression_name", "")) or ACTION_NAME
-        skill_label = str(payload.get("skill_label", ""))
-        skill_row = str(payload.get("skill_row", ""))
-        with_skill = f" with {skill_label}" if skill_label else ""
-        self._what.setText(
-            f"<b>{html.escape(source)}</b> is trying to impress you"
-            f"{html.escape(with_skill)}: <b>{html.escape(impression)}</b>."
-        )
-        current = str(self._choice.currentData() or "")
-        self._choices = resist_choices(self._character, self._data, skill_row)
-        _fill_choices(self._choice, self._choices, current)
-        best = best_choice(self._choices)
-        self._highest.setText(
-            f"Use highest ({choice_caption(best)})" if best is not None else "Use highest"
-        )
-        self._sync()
-
-    def _sync(self) -> None:
-        self._choice.setEnabled(not self._highest.isChecked())
-
-    def answer(self) -> ResistAnswer:
-        best = best_choice(self._choices)
-        chosen = (
-            best
-            if self._highest.isChecked()
-            else next((c for c in self._choices if c.ref == self._choice.currentData()), best)
-        )
-        return ResistAnswer(
-            action_id=self.action_id,
-            use_highest=self._highest.isChecked(),
-            choice="" if chosen is None else chosen.ref,
-            label="" if chosen is None else chosen.label,
-            modifier=0 if chosen is None else chosen.modifier,
-            options=tuple(self._choices),
-        )
-
-    def _send(self) -> None:
-        self.answered.emit(self.answer())
-        self.close()
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().showEvent(event)
+        if not self._fitted:
+            self._fitted = True
+            fit_to_screen(self)
 
 
 # -- the GM's window --------------------------------------------------------------
@@ -622,6 +548,8 @@ class PlannedTarget:
     party: ImpressParty
     resist: TraitChoice | None
     dc_offset: int
+    #: The GM left it at "Use highest": a player then picks when asked to roll.
+    highest: bool = True
 
 
 @dataclass(frozen=True)
@@ -637,40 +565,44 @@ class ImpressPlan:
     hint: str
     targets: tuple[PlannedTarget, ...] = field(default=())
 
-
-@dataclass
-class _TargetRow:
-    party: ImpressParty
-    include: QCheckBox
-    highest: QCheckBox
-    choice: QComboBox
-    status: QLabel
-    bonus: object
-    penalty: object
-    choices: list[TraitChoice] = field(default_factory=list)
-    answered: bool = False
-    prompted: bool = False
-    #: Asked, but the prompt could not be delivered — they resist off their sheet.
-    unreachable: bool = False
+    @property
+    def title(self) -> str:
+        """What the action's table in the history is headed by."""
+        return f"{self.source.name}: {self.impression.name}"
 
 
-class ImpressWindow(QDialog):
-    """The GM resolving an Impress — a player's (from *attempt*) or one of their NPCs'.
+class ImpressRow(ActionRow):
+    """A target's row: how it resists ("Use highest", or a pick), and its numbers."""
 
-    The GM's controls are the situational modifiers, each target's resistance ("Use
-    highest" on by default, or a pick — a player's own answer fills this in), and a
-    bonus and penalty on the check against each target alone. :attr:`rollRequested`
-    hands the finished :class:`ImpressPlan` to whoever rolls it.
+    def __init__(self, party: ImpressParty) -> None:
+        self.highest = QCheckBox("Use highest")
+        self.highest.setChecked(True)
+        self.choice = QComboBox()
+        guard_wheel(self.choice)
+        cell = QWidget()
+        cell_layout = QHBoxLayout(cell)
+        cell_layout.setContentsMargins(0, 0, 0, 0)
+        cell_layout.addWidget(self.highest)
+        cell_layout.addWidget(self.choice, stretch=1)
+        super().__init__(party, [cell])
+        self.choices: list[TraitChoice] = []
+
+    def inputs(self) -> list[QWidget]:
+        return [self.include, self.highest, self.choice, self.bonus, self.penalty]
+
+
+class ImpressWindow(ActionWindow):
+    """The GM setting up and resolving an Impress — a player's, or one of their NPCs'.
+
+    The GM's controls are the impresser (an NPC of theirs), the impression and the skill
+    (a player's own when they chose them, the GM's when they sent it bare), a bonus and a
+    penalty on the impresser's check, the situational modifiers, each target's resistance
+    ("Use highest" by default, or a pick), and a bonus and penalty on the check against
+    each target alone. :attr:`rollRequested` hands the finished :class:`ImpressPlan` to
+    whoever rolls it; the window then shows each roll as it comes back.
     """
 
     rollRequested = Signal(object)  # ImpressPlan
-    #: A player target was ticked and has not been asked how they resist yet.
-    promptNeeded = Signal(object)  # ImpressParty
-    #: The skill changed under prompts already sent; they need re-sending.
-    promptsChanged = Signal()
-    #: A player who was asked is no longer being impressed (untargeted).
-    promptWithdrawn = Signal(object)  # ImpressParty
-    cancelled = Signal()
 
     def __init__(
         self,
@@ -680,88 +612,80 @@ class ImpressWindow(QDialog):
         sources: list[ImpressParty],
         targets: list[ImpressParty],
         attempt: ImpressAttempt | None = None,
+        from_card: bool = False,
         parent: QWidget | None = None,
     ) -> None:
-        super().__init__(parent)
-        self._data = data
-        self.action_id = action_id
+        super().__init__(
+            data,
+            action_id=action_id,
+            title=ACTION_NAME,
+            targets=targets,
+            go_caption="🎲 Roll",
+            box_title="Targets",
+            columns=(("Resists with", "What each target rolls against the impress check"),),
+            from_card=from_card,
+            parent=parent,
+        )
         self._attempt = attempt
         self._sources = sources
-        self._rows: list[_TargetRow] = []
-        self._done = False
-        #: The skill every player's answer so far was given against.
-        self._asked_skill = ""
-        self.setWindowTitle(ACTION_NAME)
-        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        #: The player chose the impression and skill; they are theirs, read-only here.
+        self._declared = attempt is not None and not attempt.bare
 
-        layout = QVBoxLayout(self)
-        form = QFormLayout()
+        setup = QWidget()
+        form = QFormLayout(setup)
+        form.setContentsMargins(0, 0, 0, 0)
         self._source = QComboBox()
         guard_wheel(self._source)
         for party in sources:
             self._source.addItem(party.name, party.ref)
-        self._source.currentIndexChanged.connect(self._on_source)
+        spin = int(theme.metric("column.stat.spin"))
+        self._check_bonus = make_spin_box(0, 20, value=0, buttons=False, max_width=spin)
+        self._check_bonus.setToolTip("A bonus to the impresser's check")
+        self._check_penalty = make_spin_box(0, 20, value=0, buttons=False, max_width=spin)
+        self._check_penalty.setToolTip("A penalty to the impresser's check")
+        source_row = QWidget()
+        source_layout = QHBoxLayout(source_row)
+        source_layout.setContentsMargins(0, 0, 0, 0)
+        source_layout.addWidget(self._source, stretch=1)
+        source_layout.addWidget(QLabel("Bonus"))
+        source_layout.addWidget(self._check_bonus)
+        source_layout.addWidget(QLabel("Penalty"))
+        source_layout.addWidget(self._check_penalty)
+        source_layout.addStretch(1)
         self._impression = QComboBox()
         guard_wheel(self._impression)
-        self._impression.currentIndexChanged.connect(self._on_impression)
         self._skill = QComboBox()
         guard_wheel(self._skill)
-        self._skill.currentIndexChanged.connect(self._on_skill)
         self._skills: list[TraitChoice] = []
         if attempt is not None:
-            # A player's declaration: what they chose is theirs, and is read-only here.
+            # A player's declaration: they impress, nobody else.
             self._source.setEnabled(False)
+        if self._declared:
             self._impression.setEnabled(False)
             self._skill.setEnabled(False)
-        form.addRow("Impresser:", self._source)
+        form.addRow("Impresser:", source_row)
         form.addRow("Impression:", self._impression)
         form.addRow("Skill:", self._skill)
-        layout.addLayout(form)
-
         self._outcome = QLabel()
         self._outcome.setWordWrap(True)
         self._outcome.setStyleSheet(muted_style())
-        layout.addWidget(self._outcome)
+        form.addRow(self._outcome)
+        self.add_section(setup)
+        self._check_note = QLabel()
+        self._check_note.setTextFormat(Qt.TextFormat.RichText)
+        self._check_note.setWordWrap(True)
+        self._check_note.hide()
+        self.add_section(self._check_note)
 
-        targets_box = QGroupBox("Targets")
-        targets_layout = QVBoxLayout(targets_box)
-        grid_host = QWidget()
-        stack = QVBoxLayout(grid_host)
-        stack.setContentsMargins(0, 0, 0, 0)
-        self._grid = QGridLayout()
-        self._grid.setHorizontalSpacing(int(theme.metric("space.sm")))
-        headers = (
-            ("", ""),
-            ("Resists with", "What each target rolls against the impress check"),
-            ("", ""),
-            ("Bonus", "A bonus to the impress check against this target alone"),
-            ("Penalty", "A penalty to the impress check against this target alone"),
-        )
-        for column, (caption, tip) in enumerate(headers):
-            header = QLabel(caption)
-            header.setStyleSheet(muted_style())
-            header.setToolTip(tip)
-            self._grid.addWidget(header, 0, column)
-        self._grid.setColumnStretch(1, 1)
-        # The rows stack from the top; the scroll area's spare height goes below them.
-        stack.addLayout(self._grid)
-        stack.addStretch(1)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(grid_host)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        targets_layout.addWidget(scroll)
         self._group_note = QLabel()
         self._group_note.setStyleSheet(tinted_style("tint.warning"))
-        targets_layout.addWidget(self._group_note)
-        layout.addWidget(targets_box, stretch=1)
-        self._all_targets = targets
-
+        self.add_section(self._group_note, after_targets=True)
         self._modifiers = ModifiersPanel(data)
-        self._modifiers.changed.connect(self._sync)
-        layout.addWidget(self._modifiers)
+        self.add_section(self._modifiers, after_targets=True)
 
-        mode_row = QHBoxLayout()
+        mode_host = QWidget()
+        mode_row = QHBoxLayout(mode_host)
+        mode_row.setContentsMargins(0, 0, 0, 0)
         self._mode_buttons: dict[str, QRadioButton] = {}
         group = QButtonGroup(self)
         for mode, caption in MODE_CAPTIONS.items():
@@ -771,29 +695,53 @@ class ImpressWindow(QDialog):
             self._mode_buttons[mode] = button
         mode = attempt.mode if attempt is not None else MODE_RESOLVE
         self._mode_buttons.get(mode, self._mode_buttons[MODE_RESOLVE]).setChecked(True)
-        group.buttonToggled.connect(lambda _button, on: on and self._on_mode())
-        layout.addLayout(mode_row)
+        self.add_section(mode_host, after_targets=True)
 
         self._total = QLabel()
         self._total.setWordWrap(True)
-        layout.addWidget(self._total)
+        self.add_section(self._total, after_targets=True)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
-        self._roll = QPushButton("🎲 Roll")
-        self._roll.setDefault(True)
-        buttons.addButton(self._roll, QDialogButtonBox.ButtonRole.AcceptRole)
-        buttons.accepted.connect(self._emit_roll)
-        buttons.rejected.connect(self.close)
-        layout.addWidget(buttons)
+        wanted = set(attempt.targets) if attempt is not None else set()
+        self.build_rows(lambda _party: [], wanted)
+        self.heading.setText(self._heading_text())
 
-        self._build_targets()
+        # Wired once everything they reach exists.
+        self._source.currentIndexChanged.connect(self._on_source)
+        self._check_bonus.valueChanged.connect(lambda _v: self.sync())
+        self._check_penalty.valueChanged.connect(lambda _v: self.sync())
+        self._impression.currentIndexChanged.connect(self._on_impression)
+        self._skill.currentIndexChanged.connect(self._on_skill)
+        self._modifiers.changed.connect(self.sync)
+        group.buttonToggled.connect(lambda _button, on: on and self._on_mode())
         self._on_source()
+
+    def make_row(self, party, cells: list[QWidget]) -> ActionRow:
+        row = ImpressRow(party)
+        row.bonus.setToolTip(f"A bonus to the impress check against {party.name} alone")
+        row.penalty.setToolTip(f"A penalty to the impress check against {party.name} alone")
+        row.highest.toggled.connect(lambda _on, r=row: self._sync_row(r))
+        row.choice.currentIndexChanged.connect(lambda _i: self.sync())
+        return row
+
+    def _heading_text(self) -> str:
+        attempt = self._attempt
+        if attempt is None:
+            return "One of your NPCs impresses somebody."
+        who = html.escape(attempt.source_name or "A player")
+        if attempt.bare:
+            return f"<b>{who}</b> is impressing — you choose how, and whom."
+        return f"<b>{who}</b> declared an impression — set the modifiers and roll."
 
     # -- the impresser -------------------------------------------------------
 
     def source(self) -> ImpressParty | None:
         ref = self._source.currentData()
         return next((p for p in self._sources if p.ref == ref), None)
+
+    def set_source(self, ref: str) -> None:
+        index = self._source.findData(ref)
+        if index >= 0:
+            self._source.setCurrentIndex(index)
 
     def impression(self) -> Impression | None:
         return self._data.impress.impression(str(self._impression.currentData() or ""))
@@ -806,7 +754,7 @@ class ImpressWindow(QDialog):
         source = self.source()
         character = source.character if source is not None else None
         attempt = self._attempt
-        if attempt is not None:
+        if self._declared and attempt is not None:
             _fill_impressions(self._impression, self._data, None, attempt.impression)
             self._skills = [
                 TraitChoice("skill", attempt.skill_row, attempt.skill_label, attempt.skill_modifier)
@@ -821,94 +769,29 @@ class ImpressWindow(QDialog):
         # The impresser cannot be their own target.
         for row in self._rows:
             mine = source is not None and row.party.ref == source.ref
-            row.include.setEnabled(not mine)
+            row.include.setEnabled(not mine and self.phase == PHASE_SETUP)
             if mine:
                 row.include.setChecked(False)
         self._on_skill()
 
     def _on_impression(self) -> None:
-        if self._attempt is None:
+        if not self._declared:
             _preselect_skill(self._skill, self.impression(), self._data)
-        self._sync()
+        self.sync()
 
     def _on_skill(self) -> None:
         skill = self.skill()
-        ref = skill.ref if skill is not None else ""
-        changed = ref != self._asked_skill
-        self._asked_skill = ref
         for row in self._rows:
-            if changed:
-                # The impresser's skill is one of the ways to resist, so an answer
-                # given against the old one is no answer to the new one.
-                row.answered = False
             self._refresh_choices(row, skill)
-        if changed and any(row.prompted for row in self._rows):
-            self.promptsChanged.emit()
-        self._sync()
+        self.sync()
 
     def _on_mode(self) -> None:
-        # Asking a player how they resist only means anything when the GM rolls it;
-        # in request mode each target rolls from the card instead.
-        for party in self.players_to_prompt():
-            self.promptNeeded.emit(party)
         for row in self._rows:
             self._sync_row(row)
-
-    def players_to_prompt(self) -> list[ImpressParty]:
-        """The ticked players who should be asked how they resist and have not been."""
-        if self.mode() != MODE_RESOLVE:
-            return []
-        return [
-            row.party
-            for row in self.included()
-            if row.party.kind == PARTY_PLAYER and not row.prompted
-        ]
 
     # -- the targets -----------------------------------------------------------
 
-    def _build_targets(self) -> None:
-        wanted = set(self._attempt.targets) if self._attempt is not None else set()
-        for index, party in enumerate(self._all_targets, start=1):
-            include = QCheckBox(party.name)
-            highest = QCheckBox("Use highest")
-            highest.setChecked(True)
-            choice = QComboBox()
-            guard_wheel(choice)
-            status = QLabel()
-            status.setWordWrap(True)
-            bonus = make_spin_box(0, 20, value=0)
-            bonus.setToolTip(f"A bonus to the impress check against {party.name} alone")
-            penalty = make_spin_box(0, 20, value=0)
-            penalty.setToolTip(f"A penalty to the impress check against {party.name} alone")
-            row = _TargetRow(party, include, highest, choice, status, bonus, penalty)
-            self._rows.append(row)
-            cell = QWidget()
-            cell_layout = QHBoxLayout(cell)
-            cell_layout.setContentsMargins(0, 0, 0, 0)
-            cell_layout.addWidget(highest)
-            cell_layout.addWidget(choice, stretch=1)
-            self._grid.addWidget(include, index, 0)
-            self._grid.addWidget(cell, index, 1)
-            self._grid.addWidget(status, index, 2)
-            self._grid.addWidget(bonus, index, 3)
-            self._grid.addWidget(penalty, index, 4)
-            include.setChecked(party.ref in wanted)
-            include.toggled.connect(lambda on, r=row: self._on_include(r, on))
-            highest.toggled.connect(lambda _on, r=row: self._sync_row(r))
-            choice.currentIndexChanged.connect(lambda _i: self._sync())
-            bonus.valueChanged.connect(lambda _v: self._sync())
-            penalty.valueChanged.connect(lambda _v: self._sync())
-            self._sync_row(row)
-        if not self._rows:
-            empty = QLabel("Nobody is on the scene to impress.")
-            empty.setStyleSheet(muted_style(italic=True))
-            self._grid.addWidget(empty, 1, 0, 1, 5)
-
-    def _refresh_choices(self, row: _TargetRow, skill: TraitChoice | None) -> None:
-        if row.answered and row.choices:
-            # A player's own numbers, from their own sheet, are the ones to trust.
-            _fill_choices(row.choice, row.choices, str(row.choice.currentData() or ""))
-            return
+    def _refresh_choices(self, row: ImpressRow, skill: TraitChoice | None) -> None:
         character = row.party.character
         row.choices = (
             resist_choices(character, self._data, skill.key)
@@ -918,17 +801,12 @@ class ImpressWindow(QDialog):
         _fill_choices(row.choice, row.choices, str(row.choice.currentData() or ""))
         self._sync_row(row)
 
-    def _on_include(self, row: _TargetRow, on: bool) -> None:
-        if row.party.kind == PARTY_PLAYER:
-            if on and not row.prompted and self.mode() == MODE_RESOLVE:
-                self.promptNeeded.emit(row.party)
-            elif not on and row.prompted:
-                # Untargeted: their prompt is asking about nothing now.
-                row.prompted = row.answered = row.unreachable = False
-                self.promptWithdrawn.emit(row.party)
+    def on_include(self, row: ActionRow, on: bool) -> None:
         self._sync_row(row)
 
-    def _sync_row(self, row: _TargetRow) -> None:
+    def _sync_row(self, row: ImpressRow) -> None:
+        if self.phase != PHASE_SETUP:
+            return
         on = row.include.isChecked()
         # Request mode rolls the check alone: nobody's resistance or per-target
         # adjustment is rolled here, so there is nothing for these to set.
@@ -940,69 +818,27 @@ class ImpressWindow(QDialog):
         row.highest.setText(
             f"Use highest ({choice_caption(best)})" if best is not None else "Use highest"
         )
-        if not on:
-            row.status.setText("")
-        elif row.party.kind != PARTY_PLAYER:
-            row.status.setText("")
-        elif row.answered:
-            row.status.setText("Answered")
-            row.status.setStyleSheet(tinted_style("tint.better", bold=False))
-        elif row.unreachable:
-            row.status.setText("Not connected — using their sheet")
-            row.status.setStyleSheet(muted_style(italic=True))
-        elif row.prompted:
-            row.status.setText("Waiting…")
-            row.status.setStyleSheet(muted_style(italic=True))
+        if on and rolled and row.party.kind == PARTY_PLAYER:
+            row.show_result(
+                "Picks how to resist when asked" if row.highest.isChecked() else "Asked to roll",
+                muted_style(italic=True),
+            )
         else:
-            row.status.setText("")
-        self._sync()
-
-    def mark_prompted(self, ref: str, sent: bool) -> None:
-        """Record that a player target was (or could not be) asked."""
-        row = self._row(ref)
-        if row is None:
-            return
-        row.prompted = sent
-        row.unreachable = not sent
-        self._sync_row(row)
-
-    def prompted_parties(self) -> list[ImpressParty]:
-        return [row.party for row in self._rows if row.prompted]
-
-    def set_answer(self, player_id: str, answer: ResistAnswer) -> None:
-        """A player's own answer: their pick, on their own numbers. The GM may still override."""
-        row = next(
-            (r for r in self._rows if r.party.kind == PARTY_PLAYER and r.party.source == player_id),
-            None,
-        )
-        if row is None or not row.prompted:
-            # Untargeted since they were asked: a late answer is to nothing.
-            return
-        row.answered = True
-        if answer.options:
-            row.choices = list(answer.options)
-        _fill_choices(row.choice, row.choices, answer.choice)
-        row.highest.blockSignals(True)
-        row.highest.setChecked(answer.use_highest)
-        row.highest.blockSignals(False)
-        self._sync_row(row)
+            row.show_result("")
+        self.sync()
 
     def set_party_character(self, ref: str, character: Character | None) -> None:
         """A fresher model for one party (a player's new snapshot)."""
         row = self._row(ref)
         if row is not None:
             row.party.character = character
-            self._refresh_choices(row, self.skill())
-
-    def _row(self, ref: str) -> _TargetRow | None:
-        return next((r for r in self._rows if r.party.ref == ref), None)
-
-    def included(self) -> list[_TargetRow]:
-        return [row for row in self._rows if row.include.isChecked()]
-
-    def set_included(self, refs: list[str]) -> None:
-        for row in self._rows:
-            row.include.setChecked(row.party.ref in refs)
+            if self.phase == PHASE_SETUP:
+                self._refresh_choices(row, self.skill())
+        source = self.source()
+        if source is not None and source.ref == ref and not self._declared:
+            source.character = character
+            if self.phase == PHASE_SETUP:
+                self._on_source()
 
     @property
     def modifiers(self) -> ModifiersPanel:
@@ -1016,19 +852,29 @@ class ImpressWindow(QDialog):
         if button is not None:
             button.setChecked(True)
 
+    def set_check_bonus(self, bonus: int, penalty: int = 0) -> None:
+        """The GM's own bonus and penalty on the impresser's check."""
+        self._check_bonus.setValue(bonus)
+        self._check_penalty.setValue(penalty)
+
     # -- the total ----------------------------------------------------------------
 
     def check_modifier(self) -> int:
         skill = self.skill()
         base = skill.modifier if skill is not None else 0
-        return base + self._modifiers.total() + group_penalty(self._data, len(self.included()))
+        own = self._check_bonus.value() - self._check_penalty.value()
+        return (
+            base + own + self._modifiers.total() + group_penalty(self._data, len(self.included()))
+        )
 
-    def _resist_for(self, row: _TargetRow) -> TraitChoice | None:
+    def _resist_for(self, row: ImpressRow) -> TraitChoice | None:
         if row.highest.isChecked():
             return best_choice(row.choices)
         return next((c for c in row.choices if c.ref == row.choice.currentData()), None)
 
-    def _sync(self) -> None:
+    def sync(self) -> None:
+        if not hasattr(self, "_total"):
+            return  # still being built
         impression, skill = self.impression(), self.skill()
         outcomes = impression_outcomes(self._data, impression) if impression else ()
         self._outcome.setText(("Success: " + " → ".join(outcomes)) if outcomes else "")
@@ -1038,11 +884,16 @@ class ImpressWindow(QDialog):
             f"Group impression: {_signed(penalty)} to the check." if penalty else ""
         )
         self._group_note.setVisible(bool(penalty))
+        if self.phase != PHASE_SETUP:
+            return
         if skill is None:
             self._total.setText("No interaction skill to impress with.")
-            self._roll.setEnabled(False)
+            self.go.setEnabled(False)
             return
         parts = [f"{html.escape(skill.label)} {_signed(skill.modifier)}"]
+        own = self._check_bonus.value() - self._check_penalty.value()
+        if own:
+            parts.append(f"GM {_signed(own)}")
         if self._modifiers.total():
             parts.append(f"modifiers {_signed(self._modifiers.total())}")
         if penalty:
@@ -1051,9 +902,41 @@ class ImpressWindow(QDialog):
             f"Impress check: <b>{_signed(self.check_modifier())}</b> ({', '.join(parts)})"
         )
         needs_targets = self.mode() == MODE_RESOLVE
-        self._roll.setEnabled(impression is not None and (count > 0 or not needs_targets))
+        self.go.setEnabled(impression is not None and (count > 0 or not needs_targets))
+        source = self.source()
+        asked = sum(1 for row in self.included() if row.party.kind == PARTY_PLAYER)
+        if not needs_targets:
+            asked = 0
+        if source is not None and source.kind == PARTY_PLAYER:
+            asked += 1
+        said = [f"{count} targeted"] if count else []
+        if asked:
+            said.append(f"{asked} asked to roll")
+        self.summary.setText(" · ".join(said))
 
     # -- rolling ------------------------------------------------------------------
+
+    def lock_setup(self) -> None:
+        super().lock_setup()
+        for widget in (
+            self._source,
+            self._impression,
+            self._skill,
+            self._check_bonus,
+            self._check_penalty,
+            self._modifiers,
+            *self._mode_buttons.values(),
+        ):
+            widget.setEnabled(False)
+
+    def set_check(self, text: str, token: str = "") -> None:
+        """What the impress check came to, shown above the table."""
+        self._check_note.setText(text)
+        self._check_note.setStyleSheet(tinted_style(token, bold=False) if token else "")
+        self._check_note.show()
+
+    def check_text(self) -> str:
+        return self._check_note.text()
 
     def plan(self) -> ImpressPlan | None:
         impression, skill, source = self.impression(), self.skill(), self.source()
@@ -1063,7 +946,8 @@ class ImpressWindow(QDialog):
             PlannedTarget(
                 party=row.party,
                 resist=self._resist_for(row),
-                dc_offset=row.bonus.value() - row.penalty.value(),
+                dc_offset=row.adjust,
+                highest=row.highest.isChecked(),
             )
             for row in self.included()
         )
@@ -1078,22 +962,14 @@ class ImpressWindow(QDialog):
             targets=targets,
         )
 
-    def _emit_roll(self) -> None:
+    def _emit_go(self) -> None:
         plan = self.plan()
         if plan is None:
             return
-        self._done = True
+        self.start_running()
         self.rollRequested.emit(plan)
-        self.close()
 
-    def done(self, result: int) -> None:
-        """Every way the window goes away — Roll, Cancel, Esc, the title bar's ✕.
-
-        Overridden here rather than ``closeEvent``: Esc rejects the dialog without
-        any close event, which left the players it had asked staring at a prompt
-        for an impression nobody would ever roll.
-        """
-        if not self._done:
-            self._done = True
-            self.cancelled.emit()
-        super().done(result)
+    @property
+    def _roll(self) -> QPushButton:
+        """The Roll button, by the name it always had."""
+        return self.go

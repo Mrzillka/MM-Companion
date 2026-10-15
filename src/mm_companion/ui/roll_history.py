@@ -582,16 +582,15 @@ class RequestCard(HistoryCard):
             name_line.setWordWrap(True)
             info.addWidget(name_line)
 
-        # Who the roll is for — the players an area caught. Anyone may still answer it
-        # (an ally interposing), but the ones it names should not have to hunt for it.
+        # Who the roll is for — the players an area caught, the one a GM asked. Anyone
+        # may still answer it (an ally interposing), but the ones it names should not
+        # have to hunt for it.
         spec = RollSpec.from_dict(request.get("spec"))
         self.for_reader = False
         if spec is not None and spec.targets:
             self.for_reader = bool(own_names & set(spec.targets))
             names = escape_rich_text(", ".join(spec.targets))
-            caught = QLabel(
-                f"<b>You're caught</b> — {names}" if self.for_reader else f"Caught: {names}"
-            )
+            caught = QLabel(f"<b>For you</b> — {names}" if self.for_reader else f"For: {names}")
             caught.setTextFormat(Qt.TextFormat.RichText)
             caught.setWordWrap(True)
             caught.setStyleSheet(
@@ -752,6 +751,23 @@ def _provokes(roll: dict) -> bool:
     """
     spec = RollSpec.from_dict(roll.get("spec"))
     return spec is not None and spec.follow_up is not None
+
+
+def action_table_key(roll: dict) -> str:
+    """The table a roll belongs to: its group's, or the action its spec names.
+
+    A group's rolls are the server's (:func:`table_key`). A roll a *player* made for an
+    action — their Dodge against an area, the impress check the GM asked them for, an
+    area's attack — is an ordinary roll, but its spec carries the action's id and a
+    title, and the action's groups are named after that same id. So it joins the table.
+    """
+    group = str(roll.get("group", "") or "")
+    if group:
+        return table_key(group)
+    spec = RollSpec.from_dict(roll.get("spec"))
+    if spec is not None and spec.action_id and spec.title:
+        return spec.action_id
+    return ""
 
 
 def _row_name(roll: dict) -> str:
@@ -926,6 +942,19 @@ class ActionCard(HistoryCard):
 
     def set_text(self, text: str) -> None:
         self._text.setText(text)
+
+    def set_status(self, text: str, *, button: str = "") -> None:
+        """Say where the action stands while it still waits — who is still to roll.
+
+        *button* renames the button to what it does now ("Open" once it is rolling).
+        """
+        if button:
+            self.button.setText(button)
+        self._status.setText(text)
+        self._status.setVisible(bool(text))
+
+    def status(self) -> str:
+        return self._status.text()
 
     def set_done(self, text: str) -> None:
         """The action is settled: say how, and take the button away."""
@@ -1200,9 +1229,9 @@ class RollHistoryPanel(QWidget):
                 return
             self._seen.add(seq)
 
-        group = str(roll.get("group", "") or "")
-        if group and roll.get("kind", KIND_ROLL) == KIND_ROLL and not _provokes(roll):
-            self._add_to_table(roll, table_key(group))
+        key = action_table_key(roll) if roll.get("kind", KIND_ROLL) == KIND_ROLL else ""
+        if key and not _provokes(roll):
+            self._add_to_table(roll, key)
             return
 
         card: HistoryCard

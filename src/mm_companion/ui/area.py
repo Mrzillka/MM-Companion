@@ -1,4 +1,4 @@
-"""The area attack's windows: declaring one, and resolving one.
+"""The area attack's windows: declaring one, and setting one up and resolving it.
 
 Two seats, two windows, and neither computes a number — the area, its Dodge DC and
 every creature's modifiers come from :mod:`mm_companion.core.rules.area_attack`:
@@ -7,10 +7,13 @@ every creature's modifiers come from :mod:`mm_companion.core.rules.area_attack`:
   the primary slot, if they aim the area at someone, and any number into the area.
   At a table that is a declaration for the GM, along with the attack check against
   the primary; off the air the attack is rolled here and the history is left a
-  request to dodge.
-* :class:`AreaWindow` — the **GM** settles who is in the area, whether the attack hit
-  the primary, and each creature's cover and adjustments, then resolves it. What
-  happens next — the server rolling, the conditions landing — is
+  request to dodge. At a table a player only sees it when both they and the GM want
+  them to choose (:func:`~mm_companion.ui.action_ui.sets_up_own_actions`); otherwise
+  the area goes to the GM bare.
+* :class:`AreaWindow` — the **GM** settles the power and its shape, who is in the area,
+  whether the attack hit the primary, and each creature's cover and adjustments, then
+  resolves it and watches each roll come back. What happens in between — the server
+  rolling, players being asked, the conditions landing — is
   :mod:`mm_companion.ui.area_gm`'s.
 
 A creature is put in either window the same way it is put on the board: by dragging
@@ -21,8 +24,7 @@ scene behind an **Add** button, since the board is not always where the window i
 from __future__ import annotations
 
 import html
-from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -33,12 +35,8 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGridLayout,
     QGroupBox,
-    QHBoxLayout,
     QLabel,
-    QMenu,
     QPushButton,
-    QScrollArea,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -55,15 +53,34 @@ from mm_companion.core.rules import (
     area_request_specs,
     area_shape_options,
     defense_class,
+    find_area_power,
     power_area_use,
 )
-from mm_companion.ui import theme
-from mm_companion.ui.card_chips import SCENE_MIME
-from mm_companion.ui.card_drop import CardDropFlow
-from mm_companion.ui.drop_feedback import DropFeedback
-from mm_companion.ui.impress import PARTY_NPC, PARTY_PLAYER, ImpressParty
+from mm_companion.ui.action_ui import (
+    PHASE_SETUP,
+    ActionRow,
+    ActionWindow,
+    BodyScroll,
+    TargetDropField,
+    TargetsBox,
+    add_button,
+    fit_to_screen,
+)
+from mm_companion.ui.impress import PARTY_PLAYER, ImpressParty
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import make_spin_box, muted_style, tinted_style
+from mm_companion.ui.widgets import muted_style, tinted_style
+
+__all__ = [
+    "ACTION_NAME",
+    "KIND_AREA_ATTACK",
+    "AreaDialog",
+    "AreaPlan",
+    "AreaTarget",
+    "AreaWindow",
+    "TargetDropField",
+    "add_button",
+    "use_summary",
+]
 
 #: What the history and the windows call the action.
 ACTION_NAME = "Area Attack"
@@ -95,94 +112,6 @@ def use_summary(use: AreaUse, data: GameData) -> str:
     )
 
 
-# -- the drop field -----------------------------------------------------------------
-
-
-class TargetDropField(CardDropFlow):
-    """A flow of target chips a scene card is dropped into — one, or any number.
-
-    *resolve* turns a dragged reference into ``(ref, name)``, or ``None`` for one this
-    window cannot target (the attacker's own card); the field never interprets a ref
-    itself. A chip's ✕ takes the creature back out.
-    """
-
-    changed = Signal()
-
-    def __init__(
-        self,
-        name: str,
-        *,
-        resolve: Callable[[str], tuple[str, str] | None],
-        single: bool = False,
-        placeholder: str = "",
-        parent: QWidget | None = None,
-    ) -> None:
-        super().__init__(name, parent, accepts=lambda ref: resolve(ref) is not None)
-        self._resolve = resolve
-        self._single = single
-        self._chips: dict[str, QToolButton] = {}
-        self.set_placeholder(placeholder)
-        self.dropped.connect(lambda ref, _index: self.add_ref(ref))
-
-    def add_ref(self, raw_ref: str) -> bool:
-        """Put the creature *raw_ref* names in the field; ``False`` if it cannot go."""
-        found = self._resolve(raw_ref)
-        if found is None:
-            return False
-        ref, name = found
-        if ref in self._chips:
-            return False
-        if self._single:
-            self.clear_refs(notify=False)
-        chip = QToolButton()
-        chip.setText(f"{name}  ✕")
-        chip.setToolTip(f"Take {name} back out")
-        chip.setCursor(Qt.CursorShape.PointingHandCursor)
-        chip.clicked.connect(lambda _=False, r=ref: self.remove_ref(r))
-        self._chips[ref] = chip
-        self.add_card(chip)
-        self.changed.emit()
-        return True
-
-    def remove_ref(self, ref: str, *, notify: bool = True) -> None:
-        chip = self._chips.pop(ref, None)
-        if chip is None:
-            return
-        self.set_cards([c for c in self._chips.values()])
-        if notify:
-            self.changed.emit()
-
-    def clear_refs(self, *, notify: bool = True) -> None:
-        self._chips.clear()
-        self.clear()
-        if notify:
-            self.changed.emit()
-
-    def refs(self) -> list[str]:
-        return list(self._chips)
-
-
-def _add_button(
-    choices: Callable[[], list[tuple[str, str]]], add: Callable[[str], object]
-) -> QPushButton:
-    """An "Add" button listing the scene, for when the board is not to hand."""
-    button = QPushButton("Add")
-    button.setToolTip("Pick a creature off the scene — or drag its card in")
-    menu = QMenu(button)
-
-    def fill() -> None:
-        menu.clear()
-        entries = choices()
-        if not entries:
-            menu.addAction("Nobody else is on the scene").setEnabled(False)
-        for ref, name in entries:
-            menu.addAction(name, lambda r=ref: add(r))
-
-    menu.aboutToShow.connect(fill)
-    button.setMenu(menu)
-    return button
-
-
 # -- the attacker's dialog -------------------------------------------------------------
 
 
@@ -210,6 +139,7 @@ class AreaDialog(QDialog):
         self._character = character
         self._power = power
         self._online = scene is not None
+        self._fitted = False
         self._names: dict[str, str] = {}
         for entry in scene or []:
             ref = str(entry.get("ref", ""))
@@ -218,7 +148,14 @@ class AreaDialog(QDialog):
             self._names[ref] = str(entry.get("name", "")) or "Someone"
         self.setWindowTitle(f"{ACTION_NAME}: {power.name}" if power.name else ACTION_NAME)
 
-        layout = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        body = QWidget()
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(0, 0, 0, 0)
+        scroll = BodyScroll()
+        scroll.setWidget(body)
+        outer.addWidget(scroll, stretch=1)
+
         self._shape: QComboBox | None = None
         self._use = power_area_use(power, character, data)
         if self._use is not None and self._use.free:
@@ -240,27 +177,24 @@ class AreaDialog(QDialog):
         self.primary: TargetDropField | None = None
         self.area: TargetDropField | None = None
         if self._online:
-            primary_box = QGroupBox("Primary target")
-            primary_layout = QHBoxLayout(primary_box)
-            self.primary = TargetDropField(
+            primary_box = TargetsBox(
+                "Primary target",
                 "areaPrimary",
                 resolve=self._resolve,
+                choices=self._choices,
                 single=True,
                 placeholder="Drop a card here to aim the area at someone (optional)",
             )
-            primary_layout.addWidget(self.primary, stretch=1)
-            primary_layout.addWidget(_add_button(self._choices, self.primary.add_ref))
+            self.primary = primary_box.field
             layout.addWidget(primary_box)
-
-            area_box = QGroupBox("Caught in the area")
-            area_layout = QHBoxLayout(area_box)
-            self.area = TargetDropField(
+            area_box = TargetsBox(
+                "Caught in the area",
                 "areaTargets",
                 resolve=self._resolve,
+                choices=self._choices,
                 placeholder="Drop the cards of everyone else in the area here",
             )
-            area_layout.addWidget(self.area, stretch=1)
-            area_layout.addWidget(_add_button(self._choices, self.area.add_ref))
+            self.area = area_box.field
             layout.addWidget(area_box, stretch=1)
             self.primary.changed.connect(lambda: self._dedupe(self.primary, self.area))
             self.area.changed.connect(lambda: self._dedupe(self.area, self.primary))
@@ -280,7 +214,7 @@ class AreaDialog(QDialog):
         buttons.addButton(self._ok, QDialogButtonBox.ButtonRole.AcceptRole)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        outer.addWidget(buttons)
         self._sync()
 
     # -- reading -------------------------------------------------------------
@@ -374,6 +308,12 @@ class AreaDialog(QDialog):
             ready = bool(self.primary_ref() or self.target_refs())
         self._ok.setEnabled(ready)
 
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().showEvent(event)
+        if not self._fitted:
+            self._fitted = True
+            fit_to_screen(self)
+
 
 # -- the GM's window ---------------------------------------------------------------
 
@@ -409,71 +349,42 @@ class AreaPlan:
         return f"{self.source.name}: {self.use.power_name} (area)"
 
 
-@dataclass
-class _Row:
-    party: ImpressParty
-    include: QCheckBox
-    role: QLabel
-    cover: QComboBox
-    bonus: object
-    penalty: object
+class AreaRow(ActionRow):
+    """A creature's row: what it rolls, its cover, and its numbers."""
+
+    def __init__(self, party: ImpressParty, data: GameData) -> None:
+        self.role = QLabel()
+        self.cover = QComboBox()
+        guard_wheel(self.cover)
+        for option in data.area.cover:
+            self.cover.addItem(
+                f"{option.label} ({_signed(option.value)})" if option.value else option.label,
+                option.value,
+            )
+        super().__init__(party, [self.role, self.cover])
+
+    def inputs(self) -> list[QWidget]:
+        return [self.include, self.cover, self.bonus, self.penalty]
 
 
-class _DropBox(QGroupBox):
-    """A group box a scene card can be dropped on, to put that creature in the area."""
+class AreaWindow(ActionWindow):
+    """The GM setting up and resolving an area attack — a player's, or an NPC's.
 
-    dropped = Signal(str)
+    The GM's controls are the power and its shape (when the attacker's sheet is to hand
+    and the use is a free one), who the area was aimed at and whether that attack hit,
+    who else is in the area (a card dropped on the table ticks them), and for each
+    creature its cover and a bonus or penalty on its own checks. :attr:`resolveRequested`
+    hands the finished :class:`AreaPlan` to whoever rolls it. NPCs are rolled for; a
+    player in the area is asked to roll from their own sheet, and what each roll came to
+    comes back to this window.
 
-    def __init__(self, title: str, accepts: Callable[[str], bool]) -> None:
-        super().__init__(title)
-        self._accepts = accepts
-        self.setObjectName("areaDropBox")
-        self.setAcceptDrops(True)
-        self._feedback = DropFeedback(self, "#areaDropBox", border=False)
-
-    def _ref(self, event) -> str:
-        if not event.mimeData().hasFormat(SCENE_MIME):
-            return ""
-        ref = bytes(event.mimeData().data(SCENE_MIME)).decode("utf-8")
-        return ref if ref and self._accepts(ref) else ""
-
-    def dragEnterEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        if self._ref(event):
-            event.acceptProposedAction()
-            self._feedback.show_accept()
-        else:
-            self._feedback.show_reject()
-
-    def dragMoveEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        if self._ref(event):
-            event.acceptProposedAction()
-
-    def dragLeaveEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        self._feedback.clear()
-        super().dragLeaveEvent(event)
-
-    def dropEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        ref = self._ref(event)
-        self._feedback.clear()
-        if ref:
-            event.acceptProposedAction()
-            self.dropped.emit(ref)
-
-
-class AreaWindow(QDialog):
-    """The GM resolving an area attack — a player's (from their attempt) or an NPC's.
-
-    The GM's controls are who the area was aimed at and whether that attack hit, who
-    else is in the area (a card dropped on the list ticks them), and for each creature
-    its cover and a bonus or penalty on its own checks. :attr:`resolveRequested` hands
-    the finished :class:`AreaPlan` to whoever rolls it. NPCs are rolled for; a player
-    in the area is sent a request to roll from their own sheet.
+    *builds* are the attacker's builds the GM may switch between — an NPC's area-capable
+    powers, when the GM started it from the NPC's card.
     """
 
     resolveRequested = Signal(object)  # AreaPlan
-    #: The GM asked to roll the attack against the primary (an NPC's own attack).
+    #: The GM asked for the attack against the primary — rolled for an NPC, asked of a player.
     attackRequested = Signal(object)  # RollSpec
-    cancelled = Signal()
 
     def __init__(
         self,
@@ -482,26 +393,53 @@ class AreaWindow(QDialog):
         attempt: AreaAttempt,
         source: ImpressParty,
         targets: list[ImpressParty],
+        builds: list[Power] | None = None,
+        from_card: bool = False,
         parent: QWidget | None = None,
     ) -> None:
-        super().__init__(parent)
-        self._data = data
+        super().__init__(
+            data,
+            action_id=attempt.action_id,
+            title=f"{ACTION_NAME}: {attempt.use.power_name}",
+            targets=[t for t in targets if t.ref != source.ref],
+            go_caption="🎲 Resolve",
+            box_title="In the area",
+            columns=(
+                ("Rolls", "What the server rolls for this creature, or who rolls it"),
+                ("Cover", "Cover from the area's origin: a bonus to the Dodge check"),
+            ),
+            from_card=from_card,
+            parent=parent,
+        )
         self.attempt = attempt
-        self.action_id = attempt.action_id
         self._source = source
-        self._targets = [t for t in targets if t.ref != source.ref]
-        self._rows: list[_Row] = []
+        self._builds = list(builds or [])
         self._attack: tuple[int, int] | None = None
-        self._done = False
-        use = attempt.use
-        self.setWindowTitle(f"{ACTION_NAME}: {use.power_name}")
-        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self._asked_attack = False
+        self._is_npc = source.kind != PARTY_PLAYER
 
-        layout = QVBoxLayout(self)
-        heading = QLabel(f"<b>{html.escape(source.name)}</b> — {use_summary(use, data)}")
-        heading.setTextFormat(Qt.TextFormat.RichText)
-        heading.setWordWrap(True)
-        layout.addWidget(heading)
+        setup = QWidget()
+        form = QFormLayout(setup)
+        form.setContentsMargins(0, 0, 0, 0)
+        self._power: QComboBox | None = None
+        if len(self._builds) > 1:
+            self._power = QComboBox()
+            guard_wheel(self._power)
+            for build in self._builds:
+                self._power.addItem(build.name or "Power", build.id)
+            self._power.setCurrentIndex(max(0, self._power.findData(attempt.use.power_id)))
+            form.addRow("Power:", self._power)
+        self._shape = QComboBox()
+        guard_wheel(self._shape)
+        for value, label in area_shape_options(data):
+            self._shape.addItem(label, value)
+        self._shape.setCurrentIndex(max(0, self._shape.findData(attempt.use.shape)))
+        form.addRow("Shape:", self._shape)
+        self._use_note = QLabel()
+        self._use_note.setTextFormat(Qt.TextFormat.RichText)
+        self._use_note.setWordWrap(True)
+        form.addRow(self._use_note)
+        self.add_section(setup)
 
         primary_box = QGroupBox("Primary target")
         primary_layout = QGridLayout(primary_box)
@@ -511,128 +449,96 @@ class AreaWindow(QDialog):
         for party in self._targets:
             self._primary.addItem(party.name, party.ref)
         self._primary.setCurrentIndex(max(0, self._primary.findData(attempt.primary)))
-        self._primary.currentIndexChanged.connect(self._on_primary)
         self._hit = QCheckBox("Hit")
         self._hit.setToolTip("A primary target that is hit makes no Dodge check: full rank.")
-        self._hit.setChecked(use.attack is None)
-        self._hit.toggled.connect(lambda _on: self._sync())
+        self._hit.setChecked(attempt.use.attack is None)
         #: The GM ticked or unticked Hit themselves, so a fresher Defense must not undo it.
         self._hit_by_hand = False
         self._hit.clicked.connect(lambda _on: setattr(self, "_hit_by_hand", True))
+        self._roll_attack = QPushButton(
+            "🎲 Roll attack" if self._is_npc else "🎲 Ask for the attack"
+        )
+        self._roll_attack.setToolTip(
+            "Roll the attack against the primary"
+            if self._is_npc
+            else f"Ask {source.name} to roll the attack against the primary"
+        )
         self._attack_note = QLabel()
         self._attack_note.setWordWrap(True)
-        self._roll_attack = QPushButton("🎲 Roll attack")
-        self._roll_attack.clicked.connect(self._emit_attack)
         primary_layout.addWidget(self._primary, 0, 0)
         primary_layout.addWidget(self._hit, 0, 1)
         primary_layout.addWidget(self._roll_attack, 0, 2)
         primary_layout.addWidget(self._attack_note, 1, 0, 1, 3)
-        layout.addWidget(primary_box)
+        self.add_section(primary_box)
 
-        self._box = _DropBox("In the area", lambda ref: self._party(ref) is not None)
-        self._box.dropped.connect(self.include_ref)
-        box_layout = QVBoxLayout(self._box)
-        grid_host = QWidget()
-        stack = QVBoxLayout(grid_host)
-        stack.setContentsMargins(0, 0, 0, 0)
-        self._grid = QGridLayout()
-        self._grid.setHorizontalSpacing(int(theme.metric("space.sm")))
-        headers = (
-            ("", ""),
-            ("Rolls", "What the server rolls for this creature, or who rolls it"),
-            ("Cover", "Cover from the area's origin: a bonus to the Dodge check"),
-            ("Bonus", "A bonus to this creature's own checks against the area"),
-            ("Penalty", "A penalty to this creature's own checks against the area"),
+        self.build_rows(lambda _party: [], set(attempt.targets) | ({attempt.primary} - {""}))
+        self.heading.setText(self._heading_text())
+
+        self._shape.currentIndexChanged.connect(self._on_build)
+        if self._power is not None:
+            self._power.currentIndexChanged.connect(self._on_build)
+        self._primary.currentIndexChanged.connect(self._on_primary)
+        self._hit.toggled.connect(lambda _on: self.sync())
+        self._roll_attack.clicked.connect(self._emit_attack)
+        self.sync()
+
+    def make_row(self, party, cells: list[QWidget]) -> ActionRow:
+        row = AreaRow(party, self._data)
+        row.bonus.setToolTip(f"A bonus to {party.name}'s checks against the area")
+        row.penalty.setToolTip(f"A penalty to {party.name}'s checks against the area")
+        row.cover.currentIndexChanged.connect(lambda _i: self.sync())
+        return row
+
+    def _heading_text(self) -> str:
+        who = html.escape(self._source.name)
+        return f"<b>{who}</b> uses <b>{html.escape(self.attempt.use.power_name)}</b> on an area."
+
+    @property
+    def use(self) -> AreaUse:
+        return self.attempt.use
+
+    # -- the power and its shape ----------------------------------------------------
+
+    def _current_power(self) -> Power | None:
+        character = self._source.character
+        if self._power is not None:
+            wanted = self._power.currentData()
+            return next((b for b in self._builds if b.id == wanted), None)
+        if self._builds:
+            return self._builds[0]
+        if character is None:
+            return None
+        return find_area_power(character, self._data, self.attempt.use.power_id)
+
+    def _on_build(self) -> None:
+        """A different power, or a different shape for a free use: work the area out again."""
+        power = self._current_power()
+        character = self._source.character
+        if power is None or character is None:
+            return
+        use = power_area_use(
+            power,
+            character,
+            self._data,
+            shape=str(self._shape.currentData() or ""),
+            npc=self._is_npc,
+            free_use=True,
         )
-        for column, (caption, tip) in enumerate(headers):
-            header = QLabel(caption)
-            header.setStyleSheet(muted_style())
-            header.setToolTip(tip)
-            self._grid.addWidget(header, 0, column)
-        self._grid.setColumnStretch(1, 1)
-        stack.addLayout(self._grid)
-        stack.addStretch(1)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(grid_host)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        box_layout.addWidget(scroll)
-        hint = QLabel("Drop a card here to put that creature in the area.")
-        hint.setStyleSheet(muted_style(italic=True))
-        box_layout.addWidget(hint)
-        layout.addWidget(self._box, stretch=1)
+        if use is None:
+            return
+        # Another power is another attack: one already rolled was not this one's.
+        if self._attack is not None and use.power_id != self.attempt.use.power_id:
+            self._attack = None
+        self.attempt = replace(self.attempt, use=use)
+        self.setWindowTitle(f"{ACTION_NAME}: {use.power_name}")
+        self.heading.setText(self._heading_text())
+        self.sync()
 
-        self._summary = QLabel()
-        self._summary.setWordWrap(True)
-        layout.addWidget(self._summary)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
-        self._resolve = QPushButton("🎲 Resolve")
-        self._resolve.setDefault(True)
-        buttons.addButton(self._resolve, QDialogButtonBox.ButtonRole.AcceptRole)
-        buttons.accepted.connect(self._emit_resolve)
-        buttons.rejected.connect(self.close)
-        layout.addWidget(buttons)
-
-        self._build_rows(set(attempt.targets) | ({attempt.primary} - {""}))
-        self._sync()
+    def _shape_free(self) -> bool:
+        """Whether the shape is the GM's to set: a free use, with the sheet to work it from."""
+        return self.attempt.use.free and self._source.character is not None
 
     # -- the parties -----------------------------------------------------------
-
-    def _party(self, ref: str) -> ImpressParty | None:
-        """The creature a scene ref — or a roster card's ``kind:source`` — names."""
-        for party in self._targets:
-            if ref == party.ref or ref == f"{party.kind}:{party.source}":
-                return party
-        return None
-
-    def _build_rows(self, wanted: set[str]) -> None:
-        for index, party in enumerate(self._targets, start=1):
-            include = QCheckBox(party.name)
-            role = QLabel()
-            role.setWordWrap(True)
-            cover = QComboBox()
-            guard_wheel(cover)
-            for option in self._data.area.cover:
-                cover.addItem(
-                    f"{option.label} ({_signed(option.value)})" if option.value else option.label,
-                    option.value,
-                )
-            bonus = make_spin_box(0, 20, value=0)
-            bonus.setToolTip(f"A bonus to {party.name}'s checks against the area")
-            penalty = make_spin_box(0, 20, value=0)
-            penalty.setToolTip(f"A penalty to {party.name}'s checks against the area")
-            row = _Row(party, include, role, cover, bonus, penalty)
-            self._rows.append(row)
-            self._grid.addWidget(include, index, 0)
-            self._grid.addWidget(role, index, 1)
-            self._grid.addWidget(cover, index, 2)
-            self._grid.addWidget(bonus, index, 3)
-            self._grid.addWidget(penalty, index, 4)
-            include.setChecked(party.ref in wanted)
-            include.toggled.connect(lambda _on: self._sync())
-            cover.currentIndexChanged.connect(lambda _i: self._sync())
-            bonus.valueChanged.connect(lambda _v: self._sync())
-            penalty.valueChanged.connect(lambda _v: self._sync())
-        if not self._rows:
-            empty = QLabel("Nobody is on the scene.")
-            empty.setStyleSheet(muted_style(italic=True))
-            self._grid.addWidget(empty, 1, 0, 1, 5)
-
-    def _row(self, ref: str) -> _Row | None:
-        return next((r for r in self._rows if r.party.ref == ref), None)
-
-    def include_ref(self, ref: str) -> bool:
-        """Put the creature *ref* names in the area (a card dropped on the list)."""
-        party = self._party(ref)
-        row = self._row(party.ref) if party is not None else None
-        if row is None:
-            return False
-        row.include.setChecked(True)
-        return True
-
-    def included(self) -> list[_Row]:
-        return [row for row in self._rows if row.include.isChecked()]
 
     def set_party_character(self, ref: str, character: Character | None) -> None:
         """A fresher model for one party (a player's new snapshot).
@@ -640,6 +546,9 @@ class AreaWindow(QDialog):
         The primary's Defense decides the Hit tick, so a new one re-reads it — unless the
         GM has set Hit by hand, which a changed sheet does not overrule.
         """
+        if ref == self._source.ref:
+            self._source.character = character
+            self.sync()
         row = self._row(ref)
         if row is None:
             return
@@ -647,12 +556,16 @@ class AreaWindow(QDialog):
         if ref == self.primary_ref() and self._attack is not None and not self._hit_by_hand:
             self.set_attack(*self._attack)
             return
-        self._sync()
+        self.sync()
 
     # -- the primary and its attack ----------------------------------------------
 
     def primary_ref(self) -> str:
         return str(self._primary.currentData() or "")
+
+    def primary_name(self) -> str:
+        row = self._row(self.primary_ref())
+        return row.party.name if row is not None else ""
 
     def set_primary(self, ref: str) -> None:
         self._primary.setCurrentIndex(max(0, self._primary.findData(ref)))
@@ -666,10 +579,11 @@ class AreaWindow(QDialog):
     def set_attack(self, total: int, die: int) -> None:
         """The attack check against the primary came in: say how it went, and tick Hit."""
         self._attack = (total, die)
+        self._asked_attack = False
         dc = self._defense_dc()
-        if dc is not None:
+        if dc is not None and self.phase == PHASE_SETUP:
             self._hit.setChecked(total >= dc)
-        self._sync()
+        self.sync()
 
     def _defense_dc(self) -> int | None:
         row = self._row(self.primary_ref())
@@ -686,17 +600,26 @@ class AreaWindow(QDialog):
         self._hit_by_hand = False
         if self._attack is not None:
             self.set_attack(*self._attack)
-        self._sync()
+        self.sync()
 
-    def _emit_attack(self) -> None:
-        primary = self._row(self.primary_ref())
-        spec = area_attack_spec(
+    def attack_spec(self) -> RollSpec:
+        return area_attack_spec(
             self.attempt.use,
             action_id=self.action_id,
             source=self._source.name,
-            target=primary.party.name if primary is not None else "",
+            target=self.primary_name(),
         )
-        self.attackRequested.emit(spec)
+
+    def _emit_attack(self) -> None:
+        if not self._is_npc:
+            self._asked_attack = True
+        self.attackRequested.emit(self.attack_spec())
+        self.sync()
+
+    def set_attack_asked(self, asked: bool) -> None:
+        """Whether the player has been asked for the attack and not answered yet."""
+        self._asked_attack = asked
+        self.sync()
 
     # -- the plan --------------------------------------------------------------
 
@@ -719,17 +642,22 @@ class AreaWindow(QDialog):
             ),
         )
 
-    def _sync(self) -> None:
+    def sync(self) -> None:
+        if not hasattr(self, "_attack_note"):
+            return  # still being built
         use = self.attempt.use
+        self._use_note.setText(use_summary(use, self._data))
+        self._shape.setEnabled(self.phase == PHASE_SETUP and self._shape_free())
         primary = self.primary_ref()
         can_roll = (
-            bool(primary)
+            self.phase == PHASE_SETUP
+            and bool(primary)
             and use.attack is not None
-            and self._source.kind == PARTY_NPC
             and self._attack is None
+            and not self._asked_attack
         )
         self._roll_attack.setVisible(can_roll)
-        self._hit.setEnabled(bool(primary))
+        self._hit.setEnabled(bool(primary) and self.phase == PHASE_SETUP)
         if not primary:
             self._attack_note.setText("Aimed at a point: everyone in the area dodges.")
             self._attack_note.setStyleSheet(muted_style(italic=True))
@@ -737,7 +665,10 @@ class AreaWindow(QDialog):
             self._attack_note.setText("No attack check — the primary target is hit.")
             self._attack_note.setStyleSheet(muted_style(italic=True))
         elif self._attack is None:
-            self._attack_note.setText(f"Attack {_signed(use.attack)} — not rolled yet.")
+            waiting = f" — waiting for {self._source.name}'s roll" if self._asked_attack else ""
+            self._attack_note.setText(
+                f"Attack {_signed(use.attack)} — not rolled yet{waiting}. Tick Hit to call it."
+            )
             self._attack_note.setStyleSheet(muted_style(italic=True))
         else:
             total, die = self._attack
@@ -748,16 +679,16 @@ class AreaWindow(QDialog):
             self._attack_note.setStyleSheet(
                 tinted_style("tint.better" if self.hit() else "tint.worse", bold=False)
             )
+        if self.phase != PHASE_SETUP:
+            return
         for row in self._rows:
             on = row.include.isChecked()
             for widget in (row.cover, row.bonus, row.penalty):
                 widget.setEnabled(on)
-            if not on:
-                row.role.setText("")
-                continue
-            is_primary = self.hit() and row.party.ref == primary
+            # Said for every row, muted when it is out: what ticking it in would mean.
+            is_primary = on and self.hit() and row.party.ref == primary
             if row.party.kind == PARTY_PLAYER:
-                row.role.setText("Hit — rolls their save" if is_primary else "Rolls from a request")
+                row.role.setText("Hit — asked for their save" if is_primary else "Asked to roll")
                 row.role.setStyleSheet(muted_style(italic=True))
             elif is_primary:
                 row.role.setText("Hit — no Dodge")
@@ -767,10 +698,10 @@ class AreaWindow(QDialog):
                     row.party.character,
                     self._data,
                     cover=int(row.cover.currentData() or 0),
-                    adjust=row.bonus.value() - row.penalty.value(),
+                    adjust=row.adjust,
                 )
                 row.role.setText(f"Dodge {_signed(total)} vs. DC {use.dodge_dc(self._data)}")
-                row.role.setStyleSheet("")
+                row.role.setStyleSheet("" if on else muted_style())
         count = len(self.included())
         npcs = sum(1 for row in self.included() if row.party.kind != PARTY_PLAYER)
         players = count - npcs
@@ -779,17 +710,23 @@ class AreaWindow(QDialog):
             parts.append(f"{npcs} rolled here")
         if players:
             parts.append(f"{players} asked to roll")
-        self._summary.setText(" · ".join(parts))
-        self._resolve.setEnabled(count > 0)
+        self.summary.setText(" · ".join(parts))
+        self.go.setEnabled(count > 0)
 
-    def _emit_resolve(self) -> None:
-        self._done = True
-        self.resolveRequested.emit(self.plan())
-        self.close()
+    def lock_setup(self) -> None:
+        super().lock_setup()
+        for widget in (self._shape, self._primary, self._hit, self._roll_attack):
+            widget.setEnabled(False)
+        if self._power is not None:
+            self._power.setEnabled(False)
+        self._roll_attack.hide()
 
-    def done(self, result: int) -> None:
-        """Every way the window goes away — see :meth:`ImpressWindow.done`."""
-        if not self._done:
-            self._done = True
-            self.cancelled.emit()
-        super().done(result)
+    def _emit_go(self) -> None:
+        plan = self.plan()
+        self.start_running()
+        self.resolveRequested.emit(plan)
+
+    @property
+    def _resolve(self) -> QPushButton:
+        """The Resolve button, by the name it always had."""
+        return self.go

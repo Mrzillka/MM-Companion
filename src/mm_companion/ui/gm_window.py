@@ -66,6 +66,7 @@ from mm_companion.core.rules import (
     RollSpec,
     apply_condition,
     apply_damage_step,
+    area_capable_builds,
     damage_step_summary,
     damage_steps,
     decrement_condition,
@@ -95,6 +96,7 @@ from mm_companion.core.session.protocol import (
     SCENE_DISPOSITIONS,
 )
 from mm_companion.ui import npc_icons, theme
+from mm_companion.ui.action_ui import publish_table_rules
 from mm_companion.ui.area_gm import AreaController
 from mm_companion.ui.block_canvas import BlockCanvas
 from mm_companion.ui.block_sizes import RecommendedSize, load_block_sizes
@@ -893,11 +895,21 @@ class GMWindow(QMainWindow):
     def impress_notice(self, text: str, colour: str) -> None:
         self._show_notice(text, colour)
 
-    # -- the area attack's two extra host methods (see AreaHost) ------------------
+    # -- the actions' two extra host methods (see AreaHost, ImpressHost) ----------
 
-    def area_add_card(self, card) -> None:
-        """Put an area attack's reminder — its Resolve button — in the GM's history."""
+    def action_add_card(self, card) -> None:
+        """Put an action's reminder — its Resolve button — in the GM's history."""
         self._history.add_card(card)
+
+    def publish_table_rules(self) -> None:
+        """Tell the table whether its players set up their own actions (a GM setting).
+
+        Published on the session's shared state rather than asked for, so a player
+        reads it the moment they click Impress — and a later joiner gets it in their
+        Welcome. Off the air there is nobody to tell.
+        """
+        if self._bridge.in_session and self._bridge.is_gm:
+            publish_table_rules(self._bridge)
 
     def area_roll_attack(self, spec: RollSpec) -> None:
         """Roll an NPC's attack against the primary on this window's roller."""
@@ -1088,6 +1100,7 @@ class GMWindow(QMainWindow):
         self._refresh_rolls()
         self._refresh_npcs()
         self._refresh_idle_status()
+        self.publish_table_rules()
 
     def _on_left(self, reason: str) -> None:
         self._set_status(f"Disconnected ({reason})", theme.color("tint.worse"))
@@ -1378,6 +1391,7 @@ class GMWindow(QMainWindow):
     def _on_started(self, host: str, port: int) -> None:
         self._rename_session()
         self._notice.dismiss()
+        self.publish_table_rules()
 
     def _on_stopped(self) -> None:
         self._copy_code_action.setEnabled(False)
@@ -2481,6 +2495,8 @@ class GMWindow(QMainWindow):
             card.pinPickerRequested.connect(self._open_npc_pin_picker)
             card.collapsedChanged.connect(self._set_npc_collapsed)
             card.damageRequested.connect(self._apply_npc_damage)
+            card.areaRequested.connect(self._start_card_area)
+            card.impressRequested.connect(self._start_card_impress)
             card.pins.set_pins(self._pins_for(_npc_key(name), "npc"))
             # Connected after the initial load, so seeding the strip does not ask
             # the window to re-measure a grid it is halfway through building.
@@ -2786,6 +2802,25 @@ class GMWindow(QMainWindow):
         path = Path(window.path) if window.path is not None else None
         key = next((n for n, entry in self._npc_state.items() if entry.path == path), "")
         self._area.start_for_npc(character, power, key, name=library.display_name(character))
+
+    def _start_card_area(self, key: str, power_id: str) -> None:
+        """An NPC card's Area button: that creature uses the power *power_id* on an area."""
+        entry = self._npc_state.get(key)
+        if entry is None:
+            return
+        power = next(
+            (b for b in area_capable_builds(entry.character, self._data) if b.id == power_id),
+            None,
+        )
+        if power is None:
+            return
+        self._area.start_for_npc(
+            entry.character, power, key, name=library.display_name(entry.character)
+        )
+
+    def _start_card_impress(self, key: str) -> None:
+        """An NPC card's Impress button: that creature impresses somebody."""
+        self._impress.open_new(source_key=key)
 
     def _post_note(self, text: str) -> None:
         """A line in the history: the table's while hosting, this window's off the air.

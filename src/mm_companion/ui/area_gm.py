@@ -3,30 +3,29 @@
 :class:`~mm_companion.ui.area.AreaWindow` decides; this carries the decision out, and
 it is the only part of the action that touches the session:
 
-* a player's declared area arrives as an ``ActionRequest`` (kind ``"area"``) and
-  puts an :class:`~mm_companion.ui.roll_history.ActionCard` in the GM's history with
-  a **Resolve Area Attack** button. The attack check against the primary target lands
-  as an ordinary roll carrying the attempt's id, and is paired up with it here;
-* **resolving** rolls the creatures nobody plays in two stages, each a server-side
-  group roll: every NPC's Dodge check (``"<id>.1"``), then — once those are in — each
-  one's save at the rank its Dodge left (``"<id>.2"``). The history draws both stages
-  as one table (:func:`~mm_companion.ui.roll_history.table_key`), and the rung each
-  failed save lands on goes straight onto the NPC's model;
-* a **player** in the area is not rolled for: the history is left a request to roll —
-  the Dodge check chained to the save — which their own sheet answers, and whose
-  outcome they apply themselves.
+* a player's declared area arrives as an ``ActionRequest`` (kind ``"area"``) and puts an
+  :class:`~mm_companion.ui.roll_history.ActionCard` in the GM's history with a **Resolve
+  Area Attack** button — whole, when the player chose who is caught, or bare, when the
+  GM is to. The attack check against the primary lands as an ordinary roll carrying the
+  attempt's id and is paired up with it here; a bare one's attack is asked of the
+  player from the window once the GM has picked a primary;
+* the GM can start one for an NPC from its card or its sheet, which opens the window
+  straight away;
+* **resolving** rolls the creatures nobody plays in two stages, each a server-side group
+  roll: every NPC's Dodge check, then — once those are in — each one's save at the rank
+  its Dodge left. A **player** in the area is asked for their Dodge, and once it is back,
+  for the save at the rank it left. Every roll lands in one table in the history and in
+  the window's Result column, and the rung each failed save lands on is applied — onto
+  an NPC's model, or as condition commands to a player's app.
 
-Off the air the same groups are rolled here (:func:`~mm_companion.core.dice.resolve_group`)
-and shown as offline cards. It reaches the GM window only through
-:class:`AreaHost`, the Impress host surface plus two methods.
+It reaches the GM window only through :class:`AreaHost`, the Impress host surface plus
+two methods. :mod:`mm_companion.ui.action_run` does the rolling and the asking.
 """
 
 from __future__ import annotations
 
 import html
-import uuid
-from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from PySide6.QtCore import QObject
@@ -34,22 +33,26 @@ from PySide6.QtWidgets import QWidget
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
-from mm_companion.core.dice import resolve_group
 from mm_companion.core.powers import Power
 from mm_companion.core.rules import (
+    KIND_POWER_CHECK,
     AreaAttempt,
     AreaEffect,
     RollSpec,
+    area_ask_dodge_spec,
+    area_ask_save_spec,
+    area_capable_builds,
     area_effect_rung,
     area_npc_dodge_spec,
     area_npc_save_specs,
-    area_request_specs,
+    area_stage_rank,
     power_area_use,
     resolve_rung,
     rung_caption,
 )
-from mm_companion.core.session.protocol import MAX_GROUP_LINES
 from mm_companion.ui import theme
+from mm_companion.ui.action_run import ActionRun, group_line, total_of
+from mm_companion.ui.action_ui import PHASE_DONE, PHASE_SETUP
 from mm_companion.ui.area import KIND_AREA_ATTACK, AreaPlan, AreaTarget, AreaWindow
 from mm_companion.ui.impress import PARTY_NPC, PARTY_PLAYER, ImpressParty, new_action_id
 from mm_companion.ui.roll_history import ActionCard
@@ -74,36 +77,50 @@ class AreaHost(Protocol):
     def impress_notice(self, text: str, colour: str) -> None:
         """Say something on the GM window's notice card."""
 
-    def area_add_card(self, card: ActionCard) -> None:
+    def action_add_card(self, card: ActionCard) -> None:
         """Put the GM's reminder card in their history."""
 
     def area_roll_attack(self, spec: RollSpec) -> None:
         """Roll an NPC's attack against the primary on the GM's roller."""
 
 
+def roll_cell(label: str, record: dict) -> str:
+    """One roll as the window's Result column shows it: what, how much, and how it went."""
+    text = f"{html.escape(label)} <b>{total_of(record)}</b>"
+    dc = record.get("dc")
+    if dc is not None:
+        text += f" vs {int(dc)}"
+    degree = record.get("degree")
+    if degree is not None:
+        degree = int(degree)
+        text += " ✓" if degree > 0 else " " + "✗" * max(1, min(3, abs(degree)))
+    return text
+
+
+@dataclass
+class _Resolving:
+    """One resolve in flight: who is still to land, and what has been said so far."""
+
+    plan: AreaPlan
+    pending: set[str]
+    said: list[str] = field(default_factory=list)
+    cells: dict[str, list[str]] = field(default_factory=dict)
+
+
 @dataclass
 class _Declared:
-    """One area attack the GM has been told about and not resolved yet."""
+    """One area attack the GM has been told about (or started) and not settled yet."""
 
     attempt: AreaAttempt
     source: ImpressParty
-    card: ActionCard
+    card: ActionCard | None
+    run: ActionRun
     attack: tuple[int, int] | None = None
     window: AreaWindow | None = None
-
-
-@dataclass
-class _Stage:
-    """One stage of a resolve in flight: its lines, and the groups still to come back."""
-
-    plan: AreaPlan
-    lines: list[dict]
-    #: What each line is about, in line order — handed to *finish* with its record.
-    about: list[object]
-    finish: Callable[[AreaPlan, list[tuple[object, dict]]], None]
-    waiting: dict[str, int] = field(default_factory=dict)
-    records: dict[str, list[dict]] = field(default_factory=dict)
-    order: list[str] = field(default_factory=list)
+    builds: list[Power] = field(default_factory=list)
+    resolving: _Resolving | None = None
+    #: A player's declaration waiting in the history, rather than the GM's own.
+    from_card: bool = True
 
 
 class AreaController(QObject):
@@ -124,11 +141,6 @@ class AreaController(QObject):
         self._declared: dict[str, _Declared] = {}
         #: An attack roll that arrived before its declaration did.
         self._early: dict[str, tuple[int, int]] = {}
-        #: Group id -> the stage it belongs to.
-        self._stages: dict[str, _Stage] = {}
-        #: Action id -> its table's id, and how many groups that table has had.
-        self._tables: dict[str, str] = {}
-        self._parts: dict[str, int] = {}
         bridge.actionRequested.connect(self._on_action_request)
         bridge.rollAdded.connect(self.take_roll)
 
@@ -169,7 +181,9 @@ class AreaController(QObject):
                 kind=PARTY_PLAYER,
                 source=player_id,
             )
-        return self._note(attempt, source)
+        declared = self._make(attempt, source, from_card=True)
+        self._show_card(declared)
+        return declared
 
     @staticmethod
     def _own_sheet_source(sources: list[ImpressParty], attempt: AreaAttempt) -> ImpressParty:
@@ -184,19 +198,37 @@ class AreaController(QObject):
             ref=attempt.source_ref or f"sheet:{name}", name=name, kind=PARTY_NPC, source=""
         )
 
-    def _note(self, attempt: AreaAttempt, source: ImpressParty) -> _Declared:
-        card = ActionCard(attempt.action_id, "", RESOLVE_CAPTION)
-        card.actionRequested.connect(self.open)
-        declared = _Declared(attempt, source, card)
+    def _make(self, attempt: AreaAttempt, source: ImpressParty, *, from_card: bool) -> _Declared:
+        run = ActionRun(
+            self._data,
+            self._bridge,
+            self._host,
+            attempt.action_id,
+            title=f"{source.name}: {attempt.use.power_name} (area)",
+            asker="The GM",
+            parent=self,
+        )
+        declared = _Declared(attempt, source, None, run, from_card=from_card)
+        run.waitingChanged.connect(lambda d=declared: self._on_waiting(d))
         self._declared[attempt.action_id] = declared
         early = self._early.pop(attempt.action_id, None)
         if early is not None:
             declared.attack = early
-        self._describe(declared)
-        self._host.area_add_card(card)
         return declared
 
+    def _show_card(self, declared: _Declared) -> None:
+        """Put the declaration's card in the GM's history (once)."""
+        if declared.card is not None:
+            return
+        card = ActionCard(declared.attempt.action_id, "", RESOLVE_CAPTION)
+        card.actionRequested.connect(self.open)
+        declared.card = card
+        self._describe(declared)
+        self._host.action_add_card(card)
+
     def _describe(self, declared: _Declared) -> None:
+        if declared.card is None:
+            return
         attempt, use = declared.attempt, declared.attempt.use
         _sources, targets = self._host.impress_parties()
         names = {p.ref: p.name for p in targets}
@@ -212,27 +244,35 @@ class AreaController(QObject):
         caught = [names[ref] for ref in attempt.targets if ref in names]
         if caught:
             text += "<br>Caught: " + html.escape(", ".join(caught))
+        elif not attempt.primary:
+            text += "<br>Who is caught is yours to set."
         declared.card.set_text(text)
 
     def start_for_npc(
         self, character: Character, power: Power, key: str, *, name: str = ""
     ) -> AreaWindow | None:
-        """The GM used an NPC's power on an area, from its sheet: open it straight away.
+        """The GM used an NPC's power on an area — from its card or its sheet: open it.
 
         *key* is the NPC's cast key (its file), which is how it is found among the
         parties — never by *name*, which two identical minions share. *name* is what to
-        call it when it is not in the cast at all.
+        call it when it is not in the cast at all. Any attack will do: the GM is the one
+        choosing to spread it, so the free use is read as on.
         """
-        use = power_area_use(power, character, self._data, npc=True)
+        use = power_area_use(power, character, self._data, npc=True, free_use=True)
         if use is None:
             return None
         sources, _targets = self._host.impress_parties()
         name = name or key or "An NPC"
         source = next(
             (p for p in sources if p.kind == PARTY_NPC and key and p.source == key), None
-        ) or ImpressParty(ref=f"sheet:{key or name}", name=name, kind=PARTY_NPC, source=key)
+        ) or ImpressParty(
+            ref=f"sheet:{key or name}", name=name, kind=PARTY_NPC, source=key, character=character
+        )
+        if source.character is None:
+            source.character = character
         attempt = AreaAttempt(new_action_id(), use, source_name=source.name, source_ref=source.ref)
-        self._note(attempt, source)
+        declared = self._make(attempt, source, from_card=False)
+        declared.builds = area_capable_builds(character, self._data)
         return self.open(attempt.action_id)
 
     # -- the window -------------------------------------------------------------
@@ -243,82 +283,154 @@ class AreaController(QObject):
         if declared is None:
             return None
         if declared.window is not None:
+            declared.window.show()
             declared.window.raise_()
+            declared.window.activateWindow()
             return declared.window
         _sources, targets = self._host.impress_parties()
+        if declared.source.character is None:
+            # A player's snapshot, for the shape and their own attack's numbers.
+            found = next((p for p in targets if p.ref == declared.source.ref), None)
+            if found is not None:
+                declared.source.character = found.character
         window = AreaWindow(
             self._data,
             attempt=declared.attempt,
             source=declared.source,
             targets=targets,
+            builds=declared.builds,
+            from_card=declared.from_card,
             parent=self._parent_window,
         )
         if declared.attack is not None:
             window.set_attack(*declared.attack)
         declared.window = window
-        window.resolveRequested.connect(self._resolve)
-        window.attackRequested.connect(self._host.area_roll_attack)
-        window.destroyed.connect(lambda *_a, d=declared: setattr(d, "window", None))
+        window.resolveRequested.connect(lambda plan, d=declared: self._resolve(d, plan))
+        window.attackRequested.connect(lambda spec, d=declared: self._attack(d, spec))
+        window.cancelled.connect(lambda d=declared: self._on_cancelled(d))
+        window.dismissed.connect(lambda d=declared: self._on_dismissed(d))
+        window.calledOff.connect(lambda d=declared: self._call_off(d))
+        window.rollWaitingRequested.connect(declared.run.roll_waiting)
         window.show()
         return window
+
+    def _on_cancelled(self, declared: _Declared) -> None:
+        """Closed before resolving. A player's stays in the history to come back to."""
+        window, declared.window = declared.window, None
+        if window is not None:
+            window.deleteLater()
+        if not declared.from_card:
+            declared.run.close()
+            self._declared.pop(declared.attempt.action_id, None)
+
+    def _on_dismissed(self, declared: _Declared) -> None:
+        declared.run.close()
+        if declared.card is not None:
+            declared.card.set_done("Dismissed.")
+        window, declared.window = declared.window, None
+        if window is not None:
+            window.deleteLater()
+        self._declared.pop(declared.attempt.action_id, None)
+
+    def _attack(self, declared: _Declared, spec: RollSpec) -> None:
+        """The window asked for the attack: rolled for an NPC, asked of a player."""
+        if declared.source.kind != PARTY_PLAYER:
+            self._host.area_roll_attack(spec)
+            return
+        if not declared.run.ask(declared.source, spec, None, lambda _a, r, d=declared: None):
+            self._host.impress_notice(
+                f"Could not ask {declared.source.name} for the attack.", theme.color("tint.worse")
+            )
+            if declared.window is not None:
+                declared.window.set_attack_asked(False)
+
+    def _on_waiting(self, declared: _Declared) -> None:
+        names = declared.run.waiting()
+        if declared.window is not None:
+            declared.window.set_waiting(names)
+        if declared.card is not None and declared.resolving is not None:
+            declared.card.set_status(
+                ("Waiting for " + ", ".join(names) + "…") if names else "Rolling…",
+                button="Open",
+            )
 
     # -- the rolls coming back ----------------------------------------------------
 
     def take_roll(self, roll: object) -> None:
-        """One roll in the history: a stage's line, or the attack against a primary.
+        """One roll in the history: a stage's line, an asked roll, or the attack.
 
         Fed by the session's ``rollAdded``, and by the GM window for a roll it made off
         the air, which no session reports: an NPC's attack rolled from the area window.
         """
         if not isinstance(roll, dict):
             return
-        group = str(roll.get("group", "") or "")
-        if group:
-            self._gather(group, roll)
+        for declared in list(self._declared.values()):
+            if declared.run.take_roll(roll):
+                spec = RollSpec.from_dict(roll.get("spec"))
+                if spec is not None and spec.kind == KIND_POWER_CHECK and not roll.get("group"):
+                    self._take_attack(declared, roll)
+                return
+        if roll.get("group") or roll.get("kind", "roll") != "roll":
             return
         spec = RollSpec.from_dict(roll.get("spec"))
-        if spec is None or not spec.action_id:
+        if spec is None or not spec.action_id or spec.kind not in (KIND_POWER_CHECK, ""):
             return
-        die = int(roll.get("die", 0))
-        attack = (die + int(roll.get("bonus", 0)) - int(roll.get("penalty", 0)), die)
         declared = self._declared.get(spec.action_id)
         if declared is None:
-            self._early[spec.action_id] = attack
+            self._early[spec.action_id] = (total_of(roll), int(roll.get("die", 0)))
             return
+        self._take_attack(declared, roll)
+
+    def _take_attack(self, declared: _Declared, roll: dict) -> None:
+        attack = (total_of(roll), int(roll.get("die", 0)))
         declared.attack = attack
         self._describe(declared)
         if declared.window is not None:
             declared.window.set_attack(*attack)
 
-    def _gather(self, group: str, roll: dict) -> None:
-        stage = self._stages.get(group)
-        if stage is None:
-            return
-        records = stage.records.setdefault(group, [])
-        records.append(roll)
-        if len(records) < stage.waiting.get(group, 0):
-            return
-        del self._stages[group]
-        if any(g in self._stages for g in stage.order):
-            return  # another part of this stage is still out
-        ordered: list[dict] = []
-        for part in stage.order:
-            ordered += sorted(stage.records.get(part, []), key=lambda r: int(r.get("seq", 0)))
-        stage.finish(stage.plan, list(zip(stage.about, ordered, strict=False)))
-
     # -- resolving ------------------------------------------------------------------
 
-    def _resolve(self, plan: AreaPlan) -> None:
+    def _resolve(self, declared: _Declared, plan: AreaPlan) -> None:
         """Roll the NPCs' Dodge checks, ask the players, and go on to the saves."""
-        declared = self._declared.get(plan.action_id)
-        if declared is not None:
-            declared.card.set_done("Resolved — the table is in the history.")
-        self._ask_players(plan)
+        declared.attempt = AreaAttempt(
+            declared.attempt.action_id,
+            plan.use,
+            source_name=declared.attempt.source_name,
+            source_ref=declared.attempt.source_ref,
+        )
+        resolving = _Resolving(plan, pending={t.party.name for t in plan.targets})
+        declared.resolving = resolving
+        self._show_card(declared)
+        if declared.card is not None:
+            declared.card.set_status("Rolling…", button="Open")
+        run = declared.run
+        run.title = plan.title
+
+        for target in plan.targets:
+            if target.party.kind != PARTY_PLAYER:
+                continue
+            if target.primary:
+                self._ask_saves(declared, target, made=None)
+            else:
+                spec = area_ask_dodge_spec(
+                    plan.use,
+                    self._data,
+                    target=target.party.name,
+                    action_id=plan.action_id,
+                    source=plan.source.name,
+                    cover=target.cover,
+                    adjust=target.adjust,
+                )
+                if not run.ask(target.party, spec, target, self._player_dodged_for(declared)):
+                    self._land(declared, target, "not asked — no session", "tint.worse")
+
         dodging = [t for t in plan.targets if t.party.kind != PARTY_PLAYER and not t.primary]
+        if not dodging:
+            self._npc_saves(declared, {})
+            return
         lines = [
-            self._line(
-                plan,
-                target,
+            group_line(
+                target.party.name,
                 area_npc_dodge_spec(
                     plan.use,
                     target.party.character,
@@ -326,62 +438,31 @@ class AreaController(QObject):
                     cover=target.cover,
                     adjust=target.adjust,
                 ),
+                title=plan.title,
             )
             for target in dodging
         ]
-        if not lines:
-            self._saves(plan, [])
-            return
-        self._roll_stage(plan, lines, dodging, self._saves)
+        run.roll_group(lines, list(dodging), lambda pairs, d=declared: self._npc_dodged(d, pairs))
 
-    def _ask_players(self, plan: AreaPlan) -> None:
-        """Leave the caught players a request to roll — they apply what it does.
+    # -- the NPCs ---------------------------------------------------------------------
 
-        One request per set of numbers the GM chose: the cover and the bonus or penalty
-        set on a player's row ride on the request they are asked with, so two players
-        set differently are asked separately.
-        """
-        players = [t for t in plan.targets if t.party.kind == PARTY_PLAYER]
-        asks: list[RollSpec] = []
-        groups: dict[tuple[int, int], list[str]] = {}
-        for target in players:
-            if target.primary:
-                asks += area_request_specs(
-                    plan.use,
-                    self._data,
-                    source=plan.source.name,
-                    primary=target.party.name,
-                    adjust=target.adjust,
-                )
-            else:
-                groups.setdefault((target.cover, target.adjust), []).append(target.party.name)
-        for (cover, adjust), names in groups.items():
-            asks += area_request_specs(
-                plan.use,
-                self._data,
-                source=plan.source.name,
-                caught=tuple(names),
-                cover=cover,
-                adjust=adjust,
-            )
-        for spec in asks:
-            if not self._bridge.prompt_roll(spec.to_dict()):
-                self._host.impress_notice(
-                    "The request for the players' rolls did not reach the session.",
-                    theme.color("tint.worse"),
-                )
-                return
+    def _npc_dodged(self, declared: _Declared, pairs: list[tuple[object, dict]]) -> None:
+        made: dict[str, bool] = {}
+        for target, record in pairs:
+            if not isinstance(target, AreaTarget):
+                continue
+            made[target.party.ref] = record.get("degree") is not None and int(record["degree"]) > 0
+            self._cell(declared, target, roll_cell("Dodge", record))
+        self._npc_saves(declared, made)
 
-    def _saves(self, plan: AreaPlan, dodged: list[tuple[object, dict]]) -> None:
+    def _npc_saves(self, declared: _Declared, made: dict[str, bool]) -> None:
         """Every NPC's save, at the rank its Dodge check (or a direct hit) left it."""
-        made = {
-            target.party.ref: (record.get("degree") is not None and int(record["degree"]) > 0)
-            for target, record in dodged
-            if isinstance(target, AreaTarget)
-        }
+        resolving = declared.resolving
+        if resolving is None:
+            return
+        plan = resolving.plan
         lines: list[dict] = []
         about: list[tuple[AreaTarget, AreaEffect]] = []
-        shrugged: list[str] = []
         for target in plan.targets:
             if target.party.kind == PARTY_PLAYER:
                 continue
@@ -393,125 +474,201 @@ class AreaController(QObject):
                 adjust=target.adjust,
             )
             if saves is None:
-                shrugged.append(target.party.name)
+                self._land(declared, target, "dodged clear — no effect", "tint.better")
+                continue
+            if not saves:
+                self._land(declared, target, "nothing to resist", "")
                 continue
             for effect, spec in saves:
-                lines.append(self._line(plan, target, spec))
+                lines.append(group_line(target.party.name, spec, title=plan.title))
                 about.append((target, effect))
-        if shrugged:
-            self._host.impress_notice(
-                ", ".join(shrugged) + " dodged clear — no effect.", theme.color("accent")
+        if lines:
+            declared.run.roll_group(
+                lines, list(about), lambda pairs, d=declared: self._npc_saved(d, pairs)
             )
-        if not lines:
-            self._finish(plan, [])
-            return
-        self._roll_stage(plan, lines, about, self._apply)
 
-    def _apply(self, plan: AreaPlan, saves: list[tuple[object, dict]]) -> None:
-        """Put each failed save's rung on its NPC, and say what happened."""
-        said: list[str] = []
-        for about, record in saves:
+    def _npc_saved(self, declared: _Declared, pairs: list[tuple[object, dict]]) -> None:
+        """Put each failed save's rung on its NPC."""
+        outcomes: dict[str, list[str]] = {}
+        targets: dict[str, AreaTarget] = {}
+        for about, record in pairs:
             target, effect = about  # type: ignore[misc]
-            degree = record.get("degree")
-            degree = None if degree is None else int(degree)
-            rung = area_effect_rung(effect, degree, self._data)
-            name = target.party.name
-            if rung is None:
-                said.append(f"{name} resisted")
-                continue
-            character = target.party.character or Character()
-            changes = list(
-                resolve_rung(
-                    character, rung, self._data, source=plan.source.name, config=effect.config
-                )
-            )
-            caption = rung_caption(rung, self._data, effect.config)
-            if changes and not self._host.impress_apply(target.party, changes):
-                said.append(f"{name}: {caption} (not delivered)")
-            else:
-                said.append(f"{name}: {caption}" if caption else f"{name} resisted")
-        self._finish(plan, said)
+            targets[target.party.name] = target
+            self._cell(declared, target, roll_cell(effect.resistance_label or "Save", record))
+            caption = self._apply(declared, target, effect, record)
+            outcomes.setdefault(target.party.name, []).append(caption)
+        for name, captions in outcomes.items():
+            said = [c for c in captions if c]
+            text = "; ".join(said) if said else "resisted"
+            self._land(declared, targets[name], text, "tint.worse" if said else "tint.better")
 
-    def _finish(self, plan: AreaPlan, said: list[str]) -> None:
-        players = [t.party.name for t in plan.targets if t.party.kind == PARTY_PLAYER]
-        if players:
-            said.append(", ".join(players) + " roll from the request")
-        if said:
-            self._host.impress_notice(
-                f"{plan.use.power_name} — " + "; ".join(said), theme.color("accent")
-            )
+    # -- the players --------------------------------------------------------------------
 
-    # -- rolling ----------------------------------------------------------------------
+    def _player_dodged_for(self, declared: _Declared):
+        return lambda target, record: self._player_dodged(declared, target, record)
 
-    @staticmethod
-    def _line(plan: AreaPlan, target: AreaTarget, spec: RollSpec) -> dict:
-        """One creature's roll as a group line: *spec* carries its number and its DC."""
-        name = target.party.name
-        modifier = spec.modifier
-        return {
-            "label": f"{name}: {spec.label}",
-            "bonus": max(0, modifier),
-            "penalty": max(0, -modifier),
-            # No lead: each line's whole DC rides as its offset from a DC of 0, which is
-            # what lets every creature roll against a DC of its own in one group.
-            "dc_offset": spec.dc or 0,
-            "player_id": "",
-            "spec": replace(spec, targets=(name,), title=plan.title).to_dict(),
-        }
+    def _player_dodged(self, declared: _Declared, target: AreaTarget, record: dict) -> None:
+        made = record.get("degree") is not None and int(record["degree"]) > 0
+        self._cell(declared, target, roll_cell("Dodge", record))
+        self._ask_saves(declared, target, made=made)
 
-    def _roll_stage(
-        self,
-        plan: AreaPlan,
-        lines: list[dict],
-        about: list,
-        finish: Callable[[AreaPlan, list[tuple[object, dict]]], None],
-    ) -> None:
-        """Roll *lines* as one stage — split into groups the server will take."""
-        stage = _Stage(plan, lines, about, finish)
-        parts = [lines[i : i + MAX_GROUP_LINES] for i in range(0, len(lines), MAX_GROUP_LINES)]
-        if not self._bridge.in_session:
-            self._roll_offline(stage, parts)
+    def _ask_saves(self, declared: _Declared, target: AreaTarget, *, made: bool | None) -> None:
+        """Ask a player for each save their Dodge (or a direct hit) left them, in turn."""
+        resolving = declared.resolving
+        if resolving is None:
             return
-        for part in parts:
-            group = self._group_id(plan)
-            stage.order.append(group)
-            stage.waiting[group] = len(part)
-            # Listen before asking: a hosting server raises each record while it
-            # records it, inside the call below.
-            self._stages[group] = stage
-        for group, part in zip(list(stage.order), parts, strict=True):
-            if not self._bridge.group_roll(group, part, dc=0):
-                for pending in stage.order:
-                    self._stages.pop(pending, None)
-                self._host.impress_notice(
-                    f"The {plan.use.power_name} rolls did not reach the session.",
-                    theme.color("tint.worse"),
-                )
-                return
-
-    def _group_id(self, plan: AreaPlan) -> str:
-        """A fresh group id in this action's table: ``"<table>.<n>"``."""
-        key = self._tables.setdefault(plan.action_id, f"{plan.action_id}-{uuid.uuid4().hex[:4]}")
-        self._parts[key] = self._parts.get(key, 0) + 1
-        return f"{key}.{self._parts[key]}"
-
-    def _roll_offline(self, stage: _Stage, parts: list[list[dict]]) -> None:
-        """No table to roll at: resolve the same groups here, as offline cards."""
-        records: list[dict] = []
-        for part in parts:
-            group = self._group_id(stage.plan)
-            result = resolve_group(
-                [(line["bonus"] - line["penalty"], line["dc_offset"]) for line in part], dc=0
+        use = resolving.plan.use
+        queue: list[tuple[AreaEffect, int]] = []
+        for effect in use.effects:
+            rank = (
+                effect.rank
+                if made is None
+                else area_stage_rank(effect.rank, made, target.party.character, self._data)
             )
-            for line, check in zip(part, result.lines, strict=True):
-                record = {
-                    **line,
-                    "die": check.die_roll,
-                    "dc": check.dc,
-                    "degree": check.degree,
-                    "critical": check.critical,
-                    "group": group,
-                }
-                self._host.impress_show_offline(record)
-                records.append(record)
-        stage.finish(stage.plan, list(zip(stage.about, records, strict=False)))
+            if rank is None:
+                self._land(declared, target, "dodged clear — no effect", "tint.better")
+                return
+            queue.append((effect, rank))
+        self._ask_next_save(declared, target, queue, [])
+
+    def _ask_next_save(
+        self,
+        declared: _Declared,
+        target: AreaTarget,
+        queue: list[tuple[AreaEffect, int]],
+        said: list[str],
+    ) -> None:
+        resolving = declared.resolving
+        if resolving is None:
+            return
+        plan = resolving.plan
+        while queue:
+            effect, rank = queue.pop(0)
+            spec = area_ask_save_spec(
+                plan.use,
+                effect,
+                rank,
+                self._data,
+                target=target.party.name,
+                action_id=plan.action_id,
+                source=plan.source.name,
+                adjust=target.adjust,
+            )
+            if spec is None:
+                continue
+
+            def finish(about, record, effect=effect) -> None:
+                self._player_saved(declared, target, effect, record, queue, said)
+
+            if not declared.run.ask(target.party, spec, (target, effect), finish):
+                self._land(declared, target, "not asked — no session", "tint.worse")
+            return
+        captions = [c for c in said if c]
+        text = "; ".join(captions) if captions else "resisted"
+        self._land(declared, target, text, "tint.worse" if captions else "tint.better")
+
+    def _player_saved(
+        self,
+        declared: _Declared,
+        target: AreaTarget,
+        effect: AreaEffect,
+        record: dict,
+        queue: list[tuple[AreaEffect, int]],
+        said: list[str],
+    ) -> None:
+        self._cell(declared, target, roll_cell(effect.resistance_label or "Save", record))
+        caption = self._apply(declared, target, effect, record)
+        said.append(caption)
+        if caption:
+            declared.run.tell(target.party, f"{declared.attempt.use.power_name}: {caption}")
+        self._ask_next_save(declared, target, queue, said)
+
+    # -- landing ---------------------------------------------------------------------------
+
+    def _apply(
+        self, declared: _Declared, target: AreaTarget, effect: AreaEffect, record: dict
+    ) -> str:
+        """Put the rung a save landed on onto its creature; what it did, in words."""
+        degree = record.get("degree")
+        rung = area_effect_rung(effect, None if degree is None else int(degree), self._data)
+        if rung is None:
+            return ""
+        source = declared.resolving.plan.source.name if declared.resolving else ""
+        # Escalation reads the target's current conditions; with no sheet to read yet
+        # (a player whose snapshot has not arrived) it reads none.
+        character = target.party.character or Character()
+        changes = list(
+            resolve_rung(character, rung, self._data, source=source, config=effect.config)
+        )
+        caption = rung_caption(rung, self._data, effect.config)
+        if changes and not self._host.impress_apply(target.party, changes):
+            return f"{caption} (not delivered)"
+        return caption
+
+    def _cell(self, declared: _Declared, target: AreaTarget, cell: str) -> None:
+        resolving = declared.resolving
+        if resolving is None:
+            return
+        cells = resolving.cells.setdefault(target.party.name, [])
+        cells.append(cell)
+        if declared.window is not None:
+            declared.window.set_result(target.party.ref, " · ".join(cells))
+
+    def _land(self, declared: _Declared, target: AreaTarget, text: str, token: str) -> None:
+        """One creature's part is over: show what it came to, and finish once all are."""
+        resolving = declared.resolving
+        if resolving is None or target.party.name not in resolving.pending:
+            return
+        resolving.pending.discard(target.party.name)
+        resolving.said.append(f"{target.party.name}: {text}")
+        cells = resolving.cells.get(target.party.name, [])
+        shown = " · ".join([*cells, f"<b>{html.escape(text)}</b>"]) if cells else html.escape(text)
+        if declared.window is not None:
+            declared.window.set_result(target.party.ref, shown, token)
+        if not resolving.pending:
+            self._finish(declared)
+
+    def _finish(self, declared: _Declared) -> None:
+        resolving = declared.resolving
+        if resolving is None:
+            return
+        summary = f"{resolving.plan.use.power_name} — " + "; ".join(resolving.said)
+        self._host.impress_notice(summary, theme.color("accent"))
+        if declared.card is not None:
+            declared.card.set_done("Resolved — the table is in the history.")
+        if declared.window is not None:
+            declared.window.finish("All in — each row shows what it did.")
+        declared.run.close()
+        self._retire(declared)
+
+    def _call_off(self, declared: _Declared) -> None:
+        """The GM stopped waiting: nothing still out counts."""
+        declared.run.close()
+        resolving = declared.resolving
+        left = sorted(resolving.pending) if resolving is not None else []
+        if declared.card is not None:
+            declared.card.set_done("Called off.")
+        if declared.window is not None:
+            declared.window.finish(
+                "Called off" + (f" — never landed: {', '.join(left)}." if left else ".")
+            )
+        self._retire(declared)
+
+    def _retire(self, declared: _Declared) -> None:
+        """Forget a settled action once its window is gone (or now, with no window)."""
+        window = declared.window
+        if window is None or window.phase == PHASE_SETUP:
+            self._declared.pop(declared.attempt.action_id, None)
+            return
+        if window.phase == PHASE_DONE and not window.isVisible():
+            self._declared.pop(declared.attempt.action_id, None)
+            window.deleteLater()
+            declared.window = None
+            return
+        window.finished.connect(lambda _r, d=declared: self._on_done_window_closed(d))
+
+    def _on_done_window_closed(self, declared: _Declared) -> None:
+        if declared.window is not None and declared.window.phase == PHASE_DONE:
+            self._declared.pop(declared.attempt.action_id, None)
+            declared.window.deleteLater()
+            declared.window = None

@@ -77,11 +77,14 @@ __all__ = [
     "AreaAttempt",
     "power_offers_area",
     "power_area_use",
+    "area_capable_builds",
     "area_line_spec",
     "area_attack_spec",
     "area_dodge_spec",
     "area_resist_spec",
     "area_request_specs",
+    "area_ask_dodge_spec",
+    "area_ask_save_spec",
     "area_dodge_modifier",
     "area_resist_modifier",
     "area_save_dc",
@@ -259,15 +262,21 @@ def _resisted(effect: PowerEffectInstance, game_data: GameData) -> bool:
     return base is not None and base.resistance_dc_base is not None
 
 
-def _area_effects(power: Power, game_data: GameData) -> list[PowerEffectInstance]:
-    """The effects of *power* that act as an area: bought, or the table's free use."""
+def _area_effects(
+    power: Power, game_data: GameData, *, free_use: bool = False
+) -> list[PowerEffectInstance]:
+    """The effects of *power* that act as an area: bought, or the table's free use.
+
+    *free_use* asks as though the power's free-use switch were on, which is how the GM
+    reaches an NPC's attack from its card without flipping anything on its sheet.
+    """
 
     if not game_data.area.available:
         return []
     chosen = [e for e in power.effects if _resisted(e, game_data) and effect_is_area(e, game_data)]
     if chosen:
         return chosen
-    if power.area_use:
+    if power.area_use or free_use:
         return [
             e
             for e in power.effects
@@ -293,6 +302,28 @@ def find_area_power(char: Character, game_data: GameData, power_id: str) -> Powe
         if item.build is not None and item.build.id == power_id:
             return item_effective_build(item, game_data)
     return None
+
+
+def area_capable_builds(char: Character, game_data: GameData) -> list[Power]:
+    """Every build on *char*'s sheet that could be used on an area, in sheet order.
+
+    An area bought with the extra, or any attack the table's free use could spread —
+    whether or not its switch is on. Powers first, then gear (as it is used, accessories
+    folded in). What an NPC card's Area button offers the GM.
+    """
+
+    builds: list[Power] = [
+        power
+        for power in leaf_powers(char.powers)
+        if _area_effects(power, game_data, free_use=True)
+    ]
+    for item in char.equipment:
+        if item.build is None:
+            continue
+        build = item_effective_build(item, game_data)
+        if build is not None and _area_effects(build, game_data, free_use=True):
+            builds.append(build)
+    return builds
 
 
 def power_offers_area(power: Power, game_data: GameData) -> bool:
@@ -379,6 +410,7 @@ def power_area_use(
     *,
     shape: str = "",
     npc: bool = False,
+    free_use: bool = False,
 ) -> AreaUse | None:
     """What *power* offers as an area on *char*'s sheet, or ``None`` if nothing.
 
@@ -395,9 +427,12 @@ def power_area_use(
     *npc* reads the Power Level the way a GM's NPC has one: estimated from what it
     can do (:func:`~.validation.estimated_power_level`), not the number on file, which
     nothing treats as a rule for an NPC.
+
+    *free_use* reads an attack as though its free-use switch were on (see
+    :func:`_area_effects`).
     """
 
-    effects = _area_effects(power, game_data)
+    effects = _area_effects(power, game_data, free_use=free_use)
     if not effects:
         return None
     lead = effects[0]
@@ -678,6 +713,71 @@ def area_request_specs(
             if spec is not None:
                 specs.append(spec)
     return specs
+
+
+def area_ask_dodge_spec(
+    use: AreaUse,
+    game_data: GameData,
+    *,
+    target: str,
+    action_id: str,
+    source: str = "",
+    cover: int = 0,
+    adjust: int = 0,
+) -> RollSpec:
+    """The Dodge check the GM asks one **player** for, on its own.
+
+    :func:`area_dodge_spec` with no save chained to it: the result goes back to the
+    GM's table, which works out the rank the player then resists and asks for that save
+    next (:func:`area_ask_save_spec`). It names the player in ``targets`` and carries
+    the action's id, so the roll finds its way into the action's table and back to the
+    GM. Its trait key is still Dodge, so the player's own number goes in.
+    """
+
+    spec = area_dodge_spec(
+        use, game_data, source=source, targets=(target,), cover=cover, adjust=adjust
+    )
+    return replace(
+        spec,
+        follow_up=None,
+        follow_up_always=False,
+        action_id=action_id,
+        hint="Your Dodge against the area. The GM's table works out the save that follows.",
+    )
+
+
+def area_ask_save_spec(
+    use: AreaUse,
+    effect: AreaEffect,
+    rank: int,
+    game_data: GameData,
+    *,
+    target: str,
+    action_id: str,
+    source: str = "",
+    adjust: int = 0,
+) -> RollSpec | None:
+    """The save the GM asks one **player** for, at the rank their Dodge left.
+
+    ``None`` for an effect nobody resists. Its DC is :func:`area_save_dc` at *rank* —
+    the one place the table and the request agree on it.
+    """
+
+    spec = area_resist_spec(
+        use, effect, game_data, full=True, source=source, targets=(target,), adjust=adjust
+    )
+    dc = area_save_dc(effect, rank, game_data)
+    if spec is None or dc is None:
+        return None
+    halved = " (halved)" if rank < effect.rank else ""
+    return replace(
+        spec,
+        dc=dc,
+        label=f"{spec.label}{halved}",
+        action_id=action_id,
+        title=f"{source}: {use.power_name} (area)" if source else f"{use.power_name} (area)",
+        hint="The GM's table applies what it does to you.",
+    )
 
 
 # -- the numbers the GM's table rolls -------------------------------------------------

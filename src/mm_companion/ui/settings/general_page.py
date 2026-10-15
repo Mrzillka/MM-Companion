@@ -1,11 +1,13 @@
 """The General settings page: preferences that are not about the look or the GM.
 
-Four settings. Whether a roll landing in the history also pops up in a corner of
+Five settings. Whether a roll landing in the history also pops up in a corner of
 the screen, and which corner (see :mod:`mm_companion.ui.toasts`). Whether a saved
 character opens in the simple sheet (the play view,
 see :mod:`mm_companion.ui.simple`). Whether the launcher looks for a newer release
 when the app starts (see :mod:`mm_companion.core.updates`) — on by default, and here
-for whoever would rather the app made no request of its own. And how the dice roller arranges
+for whoever would rather the app made no request of its own. Whether, at a table, this
+player sets up their own Impress and area attacks or sends them to the GM to set up
+(see :mod:`mm_companion.ui.action_ui`). And how the dice roller arranges
 itself, as a sheet block and as the GM window's Rolls block alike. Normally it
 reflows to whatever room it is given, but two of the shapes it can be in turned
 out to be worth choosing outright:
@@ -59,6 +61,12 @@ UPDATES_NOTE = (
     "Nothing is downloaded until you click Update."
 )
 
+ACTIONS_NOTE = (
+    "At a table, Impress and an area line open a window where you pick the impression, "
+    "the shape and who is targeted — when the GM allows it. Off, they go straight to "
+    "the GM, who sets them up. The GM resolves them either way."
+)
+
 SIMPLE_NOTE = (
     "The play view: the character on one tight, printable page. A character you open "
     "from your library starts there; a new one still opens for editing, and the Edit "
@@ -108,6 +116,7 @@ class GeneralPage(SettingsPage):
         column.addWidget(self._build_notifications())
         column.addWidget(self._build_updates())
         column.addWidget(self._build_simple_sheet())
+        column.addWidget(self._build_action_setup())
         column.addWidget(self._build_heading())
         column.addWidget(self._build_dice_layout())
         column.addStretch()
@@ -187,6 +196,25 @@ class GeneralPage(SettingsPage):
         stack.addWidget(note)
         return panel
 
+    def _build_action_setup(self) -> QWidget:
+        panel = QWidget()
+        stack = QVBoxLayout(panel)
+        stack.setContentsMargins(0, 0, 0, 0)
+
+        title = QLabel("Impress and area attacks")
+        title.setStyleSheet(BOLD_STYLE)
+        stack.addWidget(title)
+
+        self._actions_myself = QCheckBox("Set up my own Impress and area attacks")
+        self._actions_myself.toggled.connect(lambda *_: self._set_status(""))
+        stack.addWidget(self._actions_myself)
+
+        note = QLabel(ACTIONS_NOTE)
+        note.setWordWrap(True)
+        note.setStyleSheet(muted_style(italic=True))
+        stack.addWidget(note)
+        return panel
+
     def _build_heading(self) -> QWidget:
         panel = QWidget()
         stack = QVBoxLayout(panel)
@@ -259,6 +287,7 @@ class GeneralPage(SettingsPage):
             self._chosen() != self._saved
             or self._check_updates.isChecked() != self._saved_check_updates
             or self._simple_on_open.isChecked() != self._saved_simple_on_open
+            or self._actions_myself.isChecked() != self._saved_actions_myself
             or self._notifications.isChecked() != self._saved_notifications
             or self._corner.currentData() != self._saved_corner
         )
@@ -275,6 +304,8 @@ class GeneralPage(SettingsPage):
         self._saved_check_updates = self._check_updates.isChecked()
         storage.set_simple_sheet_on_open(self._simple_on_open.isChecked())
         self._saved_simple_on_open = self._simple_on_open.isChecked()
+        storage.set_resolve_actions_myself(self._actions_myself.isChecked())
+        self._saved_actions_myself = self._actions_myself.isChecked()
         storage.set_dice_layout(self._chosen())
         self._saved = self._chosen()
         for window in _open_windows():
@@ -302,6 +333,8 @@ class GeneralPage(SettingsPage):
         self._check_updates.setChecked(self._saved_check_updates)
         self._saved_simple_on_open = storage.simple_sheet_on_open()
         self._simple_on_open.setChecked(self._saved_simple_on_open)
+        self._saved_actions_myself = storage.resolve_actions_myself()
+        self._actions_myself.setChecked(self._saved_actions_myself)
         self._saved = storage.dice_layout()
         self._choices[self._saved].setChecked(True)
         self._set_status("")

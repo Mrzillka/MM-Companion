@@ -17,9 +17,10 @@ into ``gm_pins`` on first sight precisely so a later change here cannot rearrang
 what is already on the board. Overruling that is a deliberate act, so it is asked
 for outright and confirmed.
 
-Above the lists sits the Scene's one preference, because it is the same kind of
-thing: a standing decision about how a GM runs their table, made once rather than
-per session.
+Above the lists sit the table's standing decisions — the same kind of thing, made
+once rather than per session: whether joining puts a player on the Scene, and whether
+players set up their own Impress and area attacks or leave that to the GM. The second
+is published to the table when it is saved, so a player's next click already reads it.
 """
 
 from __future__ import annotations
@@ -64,6 +65,13 @@ AUTO_PLAYERS_HINT = (
     "joining it by themselves."
 )
 
+PLAYERS_CHOOSE_LABEL = "Let players set up their own Impress and area attacks"
+PLAYERS_CHOOSE_HINT = (
+    "On, a player who wants to (their own setting) picks the impression, the skill, the "
+    "shape and who is targeted, and you check it and roll. Off, every Impress and area "
+    "attack reaches you bare and you set it up. Either way you resolve it."
+)
+
 NOTE_TEXT = (
     "A card's strip starts from these and is then its own: editing a list here "
     "does not rearrange a card already on the board, only the ones a GM has yet "
@@ -83,9 +91,11 @@ class GMPage(SettingsPage):
         self._pickers: dict[str, PinPickerDialog] = {}
         self._saved: dict[str, list[PinRef]] = {}
         self._saved_auto_players = True
+        self._saved_players_choose = True
 
         column = QVBoxLayout(self)
         column.addWidget(self._build_scene())
+        column.addWidget(self._build_actions_box())
         column.addWidget(self._build_heading())
         column.addLayout(self._build_lists(), stretch=1)
         column.addLayout(self._build_actions())
@@ -104,6 +114,20 @@ class GMPage(SettingsPage):
         self._auto_players.toggled.connect(self._on_edited)
         column.addWidget(self._auto_players)
         hint = QLabel(AUTO_PLAYERS_HINT)
+        hint.setWordWrap(True)
+        hint.setStyleSheet(muted_style(italic=True))
+        column.addWidget(hint)
+        return box
+
+    def _build_actions_box(self) -> QWidget:
+        """The table's rule for actions against other characters."""
+        box = QGroupBox("Impress and area attacks")
+        column = QVBoxLayout(box)
+        self._players_choose = QCheckBox(PLAYERS_CHOOSE_LABEL)
+        self._players_choose.setToolTip(PLAYERS_CHOOSE_HINT)
+        self._players_choose.toggled.connect(self._on_edited)
+        column.addWidget(self._players_choose)
+        hint = QLabel(PLAYERS_CHOOSE_HINT)
         hint.setWordWrap(True)
         hint.setStyleSheet(muted_style(italic=True))
         column.addWidget(hint)
@@ -185,6 +209,8 @@ class GMPage(SettingsPage):
     def is_dirty(self) -> bool:
         if self._auto_players.isChecked() != self._saved_auto_players:
             return True
+        if self._players_choose.isChecked() != self._saved_players_choose:
+            return True
         return any(self.pins(kind) != self._saved.get(kind, []) for kind, _heading in KINDS)
 
     def save(self) -> None:
@@ -198,8 +224,13 @@ class GMPage(SettingsPage):
             {kind: [ref.to_dict() for ref in self.pins(kind)] for kind, _heading in KINDS}
         )
         storage.set_gm_scene_auto_players(self._auto_players.isChecked())
+        storage.set_gm_players_choose_actions(self._players_choose.isChecked())
         self._saved = {kind: self.pins(kind) for kind, _heading in KINDS}
         self._saved_auto_players = self._auto_players.isChecked()
+        self._saved_players_choose = self._players_choose.isChecked()
+        # The table reads it off the session, so a running one is told now.
+        for window in _open_gm_windows():
+            window.publish_table_rules()
         self._set_status("Saved. New cards will start with these.")
 
     def discard(self) -> None:
@@ -237,6 +268,10 @@ class GMPage(SettingsPage):
         self._auto_players.setChecked(storage.gm_scene_auto_players())
         self._auto_players.blockSignals(False)
         self._saved_auto_players = self._auto_players.isChecked()
+        self._players_choose.blockSignals(True)
+        self._players_choose.setChecked(storage.gm_players_choose_actions())
+        self._players_choose.blockSignals(False)
+        self._saved_players_choose = self._players_choose.isChecked()
 
     def _on_edited(self, *_args: object) -> None:
         self._set_status("")

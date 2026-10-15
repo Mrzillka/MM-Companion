@@ -1027,7 +1027,9 @@ class EffectCard(QFrame):
         Shared by :meth:`attach_modifier` (which first appends the selection) and
         :meth:`_seed_modifier_chips` (which renders ones already present on load).
         """
-        chip = ModifierChip(modifier, selection, self._data, self._character)
+        chip = ModifierChip(
+            modifier, selection, self._data, self._character, base_effect=self._effect()
+        )
         chip.removeRequested.connect(self._remove_chip)
         chip.changed.connect(lambda m=modifier: self._on_chip_changed(m))
         self._chips.append(chip)

@@ -46,6 +46,28 @@ def roll_d20(rng: random.Random | None = None) -> int:
     return roller.randint(1, D20_SIDES)
 
 
+#: A lucky re-roll never comes up low (p22, Luck): a die showing this or less has
+#: this much added to it, so the re-roll always lands on 11-20.
+REROLL_FLOOR = 10
+
+
+def reroll_d20(rng: random.Random | None = None) -> tuple[int, bool]:
+    """Roll a d20 for a re-roll: a 1-10 has :data:`REROLL_FLOOR` added (11-20 always).
+
+    The Luck advantage's re-roll, and the Hero Point spent on one. Returns
+    ``(die, natural)``: the die is the number that counts — a 3 re-rolled reads 13 —
+    and ``natural`` says whether that is the face that actually came up. It matters
+    for one thing: only a *natural* 20 is an added success (p88, p94), so a 10 lifted
+    to 20 is graded as a 20 but is not a critical. Pass it on as
+    :func:`resolve_check`'s ``natural``.
+    """
+
+    face = roll_d20(rng)
+    if face <= REROLL_FLOOR:
+        return face + REROLL_FLOOR, False
+    return face, True
+
+
 def degrees(margin: int) -> int:
     """Convert a ``check_total - dc`` margin into a signed degree count.
 
@@ -66,6 +88,7 @@ def resolve_check(
     graded: bool = True,
     roll: int | None = None,
     rng: random.Random | None = None,
+    natural: bool = True,
 ) -> CheckResult:
     """Resolve ``d20 + modifier`` against ``dc``.
 
@@ -77,12 +100,15 @@ def resolve_check(
     natural-20/1 adjustment (a nat 20 adds a degree, a nat 1 subtracts one — which
     can flip the outcome). When false, ``degree`` is simply +1 (hit) or -1 (miss)
     and no crit adjustment is applied.
+
+    ``natural`` is false for a die that did not come up as it reads — a re-roll's
+    lifted 1-10 (:func:`reroll_d20`) — which is never a natural 1 or 20.
     """
 
     die = roll if roll is not None else roll_d20(rng)
     total = die + modifier
     margin = total - dc
-    critical = die in (1, D20_SIDES)
+    critical = natural and die in (1, D20_SIDES)
 
     if not graded:
         return CheckResult(die, modifier, total, dc, 1 if margin >= 0 else -1, critical)
@@ -92,8 +118,52 @@ def resolve_check(
     # 20 that improves a 1-degree failure lands on a 1-degree success (and a
     # natural 1 drags a 1-degree success to a 1-degree failure), rather than the
     # nonexistent 0 the raw +/- 1 in the §10 pseudocode would produce.
-    if die == D20_SIDES:
+    if critical and die == D20_SIDES:
         degree = 1 if degree == -1 else degree + 1
-    elif die == 1:
+    elif critical and die == 1:
         degree = -1 if degree == 1 else degree - 1
     return CheckResult(die, modifier, total, dc, degree, critical)
+
+
+@dataclass(frozen=True)
+class GroupResult:
+    """One check rolled against several targets' resistances (:func:`resolve_group`).
+
+    ``lead_die``/``lead_total`` are the opposing check, ``None`` when the DC was
+    fixed; ``lines`` are each target's resistance check, in the order asked.
+    """
+
+    lead_die: int | None
+    lead_total: int | None
+    lines: tuple[CheckResult, ...]
+
+
+def resolve_group(
+    lines: list[tuple[int, int]],
+    *,
+    lead_modifier: int | None = None,
+    dc: int | None = None,
+    critical_bonus: int = 0,
+    rng: random.Random | None = None,
+) -> GroupResult:
+    """Roll one check against several resistances, the way an Impress or an area effect is.
+
+    Each of *lines* is ``(modifier, dc_offset)`` — a target's resistance and an
+    adjustment to the DC against that target alone. The DC is either fixed (*dc*) or
+    **opposed**: with a *lead_modifier* the lead check is rolled first and its total is
+    the DC, raised by *critical_bonus* on a natural 20 (an added degree of success —
+    the caller says how many points that is, so this module stays free of content).
+
+    Rules-free and seedable, so the session server (which must not load game data) and
+    a GM rolling off the air resolve a group identically.
+    """
+
+    lead_die: int | None = None
+    lead_total: int | None = None
+    base = dc if dc is not None else 0
+    if lead_modifier is not None:
+        lead_die = roll_d20(rng)
+        lead_total = lead_die + lead_modifier
+        base = lead_total + (critical_bonus if lead_die == D20_SIDES else 0)
+    results = tuple(resolve_check(modifier, base + offset, rng=rng) for modifier, offset in lines)
+    return GroupResult(lead_die, lead_total, results)

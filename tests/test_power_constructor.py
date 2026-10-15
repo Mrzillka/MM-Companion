@@ -6,6 +6,8 @@ mutation methods the drop handlers delegate to (``add_effect`` / ``attach_modifi
 
 from __future__ import annotations
 
+import html
+
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QLabel
@@ -1831,7 +1833,7 @@ def test_dev_mode_makes_the_terms_panel_editable_and_cost_flows(qapp: QApplicati
     assert window.power.cost_override is None
 
 
-def test_dev_mode_term_override_flows_to_the_read_only_summary(qapp: QApplication) -> None:
+def test_turning_dev_mode_off_takes_the_overrides_off_the_build(qapp: QApplication) -> None:
     from mm_companion.core.powers import power_is_homerule
 
     window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
@@ -1842,14 +1844,25 @@ def test_dev_mode_term_override_flows_to_the_read_only_summary(qapp: QApplicatio
     combos = _editable_combos(window._terms)
     # _OVERRIDE_STD_FIELDS order: effect_type, range, action, ... — index 1 is Range.
     combos[1].setCurrentText("Planetary")
+    window._terms._cost_override_check.setChecked(True)
+    window._terms._cost_override_spin.setValue(30)
     assert card.instance.overrides["range"]["value"] == "Planetary"
     assert power_is_homerule(window.power)
 
-    # Turning Dev mode off re-renders the read-only summary, which shows the override.
+    # Off: the build is back to the book — the summary, the cost and the flag.
     window._dev_mode.setChecked(False)
     rows = {r.key: r for r in window._terms.effect_rows[0]}
-    assert rows["range"].value == "Planetary"
-    assert rows["range"].change == "homerule"
+    assert rows["range"].value != "Planetary"
+    assert rows["range"].change != "homerule"
+    assert window.power.cost_override is None
+    assert "homerule" not in window._cost.text()
+    assert not power_is_homerule(window.power)
+
+    # On again in the same window: the edits come back rather than being retyped.
+    window._dev_mode.setChecked(True)
+    assert card.instance.overrides["range"]["value"] == "Planetary"
+    assert window.power.cost_override == 30
+    assert "30 PP" in window._cost.text()
 
 
 def test_dev_mode_seeds_auto_values_and_resolves_option_numbers(qapp: QApplication) -> None:
@@ -1988,7 +2001,8 @@ def test_palette_bricks_hint_their_description(qapp: QApplication) -> None:
     _search, effect_bricks = window._search_tabs["effects"]
     damage = next(b for b in effect_bricks if b.search_key == "damage")
     record = next(e for e in data.effects if e.id == "damage")
-    assert record.description in damage.toolTip()
+    # Rich text, so the description arrives escaped (an apostrophe is &#x27;).
+    assert html.escape(record.description) in damage.toolTip()
     assert record.name in damage.toolTip()
 
     _search, extra_bricks = window._search_tabs["extras"]
@@ -2573,6 +2587,36 @@ def test_an_ordinary_effects_cost_line_hides_nothing(qapp: QApplication) -> None
     window = PowerConstructorWindow(load_game_data())
     card = window.canvas.add_effect("damage")
     assert card._cost.toolTip() == ""
+
+
+def test_alternate_resistance_picks_the_resistance_on_its_chip(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QComboBox
+
+    window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
+    card = window.canvas.add_effect("damage")
+    card.attach_modifier("alternate_resistance")
+    combos = card._chips[0].findChildren(QComboBox)
+    # Resisted by, Or, Worth — the first two offering every resistance.
+    assert len(combos) == 3
+    picker = combos[0]
+    offered = [picker.itemData(i) for i in range(picker.count())]
+    assert {"Dodge", "Fortitude", "Toughness", "Will"} <= set(offered)
+
+    picker.setCurrentIndex(picker.findData("Will"))
+
+    assert card._chips[0].selection.config["resistance"] == "Will"
+    rows = {r.key: r for r in window._terms.effect_rows[0]}
+    assert rows["resistance"].value.startswith("Will vs.")
+
+
+def test_affliction_keeps_its_resistance_on_the_card_not_the_chip(qapp: QApplication) -> None:
+    from PySide6.QtWidgets import QComboBox
+
+    window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
+    card = window.canvas.add_effect("affliction")
+    card.attach_modifier("alternate_resistance")
+    # Only the Worth tier: the card's own Resisted by is the one that widens.
+    assert len(card._chips[0].findChildren(QComboBox)) == 1
 
 
 def test_a_narrowed_picker_still_shows_the_value_it_holds(qapp: QApplication) -> None:

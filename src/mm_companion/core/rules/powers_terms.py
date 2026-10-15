@@ -18,6 +18,15 @@ from ..powers import (
 )
 from ..registry import Registry
 from .appliers import trait_category
+from .area import (
+    area_applications,
+    area_dodge_dc,
+    area_selection,
+    area_shape,
+    area_size_text,
+    area_spread_label,
+    effect_is_area,
+)
 from .costs import power_points_spent
 from .derived import effective_ability, skill_total
 from .powers_cost import (
@@ -487,6 +496,45 @@ def _modifier_notes(
     return tuple(notes)
 
 
+def modifier_field_claimed(field, base_effect) -> bool:
+    """Whether a modifier's config ``field`` names a game term the effect itself picks.
+
+    Alternate Resistance chooses what an effect is resisted by — except on an effect
+    that already has its own "Resisted by" (Affliction), where the extra *widens* that
+    field instead. Two pickers for one answer would be a question of which wins, so
+    the modifier's yields: the constructor does not show it and the summary ignores it.
+    """
+
+    if not field.overrides or base_effect is None:
+        return False
+    return any(own.overrides == field.overrides for own in base_effect.config_fields)
+
+
+def modifier_config_overrides(
+    modifier, selection, base_effect, game_data: GameData | None
+) -> dict[str, str]:
+    """The game-term fields a modifier's own config choices replace.
+
+    A config field on a *modifier* naming ``overrides`` works as one on an effect does:
+    the chosen value becomes that stat — Alternate Resistance's "Resisted by" turns a
+    Damage's Toughness into Fortitude. Several fields overriding one stat read as
+    alternatives (``"Fortitude or Will"``), which is how a best-of or worst-of two is
+    written down. A field the effect claims itself (:func:`modifier_field_claimed`)
+    is skipped, and an unset one leaves the stat alone.
+    """
+
+    picked: dict[str, list[str]] = {}
+    for field in modifier.config_fields:
+        if not field.overrides or modifier_field_claimed(field, base_effect):
+            continue
+        value = selection.config.get(field.key)
+        if value:
+            shown = _config_display(field, value, game_data)
+            if shown not in picked.get(field.overrides, []):
+                picked.setdefault(field.overrides, []).append(shown)
+    return {key: " or ".join(values) for key, values in picked.items()}
+
+
 def _effective_stats(
     effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
 ) -> tuple[dict[str, str], dict[str, str], dict[str, str], EffectImpact]:
@@ -568,6 +616,17 @@ def _effective_stats(
                 stats[key] = value
                 change[key] = tint
                 touched = True
+        for key, value in modifier_config_overrides(
+            modifier, selection, base_effect, game_data
+        ).items():
+            # Only a stat the effect has: Alternate Resistance on a Flight swaps
+            # nothing in, rather than inventing a save nobody makes. And untinted,
+            # like an effect's own config choice — a best-of-two pick is a flaw, so
+            # the extra's green would read it backwards; its cost says which it was.
+            if stats.get(key):
+                stats[key] = value
+                change[key] = ""
+                touched = True
         if modifier.step_field == "action":
             action_step += steps
             if steps:
@@ -603,6 +662,8 @@ def _effective_stats(
             touched = True  # the same, for the Reach row (see :func:`effect_reach`)
         if modifier.requires_check:
             touched = True  # gets its own roll row (see :func:`required_check_notes`)
+        if selection.modifier_id in game_data.area.modifiers:
+            touched = True  # the Area row says it (see :func:`effect_area_text`)
         if touched:
             impactful.add(selection.modifier_id)
 
@@ -950,7 +1011,9 @@ def effect_pl_cap_shift(
     onto the other, so the cap always actually holds.
 
     An **auto-hit** effect has no attack bonus to trade, so it is always the rank that
-    falls — against ``PL`` alone, the cap that applies to it.
+    falls — against ``PL`` alone, the cap that applies to it. So is an **area**, whose
+    rank alone is capped (:func:`~.validation.power_pl_violations`) whether or not it
+    can also be aimed with an attack check.
     """
 
     if effect.pl_cap not in PL_CAPS or char is None:
@@ -963,7 +1026,7 @@ def effect_pl_cap_shift(
         return 0, 0
 
     rank = effect_effective_rank(effect, game_data, char)
-    if not effect_makes_attack(effect, game_data):
+    if effect_is_area(effect, game_data) or not effect_makes_attack(effect, game_data):
         return max(0, rank - char.power_level), 0
 
     attack = effect_base_attack_bonus(effect, game_data, char)
@@ -1241,6 +1304,11 @@ def effect_stat_rows(
             reach = effect_reach(effect, game_data, char)
             if reach is not None:
                 rows.append(EffectStat("reach", "Reach", "", reach_text(reach), "better"))
+            # An area says how big it is and what everyone in it rolls, beside the
+            # range it is placed at. Green, because an extra bought it.
+            area = effect_area_text(effect, game_data, char)
+            if area:
+                rows.append(EffectStat("area", "Area", "", area, "better"))
         if key == "resistance":
             # An effect that makes an opposed check of its own says so here, next to the
             # save it is so easily mistaken for. It is the *wielder's* roll, and it is
@@ -1942,9 +2010,54 @@ def effect_game_terms(
     reach = effect_reach(effect, game_data, char)
     if reach is not None:
         chosen.insert(0, f"Reach: {reach_text(reach)}")
+    area = effect_area_text(effect, game_data, char)
+    if area:
+        chosen.insert(0, f"Area: {area}")
     if chosen:
         line += "; " + ", ".join(chosen)
     return line
+
+
+def effect_area_rank(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+) -> int:
+    """The rank an area effect's Dodge DC and halving are figured from.
+
+    The effect's rank as its save DC reads it — Strength folded in, and whatever a hard
+    Power Level cap shaved off — so the Area row and the save beside it can never
+    disagree about which rank the area is.
+    """
+
+    rank_cut, _attack_cut = effect_pl_cap_shift(effect, game_data, char)
+    return effect_effective_rank(effect, game_data, char) - rank_cut
+
+
+def effect_area_text(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+) -> str:
+    """An area effect's size and Dodge DC in words, or ``""`` for an effect that is not one.
+
+    ``"Sphere, 15 feet across; Dodge DC 18 for half"`` — the spread is named too when it
+    is not the default (``"Cone, …, Emanation; …"``). Only an effect someone resists
+    offers a Dodge for half: an area Healing or Environment is just a size.
+    """
+
+    selection = area_selection(effect, game_data)
+    if selection is None:
+        return ""
+    rank = effect_area_rank(effect, game_data, char)
+    parts = [
+        area_size_text(
+            area_shape(selection, game_data), area_applications(selection), rank, game_data
+        )
+    ]
+    spread = area_spread_label(selection, game_data)
+    if spread:
+        parts[0] = f"{parts[0]}, {spread}"
+    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if game_data.area.dodge and base is not None and base.resistance_dc_base is not None:
+        parts.append(f"Dodge DC {area_dodge_dc(rank, game_data)} for half")
+    return "; ".join(parts)
 
 
 def effect_reach(

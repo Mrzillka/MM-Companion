@@ -28,7 +28,7 @@ server/           python -m mm_companion.server — a headless host for 24/7 upt
 
 | Module | What it holds |
 | --- | --- |
-| `protocol.py` | The message vocabulary. `PROTOCOL_VERSION`, frozen message dataclasses (`Hello`, `CharacterSnapshot`, `RollRequest`, `Welcome`, `Roster`, `RollAdded`, `ApplyCondition`/`RemoveCondition`, `SetScene`/`SceneUpdate`, `SetScenePortrait`/`ScenePortrait`, `SetModState`/`ModStateUpdate`, `ModRequest`, `ModNote`, `ErrorMessage`, `Kicked`, `Ping`/`Pong`) with generic, annotation-driven validation, and `encode`/`decode` (newline-delimited UTF-8 JSON, capped at `MAX_MESSAGE_BYTES` = 256 KiB). `sanitize_snapshot()` strips a character's `image_path` — a portrait path is meaningless on another machine; `sanitize_scene()` does the same job for the GM-supplied board, and `sanitize_mod_payload()`/`sanitize_mod_state()` for a mod's opaque one. |
+| `protocol.py` | The message vocabulary. `PROTOCOL_VERSION`, frozen message dataclasses (`Hello`, `CharacterSnapshot`, `RollRequest`, `Welcome`, `Roster`, `RollAdded`, `ApplyCondition`/`RemoveCondition`, `SetScene`/`SceneUpdate`, `SetScenePortrait`/`ScenePortrait`, `SetModState`/`ModStateUpdate`, `ModRequest`, `ModNote`, `ActionRequest`/`ActionPrompt`, `GroupRollRequest`, `RevealRollRequest`/`RollRevealed`, `ErrorMessage`, `Kicked`, `Ping`/`Pong`) with generic, annotation-driven validation, and `encode`/`decode` (newline-delimited UTF-8 JSON, capped at `MAX_MESSAGE_BYTES` = 256 KiB). `sanitize_snapshot()` strips a character's `image_path` — a portrait path is meaningless on another machine; `sanitize_scene()` does the same job for the GM-supplied board, and `sanitize_mod_payload()`/`sanitize_mod_state()` for a mod's opaque one. |
 | `model.py` | `SessionState` (id, name, timestamps, `players`, `npc_paths`, `rolls`, `host_token`, and the three `scene*` fields below), `PlayerSlot`, and `RollRecord` — a roll, a note *or* a request, per its `kind` (see "Notes" and "Requests" below). Two token layers: the session's **`host_token`** (the join secret carried in the code) and a per-slot **`token`** a returning client presents to reclaim its seat. `visible_rolls()` filters out hidden GM rolls; `new_session(name)` mints one. |
 | `store.py` | Workspace persistence, modelled on `core/library.py`: `sessions/<id>/session.json` plus an **appended** `rolls.jsonl`, so a roll never rewrites the whole history. `save_session`, `append_roll`, `load_session` (stitches the two back and clears stale `connected` flags), `list_sessions`, `delete_session`. Session ids are validated against `^[A-Za-z0-9_-]{1,64}$` before they touch a path — an id can arrive over the wire. |
 | `net.py` | `Connection` (framed, buffered, lock-guarded writes), the `Transport`/`Listener` ABCs, and the loopback/LAN `TcpTransport`. `DEFAULT_PORT = 47331`. |
@@ -336,6 +336,35 @@ luck: it reads one envelope per connection and forwards every byte after that
 unread, so it has never known what a session message is. What the relay *does*
 constrain is behaviour — 256 KiB/s per session — which is why mod state is pushed
 on change and never on a tick.
+
+## Actions against other characters (v11)
+
+**v11** is for actions one character takes against others — the Impress action
+first, area effects meant to follow. Three messages and one record field:
+
+| Message | Direction | Who may | Stored |
+| --- | --- | --- | --- |
+| `ActionRequest` | both | any seat up; forwarded to the **GM alone** | no |
+| `ActionPrompt` | both | the GM up; delivered to the **one player** it names | no |
+| `GroupRollRequest` | up | the GM alone | each roll, as an ordinary record |
+
+The first two are the mod channel's request half with another vocabulary — an opaque,
+bounded payload, `player_id` stamped by the server — carrying a player's declared
+attempt to the GM, the GM's "how do you resist?" to a target, and the answer back.
+`GroupRollRequest` is the one that does something: the server rolls a lead check and
+then every line against its total (or every line against a fixed DC), raising the
+DC by a GM-supplied `critical_bonus` on a natural 20 so it stays rules-free, and
+records each roll as an ordinary `RollRecord` tagged with `group` and attributed to
+the seat its line names. Readers needed nothing new to draw them; the GM's window
+gathers them back by `group` to apply the result. The whole account is in
+`docs/notes/actions.md`.
+
+## Revealing a hidden roll (v12)
+
+**v12** adds one pair: `RevealRollRequest` (up, the GM alone) and `RollRevealed`
+(down, to every seat). The server replaces the stored record with a visible copy,
+rewrites the log, and sends the whole roll — the GM's window redraws the card it
+already has, a player's sees the roll for the first time.
 
 ## The connection ladder
 

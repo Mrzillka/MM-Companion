@@ -661,6 +661,40 @@ def test_a_row_stacks_its_boxes_when_they_would_be_slivers(qapp, data) -> None:
     assert top.is_row
 
 
+def test_the_page_never_sees_a_width_narrower_than_its_share_when_the_window_shrinks(
+    qapp, data
+) -> None:
+    """The strip is cut to its share of the window *before* the page is handed its width.
+
+    Restoring a maximised window used to shrink the page by all of it while the strip
+    kept its full width, and only then re-divide. That one sliver of a layout stacked the
+    rows, and the width they were given back sat in their dead-band, so they stayed
+    stacked until the divider was dragged.
+    """
+    sheet = _simple(qapp, data)
+    sheet.resize(1500, 900)
+    _settle(qapp, sheet)
+    scroll = sheet.simple_sheet.scroll_area
+    widths: list[int] = []
+
+    class Watch(QObject):
+        def eventFilter(self, _obj, event) -> bool:  # noqa: N802 - Qt override
+            if event.type() == QEvent.Type.Resize:
+                widths.append(event.size().width())
+            return False
+
+    watch = Watch()
+    scroll.installEventFilter(watch)
+    try:
+        sheet.resize(700, 900)
+        _settle(qapp, sheet)
+    finally:
+        scroll.removeEventFilter(watch)
+
+    assert widths
+    assert min(widths) == scroll.width()
+
+
 def test_the_speed_line_flips_its_units(qapp, data) -> None:
     sheet = _simple(qapp, data)
     view = sheet.simple_sheet.view("system_info")
@@ -1283,3 +1317,24 @@ def test_a_box_in_the_strip_scrolls_inside_itself_rather_than_clipping(qapp) -> 
     released = box.release_body()
     assert released is body and body.parent() is box
     assert body.minimumHeight() == 0  # a refusal measured for the strip goes no further
+
+
+def test_an_afflictions_degrees_are_printed_at_ordinary_size(qapp: QApplication) -> None:
+    """Not in the translucent small print, where players read past them."""
+    from mm_companion.core.powers import Power, PowerEffectInstance
+    from mm_companion.ui.cards import simple_effects_block
+
+    data = load_game_data()
+    effect = PowerEffectInstance("affliction", rank=6)
+    effect.config.update(degree1="dazed", degree2="stunned", degree3="incapacitated")
+    block = simple_effects_block(
+        Power(name="Grip", effects=[effect]), Character.new_default(data), data
+    )
+
+    plain = [
+        label.text() for label in block.findChildren(QLabel) if not isinstance(label, TermLabel)
+    ]
+    line = next(text for text in plain if "1st degree" in text)
+    assert "Dazed" in line and "Stunned" in line and "Incapacitated" in line
+    terms = " ".join(label.text() for label in block.findChildren(TermLabel))
+    assert "degree" not in terms

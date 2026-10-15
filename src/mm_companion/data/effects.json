@@ -330,7 +330,7 @@
           ]
         }
       ],
-      "description": "Hides you from a chosen sense type, from a shadow-blend to full invisibility."
+      "description": "Full Concealment from one sense per rank; two ranks cover a whole sense type, and sight senses cost double."
     },
     {
       "id": "create",
@@ -378,7 +378,7 @@
           "hint": "Adds your Strength rank to the Damage rank (and its cost)."
         }
       ],
-      "description": "A direct harmful attack — the basis for most offensive powers.",
+      "description": "Inflicts Damage conditions: an attack against Defense, resisted by Toughness against the effect's DC.",
       "resistanceDcBase": 10,
       "resistanceOutcomes": {
         "note": "The damage condition ladder (docs/mm-core-mechanics.md §9).",
@@ -386,6 +386,7 @@
           "conditions": ["hit"],
           "note": "unless the target's Toughness is Hardened, Impervious or Impenetrable against this attack"
         },
+        "_parameters": "A rung may also carry parameters: a condition id -> the parameter it is applied with ({source} is whoever imposed it), for a condition that needs one, as Frightened does.",
         "_escalates": "What a rung applies *instead* when the target already carries the named condition, chained: a second failure at this rung on an Incapacitated target reads incapacitated -> dying, a third dying -> dead. The book's rule, as data rather than prose.",
         "degrees": [
           {
@@ -418,7 +419,7 @@
         "pattern": "instant_action",
         "affects": "none"
       },
-      "description": "Bats away or redirects an incoming ranged attack."
+      "description": "Until your next turn you can Block ranged attacks as well as close ones, rolling your Deflect rank against the attack."
     },
     {
       "id": "elongation",
@@ -642,7 +643,7 @@
           ]
         }
       ],
-      "description": "Grants additional functional limbs for extra actions or grips."
+      "description": "Extra arms, tentacles, a tail or the like. No extra actions, but they grab like Improved Grab and help in Grab checks."
     },
     {
       "id": "feature",
@@ -709,7 +710,7 @@
         "pattern": "instant_action",
         "affects": "none"
       },
-      "description": "Bends luck and probability in or against someone's favor."
+      "description": "Spend Hero Points and heroic advantages on behalf of others, or against them: negate theirs, or force a re-roll."
     },
     {
       "id": "growth",
@@ -727,7 +728,7 @@
         "pattern": "passive_toggle",
         "affects": "special"
       },
-      "description": "Increases your size, with knock-on changes to Strength, Toughness, and more."
+      "description": "Raises your size category by one per rank (up to Awesome at rank 5), with all of that size's modifiers."
     },
     {
       "id": "healing",
@@ -745,7 +746,7 @@
         "pattern": "instant_action",
         "affects": "none"
       },
-      "description": "Removes damage conditions from a target on touch."
+      "description": "Removes Damage conditions by touch: each degree on a DC 10 check removes one, least severe first."
     },
     {
       "id": "illusion",
@@ -892,7 +893,7 @@
         "pattern": "instant_action",
         "affects": "none"
       },
-      "description": "Reads or influences a target's surface thoughts and memories.",
+      "description": "Reads a target's mind. Your effect check against their Will sets how deep you get, from surface thoughts to memories.",
       "resistanceDcBase": 10
     },
     {
@@ -911,7 +912,7 @@
         "pattern": "passive_toggle",
         "affects": "special"
       },
-      "description": "Changes your appearance to resemble other people or forms."
+      "description": "Changes your appearance but not your traits, with +20 to Deception to pass as the form; rank sets which forms."
     },
     {
       "id": "move_object",
@@ -959,7 +960,7 @@
           "hint": "A descriptor, effect type, or named power (GM-approved; broad scopes need review)."
         }
       ],
-      "description": "Suppresses or shuts down another power or effect."
+      "description": "Counters an effect of a chosen descriptor, with an opposed check once a ranged attack lands."
     },
     {
       "id": "obscure",
@@ -1030,7 +1031,7 @@
         "pattern": "instant_action",
         "affects": "none"
       },
-      "description": "Perceives events from the past at your current location."
+      "description": "Replays past events at your location as if you were there. One use per rank, per adventure."
     },
     {
       "id": "precognition",
@@ -1048,7 +1049,7 @@
         "pattern": "passive_permanent",
         "affects": "special"
       },
-      "description": "Grants glimpses or warnings of events yet to happen."
+      "description": "Glimpses of the future, as a Guidance benefit or a warning. One use per rank, per adventure."
     },
     {
       "id": "protection",
@@ -1068,7 +1069,7 @@
         "target": "TOUGHNESS",
         "apply": "bonus"
       },
-      "description": "A standing bonus to Toughness from tough skin, natural armor, or similar."
+      "description": "+1 Toughness per rank from tough skin, armor or the like, within the Power Level limit."
     },
     {
       "id": "quickness",
@@ -1104,7 +1105,7 @@
         "pattern": "passive_permanent",
         "affects": "recovery"
       },
-      "description": "Speeds up how quickly you recover from injury."
+      "description": "Automatically sheds your least severe Damage condition every few rounds: faster with rank, several a round from rank 11, and back from Dead from rank 15."
     },
     {
       "id": "remote_sensing",
@@ -1142,7 +1143,7 @@
           ]
         }
       ],
-      "description": "Projects your senses to a remote location instead of your body."
+      "description": "Displaces your senses to a distant point, perceiving as if there; your own surroundings go unnoticed meanwhile."
     },
     {
       "id": "shrinking",
@@ -1160,7 +1161,7 @@
         "pattern": "passive_toggle",
         "affects": "special"
       },
-      "description": "Decreases your size, with knock-on changes to Stealth, Defense, and more."
+      "description": "Lowers your size category by one per rank (down to Minuscule at rank 5), with all of that size's modifiers."
     },
     {
       "id": "speed",
@@ -1178,7 +1179,7 @@
         "pattern": "passive_toggle",
         "affects": "movement"
       },
-      "description": "Increases your ground movement speed.",
+      "description": "Adds your rank to your ground and climbing speed.",
       "measure": { "column": "distance", "label": "Speed", "perRound": true, "mode": "ground" }
     },
     {
@@ -1206,7 +1207,7 @@
         "forbidsEffects": ["summon"],
         "forbidsAdvantages": ["minion"]
       },
-      "description": "Calls forth an ally or creature to fight and act on your behalf."
+      "description": "Calls a minion to your side, built with (rank × 15) Power Points."
     },
     {
       "id": "swimming",
@@ -1244,7 +1245,7 @@
         "pattern": "instant_action",
         "affects": "movement"
       },
-      "description": "Instantly relocates you (and possibly others) across distance."
+      "description": "Moves you instantly to a place you can accurately sense, up to a distance rank equal to your effect rank."
     },
     {
       "id": "transmute",
@@ -1296,7 +1297,7 @@
         "pattern": "resource_pool",
         "affects": "none"
       },
-      "description": "A flexible pool of points you can reconfigure into different effects on the fly."
+      "description": "(rank × 5) points you reconfigure, with a Concentrate action, into any effects that fit its descriptor."
     }
   ]
 }

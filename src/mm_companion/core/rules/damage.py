@@ -39,6 +39,7 @@ from .conditions import apply_condition, expand_includes
 __all__ = [
     "DamageStep",
     "damage_steps",
+    "resolve_condition_ids",
     "resolve_damage_step",
     "apply_damage_step",
     "damage_step_summary",
@@ -207,6 +208,28 @@ def _supersedes_a_sibling(
     return False
 
 
+def resolve_condition_ids(
+    character: Character,
+    conditions: tuple[str, ...],
+    escalates: tuple[tuple[str, str], ...],
+    game_data: GameData,
+) -> tuple[str, ...]:
+    """What a rung naming *conditions* would put on *character*: escalated, then ordered.
+
+    The rung-walking half of :func:`resolve_damage_step`, for any ladder — the damage
+    one, an Affliction's, an impression's (:mod:`.targeting` is the other caller).
+    Pure: it reads the character's current conditions and changes nothing.
+    """
+
+    ladder = dict(escalates)
+    catalog = game_data.condition_catalog()
+    resolved = tuple(_escalate(character, cid, ladder, catalog) for cid in conditions)
+    # A condition that supersedes something a sibling brings must be applied *after*
+    # that sibling, or there is nothing there yet for it to replace. Stable, so
+    # everything the graph has no opinion about keeps the book's printed order.
+    return tuple(sorted(resolved, key=lambda cid: _supersedes_a_sibling(cid, resolved, game_data)))
+
+
 def resolve_damage_step(
     character: Character, step: DamageStep, game_data: GameData
 ) -> tuple[str, ...]:
@@ -216,13 +239,7 @@ def resolve_damage_step(
     what lets a button say in its tooltip what clicking it will do.
     """
 
-    ladder = dict(step.escalates)
-    catalog = game_data.condition_catalog()
-    resolved = tuple(_escalate(character, cid, ladder, catalog) for cid in step.conditions)
-    # A condition that supersedes something a sibling brings must be applied *after*
-    # that sibling, or there is nothing there yet for it to replace. Stable, so
-    # everything the graph has no opinion about keeps the book's printed order.
-    return tuple(sorted(resolved, key=lambda cid: _supersedes_a_sibling(cid, resolved, game_data)))
+    return resolve_condition_ids(character, step.conditions, step.escalates, game_data)
 
 
 def apply_damage_step(

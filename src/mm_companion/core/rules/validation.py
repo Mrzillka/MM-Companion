@@ -17,6 +17,7 @@ from ..powers import (
     power_is_stunt,
 )
 from ..registry import Registry
+from .area import effect_is_area
 from .derived import effective_ability, resistance_total, skill_total
 from .equipment import item_effective_build
 from .powers_cost import (
@@ -101,6 +102,8 @@ def power_pl_violations(power: Power, char: Character, game_data: GameData) -> l
       folds in the wielder's Strength.
     - A resisted effect with **no attack roll** (auto-hit — Perception range, or a
       Perception-Range modifier) instead obeys ``effect_rank <= power_level``.
+    - An **area** effect (:func:`~.area.effect_is_area`) obeys the same rank-only cap,
+      whether or not it can also be aimed at one creature with an attack check.
 
     Both caps then shift by :func:`~.powers_cost.effect_size_rank_shift` — the ranks the
     character's **size** is paying for. The Size Table raises a large creature's
@@ -138,7 +141,15 @@ def power_pl_violations(power: Power, char: Character, game_data: GameData) -> l
         size_shift = effect_size_rank_shift(effect, game_data, char)
         limit = base_limit + size_shift
         rank_limit = power_level + size_shift
-        if effect_makes_attack(effect, game_data):
+        if effect_is_area(effect, game_data):
+            # An area's rank alone is capped at the Power Level, attack check or not:
+            # the one creature it can be aimed at is a bonus, not what it is built for.
+            if rank > rank_limit:
+                violations.append(
+                    f"{base.name}: an area's rank {rank} exceeds the PL {power_level} "
+                    f"rank cap of {rank_limit}."
+                )
+        elif effect_makes_attack(effect, game_data):
             attack = effect_base_attack_bonus(effect, game_data, char)
             if attack + rank > limit:
                 violations.append(
@@ -215,7 +226,8 @@ def estimated_power_level(char: Character, game_data: GameData) -> int:
     - the attack + effect-rank cap over every offensive effect of every build the
       character carries — its powers **and** its gear (:func:`offensive_builds`),
       mirroring :func:`power_pl_violations`: an attack-roll effect needs
-      ``ceil((attack + rank) / 2)``, an auto-hit effect needs ``rank`` outright;
+      ``ceil((attack + rank) / 2)``, an auto-hit or an area effect needs ``rank``
+      outright;
     - each paired-resistance cap from ``system.json`` (Dodge + Toughness,
       Fortitude + Will), summed via :func:`resistance_total` — which already folds in
       what worn armour grants, since equipment contributions reach the derived totals
@@ -245,7 +257,11 @@ def estimated_power_level(char: Character, game_data: GameData) -> int:
                 # validator says is legal several ranks lower.
                 rank = effect_build_rank(effect, game_data, char)
                 rank -= effect_size_rank_shift(effect, game_data, char)
-                if effect_makes_attack(effect, game_data):
+                if effect_is_area(effect, game_data):
+                    # An area's rank alone is capped, attack check or not — as
+                    # power_pl_violations reads it.
+                    pl = max(pl, rank)
+                elif effect_makes_attack(effect, game_data):
                     linked = effect_attack_skill_bonus(effect, char, game_data)
                     attack_ability = (
                         linked

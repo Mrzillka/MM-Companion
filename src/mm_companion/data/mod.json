@@ -20,6 +20,7 @@
     "system.json",
     "measurements.json",
     "movement.json",
-    "equipment.json"
+    "equipment.json",
+    "actions.json"
   ]
 }

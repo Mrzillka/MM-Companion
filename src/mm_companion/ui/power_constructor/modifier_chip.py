@@ -20,7 +20,10 @@ from mm_companion.core.powers import (
     ModifierSelection,
 )
 from mm_companion.core.rules import (
+    CONFIG_OPTION_SOURCES,
+    config_source_options,
     effective_ability,
+    modifier_field_claimed,
     modifier_rank_cap,
 )
 from mm_companion.ui import theme
@@ -71,12 +74,16 @@ class ModifierChip(QFrame):
         selection: ModifierSelection,
         game_data=None,
         character: Character | None = None,
+        base_effect=None,
     ) -> None:
         super().__init__()
         self.selection = selection
         self._modifier = modifier
         self._data = game_data
         self._character = character
+        # The effect this chip is attached to (an ``effects.json`` record), so a field
+        # the effect answers itself is not asked a second time here.
+        self._base_effect = base_effect
         self._press_pos = None
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setCursor(Qt.CursorShape.OpenHandCursor)  # hints the chip is draggable
@@ -247,6 +254,8 @@ class ModifierChip(QFrame):
         points_spin = None  # the single points spin, if any, that gates other fields
         gated: list[tuple[QWidget, int]] = []  # (widget, show_when_points value)
         for cfg in modifier.config_fields:
+            if modifier_field_claimed(cfg, self._base_effect):
+                continue
             if cfg.type == "points":
                 # A small spin box whose value *is* the modifier's flat cost (Subtle's
                 # 1 or 2 points). Seed and persist the default so the cost is right
@@ -272,6 +281,14 @@ class ModifierChip(QFrame):
                     fill_trait_combo(
                         combo, self._data, self.selection.config.get(cfg.key, ""), cfg.source
                     )
+                elif cfg.source in CONFIG_OPTION_SOURCES:
+                    # A game-data list (Alternate Resistance's "Resisted by"). Led by
+                    # an empty row: unset is a real answer — the effect's own value.
+                    combo.addItem(f"{cfg.label}: —", "")
+                    for label, value in config_source_options(cfg, self._data):
+                        combo.addItem(f"{cfg.label}: {label}", value)
+                    index = combo.findData(self.selection.config.get(cfg.key, ""))
+                    combo.setCurrentIndex(max(index, 0))
                 else:
                     for option in cfg.options:
                         combo.addItem(option.label, option.value)

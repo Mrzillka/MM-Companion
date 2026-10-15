@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from mm_companion.core.rules import PinRef, RollSpec
+from mm_companion.core.rules import KIND_AREA, PinRef, RollSpec
 from mm_companion.ui import theme
 from mm_companion.ui.cards.card import card_ancestors_of, hand_back_highlight
 from mm_companion.ui.sections.stat_table import PinMenuState
@@ -34,6 +34,10 @@ def split_roll_label(spec: RollSpec) -> tuple[str, str]:
     layer wrote is lost — the label already says "10 vs. Defense (area; Dodge for half)".
     """
     label = spec.label
+    if spec.kind == KIND_AREA:
+        # Not a roll at all, so no number to print large: the word is the handle.
+        head, _sep, rest = label.partition(": ")
+        return head, rest
     if spec.dc is not None and (spec.rolled_by_target or not spec.modifier):
         pattern = rf"\s*(vs\.?)?\s*(DC\s*)?{spec.dc}\b"
         words = re.sub(pattern, "", label, count=1)
@@ -167,9 +171,14 @@ class RollsFooter(QWidget):
     :class:`~mm_companion.core.rules.PinRef` naming that roll. A footer built without
     one — or on a sheet with no card behind it (:attr:`PinMenuState.enabled`) — has no
     context menu.
+
+    The **area line** (:data:`~mm_companion.core.rules.KIND_AREA`) is drawn like a roll
+    but is not one: clicking it raises :attr:`areaRequested` with the build's id, never
+    :attr:`rollRequested`, so nothing that throws dice is ever handed it.
     """
 
     rollRequested = Signal(object)  # RollSpec
+    areaRequested = Signal(str)  # the build's id
     pinRequested = Signal(object)  # PinRef
     unpinRequested = Signal(object)  # PinRef
 
@@ -217,7 +226,9 @@ class RollsFooter(QWidget):
         """
         rollable = not spec.rolled_by_target
         row = RollLine(rollable)
-        if self._pin_ref is not None:
+        # The area line opens a window rather than naming a roll, so there is nothing
+        # for a GM card to pin.
+        if self._pin_ref is not None and spec.kind != KIND_AREA:
             row.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             row.customContextMenuRequested.connect(
                 lambda pos, r=row, i=index: self._show_pin_menu(r, pos, i)
@@ -230,7 +241,10 @@ class RollsFooter(QWidget):
 
         if rollable:
             row.setToolTip(spec.hint or f"Roll {spec.label}")
-            row.clicked.connect(lambda s=spec: self.rollRequested.emit(s))
+            if spec.kind == KIND_AREA:
+                row.clicked.connect(lambda s=spec: self.areaRequested.emit(s.trait_key))
+            else:
+                row.clicked.connect(lambda s=spec: self.rollRequested.emit(s))
             glyph = QLabel("🎲")
             glyph.setFixedWidth(glyph_width)
             glyph.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)

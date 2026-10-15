@@ -76,3 +76,30 @@ def test_roll_d20_in_range() -> None:
     rng = random.Random(0)
     for _ in range(200):
         assert 1 <= roll_d20(rng) <= 20
+
+
+def test_a_reroll_always_lands_on_eleven_to_twenty() -> None:
+    from mm_companion.core.dice import reroll_d20
+
+    rng = random.Random(3)
+    rolls = [reroll_d20(rng)[0] for _ in range(400)]
+    assert set(rolls) == set(range(11, 21))
+
+
+def test_a_low_reroll_counts_ten_more(monkeypatch) -> None:
+    from mm_companion.core import dice
+
+    monkeypatch.setattr(dice, "roll_d20", lambda rng=None: 3)
+    assert dice.reroll_d20() == (13, False)  # lifted, so not the face that came up
+    monkeypatch.setattr(dice, "roll_d20", lambda rng=None: 17)
+    assert dice.reroll_d20() == (17, True)
+
+
+def test_a_lifted_twenty_is_not_a_natural_twenty() -> None:
+    """Only a natural 20 is an added success (p88, p94); a re-rolled 10 read as 20 is not."""
+    lifted = resolve_check(5, 15, roll=20, natural=False)
+    assert not lifted.critical
+    assert lifted.degree == 3  # 25 vs 15, with no degree added
+
+    natural = resolve_check(5, 15, roll=20)
+    assert natural.critical and natural.degree == 4

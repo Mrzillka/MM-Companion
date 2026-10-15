@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import secrets
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 
 from mm_companion.core.dice import CheckResult
@@ -196,6 +196,18 @@ class RollRecord:
     kind: str = KIND_ROLL
     text: str = ""
     mod_id: str = ""
+    #: A lucky re-roll (:func:`~mm_companion.core.dice.reroll_d20`): its die could not
+    #: come up under 11. Stamped by the server that rolled it, never taken from a
+    #: label, so every seat can see which dice were lucky ones.
+    reroll: bool = False
+    #: The group roll this line belongs to (see
+    #: :meth:`~.server.SessionServer.group_roll`), or ``""`` for an ordinary roll.
+    #: One check against several resistances lands as several records — a line per
+    #: creature, each attributed to its own seat — and this is how a reader puts
+    #: them back together: the GM's window to apply what the check did, and a
+    #: player's roller to know that a record bearing their name is not the answer
+    #: to the die *they* threw.
+    group: str = ""
     timestamp: str = field(default_factory=utc_now)
 
     @property
@@ -225,6 +237,8 @@ class RollRecord:
             "kind": self.kind,
             "text": self.text,
             "mod_id": self.mod_id,
+            "group": self.group,
+            "reroll": self.reroll,
             "timestamp": self.timestamp,
         }
 
@@ -249,6 +263,8 @@ class RollRecord:
             kind=str(raw.get("kind", "")) or KIND_ROLL,
             text=str(raw.get("text", "")),
             mod_id=str(raw.get("mod_id", "")),
+            group=str(raw.get("group", "")),
+            reroll=bool(raw.get("reroll", False)),
             timestamp=str(raw.get("timestamp", "")) or utc_now(),
         )
 
@@ -266,8 +282,15 @@ class RollRecord:
         label: str = "",
         hidden: bool = False,
         spec: dict | None = None,
+        group: str = "",
+        reroll: bool = False,
+        natural: bool = True,
     ) -> RollRecord:
-        """Build a record from a resolved check (``None`` when no DC was set)."""
+        """Build a record from a resolved check (``None`` when no DC was set).
+
+        ``natural`` is false for a re-roll's lifted die, which is never a natural
+        1 or 20 (see :func:`~mm_companion.core.dice.reroll_d20`).
+        """
         return cls(
             seq=seq,
             player_id=player_id,
@@ -277,10 +300,12 @@ class RollRecord:
             penalty=penalty,
             dc=None if result is None else result.dc,
             degree=None if result is None else result.degree,
-            critical=die in (1, 20) if result is None else result.critical,
+            critical=(natural and die in (1, 20)) if result is None else result.critical,
             label=label,
             hidden=hidden,
             spec=spec,
+            group=group,
+            reroll=reroll,
         )
 
 
@@ -431,6 +456,9 @@ class SessionState:
         label: str = "",
         hidden: bool = False,
         spec: dict | None = None,
+        group: str = "",
+        reroll: bool = False,
+        natural: bool = True,
     ) -> RollRecord:
         """Build a :class:`RollRecord` from a resolved check and append it.
 
@@ -448,6 +476,9 @@ class SessionState:
             label=label,
             hidden=hidden,
             spec=spec,
+            group=group,
+            reroll=reroll,
+            natural=natural,
         )
         self.rolls.append(record)
         self.touch()
@@ -610,6 +641,21 @@ class SessionState:
                 del self.rolls[index]
                 self.touch()
                 return roll
+        return None
+
+    def reveal_roll(self, seq: int) -> RollRecord | None:
+        """Make the hidden roll with this sequence number visible; return it.
+
+        ``None`` when no roll carries that number *or* it was never hidden — there
+        is nothing to reveal, and a caller that broadcasts on success must not
+        send the table a second copy of a roll it already has.
+        """
+        for index, roll in enumerate(self.rolls):
+            if roll.seq == seq and roll.hidden:
+                shown = replace(roll, hidden=False)
+                self.rolls[index] = shown
+                self.touch()
+                return shown
         return None
 
     # -- housekeeping ------------------------------------------------------

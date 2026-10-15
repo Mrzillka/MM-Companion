@@ -14,6 +14,12 @@ unchanged. Submodules form a dependency DAG: ``appliers`` → ``runtime``/``adva
 ``conditions`` (base) → ``size`` → ``derived`` → ``trait_rates`` → ``powers_cost`` →
 ``costs`` → ``movement``/``powers_terms``/``damage`` → ``platforms`` → ``equipment`` →
 ``validation`` → ``subbuilds``/``extra_effort`` → ``rolls`` → ``pins``.
+``targeting`` (one check against several targets' ladders) sits on ``damage``, whose
+rung resolver it shares, and under ``rolls``; ``impress`` sits on ``rolls``.
+
+``area`` (an area's shape, size and Dodge DC) sits below ``powers_terms``, which states
+an area's size on the card; ``area_attack`` (resolving one against a scene) sits on
+``rolls``, beside ``impress``.
 
 ``costs`` moved above ``powers_terms`` (it used to sit beside it) when Morph's Metamorph
 needed a note saying what its alternate forms cost: the rules put that budget at "the
@@ -41,6 +47,8 @@ reaches ``derived`` back.
 from .accessories import *  # noqa: F401,F403
 from .advantages import *  # noqa: F401,F403
 from .appliers import *  # noqa: F401,F403
+from .area import *  # noqa: F401,F403
+from .area_attack import *  # noqa: F401,F403
 from .build_cache import *  # noqa: F401,F403
 from .conditions import *  # noqa: F401,F403
 from .configurations import *  # noqa: F401,F403
@@ -49,6 +57,7 @@ from .damage import *  # noqa: F401,F403
 from .derived import *  # noqa: F401,F403
 from .equipment import *  # noqa: F401,F403
 from .extra_effort import *  # noqa: F401,F403
+from .impress import *  # noqa: F401,F403
 from .improvised import *  # noqa: F401,F403
 from .movement import *  # noqa: F401,F403
 from .pins import *  # noqa: F401,F403
@@ -59,5 +68,6 @@ from .rolls import *  # noqa: F401,F403
 from .runtime import *  # noqa: F401,F403
 from .size import *  # noqa: F401,F403
 from .subbuilds import *  # noqa: F401,F403
+from .targeting import *  # noqa: F401,F403
 from .trait_rates import *  # noqa: F401,F403
 from .validation import *  # noqa: F401,F403

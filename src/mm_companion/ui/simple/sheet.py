@@ -364,6 +364,26 @@ def dress_borrowed(section: QWidget, simple: bool) -> None:
         set_simple_frame(section, simple)
 
 
+class _StripSplitter(QSplitter):
+    """The page beside the strip, the strip sized *before* the page is handed its width.
+
+    A splitter that shrinks keeps its zero-stretch strip whole and takes it all out of
+    the page; re-dividing afterwards (from the sheet's own ``resizeEvent``) came too
+    late. Restoring a maximised window handed the page a sliver for one layout, every
+    row on it stacked, and the width it was then given back sat in the rows' dead-band —
+    so they stayed stacked until the divider was dragged. Dividing here, ahead of
+    ``QSplitter``'s own pass, means the page only ever sees its final width.
+    """
+
+    def __init__(self, divide) -> None:  # noqa: ANN001 - a no-argument callable
+        super().__init__(Qt.Orientation.Horizontal)
+        self._divide = divide
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        self._divide()
+        super().resizeEvent(event)
+
+
 class SimpleSheet(QWidget):
     """The play view of one :class:`~mm_companion.ui.character_sheet.CharacterSheet`.
 
@@ -405,7 +425,7 @@ class SimpleSheet(QWidget):
         self._strip.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._strip.setWidget(self._strip_page)
 
-        self._splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._splitter = _StripSplitter(self._apply_strip_extent)
         self._splitter.setChildrenCollapsible(False)
         self._splitter.addWidget(self._scroll)
         self._splitter.addWidget(self._strip)
@@ -659,10 +679,6 @@ class SimpleSheet(QWidget):
     def _on_splitter_moved(self, _pos: int, _index: int) -> None:
         if not self._placing:
             self._strip_dragged = True
-
-    def resizeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
-        super().resizeEvent(event)
-        self._apply_strip_extent()
 
     def changeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
         """Redraw for a new theme: the boxes and views read their tokens when built.

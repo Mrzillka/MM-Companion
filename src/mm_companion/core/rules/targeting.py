@@ -1,0 +1,207 @@
+"""One check against several targets: who resisted, and what failing did to them.
+
+The Impress action is the first thing built on this, and the shape is chosen so it is
+not the last. An impression, an area Damage effect and an area Affliction all come
+down to the same three steps:
+
+1. **A DC.** Either fixed (an effect's ``10 + rank``) or *opposed* — another
+   character's check total, which is what an impress check is. :func:`opposed_dc`
+   turns a rolled total into one, folding in the natural-20 bonus.
+2. **One resistance check per target** against that DC, each possibly adjusted for
+   that target alone. The rolling is done elsewhere (by the session server, or by
+   :func:`mm_companion.core.dice.resolve_group` off the air) so the numbers are never
+   a client's claim; this module only reads the resulting degree.
+3. **A rung of a ladder** for every target that failed — the same
+   :class:`~mm_companion.core.data_loader.ResistanceOutcome` rungs an effect's
+   ``resistanceOutcomes`` uses — resolved against the target's current conditions
+   (escalation and apply order, :func:`~.damage.resolve_condition_ids`) and applied.
+
+Nothing here names an action, a condition or a degree: the ladders are data.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass
+
+from ..character import Character
+from ..data_loader import GameData, ResistanceOutcome
+from .conditions import apply_condition
+from .damage import resolve_condition_ids
+
+__all__ = [
+    "SOURCE_PLACEHOLDER",
+    "TargetResult",
+    "failure_degrees",
+    "outcome_rung",
+    "opposed_dc",
+    "rung_condition_ids",
+    "rung_caption",
+    "ladder_captions",
+    "resolve_rung",
+    "apply_rung",
+]
+
+#: What a rung's ``parameters`` template writes for whoever imposed it.
+SOURCE_PLACEHOLDER = "{source}"
+
+
+@dataclass(frozen=True)
+class TargetResult:
+    """One target's resistance check against the action's DC, as it was rolled.
+
+    ``degree`` is the *target's* signed degree: positive means they resisted.
+    """
+
+    ref: str
+    die: int
+    total: int
+    dc: int
+    degree: int
+
+    @property
+    def resisted(self) -> bool:
+        return self.degree > 0
+
+    @property
+    def failures(self) -> int:
+        """Degrees of failure, or 0 for a resisted check."""
+        return failure_degrees(self.degree)
+
+
+def failure_degrees(degree: int | None) -> int:
+    """How many degrees a resistance check failed by — 0 when it held (or was ungraded)."""
+
+    if degree is None or degree > 0:
+        return 0
+    return max(1, -degree)
+
+
+def outcome_rung(
+    ladder: tuple[ResistanceOutcome, ...],
+    degree: int | None,
+    success: ResistanceOutcome | None = None,
+) -> ResistanceOutcome | None:
+    """The rung a resistance check of *degree* lands on, or ``None`` for none.
+
+    The last rung covers every deeper failure, exactly as an effect's ladder does. A
+    check that held lands on *success* (Damage's Hit), which is usually nothing.
+    """
+
+    failures = failure_degrees(degree)
+    if not failures:
+        return success if degree is not None else None
+    if not ladder:
+        return None
+    return ladder[min(failures, len(ladder)) - 1]
+
+
+def opposed_dc(lead_total: int, lead_die: int, game_data: GameData, offset: int = 0) -> int:
+    """The DC an opposed check's total sets for one target.
+
+    A natural 20 on the opposing check is an added degree of success, which against a
+    DC the target resists is the same five points an attack's critical adds to its
+    effect — ``system.critical_effect_bonus``. *offset* is a per-target adjustment
+    (a bonus or penalty that applies against this target only).
+    """
+
+    bonus = game_data.system.critical_effect_bonus if lead_die == 20 else 0
+    return lead_total + bonus + offset
+
+
+def rung_condition_ids(
+    rung: ResistanceOutcome, config: Mapping[str, object] | None = None
+) -> tuple[str, ...]:
+    """The condition ids a rung names — read off *config* for a ``configKey`` rung.
+
+    An Affliction's rungs name the field of the effect instance holding the ids the
+    player chose; with no *config* such a rung names nothing.
+    """
+
+    if rung.config_key:
+        value = (config or {}).get(rung.config_key, "")
+        values = value if isinstance(value, (list, tuple)) else [value]
+        return tuple(str(v).strip() for v in values if str(v).strip())
+    return rung.conditions
+
+
+def rung_caption(
+    rung: ResistanceOutcome, game_data: GameData, config: Mapping[str, object] | None = None
+) -> str:
+    """One rung as words — "Hit + Dazed (Stunned instead if already Dazed)"."""
+
+    catalog = game_data.condition_catalog()
+    ids = rung_condition_ids(rung, config)
+    if ids:
+        names = [catalog[cid].name if cid in catalog else cid for cid in ids]
+    else:
+        names = [rung.text] if rung.text else []
+    text = " + ".join(n for n in names if n)
+    if not text:
+        return ""
+    return f"{text} ({rung.note})" if rung.note else text
+
+
+def ladder_captions(
+    ladder: tuple[ResistanceOutcome, ...],
+    game_data: GameData,
+    config: Mapping[str, object] | None = None,
+) -> tuple[str, ...]:
+    """A whole ladder as words, one entry per degree — empty if it says nothing."""
+
+    rungs = tuple(rung_caption(rung, game_data, config) for rung in ladder)
+    return rungs if any(rungs) else ()
+
+
+def _parameter(rung: ResistanceOutcome, condition_id: str, source: str) -> str | None:
+    template = dict(rung.parameters).get(condition_id)
+    if template is None:
+        return None
+    value = template.replace(SOURCE_PLACEHOLDER, source).strip()
+    return value or None
+
+
+def resolve_rung(
+    character: Character,
+    rung: ResistanceOutcome,
+    game_data: GameData,
+    *,
+    source: str = "",
+    config: Mapping[str, object] | None = None,
+) -> tuple[tuple[str, str | None], ...]:
+    """What *rung* would put on *character*, as ``(condition id, parameter)`` pairs.
+
+    Escalated and ordered against what the character already has, exactly as the
+    damage ladder is (:func:`~.damage.resolve_condition_ids`), and each paired with
+    the parameter the rung applies it with — ``{source}`` naming whoever imposed it.
+    Pure, so a caller can say what it will do before it does it. A rung that is only
+    words (a Coerced attitude) resolves to nothing.
+    """
+
+    ids = rung_condition_ids(rung, config)
+    if not ids:
+        return ()
+    resolved = resolve_condition_ids(character, ids, rung.escalates, game_data)
+    return tuple((cid, _parameter(rung, cid, source)) for cid in resolved)
+
+
+def apply_rung(
+    character: Character,
+    rung: ResistanceOutcome,
+    game_data: GameData,
+    *,
+    source: str = "",
+    config: Mapping[str, object] | None = None,
+) -> tuple[tuple[str, str | None], ...]:
+    """Put *rung* on *character*, returning the ``(id, parameter)`` pairs applied.
+
+    Through the ordinary :func:`~.conditions.apply_condition`, so bundling and
+    supersession are the same resolver's job as for a condition picked by hand. The
+    pairs are what a caller replays onto a second copy of the character (an open
+    sheet, a player's own app) so both agree on what escalation decided.
+    """
+
+    applied = resolve_rung(character, rung, game_data, source=source, config=config)
+    for condition_id, parameter in applied:
+        apply_condition(character, condition_id, game_data, parameter=parameter)
+    return applied

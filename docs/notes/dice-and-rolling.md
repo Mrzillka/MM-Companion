@@ -660,6 +660,38 @@ of NPCs — often fewer. Two answers, and they are independent.
   makes would pop a real window on the developer's desktop; `tests/test_toasts.py`
   lifts it for its own.
 
+## The Action row
+
+Under the Request row, an **Action** row: **Reroll** first, then the actions taken
+against other characters — Impress — once a host calls `set_actions` with
+`(key, caption, tooltip)` triples. The row used to hide until then; Reroll is always
+there, so it no longer does. The actions only *report* (`actionRequested(key)`): running an action
+needs a dialog, a character and perhaps a session, none of which the panel has. The
+Dice block and the GM's Rolls block both offer Impress here, which is what puts the
+player's button and the GM's in the same place. See [the actions notes](actions.md),
+which also cover the two `RollSpec` additions the action brought (`KIND_BEST_OF` and
+`dc_from_total`).
+
+## Reroll
+
+`DiceRollerPanel.reroll` throws **this panel's last roll** again — the bonus, penalty,
+DC, hidden flag, label and spec it was *made* with, not what the inputs say now (a roll
+spends its sliders, so the inputs have usually moved on). Only a roll that **came back**
+counts: `_start_roll` parks it in `_pending_last` and a result commits it, so a roll the
+session never answered is not handed back as a free lucky one. The spec is read from the
+record (`_rolled_spec`), never re-loaded onto the chip — loading runs the localizer, which
+*adds* this sheet's number, so a re-rolled save came back at double its modifier, and it
+also unloaded whatever trait the player had picked since.
+
+The die is `core.dice.reroll_d20`: a 1–10 counts 10 more, so it lands on 11–20 — the Luck
+re-roll. It returns `(die, natural)`, because only a **natural** 20 is an added success
+(the book says so in as many words): a 10 lifted to 20 is graded as 20 but is not a
+critical, so `resolve_check` and `RollRecord.from_check` take `natural`. In a session
+the **server** rolls it (`RollRequest.reroll`, protocol v12) and stamps `reroll` on the
+record itself — a client's label is not evidence, and every seat should see which dice
+were lucky. `reroll_label` adds "(reroll)" wherever a roll is named. It spends nothing —
+no Hero Point, no Luck rank — which is the player's to mark.
+
 ## The Request row sits on the grid
 
 The trait combo is in the sliders' column and the DC box with its "Ask" in the spin

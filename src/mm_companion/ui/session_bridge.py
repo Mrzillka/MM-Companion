@@ -38,6 +38,7 @@ from mm_companion.core.session import relay as session_relay
 from mm_companion.core.session import server as session_server
 from mm_companion.core.session.model import SessionState, new_session
 from mm_companion.core.session.net import DEFAULT_PORT
+from mm_companion.core.session.protocol import sanitize_mod_payload
 
 #: How long :meth:`SessionBridge.stop` waits for a publish still in flight.
 _PUBLISH_JOIN_TIMEOUT = 10.0
@@ -86,6 +87,9 @@ class SessionBridge(QObject):
     rollAdded = Signal(object)
     #: One roll removed from the log, by its ``seq`` (int). GM-driven either side.
     rollRemoved = Signal(int)
+    #: A hidden GM roll shown to the table, as the whole (now visible) roll dict.
+    #: The GM's screens redraw a card they already hold; a player's adds a new one.
+    rollRevealed = Signal(object)
     #: The whole roll history at once — on attach, and on a fresh join.
     historyReplaced = Signal(object)
 
@@ -105,6 +109,12 @@ class SessionBridge(QObject):
     #: A mod at another seat asking this one's mod for something:
     #: ``(mod_id, topic, player_id, payload)``. Reaches the GM and nobody else.
     modRequest = Signal(str, str, str, object)
+    #: A seat asked the GM to run an action — ``(kind, action_id, player_id,
+    #: payload)``. Raised on the GM's side only (hosting or dialled in).
+    actionRequested = Signal(str, str, str, object)
+    #: The GM asked this seat something about an action — ``(kind, action_id,
+    #: payload)``. Raised on a player's side only.
+    actionPrompted = Signal(str, str, object)
 
     #: A player took a seat (``{"player": ..., "new": bool}``), host side only.
     playerJoined = Signal(object)
@@ -275,6 +285,7 @@ class SessionBridge(QObject):
         dc: int | None = None,
         hidden: bool = False,
         spec: dict | None = None,
+        reroll: bool = False,
     ) -> bool:
         """Put one roll to the session, whichever end of it this app is on.
 
@@ -289,15 +300,28 @@ class SessionBridge(QObject):
         description of the roll (a serialized
         :class:`~mm_companion.core.rules.RollSpec`), which travels so that the
         *other* seats can act on it — see ``docs/mm-session-architecture.md``.
+        ``reroll`` asks the server for a lucky re-roll (a die of 11-20).
         """
         if self._server is not None:
             self._server.roll(
-                label=label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden, spec=spec
+                label=label,
+                bonus=bonus,
+                penalty=penalty,
+                dc=dc,
+                hidden=hidden,
+                spec=spec,
+                reroll=reroll,
             )
             return True
         if self._client is not None:
             return self._client.request_roll(
-                label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden, spec=spec
+                label,
+                bonus=bonus,
+                penalty=penalty,
+                dc=dc,
+                hidden=hidden,
+                spec=spec,
+                reroll=reroll,
             )
         return False
 
@@ -346,6 +370,19 @@ class SessionBridge(QObject):
             return self._server.remove_roll(seq)
         if self._client is not None:
             return self._client.request_remove_roll(seq)
+        return False
+
+    def reveal_roll(self, seq: int) -> bool:
+        """Show one hidden roll to the table (a GM action).
+
+        Dual-path like :meth:`remove_roll`, and it comes back the same way — as
+        :attr:`rollRevealed`, on this screen and every other. Returns False when
+        there is no live session.
+        """
+        if self._server is not None:
+            return self._server.reveal_roll(seq)
+        if self._client is not None:
+            return self._client.request_reveal_roll(seq)
         return False
 
     # -- GM commands -------------------------------------------------------
@@ -543,6 +580,71 @@ class SessionBridge(QObject):
         if server is None:  # pragma: no cover - guarded by the caller
             return False
         return server.record_mod_note(mod_id, text) is not None
+
+    # -- actions against other characters --------------------------------
+
+    def send_action_request(self, kind: str, action_id: str, payload: dict | None = None) -> bool:
+        """Ask the GM to run an action — an Impress, a resist choice. Any seat may.
+
+        The GM's own seat asking — the Impress button on an NPC's sheet the GM has
+        open — is answered right here: the server forwards nothing from the GM to
+        the GM, so it is raised on :attr:`actionRequested` as though it had arrived,
+        stamped with this seat's id, and the GM window opens it like a player's.
+
+        It goes through the sanitizer the server runs on a player's, so the GM's own
+        declaration arrives in the shape a player's does: an area's attempt once lost
+        its effects' config on the wire and nowhere else, which is why no test saw it.
+        """
+        if self.is_gm:
+            self.actionRequested.emit(
+                str(kind),
+                str(action_id),
+                self.own_player_id(),
+                sanitize_mod_payload(dict(payload or {})) or {},
+            )
+            return True
+        if self._client is not None:
+            return self._client.send_action_request(kind, action_id, payload)
+        return False
+
+    def prompt_action(
+        self, player_id: str, kind: str, action_id: str, payload: dict | None = None
+    ) -> bool:
+        """Ask one player something about an action in progress (a GM action)."""
+        if self._server is not None:
+            return self._server.prompt_action(player_id, kind, action_id, payload)
+        if self._client is not None:
+            return self._client.prompt_action(player_id, kind, action_id, payload)
+        return False
+
+    def group_roll(
+        self,
+        group: str,
+        lines: list[dict],
+        *,
+        lead: dict | None = None,
+        dc: int | None = None,
+        critical_bonus: int = 0,
+    ) -> bool:
+        """Have the server roll one check against several resistances (a GM action).
+
+        Every roll comes back on :attr:`rollAdded` carrying ``group``, on both
+        roads — the hosting server raises each record as an event while it
+        records it, which is why a caller gathering them must be listening
+        *before* it calls this. ``False`` with no live session, so a caller can
+        roll off the air instead.
+        """
+        if self._server is not None:
+            return bool(
+                self._server.group_roll(
+                    group, lines, lead=lead, dc=dc, critical_bonus=critical_bonus
+                )
+            )
+        if self._client is not None:
+            return self._client.group_roll(
+                group, lines, lead=lead, dc=dc, critical_bonus=critical_bonus
+            )
+        return False
 
     # -- hosting -----------------------------------------------------------
 
@@ -777,6 +879,8 @@ class SessionBridge(QObject):
             self.rollAdded.emit(payload)
         elif kind == session_server.EVENT_ROLL_REMOVED:
             self.rollRemoved.emit(int(payload.get("seq", 0)))
+        elif kind == session_server.EVENT_ROLL_REVEALED:
+            self.rollRevealed.emit(payload)
         elif kind == session_server.EVENT_SCENE:
             self.sceneChanged.emit(payload.get("entries", []))
         elif kind == session_server.EVENT_SCENE_PORTRAIT:
@@ -789,6 +893,13 @@ class SessionBridge(QObject):
             self.modRequest.emit(
                 str(payload.get("mod_id", "")),
                 str(payload.get("topic", "")),
+                str(payload.get("player_id", "")),
+                payload.get("payload"),
+            )
+        elif kind == session_server.EVENT_ACTION_REQUEST:
+            self.actionRequested.emit(
+                str(payload.get("kind", "")),
+                str(payload.get("action_id", "")),
                 str(payload.get("player_id", "")),
                 payload.get("payload"),
             )
@@ -819,6 +930,8 @@ class SessionBridge(QObject):
             self.rollAdded.emit(payload)
         elif kind == session_client.EVENT_ROLL_REMOVED:
             self.rollRemoved.emit(int(payload.get("seq", 0)))
+        elif kind == session_client.EVENT_ROLL_REVEALED:
+            self.rollRevealed.emit(payload)
         elif kind == session_client.EVENT_SCENE:
             self.sceneChanged.emit(payload.get("entries", []))
         elif kind == session_client.EVENT_SCENE_PORTRAIT:
@@ -834,6 +947,20 @@ class SessionBridge(QObject):
                 str(payload.get("mod_id", "")),
                 str(payload.get("topic", "")),
                 str(payload.get("player_id", "")),
+                payload.get("payload"),
+            )
+        elif kind == session_client.EVENT_ACTION_REQUEST:
+            # Reaches a GM client only; the same signal the hosting half raises.
+            self.actionRequested.emit(
+                str(payload.get("kind", "")),
+                str(payload.get("action_id", "")),
+                str(payload.get("player_id", "")),
+                payload.get("payload"),
+            )
+        elif kind == session_client.EVENT_ACTION_PROMPT:
+            self.actionPrompted.emit(
+                str(payload.get("kind", "")),
+                str(payload.get("action_id", "")),
                 payload.get("payload"),
             )
         elif kind == session_client.EVENT_SNAPSHOT:

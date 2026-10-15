@@ -206,6 +206,19 @@ def test_the_override_starts_at_the_engines_own_answer(qapp, data) -> None:
     assert window._terms._cost_override_spin.value() == 3
 
 
+def test_turning_dev_mode_off_clears_an_items_hand_set_price(qapp, data) -> None:
+    char = _hero(data, "sword")
+    char.equipment[0].ep_override = 9
+    window = _gear_window(data, char, char.equipment[0])
+
+    window._dev_mode.setChecked(False)
+    assert window.item.ep_override is None
+    assert window._cost.text() == "Total cost: 3 EP"
+
+    window._dev_mode.setChecked(True)
+    assert window.item.ep_override == 9
+
+
 def test_an_item_priced_by_hand_opens_in_dev_mode(qapp, data) -> None:
     char = _hero(data, "sword")
     char.equipment[0].ep_override = 9

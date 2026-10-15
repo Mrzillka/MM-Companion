@@ -25,6 +25,7 @@ from mm_companion.ui.block_sizes import RecommendedSize, load_block_sizes
 from mm_companion.ui.blocks.base import BlockDescriptor, instance_template
 from mm_companion.ui.blocks.bus import (
     ABILITY_CHANGED,
+    AREA_REQUESTED,
     BONUS_REQUESTED,
     BUILD_CHANGED,
     CAPS_CHANGED,
@@ -348,6 +349,8 @@ _BASE_BLOCKS = [
         # through the block that owns the pips.
         {
             **_ROLLS,
+            # The area line: no die, but the roller opens the window that aims it.
+            "areaRequested": (AREA_REQUESTED,),
             "noteRequested": (NOTE_REQUESTED,),
             "heroPointRequested": (HERO_POINT_REQUESTED,),
         },
@@ -371,7 +374,8 @@ _BASE_BLOCKS = [
         # folds in Strength) and its *budget* is a rank of the Equipment advantage, so
         # an advantage edit has to reach it.
         {FACTS_CHANGED: "refresh", COST_RATES_CHANGED: "refresh"},
-        _ROLLS,  # the 🎲 beside each line of a weapon card's dice footer
+        # the 🎲 beside each line of a weapon card's dice footer, and its area line
+        {**_ROLLS, "areaRequested": (AREA_REQUESTED,)},
         {},
     ),
     (
@@ -425,6 +429,7 @@ _BASE_BLOCKS = [
         {
             ROLL_REQUESTED: "perform_roll",
             LOAD_REQUESTED: "load_roll",
+            AREA_REQUESTED: "start_area",
             NOTE_REQUESTED: "post_note",
             BONUS_REQUESTED: "add_bonus",
         },

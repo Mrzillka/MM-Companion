@@ -57,9 +57,12 @@ from .protocol import (
     ERROR_SESSION_FULL,
     PROTOCOL_VERSION,
     REASON_SESSION_CLOSED,
+    ActionPrompt,
+    ActionRequest,
     ApplyCondition,
     CharacterSnapshot,
     ErrorMessage,
+    GroupRollRequest,
     Hello,
     Kicked,
     KickRequest,
@@ -74,10 +77,12 @@ from .protocol import (
     ProtocolError,
     RemoveCondition,
     RemoveRollRequest,
+    RevealRollRequest,
     RollAdded,
     RollPrompt,
     RollRemoved,
     RollRequest,
+    RollRevealed,
     Roster,
     ScenePortrait,
     SceneUpdate,
@@ -97,6 +102,7 @@ EVENT_DISCONNECTED = "disconnected"  # {"reason"}
 EVENT_ROSTER = "roster"  # {"players": [public slot dicts]}
 EVENT_ROLL = "roll"  # one roll dict
 EVENT_ROLL_REMOVED = "roll_removed"  # {"seq"}
+EVENT_ROLL_REVEALED = "roll_revealed"  # one roll dict, a hidden roll now shown
 EVENT_SCENE = "scene"  # {"entries": [scene entry dicts]}
 EVENT_SCENE_PORTRAIT = "scene_portrait"  # {"ref", "portrait"}
 EVENT_MOD_STATE = "mod_state"  # {"mod_id", "key", "payload"} — payload None means gone
@@ -106,6 +112,10 @@ EVENT_MOD_REQUEST = "mod_request"  # {"mod_id", "topic", "player_id", "payload"}
 # Reaches a GM client only. Named to match the hosting side's EVENT_SNAPSHOT so
 # the Qt bridge can raise one signal from either half.
 EVENT_SNAPSHOT = "snapshot"  # {"player_id", "character"}
+#: A seat asking the GM to run an action. Reaches a GM client only.
+EVENT_ACTION_REQUEST = "action_request"  # {"kind", "action_id", "player_id", "payload"}
+#: The GM asking this seat something about an action in progress.
+EVENT_ACTION_PROMPT = "action_prompt"  # {"player_id", "kind", "action_id", "payload"}
 EVENT_APPLY_CONDITION = "apply_condition"  # {"player_id", "condition_id", "parameter"}
 EVENT_REMOVE_CONDITION = "remove_condition"  # {"player_id", "condition_id", "parameter"}
 EVENT_SET_HERO_POINTS = "set_hero_points"  # {"player_id", "value"}
@@ -418,10 +428,22 @@ class SessionClient:
         dc: int | None = None,
         hidden: bool = False,
         spec: dict | None = None,
+        reroll: bool = False,
     ) -> bool:
-        """Ask the server to roll. The result comes back as :data:`EVENT_ROLL`."""
+        """Ask the server to roll. The result comes back as :data:`EVENT_ROLL`.
+
+        ``reroll`` asks for a lucky re-roll, whose die never comes up under 11.
+        """
         return self.send(
-            RollRequest(label=label, bonus=bonus, penalty=penalty, dc=dc, hidden=hidden, spec=spec)
+            RollRequest(
+                label=label,
+                bonus=bonus,
+                penalty=penalty,
+                dc=dc,
+                hidden=hidden,
+                spec=spec,
+                reroll=reroll,
+            )
         )
 
     def post_note(self, text: str) -> bool:
@@ -447,6 +469,13 @@ class SessionClient:
         it, the same as it reaches every other client.
         """
         return self.send(RemoveRollRequest(seq=seq))
+
+    def request_reveal_roll(self, seq: int) -> bool:
+        """Ask the server to show one hidden roll to the table (honored only for the GM).
+
+        Comes back as :data:`EVENT_ROLL_REVEALED`, to this client and every other.
+        """
+        return self.send(RevealRollRequest(seq=seq))
 
     def ping(self, nonce: int = 0) -> bool:
         """Keepalive; the answer arrives as :data:`EVENT_PONG`."""
@@ -525,6 +554,50 @@ class SessionClient:
         one history, one feed.
         """
         return self.send(ModNote(mod_id=str(mod_id), text=str(text)))
+
+    def send_action_request(
+        self, kind: str, action_id: str = "", payload: dict | None = None
+    ) -> bool:
+        """Ask the GM to run an action — an Impress, a resist choice. Any seat may.
+
+        The server stamps this seat's id onto it and forwards it to the GM alone.
+        """
+        return self.send(ActionRequest(kind=str(kind), action_id=str(action_id), payload=payload))
+
+    def prompt_action(
+        self, player_id: str, kind: str, action_id: str = "", payload: dict | None = None
+    ) -> bool:
+        """Ask one player something about an action in progress (honored only for the GM)."""
+        return self.send(
+            ActionPrompt(
+                player_id=str(player_id), kind=str(kind), action_id=str(action_id), payload=payload
+            )
+        )
+
+    def group_roll(
+        self,
+        group: str,
+        lines: list[dict],
+        *,
+        lead: dict | None = None,
+        dc: int | None = None,
+        critical_bonus: int = 0,
+        hidden: bool = False,
+    ) -> bool:
+        """Have the server roll one check against several resistances (honored only for the GM).
+
+        Every roll comes back as :data:`EVENT_ROLL` carrying ``group``.
+        """
+        return self.send(
+            GroupRollRequest(
+                group=str(group),
+                lines=list(lines),
+                lead=lead,
+                dc=dc,
+                critical_bonus=int(critical_bonus),
+                hidden=bool(hidden),
+            )
+        )
 
     # -- reading -----------------------------------------------------------
 
@@ -669,6 +742,23 @@ class SessionClient:
         elif isinstance(message, RollRemoved):
             self.history = [r for r in self.history if r.get("seq") != message.seq]
             self._emit(EVENT_ROLL_REMOVED, {"seq": message.seq})
+        elif isinstance(message, RollRevealed):
+            # The GM already holds this seq (hidden); a player has never seen it.
+            # Either way it goes in at its own place in the log, by seq.
+            seq = message.roll.get("seq")
+            self.history = [r for r in self.history if r.get("seq") != seq]
+            at = len(self.history)
+            if isinstance(seq, int):
+                at = next(
+                    (
+                        index
+                        for index, entry in enumerate(self.history)
+                        if isinstance(entry.get("seq"), int) and entry["seq"] > seq
+                    ),
+                    at,
+                )
+            self.history.insert(at, message.roll)
+            self._emit(EVENT_ROLL_REVEALED, message.roll)
         elif isinstance(message, SceneUpdate):
             self.scene = [dict(entry) for entry in message.entries]
             self._emit(EVENT_SCENE, {"entries": [dict(e) for e in self.scene]})
@@ -691,6 +781,10 @@ class SessionClient:
             self._emit(EVENT_MOD_STATE, message.to_dict())
         elif isinstance(message, ModRequest):
             self._emit(EVENT_MOD_REQUEST, message.to_dict())
+        elif isinstance(message, ActionRequest):
+            self._emit(EVENT_ACTION_REQUEST, message.to_dict())
+        elif isinstance(message, ActionPrompt):
+            self._emit(EVENT_ACTION_PROMPT, message.to_dict())
         elif isinstance(message, PlayerSnapshot):
             self._emit(
                 EVENT_SNAPSHOT,

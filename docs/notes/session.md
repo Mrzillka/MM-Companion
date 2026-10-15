@@ -607,6 +607,28 @@ The shape:
   Adding or removing a block invalidates a stored arrangement, so enabling a mod
   that registers one resets `gm_layout` once; the canvas already falls back to
   defaults rather than breaking.
+- **Protocol v11 carries actions against other characters** — `ActionRequest`,
+  `ActionPrompt`, `GroupRollRequest` and `RollRecord.group`, with the Impress action
+  the first user. Routed like the mod channel (opaque payloads, the sender stamped by
+  the server) and rolled like any roll (by the server). The whole account is in [the
+  actions notes](actions.md).
+- **Protocol v12 lets the GM reveal a hidden roll** — `RevealRollRequest` up (GM
+  only, like `RemoveRollRequest`) and `RollRevealed` down to *every* seat, the GM's
+  included. The record is replaced with `hidden=False` and `rolls.jsonl` rewritten, so
+  a late joiner's welcome carries it like any roll. It is its own message rather than
+  a second `RollAdded` because the two ends read it differently: the GM's history
+  already holds that `seq` and redraws the card **in place** (`RollHistoryPanel.
+  reveal_roll`), while a player's has never seen it and adds it at the top — and
+  `add_roll` drops a `seq` it has seen, so a re-sent `RollAdded` would have reached
+  nobody who already had it. The **Show** button sits beside the ✕ on a GM's hidden,
+  positive-`seq` card; off the air it flips the resumed log the way ✕ strikes it.
+- **Protocol v13 carries area attacks on the spec** — six `RollSpec` keys
+  (`dc_if_resisted`, `note_if_resisted`, `follow_up_always`, `targets`, `action_id`,
+  `title`) and no new message. Bumped all the same, because `sanitize_spec` is a
+  whitelist: a v12 server strips the keys without a word, and a caught player would be
+  offered the full-rank save after a made Dodge, or no save at all after a failed one.
+  The **hub on the VPS must be redeployed** with the clients for this one. See [the
+  actions notes](actions.md).
 - Deployment lives in `deploy/` (systemd units, `deploy.sh`, runbook) — tracked
   and secret-free. The operator's addresses and key paths are in a gitignored
   `SERVER.md`.

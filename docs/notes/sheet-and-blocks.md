@@ -639,7 +639,7 @@ band is not what they are about.
   now `NPCWindow` passes them as `CharacterSheet(exclude=…)` and they are absent — no
   frame, no View-menu entry, no "New Notes Block". Three things follow from absent
   rather than hidden:
-  - **A request nobody serves goes out.** `OUTWARD_REQUESTS` (roll, load, bonus, note)
+  - **A request nobody serves goes out.** `OUTWARD_REQUESTS` (roll, load, bonus, note, area)
     is served by the sheet itself when no block on it does, as
     `CharacterSheet.requestUnserved(topic, payload)`, relayed by `MainWindow`. The GM
     window connects that to its own roller, where a card's rolls already land. A

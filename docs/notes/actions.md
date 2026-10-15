@@ -1,8 +1,8 @@
-# Actions against other characters: Impress, and the targeting layer
+# Actions against other characters: Impress, area attacks, and the targeting layer
 
-Matters when touching the Impress action, `actions.json`, the roller's Action row,
-or anything that resolves one check against several creatures (area damage and
-afflictions are meant to be built on the same layer).
+Matters when touching the Impress action, area attacks, `actions.json`, the roller's
+Action row, the history's table card, or anything that resolves one check against
+several creatures.
 
 Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
 
@@ -114,12 +114,193 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   rolls whichever is highest on the clicker's sheet and names it in the label. Not
   impress-specific, and the reason it lives in `rolls.py` rather than `impress.py`:
   any "whichever is higher" resistance can use it, and the import graph forbids
-  `rolls` reaching up into `impress`.
+  `rolls` reaching up into `impress`. **`KIND_WORST_OF`** is its mirror (the lowest
+  candidate), for an area resisted by the worst of two.
 - **`dc_from_total`** on a follow-up: its DC is the provoking roll's *total*, filled
   in by `follow_up_for_result(…, total=)`. The natural-1 graze rule does not apply to
   one — a 1 on an opposed check is simply a low total.
 
+## Area attacks
+
+The second action on this layer, following the 4e rules (Area Effect extra, PDF p152):
+
+- An area may be aimed at **one creature with an ordinary attack check**. A hit gives
+  that creature no Dodge, and it resists at full rank.
+- Or it may be aimed at a point, a routine check nobody rolls.
+- Everyone else in the area makes **Dodge vs. 10 + area rank**. Making it halves the
+  rank they then resist the effect at, rounded up.
+- Evasion is +5 to that Dodge, and at rank 2 a made Dodge means no effect at all.
+
+### The pieces
+
+- **Two modules, split by the import DAG.**
+  - `core/rules/area.py` sits *below* `powers_terms` and holds the shape, size, Dodge
+    DC, the halving and Evasion. It has to sit there because the card's game-terms
+    table states an area's size (the **Area** row, beside Range).
+  - `core/rules/area_attack.py` holds the resolution half and sits on `rolls` beside
+    `impress`. It defines `AreaUse` (what a power offers, worked out on its wielder's
+    sheet), `AreaAttempt` (what travels to the GM) and the specs.
+- **The data.**
+  - `modifiers.json`'s `area_effect` carries a `shape` select, an `applications`
+    points field and a `spread` select. The applications value *is* the cost per rank;
+    past the first, each one widens the shape a distance rank or doubles a Shapeable
+    area's spaces. Emanation is a `costDelta` of +1 on the spread.
+  - `actions.json`'s `area` block names the modifiers that make an area, the Dodge
+    key, the DC base, the halving, the size phrase per shape, Evasion and the GM's
+    cover options.
+  - Gear passes a shape through the new `config` on an equipment modifier ref.
+- **Power Level.** An area's rank alone is capped at the PL, attack check or not. Three
+  places have to agree on that, and at first only the validator did:
+  - `power_pl_violations` checks it;
+  - `effect_pl_cap_shift` (a hard cap) cuts an area's *rank* to the PL, as for an
+    auto-hit effect. It used to trim attack + rank instead, which let a rank 14 area
+    through at PL 10;
+  - `estimated_power_level` reads an area's rank as its PL.
+- The card's **Area** row says "Dodge DC N for half" only for an effect someone
+  resists. An area Healing or Environment is just a size.
+- **The free area use.** Any attack may be used as an area at the table.
+  - A checkable "Use as an area attack" on the power card's right-click menu sets
+    `Power.area_use`. It is saved, runtime-like, undoable and priced at nothing.
+  - The area rank is capped at the Power Level (`freeUsePlCap`), **plus the size
+    shift** (`effect_size_rank_shift`), exactly as the validator's rank cap is. A huge
+    creature's Strength-Based Damage is the book's own reason for the free use, and
+    it once got cut back to the bare PL for it.
+  - An NPC's cap is its *estimated* PL (`npc=True` on `power_area_use`), never the
+    number on file, which nothing reads as a rule for an NPC. The Powers and Equipment
+    blocks learn they are on an NPC sheet through `set_npc_mode` and redraw.
+  - The book's version is the size rule (PDF p58). Here it is the GM's call, not a
+    gate the app checks.
+- **The area line.** `power_rolls_with_area` appends one `KIND_AREA` spec to the
+  footer. It is not a die, and it **never travels as one**.
+  - It goes *last*, so a pin's index keeps naming the roll it was made on. The footer
+    offers no pin menu on it.
+  - Its `trait_key` is the build's id, which `find_area_power` looks up. That lookup
+    is why `item_effective_build` now keeps the host's id.
+  - Clicking it raises `RollsFooter.areaRequested(build id)`, not `rollRequested`. It
+    reaches the bus as its own topic, `area-requested`, which the Dice block serves
+    with `start_area`. It was a `RollSpec` on `roll-requested` at first, and that took
+    a special case in five places. Any server of that topic that missed one (the GM's
+    load path, a mod's roller) would have rolled a +0 d20 labelled "Area: …".
+  - `area-requested` is one of `OUTWARD_REQUESTS`. On an NPC sheet it goes to the GM
+    window, which finds the NPC **by the sheet's file** and calls
+    `AreaController.start_for_npc`.
+
+### Declaring
+
+- `AreaDialog` takes scene cards dropped into a primary slot and an area field
+  (`TargetDropField`, a `CardDropFlow` of chips), or picked off an "Add" menu.
+- **It is modeless** (`show()`, not `exec()`). The cards are dragged off the Scene
+  block on the same window, and a modal dialog swallows the press that starts the drag.
+- A player's scene cards are draggable now; only the GM's board takes the drop back.
+- At a table, sending it does three things:
+  1. sends the `AreaAttempt` (`ActionRequest` kind `"area"`);
+  2. posts a note naming who is caught;
+  3. rolls the attack against the primary as an ordinary roll. That roll carries the
+     attempt's `action_id` and **no follow-up**, because the primary's save is the GM's.
+- **The attempt is flat on the wire.** The server runs every `ActionRequest` payload
+  through `sanitize_mod_payload`, which keeps four levels of nesting. Under a `"use"`
+  key an effect's config sat at level four and everything in it was dropped. An Area
+  Affliction then reached the GM with no conditions on its ladder, and every NPC that
+  failed its save was reported as having resisted. So the use's keys sit beside the
+  attempt's own, and an effect's config carries only plain values (no list or dict,
+  and no ladder reads one).
+  - The GM's own seat runs the same sanitizer in `SessionBridge.send_action_request`,
+    so a self-looped declaration arrives in the shape a player's does. The bug lived
+    only on the wire, and that is why no test saw it.
+  - `start_area` refuses an attempt the sanitizer would change (too large) rather than
+    send one the GM would resolve differently.
+
+### The GM's side
+
+- `AreaController` puts an `ActionCard` with **Resolve Area Attack** in the GM's
+  history. The card is GM-only and not a record, and it is the only way back to the
+  attack. So while it is `pending`, `RollHistoryPanel.clear()` keeps it through a
+  replay (a reconnect's `Welcome`) and puts it back on top, and `_trim` never drops
+  it.
+- It pairs the attack roll up with the declaration by `action_id`, through
+  `take_roll`. An attack that arrives before its declaration is kept until the
+  declaration lands. Off the air an NPC's attack from the window's 🎲 raises no
+  `rollAdded`, so the GM window's `_show_offline_roll` hands it to `take_roll` too.
+- **Namesakes are numbered.** `impress_parties` calls two NPCs on the board that share
+  a name `Thug (1)` and `Thug (2)` (players keep theirs, since their app finds a
+  request by its name). The table card's rows, the notices and a request's targets
+  are all keyed by display name. Without the numbers, two Thugs share one row and the
+  last roll stands for both.
+- `AreaWindow` lets the GM edit:
+  - who is in the area. A dropped card ticks a row, and a roster card's `kind:source`
+    ref works too.
+  - the primary, and whether it was hit. "Hit" is pre-ticked from the attack's total
+    against the primary's Defense class.
+  - per creature, a cover combo (Dodge only) and a bonus and penalty (both of that
+    creature's checks).
+- An NPC attacker gets a 🎲 Roll attack button.
+- A player's fresh snapshot reaches open area windows as it does Impress ones
+  (`AreaController.windows`). If the primary's Defense changed, the Hit tick is
+  re-read, unless the GM set Hit by hand.
+
+### Resolving
+
+- **Only the creatures nobody plays are rolled**, in two stages. Each stage is a group
+  with **no lead**: every line's whole DC rides as its `dc_offset` from a `dc=0`.
+  1. Stage 1 is the Dodge checks, group `"<table>.1"`.
+  2. Once they are all back, stage 2 is each creature's save at the rank its Dodge
+     left (`area_stage_rank`), group `"<table>.2"`.
+- A stage with more than `MAX_GROUP_LINES` lines is split over several groups, and all
+  of them are gathered before it moves on.
+- Each failed save's rung goes onto the NPC through `impress_apply`.
+- **The numbers are core's.** `area_npc_dodge_spec` and `area_npc_save_specs` build each
+  NPC's line with its own modifier and DC in, and the controller only turns them into
+  group lines. Every save DC comes from `area_save_dc`. Its base is `AreaEffect.dc_base`
+  as the wielder's card worked it out (a typed DC override included), so the GM's
+  table and a player's request cannot disagree.
+- **A choice of resistances.** A card resisted by two traits (Alternate Resistance's
+  best or worst of two, Illusion's Insight or Perception), or by a skill or an ability
+  in a resistance's place, is carried as `resistance_kind` `KIND_BEST_OF` or
+  `KIND_WORST_OF` with a `best_of_key`. Before this, those NPC saves were rolled at
+  +0. Which modifier choice means "the worse" is data, `area.worstOf`. A player's
+  request uses the same kind, so `localize_spec` fills in their pick.
+- **Players are asked, not rolled for.** Caught players get one request per set of
+  numbers the GM chose for them (`area_request_specs`, grouped by cover and
+  adjustment):
+  - It is a `KIND_AREA_DODGE` spec naming them in `targets`, chained to the save.
+  - The chain uses `follow_up_always`, because a *failed* Dodge is exactly when the
+    save is due.
+  - It also carries `dc_if_resisted`, the halved DC, which `follow_up_for_result`
+    picks on a made Dodge.
+  - Any player may click it (Interpose), and `localize_spec` adds the clicker's
+    Evasion.
+  - The GM's cover and adjustment ride as the spec's modifier, which the clicker's
+    own number is added to. Cover counts on the Dodge only, the adjustment on the
+    Dodge and the save, and the label names both. They used to be dropped without a
+    word.
+  - A hit primary player gets a plain full-rank save instead.
+  - Players apply their own conditions.
+- **No crits on the area half.** An area's Dodge and save follow-ups take no natural-20
+  bump and no natural-1 graze, because area effects make no attack check (PDF p195).
+  The primary's attack is an ordinary attack and keeps its own.
+
+## One table per group (Impress too)
+
+`RollHistoryPanel` draws every record carrying a `group` as **one** `GroupTableCard`:
+
+- **The key** is `table_key(group)`: the group id without a numeric `.n` suffix. That
+  is how an area's two stages fill in one table.
+- **A row** is the creature a line's spec names in `targets`. The Impress controller
+  now sets it, plus a `title` the card is headed by. A roll naming nobody is a row of
+  its own, and each row ends on its last roll's outcome.
+- **Row order** sorts by `abs(seq)`, because off the air a window counts its own rolls
+  *down* from −1.
+- **Removing and revealing.** `remove_roll` and `reveal_roll` find a roll's table by
+  `seqs`, and the GM's ✕ strikes the whole table.
+- **The exception:** a grouped roll whose spec has a **follow-up** keeps its own card.
+  Request-mode Impress is a group of one, and its card is where everyone finds the
+  Resist button.
+
 ## Not done yet
 
-The end-of-turn save to shake an impression off, area effects on this layer, and
-counting earlier attempts automatically are in [the debts](debts.md).
+These are in [the debts](debts.md):
+
+- the end-of-turn save to shake an impression off;
+- counting earlier attempts automatically;
+- the area pieces left out: a Hero Point inside the table, areas that do not resolve
+  to conditions, heavy weapons' two ranks, and linked areas.

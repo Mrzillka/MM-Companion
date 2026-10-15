@@ -430,7 +430,8 @@
       "modifiers": [
         {
           "modifier": "modifiers:area_effect",
-          "note": "Cone"
+          "note": "Cone",
+          "config": {"shape": "cone"}
         }
       ],
       "patterns": [
@@ -2822,7 +2823,8 @@
         },
         {
           "modifier": "modifiers:area_effect",
-          "note": "Cone or Line, switchable as a free action"
+          "note": "Cone or Line, switchable as a free action",
+          "config": {"shape": "cone"}
         }
       ],
       "patterns": [
@@ -2862,7 +2864,8 @@
         },
         {
           "modifier": "modifiers:area_effect",
-          "note": "Sphere"
+          "note": "Sphere",
+          "config": {"shape": "sphere"}
         }
       ],
       "patterns": [
@@ -2940,7 +2943,8 @@
         {
           "modifier": "modifiers:area_effect",
           "rank": 7,
-          "note": "Sphere Area 7 secondary"
+          "note": "Sphere Area 7 secondary",
+          "config": {"shape": "sphere"}
         }
       ],
       "critical": {
@@ -3069,7 +3073,8 @@
       "modifiers": [
         {
           "modifier": "modifiers:area_effect",
-          "note": "Sphere"
+          "note": "Sphere",
+          "config": {"shape": "sphere"}
         }
       ],
       "patterns": [
@@ -3105,7 +3110,8 @@
       "modifiers": [
         {
           "modifier": "modifiers:area_effect",
-          "note": "Sphere"
+          "note": "Sphere",
+          "config": {"shape": "sphere"}
         },
         {
           "modifier": "modifiers:short_term"
@@ -3153,7 +3159,8 @@
       "modifiers": [
         {
           "modifier": "modifiers:area_effect",
-          "note": "Sphere"
+          "note": "Sphere",
+          "config": {"shape": "sphere"}
         }
       ],
       "patterns": [
@@ -3201,7 +3208,8 @@
       "modifiers": [
         {
           "modifier": "modifiers:area_effect",
-          "note": "Sphere"
+          "note": "Sphere",
+          "config": {"shape": "sphere"}
         }
       ],
       "patterns": [
@@ -3248,7 +3256,8 @@
       "modifiers": [
         {
           "modifier": "modifiers:area_effect",
-          "note": "Sphere"
+          "note": "Sphere",
+          "config": {"shape": "sphere"}
         }
       ],
       "patterns": [
@@ -3297,7 +3306,8 @@
       "modifiers": [
         {
           "modifier": "modifiers:area_effect",
-          "note": "Sphere"
+          "note": "Sphere",
+          "config": {"shape": "sphere"}
         },
         {
           "modifier": "modifiers:extra_condition"
@@ -3334,7 +3344,8 @@
       "modifiers": [
         {
           "modifier": "modifiers:area_effect",
-          "note": "Sphere"
+          "note": "Sphere",
+          "config": {"shape": "sphere"}
         }
       ],
       "patterns": [
@@ -3368,7 +3379,8 @@
       "modifiers": [
         {
           "modifier": "modifiers:area_effect",
-          "note": "Sphere"
+          "note": "Sphere",
+          "config": {"shape": "sphere"}
         }
       ],
       "patterns": [

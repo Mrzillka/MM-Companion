@@ -97,6 +97,8 @@ that used to be spelled in Python:
 | `groundMode` | `movement.json` | which of those modes everybody walks in |
 | `statIntegration` | `modifiers.json`, `effect_modifiers.json` | what taking this extra or flaw *grants*, in the same shape a base effect uses |
 | `impress` | `actions.json` | the Impress action: impressions and their ladders, the interaction skills, what a target resists with, the group penalty and the GM's situational modifiers |
+| `area` | `actions.json` | area attacks: which modifiers make an effect an area, the Dodge key and DC base, how a made Dodge halves the rank, each shape's size phrase, the Evasion advantage, the GM's cover options, whether a free area use is capped at the Power Level, and which modifier choice makes a choice of two resistances the worse one (`worstOf`) |
+| `config` | an `equipment.json` modifier ref | the modifier's config choices on a catalog item, as a power's selection stores them (a grenade's Area `shape`) |
 | `parameters` | any `resistanceOutcomes` rung | the parameter a rung applies a condition with; `{source}` is whoever imposed it |
 
 ## How content merges

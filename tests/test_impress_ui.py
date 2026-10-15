@@ -46,6 +46,7 @@ from mm_companion.ui.impress import (
     ResistPromptDialog,
     _fill_impressions,
 )
+from mm_companion.ui.roll_history import GroupTableCard
 from mm_companion.ui.sections.dice import DiceSection
 from mm_companion.ui.session_bridge import set_active_session
 from mm_companion.ui.session_dialogs import HostOptions
@@ -269,8 +270,12 @@ def test_the_gm_rolls_an_npc_impression_and_the_target_takes_the_rung(
     # Two degrees of failure on Demoralized: Frightened of the Thug.
     model = window._npc_state[mook].character
     assert [(c.condition_id, c.parameter) for c in model.conditions] == [("frightened", "Thug")]
-    cards = window._history.cards()
-    assert len(cards) == 2
+    # One table for the whole group: the check, then the Mook's row and what it did.
+    (card,) = window._history.cards()
+    assert isinstance(card, GroupTableCard)
+    lines = card.lines()
+    assert len(lines) == 3 and "Thug: Demoralized" in lines[0]
+    assert "Mook" in lines[2] and "Frightened" in lines[2]
     assert "Frightened" in window._notice_label.text()
 
 

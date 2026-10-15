@@ -70,6 +70,7 @@ from mm_companion.core.rules import (
     damage_steps,
     decrement_condition,
     default_pins,
+    find_area_power,
     initiative_modifier,
     parse_pins,
     requested_roll_choices,
@@ -94,9 +95,11 @@ from mm_companion.core.session.protocol import (
     SCENE_DISPOSITIONS,
 )
 from mm_companion.ui import npc_icons, theme
+from mm_companion.ui.area_gm import AreaController
 from mm_companion.ui.block_canvas import BlockCanvas
 from mm_companion.ui.block_sizes import RecommendedSize, load_block_sizes
 from mm_companion.ui.blocks.bus import (
+    AREA_REQUESTED,
     BONUS_REQUESTED,
     LOAD_REQUESTED,
     NOTE_REQUESTED,
@@ -266,6 +269,24 @@ def _next_copy_name(source_name: str, existing: set[str]) -> str:
 def _npc_key(file_name: str) -> str:
     """A pin-store key for an NPC. Its file name is its identity everywhere else."""
     return f"npc:{file_name}"
+
+
+def _number_namesakes(parties: list[ImpressParty]) -> None:
+    """Number the NPCs on the board that share a name: ``Thug (1)``, ``Thug (2)``.
+
+    An action's table card has a row per creature, keyed by the name a line names, and
+    its notices say who did what by name. Two identical minions would share one row
+    and one line, the last roll's outcome standing for both. A player keeps their
+    name, since their own app recognises a request meant for them by it.
+    """
+    counts: dict[str, int] = {}
+    for party in parties:
+        counts[party.name] = counts.get(party.name, 0) + 1
+    seen: dict[str, int] = {}
+    for party in parties:
+        if party.kind == PARTY_NPC and counts[party.name] > 1:
+            seen[party.name] = seen.get(party.name, 0) + 1
+            party.name = f"{party.name} ({seen[party.name]})"
 
 
 def _player_key(player_id: str) -> str:
@@ -477,6 +498,9 @@ class GMWindow(QMainWindow):
         # Runs every Impress this window resolves — a player's, or an NPC's from the
         # roller's Action row (see mm_companion.ui.impress_gm).
         self._impress = ImpressController(self._data, self._bridge, self, self)
+        # And every area attack: a player's declaration lands in the history with a
+        # Resolve button, and an NPC's starts from its sheet (mm_companion.ui.area_gm).
+        self._area = AreaController(self._data, self._bridge, self, self)
         self._refresh_idle_status()
         self._refresh_trouble()
         self._refresh_rolls()
@@ -823,13 +847,16 @@ class GMWindow(QMainWindow):
                 )
             on_board[entry.wire_source()] = entry.ref
             targets.append(party)
+        _number_namesakes(targets)
+        named = {party.ref: party.name for party in targets}
         sources: list[ImpressParty] = []
         for name in self._ordered_npcs():
             npc = self._npc_state.get(name)
             if npc is None:
                 continue
             ref = on_board.get(f"{SCENE_NPC}:{name}", f"{SCENE_NPC}:{name}")
-            sources.append(ImpressParty(ref, npc.summary.name, PARTY_NPC, name, npc.character))
+            shown = named.get(ref, npc.summary.name)
+            sources.append(ImpressParty(ref, shown, PARTY_NPC, name, npc.character))
         sources += [party for party in targets if party.kind == PARTY_PLAYER]
         return sources, targets
 
@@ -865,6 +892,16 @@ class GMWindow(QMainWindow):
 
     def impress_notice(self, text: str, colour: str) -> None:
         self._show_notice(text, colour)
+
+    # -- the area attack's two extra host methods (see AreaHost) ------------------
+
+    def area_add_card(self, card) -> None:
+        """Put an area attack's reminder — its Resolve button — in the GM's history."""
+        self._history.add_card(card)
+
+    def area_roll_attack(self, spec: RollSpec) -> None:
+        """Roll an NPC's attack against the primary on this window's roller."""
+        self._roller.roll_spec(spec)
 
     def _request_roll(self, spec: object) -> None:
         """Ask the table to roll something — the Request row's handler.
@@ -1276,21 +1313,24 @@ class GMWindow(QMainWindow):
             return
         result = roll.get("result")
         self._offline_seq -= 1
-        self._history.add_roll(
-            {
-                "seq": self._offline_seq,
-                "player_name": self._name_of_gm(),
-                "die": roll["die"],
-                "bonus": roll["bonus"],
-                "penalty": roll["penalty"],
-                "dc": roll["dc"],
-                "degree": None if result is None else result.degree,
-                "critical": bool(result is not None and result.critical),
-                "label": roll.get("label", ""),
-                # Local-only, as everywhere: it carries the chain this card offers.
-                "spec": roll.get("spec"),
-            }
-        )
+        record = {
+            "seq": self._offline_seq,
+            "player_name": self._name_of_gm(),
+            "die": roll["die"],
+            "bonus": roll["bonus"],
+            "penalty": roll["penalty"],
+            "dc": roll["dc"],
+            "degree": None if result is None else result.degree,
+            "critical": bool(result is not None and result.critical),
+            "label": roll.get("label", ""),
+            # Local-only, as everywhere: it carries the chain this card offers.
+            "spec": roll.get("spec"),
+        }
+        self._history.add_roll(record)
+        # An NPC's attack against an area's primary, rolled from the area window: off
+        # the air there is no rollAdded to bring its total back, so it is handed over.
+        if getattr(self, "_area", None) is not None:
+            self._area.take_roll(record)
 
     def _on_local_roll_removed(self, seq: int) -> None:
         """Persist a roll the GM struck while not hosting.
@@ -1506,6 +1546,10 @@ class GMWindow(QMainWindow):
         entry = self._scene_entry_for(SCENE_PLAYER, player_id)
         if entry is not None and getattr(self, "_impress", None) is not None:
             for window in self._impress.windows.values():
+                window.set_party_character(entry.ref, Character.from_dict(character))
+        # The area windows too: a primary player's Defense decides the Hit tick.
+        if entry is not None and getattr(self, "_area", None) is not None:
+            for window in self._area.windows.values():
                 window.set_party_character(entry.ref, Character.from_dict(character))
         # Their conditions and their picture are on the board too, and a snapshot
         # is the only warning that either moved.
@@ -2614,7 +2658,9 @@ class GMWindow(QMainWindow):
         """Show an NPC sheet and keep it alive, watching for saves and its close."""
         key = id(window)
         self._npc_windows[key] = window
-        window.requestUnserved.connect(self._on_npc_request)
+        window.requestUnserved.connect(
+            lambda topic, payload, w=window: self._on_npc_request(topic, payload, w)
+        )
         window.saved.connect(lambda w=window: self._on_npc_saved(w))
         window.closed.connect(lambda k=key: self._npc_windows.pop(k, None))
         # Closing a sheet saves the NPC arrangement, which the spare should open with.
@@ -2706,7 +2752,7 @@ class GMWindow(QMainWindow):
         if spare is not None:
             spare.deleteLater()
 
-    def _on_npc_request(self, topic: str, payload: object) -> None:
+    def _on_npc_request(self, topic: str, payload: object, window=None) -> None:
         """A roll (or a line for the history) asked for on an NPC sheet.
 
         An NPC sheet has no roller of its own, so it lands here — on this window's,
@@ -2716,12 +2762,30 @@ class GMWindow(QMainWindow):
         """
         if topic == ROLL_REQUESTED and isinstance(payload, RollSpec):
             self._roller.roll_spec(payload)
+        elif topic == AREA_REQUESTED and isinstance(payload, str) and window is not None:
+            # Not a die: the NPC uses a power on an area, and the GM picks who is in it.
+            self._start_npc_area(window, payload)
         elif topic == LOAD_REQUESTED and isinstance(payload, RollSpec):
             self._roller.load_spec(payload)
         elif topic == BONUS_REQUESTED and type(payload) is int and payload > 0:
             self._roller.add_bonus(payload)
         elif topic == NOTE_REQUESTED and isinstance(payload, str) and payload:
             self._post_note(payload)
+
+    def _start_npc_area(self, window: NPCWindow, power_id: str) -> None:
+        """Open the area window for the build *power_id* names on an NPC sheet.
+
+        The NPC is the cast entry the sheet's file is, never one found by its display
+        name: two Thugs share a name, and the wrong one would be left out of the targets
+        while the attacker could be ticked into its own area.
+        """
+        character = window.sheet.character
+        power = find_area_power(character, self._data, power_id)
+        if power is None:
+            return
+        path = Path(window.path) if window.path is not None else None
+        key = next((n for n, entry in self._npc_state.items() if entry.path == path), "")
+        self._area.start_for_npc(character, power, key, name=library.display_name(character))
 
     def _post_note(self, text: str) -> None:
         """A line in the history: the table's while hosting, this window's off the air.

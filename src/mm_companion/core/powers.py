@@ -384,6 +384,12 @@ class Power:
     dynamic_points: int | None = None
     cost_override: int | None = None
     stunt_of: str = ""
+    #: The table's free **area use**: any attack may be used as an area without buying
+    #: the extra (the GM's call, and the rules' own for an attacker far larger than its
+    #: target). A play-time switch on the card, priced at nothing — the area rank is
+    #: capped at the Power Level instead (see :mod:`~.rules.area_attack`). Written only
+    #: when on.
+    area_use: bool = False
 
     def to_dict(self) -> dict:
         data = {
@@ -404,6 +410,8 @@ class Power:
             data["cost_override"] = self.cost_override
         if self.stunt_of:
             data["stunt_of"] = self.stunt_of
+        if self.area_use:
+            data["area_use"] = True
         if self.active_effect is not None:
             data["active_effect"] = self.active_effect
         # The runtime switches, written only when off — see the class docstring.
@@ -451,6 +459,7 @@ class Power:
             cost_override=None if raw_cost is None else int(raw_cost),
             stunt_of=raw.get("stunt_of", ""),
             active_effect=None if raw_effect is None else int(raw_effect),
+            area_use=bool(raw.get("area_use", False)),
         )
 
 

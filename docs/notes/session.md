@@ -622,6 +622,13 @@ The shape:
   `add_roll` drops a `seq` it has seen, so a re-sent `RollAdded` would have reached
   nobody who already had it. The **Show** button sits beside the ✕ on a GM's hidden,
   positive-`seq` card; off the air it flips the resumed log the way ✕ strikes it.
+- **Protocol v13 carries area attacks on the spec** — six `RollSpec` keys
+  (`dc_if_resisted`, `note_if_resisted`, `follow_up_always`, `targets`, `action_id`,
+  `title`) and no new message. Bumped all the same, because `sanitize_spec` is a
+  whitelist: a v12 server strips the keys without a word, and a caught player would be
+  offered the full-rank save after a made Dodge, or no save at all after a failed one.
+  The **hub on the VPS must be redeployed** with the clients for this one. See [the
+  actions notes](actions.md).
 - Deployment lives in `deploy/` (systemd units, `deploy.sh`, runbook) — tracked
   and secret-free. The operator's addresses and key paths are in a gitignored
   `SERVER.md`.

@@ -562,6 +562,7 @@ class RequestCard(HistoryCard):
         *,
         show_author: bool = True,
         can_remove: bool = False,
+        own_names: frozenset[str] = frozenset(),
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(request.get("seq"), parent)
@@ -580,6 +581,23 @@ class RequestCard(HistoryCard):
             name_line.setTextFormat(Qt.TextFormat.RichText)
             name_line.setWordWrap(True)
             info.addWidget(name_line)
+
+        # Who the roll is for — the players an area caught. Anyone may still answer it
+        # (an ally interposing), but the ones it names should not have to hunt for it.
+        spec = RollSpec.from_dict(request.get("spec"))
+        self.for_reader = False
+        if spec is not None and spec.targets:
+            self.for_reader = bool(own_names & set(spec.targets))
+            names = escape_rich_text(", ".join(spec.targets))
+            caught = QLabel(
+                f"<b>You're caught</b> — {names}" if self.for_reader else f"Caught: {names}"
+            )
+            caught.setTextFormat(Qt.TextFormat.RichText)
+            caught.setWordWrap(True)
+            caught.setStyleSheet(
+                tinted_style("tint.warning") if self.for_reader else muted_style(italic=True)
+            )
+            info.addWidget(caught)
 
         for widget in request_widgets(request.get("spec"), on_roll=self.rollRequested.emit):
             info.addWidget(widget)
@@ -689,6 +707,232 @@ class SessionRollCard(HistoryCard):
             return
         key = quick_roll_key(self.parameters())
         self.star.set_state(key in saved_keys, room)
+
+
+def table_key(group: str) -> str:
+    """Which table card a group roll belongs to — the group id less any stage suffix.
+
+    An action resolved in stages rolls each stage as its own group (an area's Dodge
+    checks, then the saves behind them), named ``"<id>.1"``, ``"<id>.2"``. They are one
+    table: the second stage fills in the rows the first one started.
+    """
+    head, dot, tail = group.rpartition(".")
+    return head if dot and head and tail.isdigit() else group
+
+
+def _table_cell(roll: dict, row: str) -> str:
+    """One roll in a table row, as rich text: what it was, the total, and the DC."""
+    label = str(roll.get("label", ""))
+    if row and label.startswith(f"{row}: "):
+        label = label[len(row) + 2 :]
+    die = int(roll.get("die", 0))
+    total = die + int(roll.get("bonus", 0)) - int(roll.get("penalty", 0))
+    text = f"{escape_rich_text(label)} <b>{total}</b>"
+    dc = roll.get("dc")
+    if dc is not None:
+        text += f" vs {int(dc)}"
+    degree = roll.get("degree")
+    if degree is not None:
+        degree = int(degree)
+        mark = "✓" if degree > 0 else "✗" * max(1, min(3, abs(degree)))
+        colour = theme.color("tint.better" if degree > 0 else "tint.worse")
+        text += f" <span style='color:{colour}'>{mark}</span>"
+    if die in (1, 20):
+        muted = theme.color("text.muted.rich")
+        text += f" <span style='color:{muted}'>(nat {die})</span>"
+    return text
+
+
+def _provokes(roll: dict) -> bool:
+    """Whether a roll carries a follow-up — which only its own card can offer.
+
+    An impression run as "request only" is a group of one: its check, whose card is
+    where every target finds the button to resist with. A table has no buttons, so a
+    roll like that keeps its ordinary card.
+    """
+    spec = RollSpec.from_dict(roll.get("spec"))
+    return spec is not None and spec.follow_up is not None
+
+
+def _row_name(roll: dict) -> str:
+    """The creature a group roll concerns — the first name its spec targets, or none."""
+    spec = RollSpec.from_dict(roll.get("spec"))
+    return spec.targets[0] if spec is not None and spec.targets else ""
+
+
+class GroupTableCard(HistoryCard):
+    """Every roll of one group — an impression, an area — as **one** table.
+
+    A group used to land as a card per creature, which buried the one thing the table
+    wanted to read (who was caught, and what it did to them) under a dozen near-identical
+    cards. Here each creature is a row — the name a line's spec names in its
+    :attr:`~mm_companion.core.rules.RollSpec.targets` — and every roll that concerns it
+    is a cell of that row, so an area's Dodge check and the save after it read side by
+    side, with what the save did at the end. A roll naming nobody (an impression's own
+    check) is a row of its own.
+
+    Rolls join it as they arrive, kept in ``seq`` order, which is what lets a second
+    stage fill in rows the first one started. :attr:`seqs` is every roll it holds, so
+    striking one by ``seq`` finds its table.
+    """
+
+    removeRequested = Signal(int)
+
+    def __init__(
+        self, key: str, *, can_remove: bool = False, parent: QWidget | None = None
+    ) -> None:
+        super().__init__(None, parent)
+        self.key = key
+        self.records: list[dict] = []
+        layout = QHBoxLayout(self)
+        self._info = QVBoxLayout()
+        tighten_card(layout, self._info)
+        layout.addLayout(self._info, stretch=1)
+        self._lines: list[QLabel] = []
+        if can_remove:
+            remove_button = QPushButton("✕")
+            remove_button.setToolTip("Remove this whole table from the history")
+            remove_button.setFixedWidth(int(theme.metric("column.roll-button")))
+            remove_button.clicked.connect(self._remove_all)
+            layout.addWidget(remove_button, alignment=Qt.AlignmentFlag.AlignTop)
+
+    @property
+    def seqs(self) -> set[int]:
+        return {r["seq"] for r in self.records if isinstance(r.get("seq"), int)}
+
+    def add_record(self, roll: dict) -> None:
+        """Take one more roll of the group (or a fresher copy of one), and redraw."""
+        seq = roll.get("seq")
+        if isinstance(seq, int):
+            self.records = [r for r in self.records if r.get("seq") != seq]
+        self.records.append(dict(roll))
+        # In the order they were rolled. Off the air a window counts its own rolls
+        # *down* from -1, so it is the magnitude that grows with time either way.
+        self.records.sort(key=lambda r: abs(r["seq"]) if isinstance(r.get("seq"), int) else 0)
+        seqs = self.seqs
+        self.seq = min(seqs) if seqs else None
+        self._redraw()
+
+    def remove_seq(self, seq: int) -> bool:
+        """Drop the roll *seq*; ``True`` when the table has nothing left in it."""
+        self.records = [r for r in self.records if r.get("seq") != seq]
+        self._redraw()
+        return not self.records
+
+    def _remove_all(self) -> None:
+        for seq in sorted(self.seqs):
+            self.removeRequested.emit(seq)
+
+    def rows(self) -> list[tuple[str, list[dict]]]:
+        """``(row name, its rolls)`` in the order the rows first appeared."""
+        rows: list[tuple[str, list[dict]]] = []
+        named: dict[str, list[dict]] = {}
+        for roll in self.records:
+            name = _row_name(roll)
+            if not name:
+                rows.append(("", [roll]))
+            elif name in named:
+                named[name].append(roll)
+            else:
+                named[name] = [roll]
+                rows.append((name, named[name]))
+        return rows
+
+    def title(self) -> str:
+        for roll in self.records:
+            spec = RollSpec.from_dict(roll.get("spec"))
+            if spec is not None and spec.title:
+                return spec.title
+        return ""
+
+    def _redraw(self) -> None:
+        for line in self._lines:
+            self._info.removeWidget(line)
+            discard_widget(line)
+        self._lines = []
+        if not self.records:
+            return
+        who = str(self.records[0].get("player_name", "")) or "Someone"
+        heading = f"<b>{escape_rich_text(who)}</b>"
+        if any(r.get("hidden") for r in self.records):
+            heading = f"{HIDDEN_MARK} {heading}"
+        title = self.title()
+        if title:
+            muted = theme.color("text.muted.rich")
+            heading += f" <span style='color:{muted}'>— {escape_rich_text(title)}</span>"
+        self._add_line(heading)
+        for name, rolls in self.rows():
+            cells = " · ".join(_table_cell(r, name) for r in rolls)
+            text = f"<b>{escape_rich_text(name)}</b> {cells}" if name else cells
+            last = rolls[-1]
+            spec = RollSpec.from_dict(last.get("spec"))
+            degree = last.get("degree")
+            degree = None if degree is None else int(degree)
+            outcome = resistance_outcome(spec, degree) if spec is not None else ""
+            if outcome:
+                tint = theme.color("tint.worse" if outcome_is_failure(degree) else "tint.warning")
+                text += f" → <span style='color:{tint}'><b>{escape_rich_text(outcome)}</b></span>"
+            self._add_line(text)
+
+    def _add_line(self, text: str) -> None:
+        line = _rich(text)
+        self._info.addWidget(line)
+        self._lines.append(line)
+
+    def lines(self) -> list[str]:
+        """The table's rows as plain text, heading first — what a test reads."""
+        return [line.text() for line in self._lines]
+
+
+class ActionCard(HistoryCard):
+    """A line in the **GM's** history that waits on them: an action to resolve.
+
+    Never on the wire — it is the GM's own reminder, built by the controller that
+    owns the action and shown only in the GM window's history, where the rolls it
+    is about land too. Its one button reopens the action's window; once resolved
+    it says so and the button goes.
+
+    While it waits it is :attr:`pending`, and the panel **keeps** a pending card through
+    a replay (a reconnect's ``Welcome``) and past :data:`MAX_CARDS`: it is the only way
+    back to the action, and losing it would leave an attack nobody can resolve.
+    """
+
+    actionRequested = Signal(str)
+
+    def __init__(
+        self, action_id: str, text: str, button: str, parent: QWidget | None = None
+    ) -> None:
+        super().__init__(None, parent)
+        self.action_id = action_id
+        layout = QHBoxLayout(self)
+        info = QVBoxLayout()
+        tighten_card(layout, info)
+        self._text = _rich(text)
+        info.addWidget(self._text)
+        self.button = QPushButton(button)
+        self.button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.button.clicked.connect(lambda: self.actionRequested.emit(self.action_id))
+        info.addWidget(self.button)
+        self._status = QLabel()
+        self._status.setWordWrap(True)
+        self._status.setStyleSheet(muted_style(italic=True))
+        info.addWidget(self._status)
+        self._status.hide()
+        layout.addLayout(info, stretch=1)
+        self.pending = True
+
+    def text(self) -> str:
+        return self._text.text()
+
+    def set_text(self, text: str) -> None:
+        self._text.setText(text)
+
+    def set_done(self, text: str) -> None:
+        """The action is settled: say how, and take the button away."""
+        self.pending = False
+        self.button.hide()
+        self._status.setText(text)
+        self._status.show()
 
 
 class RollHistoryPanel(QWidget):
@@ -885,14 +1129,18 @@ class RollHistoryPanel(QWidget):
         if self._bridge is not None:
             self._own_id = self._bridge.own_player_id()
         self.clear()
-        if not isinstance(rolls, list):
-            return
-        self._replaying = True
-        try:
-            for roll in rolls[-MAX_CARDS:]:
-                self.add_roll(roll)
-        finally:
-            self._replaying = False
+        if isinstance(rolls, list):
+            self._replaying = True
+            try:
+                for roll in rolls[-MAX_CARDS:]:
+                    self.add_roll(roll)
+            finally:
+                self._replaying = False
+        # What clear() kept back — an action still waiting on the GM — goes back on top,
+        # where it was before the replay buried it under the log.
+        for card in reversed(self._waiting()):
+            self._layout.removeWidget(card)
+            self._layout.insertWidget(0, card)
 
     def add_roll(self, roll: object) -> None:
         """Put one entry at the top of the list.
@@ -931,6 +1179,16 @@ class RollHistoryPanel(QWidget):
             self._held.pop(seq, None)
         self._insert(roll)
 
+    def _own_names(self) -> frozenset[str]:
+        """The names this seat goes by on the scene — what a request's targets name."""
+        if self._bridge is None or not self._own_id:
+            return frozenset()
+        return frozenset(
+            str(entry.get("name", ""))
+            for entry in self._bridge.scene()
+            if entry.get("player_id") == self._own_id and entry.get("name")
+        )
+
     def _is_own(self, roll: dict) -> bool:
         return bool(self._own_id) and str(roll.get("player_id", "")) == self._own_id
 
@@ -941,6 +1199,11 @@ class RollHistoryPanel(QWidget):
             if seq in self._seen:
                 return
             self._seen.add(seq)
+
+        group = str(roll.get("group", "") or "")
+        if group and roll.get("kind", KIND_ROLL) == KIND_ROLL and not _provokes(roll):
+            self._add_to_table(roll, table_key(group))
+            return
 
         card: HistoryCard
         if roll.get("kind") in (KIND_NOTE, KIND_MOD):
@@ -953,7 +1216,7 @@ class RollHistoryPanel(QWidget):
             card = NoteCard(roll, can_remove=self._gm)
             card.removeRequested.connect(self._request_remove)
         elif roll.get("kind") == KIND_REQUEST:
-            card = RequestCard(roll, can_remove=self._gm)
+            card = RequestCard(roll, can_remove=self._gm, own_names=self._own_names())
             card.removeRequested.connect(self._request_remove)
             # The same signal the follow-up chip travels on, and for the same
             # reason: both are "roll this on your own sheet", and the roller
@@ -967,6 +1230,37 @@ class RollHistoryPanel(QWidget):
         self._empty.setVisible(False)
         if not self._replaying:
             announce_entry(roll, self)
+
+    def _add_to_table(self, roll: dict, key: str) -> None:
+        """Put a group's roll in its table card — a new one for the group's first roll.
+
+        Only the first roll of a table is announced: the rest are the same news, a row
+        at a time.
+        """
+        table = next(
+            (c for c in self.cards() if isinstance(c, GroupTableCard) and c.key == key), None
+        )
+        if table is not None:
+            table.add_record(roll)
+            return
+        table = GroupTableCard(key, can_remove=self._gm)
+        table.removeRequested.connect(self._request_remove)
+        table.add_record(roll)
+        self._layout.insertWidget(0, table)
+        self._trim()
+        self._empty.setVisible(False)
+        if not self._replaying:
+            announce_entry(roll, self)
+
+    def add_card(self, card: HistoryCard) -> None:
+        """Put a card the owner built at the top — a GM's :class:`ActionCard`.
+
+        Not a record: nothing is added to the log and nothing of it is saved. A replay
+        keeps it rather than bringing it back (:meth:`clear`), for as long as it waits.
+        """
+        self._layout.insertWidget(0, card)
+        self._trim()
+        self._empty.setVisible(False)
 
     def _roll_card(self, roll: dict) -> SessionRollCard:
         card = SessionRollCard(roll, own=self._is_own(roll), can_remove=self._gm)
@@ -1005,6 +1299,12 @@ class RollHistoryPanel(QWidget):
         if not isinstance(roll, dict):
             return
         seq = roll.get("seq")
+        table = next(
+            (c for c in self.cards() if isinstance(c, GroupTableCard) and seq in c.seqs), None
+        )
+        if table is not None:
+            table.add_record(roll)
+            return
         old = next((c for c in self.cards() if seq is not None and c.seq == seq), None)
         if old is None:
             self.add_roll(roll)
@@ -1029,8 +1329,16 @@ class RollHistoryPanel(QWidget):
         self.rollRemovedLocally.emit(seq)
 
     def remove_roll(self, seq: int) -> None:
-        """Drop the card for *seq* (from a ``rollRemoved`` broadcast); no-op if absent."""
+        """Drop the card for *seq* (from a ``rollRemoved`` broadcast); no-op if absent.
+
+        A roll in a table takes only its cell with it; the table goes once it is empty.
+        """
         for card in self.cards():
+            if isinstance(card, GroupTableCard) and seq in card.seqs:
+                if card.remove_seq(seq):
+                    self._layout.removeWidget(card)
+                    discard_widget(card)
+                break
             if card.seq == seq:
                 self._layout.removeWidget(card)
                 discard_widget(card)
@@ -1040,12 +1348,24 @@ class RollHistoryPanel(QWidget):
             self._empty.setVisible(True)
 
     def clear(self) -> None:
+        """Drop every card — except an :class:`ActionCard` still waiting on the GM.
+
+        That one is no record, so nothing would bring it back, and it is the only way
+        to the action it stands for.
+        """
+        waiting = self._waiting()
         for card in self.cards():
+            if card in waiting:
+                continue
             self._layout.removeWidget(card)
             discard_widget(card)
         self._seen.clear()
         self._held.clear()
-        self._empty.setVisible(True)
+        self._empty.setVisible(not waiting)
+
+    def _waiting(self) -> list[HistoryCard]:
+        """The action cards on screen still waiting on the GM, newest first."""
+        return [c for c in self.cards() if isinstance(c, ActionCard) and c.pending]
 
     def cards(self) -> list[HistoryCard]:
         """The cards on screen, newest first — rolls and notes alike.
@@ -1070,7 +1390,8 @@ class RollHistoryPanel(QWidget):
         bottom of the stack as cards are inserted above it, which is exactly where a
         positional "the oldest one is second from the end" rule would have found it.
         """
-        cards = self.cards()
+        # A waiting action card is never the one to go — see ActionCard.
+        cards = [c for c in self.cards() if not (isinstance(c, ActionCard) and c.pending)]
         for card in cards[MAX_CARDS:]:
             self._layout.removeWidget(card)
             discard_widget(card)

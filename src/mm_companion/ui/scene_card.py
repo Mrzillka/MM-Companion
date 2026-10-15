@@ -362,7 +362,10 @@ class SceneCard(QFrame):
     # -- the GM's gestures -------------------------------------------------
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        if self._gm and event.button() == Qt.MouseButton.LeftButton:
+        # Every seat may drag a card, not only the GM: a player drags one into an
+        # area attack's window to put that creature in the area. Only the GM's board
+        # takes the drop back, so on a player's screen it reorders nothing.
+        if self.ref and event.button() == Qt.MouseButton.LeftButton:
             self._press_pos = event.position().toPoint()
         super().mousePressEvent(event)
 

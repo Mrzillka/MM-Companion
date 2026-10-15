@@ -1659,6 +1659,9 @@ class EquipmentModifierRef:
     modifier: str
     rank: int | None = None
     note: str = ""
+    #: The modifier's config choices, as a power's selection would store them (an Area
+    #: Effect's ``shape``). Empty for the commonest case, a modifier with no choices.
+    config: dict = field(default_factory=dict, compare=False)
     #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
     extra: dict = field(default_factory=dict, compare=False)
 
@@ -2192,6 +2195,54 @@ class ImpressRules:
 
 
 @dataclass(frozen=True)
+class AreaCover:
+    """One degree of cover a creature may have from an area's origin — a Dodge bonus."""
+
+    id: str
+    label: str
+    value: int = 0
+
+
+@dataclass(frozen=True)
+class AreaEvasion:
+    """The advantage that helps against areas: a Dodge bonus, then no effect on a save."""
+
+    advantage: str
+    dodge_bonus: int = 0
+    negate_at_rank: int = 0
+
+
+@dataclass(frozen=True)
+class AreaRules:
+    """Area attacks, from ``actions.json``'s ``area`` block.
+
+    ``modifiers`` are the modifier ids that make an effect an area effect; their shape,
+    applications and spread config is interpreted by :mod:`~.rules.area`. Empty when a
+    ruleset ships no block, which is how a caller knows to offer no area use at all.
+    """
+
+    modifiers: tuple[str, ...] = ()
+    dodge: str = ""
+    dc_base: int = 10
+    halve: str = "up"
+    base_distance_rank: int = 1
+    shapes: dict[str, str] = field(default_factory=dict)
+    default_shape: str = ""
+    evasion: AreaEvasion | None = None
+    free_use_pl_cap: bool = True
+    cover: tuple[AreaCover, ...] = ()
+    #: ``(modifier id, config key, value)`` choices that make an effect resisted by
+    #: either of two traits take the *worse* of them (Alternate Resistance's worst of
+    #: two). Without one, a choice between two is the better one.
+    worst_of: tuple[tuple[str, str, str], ...] = ()
+
+    @property
+    def available(self) -> bool:
+        """Whether this ruleset resolves area attacks at all."""
+        return bool(self.modifiers and self.dodge)
+
+
+@dataclass(frozen=True)
 class GameData:
     """The full parsed game-data content, aggregated across the data files.
 
@@ -2272,6 +2323,7 @@ class GameData:
     installation_rules: InstallationRules = field(default_factory=InstallationRules)
     #: The Impress action, from ``actions.json``.
     impress: ImpressRules = field(default_factory=ImpressRules)
+    area: AreaRules = field(default_factory=AreaRules)
 
     def _catalog(self, key: str, build: Callable[[], dict]) -> dict:
         """Memoize one of the merged ``id ->`` lookups below, per :class:`GameData`.
@@ -2873,6 +2925,45 @@ def _parse_impress(raw: dict) -> ImpressRules:
     )
 
 
+def _parse_area(raw: dict) -> AreaRules:
+    """Parse ``actions.json``'s ``area`` block (see :class:`AreaRules`)."""
+
+    block = raw.get("area")
+    if not isinstance(block, dict):
+        return AreaRules()
+    evasion = block.get("evasion")
+    shapes = block.get("shapes", {})
+    return AreaRules(
+        modifiers=tuple(str(m) for m in block.get("modifiers", ())),
+        dodge=str(block.get("dodge", "")),
+        dc_base=int(block.get("dcBase", 10)),
+        halve=str(block.get("halve", "up")),
+        base_distance_rank=int(block.get("baseDistanceRank", 1)),
+        shapes={str(k): str(v) for k, v in shapes.items()} if isinstance(shapes, dict) else {},
+        default_shape=str(block.get("defaultShape", "")),
+        evasion=(
+            AreaEvasion(
+                advantage=str(evasion.get("advantage", "")),
+                dodge_bonus=int(evasion.get("dodgeBonus", 0)),
+                negate_at_rank=int(evasion.get("negateAtRank", 0)),
+            )
+            if isinstance(evasion, dict) and evasion.get("advantage")
+            else None
+        ),
+        free_use_pl_cap=bool(block.get("freeUsePlCap", True)),
+        cover=tuple(
+            AreaCover(str(c["id"]), str(c.get("label", c["id"])), int(c.get("value", 0)))
+            for c in block.get("cover", ())
+            if isinstance(c, dict) and c.get("id")
+        ),
+        worst_of=tuple(
+            (str(w["modifier"]), str(w.get("key", "")), str(w.get("value", "")))
+            for w in block.get("worstOf", ())
+            if isinstance(w, dict) and w.get("modifier")
+        ),
+    )
+
+
 def _parse_base_cost_by(raw: dict | None) -> BaseCostBy | None:
     """Parse an effect's ``baseCostBy`` block, or ``None`` when it has none.
 
@@ -3205,7 +3296,8 @@ def _parse_equipment_modifier_ref(raw: dict) -> EquipmentModifierRef:
         modifier=_unqualify(raw.get("modifier")),
         rank=None if rank is None else int(rank),
         note=str(raw.get("note", "")),
-        extra=_extras(raw, "modifier", "rank", "note"),
+        config=dict(raw["config"]) if isinstance(raw.get("config"), dict) else {},
+        extra=_extras(raw, "modifier", "rank", "note", "config"),
     )
 
 
@@ -4038,6 +4130,7 @@ def _build_game_data(content: dict[str, dict]) -> GameData:
         system=system,
         blocks=tuple(_parse_block_spec(b) for b in blocks_raw.get("blocks", [])),
         impress=_parse_impress(actions_raw),
+        area=_parse_area(actions_raw),
     )
 
 

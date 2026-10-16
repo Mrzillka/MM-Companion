@@ -50,7 +50,12 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
 - **Four rules, each guarded by a test in `tests/test_theme_qss.py`:**
   1. Never select a bare `QFrame`/`QLabel`/`QGroupBox`/`QScrollArea` — every
      nested separator and label inherits it. Use an object name or a class that
-     names a whole component.
+     names a whole component. The same goes for a widget's **own** inline sheet: a
+     bare `border: …; background: …` on a widget reaches every child, and that
+     includes a right-click `QMenu` parented to it — the pin chip's menu drew itself
+     in the chip's border, radius and fill and clipped its own item. Scope it
+     (`#pinChip { … }`, `#specChip { … }`). Not test-guarded: an inline sheet is
+     not in the built stylesheet `tests/test_theme_qss.py` reads.
   2. Never set `font-size` in a stylesheet. It outranks the widget's `QFont`,
      which is what the powers cards animate through; use
      `QFont.setPointSizeF(theme.font_size(...))`.

@@ -221,14 +221,14 @@ def test_a_single_slot_keeps_only_the_last_card(qapp) -> None:
     assert field.refs() == ["b"]
 
 
-def test_a_free_use_picks_its_shape_in_the_dialog(qapp, data) -> None:
+def test_a_free_use_takes_the_default_shape_without_asking(qapp, data) -> None:
+    """The shape changes nothing the table resolves, so the dialog has no row for it."""
     hero = creature(data, "Ana")
     blast = Power(name="Blast", effects=[PowerEffectInstance("damage", rank=12)], area_use=True)
     dialog = AreaDialog(data, hero, blast, scene=SCENE, own_player_id="me")
-    assert dialog._shape is not None
-    dialog._shape.setCurrentIndex(dialog._shape.findData("line"))
+    assert not hasattr(dialog, "_shape")
     use = dialog.use()
-    assert use.shape == "line" and use.free and use.rank == 10
+    assert use.shape and use.free and use.rank == 10
 
 
 def test_off_the_air_the_dialog_rolls_and_leaves_a_dodge_request(qapp, data) -> None:
@@ -764,9 +764,7 @@ def test_any_npc_attack_can_be_spread_from_its_card(qapp, window: GMWindow, data
     assert [b.name for b in entry.card.area_builds()] == ["Blast"]
     window._start_card_area(thug.name, entry.character.powers[0].id)
     (area,) = window._area.windows.values()
-    assert area.use.free and area._shape.isEnabled()
-    area._shape.setCurrentIndex(area._shape.findData("line"))
-    assert area.use.shape == "line"
+    assert area.use.free and area.use.shape
     area.close()
 
 

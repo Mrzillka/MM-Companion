@@ -90,6 +90,16 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   what the modifiers add up to ("none", or the tinted total), and unfolds itself when
   `set_values` sets one that counts. Each modifier's `label` is a short caption and its
   `hint` the explanation, shown as the control's tooltip.
+- **Folding changes the window's height and nothing else.** `ModifiersPanel.sizeHint`
+  is as wide as the unfolded grid even while folded, so the window opens at that width;
+  a `StepSpin` is arrowless and `column.stat.spin` wide like the Adjust boxes it sits
+  among (with the platform's arrows it was what made the grid wide). `_on_fold` calls
+  `updateGeometry` before `fit_to_screen` — a parent's cached hint of the panel is only
+  dropped by that, so without it a fold left the window at its unfolded height — and
+  `fit_to_screen` invalidates the body's layout before activating it for the same
+  reason. The bodies end on a stretch (`ActionWindow._body`, the dialogs' offline
+  bodies), so a window taller than its content keeps the slack at the bottom instead of
+  spreading it between the sections.
 - **A declared impression is the player's pick, not a lock.** The GM window opens on the
   impression and skill they declared, picked out of everything their snapshot offers, and
   the GM may change either (the declared skill keeps the number the player's own sheet
@@ -327,8 +337,8 @@ The second action on this layer, following the 4e rules (Area Effect extra, PDF 
 - **NPC cards carry the actions.** 🗣 (Impress) and 💥 (Area, shown only for a creature
   with an attack) sit in the card's header so a collapsed card keeps them, and both are
   on the right-click menu. Area goes straight to the window for one attack, or offers
-  a menu of them. The window then lets the GM switch the **power** and, for a free
-  use, the **shape** (a player's too, worked out again off their snapshot).
+  a menu of them. The window then lets the GM switch the **power** (a player's too,
+  worked out again off their snapshot).
 - `AreaController` puts an `ActionCard` with **Resolve Area Attack** in the GM's
   history. The card is GM-only and not a record, and it is the only way back to the
   attack. So while it is `pending`, `RollHistoryPanel.clear()` keeps it through a
@@ -345,8 +355,10 @@ The second action on this layer, following the 4e rules (Area Effect extra, PDF 
   last roll stands for both.
 - `AreaWindow` lets the GM edit:
   - the attacker (one the GM started), the **power** — every area of every build the
-    attacker's sheet offers, a player's off their snapshot — and, for a free use, the
-    shape;
+    attacker's sheet offers, a player's off their snapshot. **No shape**: neither
+    window asks for one, since which shape an area is changes nothing the table
+    resolves (the user dropped it, 2026-10-17); a free use takes the default and a
+    bought one its extra's;
   - an **Adjust** to the area's **rank** (`area_use_adjusted`: the Dodge DC and every
     save DC move with it) and one to the **attack** check. The attack's is added when
     Hit is judged, never to the spec asked for, so an attack the player rolled at
@@ -502,7 +514,12 @@ A trait roll clicked in the GM's history — a request card, or a save chip unde
 - **Row order** sorts by `abs(seq)`, because off the air a window counts its own rolls
   *down* from −1.
 - **Removing and revealing.** `remove_roll` and `reveal_roll` find a roll's table by
-  `seqs`, and the GM's ✕ strikes the whole table.
+  `seqs`. The GM's ✕ strikes the whole table, and the GM's **Show** — beside it in the
+  heading row, there only while the table holds a hidden session roll — shows every
+  hidden roll in it, one `reveal_roll` per `seq` (the server reveals them one at a
+  time). A table had no Show at first, so a hidden group could never be shown. The
+  heading is one label built once, so its buttons survive a redraw; `lines()` still
+  reads it first.
 - **The exception:** a grouped roll whose spec has a **follow-up** keeps its own card.
   Request-mode Impress is a group of one, and its card is where everyone finds the
   Resist button.

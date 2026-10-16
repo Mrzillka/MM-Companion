@@ -166,11 +166,16 @@ def fit_to_screen(window: QWidget, *, share: float = 0.85, min_chars: int = 0) -
     if screen is None:
         return
     room = screen.availableGeometry()
-    # Measured on first show, before Qt has laid anything out: activate the layouts
-    # first, or the scrolled body's hint is the stale one from before its rows existed.
+    # Measured on first show, before Qt has laid anything out, and straight after a part
+    # of the body was shown or hidden, before the layout has heard of it: invalidate and
+    # activate the layouts first, or the scrolled body's hint is the stale one — from
+    # before its rows existed, or from before a section folded away. ``activate`` alone
+    # does nothing to a layout Qt has not yet marked dirty, which is the second case: a
+    # folded section left the window at its unfolded height.
     for scroll in window.findChildren(BodyScroll):
         inner = scroll.widget()
         if inner is not None and inner.layout() is not None:
+            inner.layout().invalidate()
             inner.layout().activate()
         scroll.updateGeometry()
     if window.layout() is not None:
@@ -506,7 +511,10 @@ class ActionWindow(QDialog):
         box_layout.addLayout(self._grid)
         self.box.setToolTip(box_help)
         self._body.addWidget(self.box)
-        self._after_box = self._body.count()
+        # A window taller than what it holds — dragged so, or left so by a section that
+        # folded — keeps the slack under the last section rather than spreading it
+        # between every one of them.
+        self._body.addStretch(1)
 
         self._footer = QVBoxLayout()
         outer.addLayout(self._footer)
@@ -551,7 +559,8 @@ class ActionWindow(QDialog):
     def add_section(self, widget: QWidget, *, after_targets: bool = False) -> None:
         """Put one of the action's own controls in, above the table or below it."""
         if after_targets:
-            self._body.addWidget(widget)
+            # Above the trailing stretch, which stays last.
+            self._body.insertWidget(self._body.count() - 1, widget)
         else:
             self._body.insertWidget(self._body.indexOf(self.box), widget)
 

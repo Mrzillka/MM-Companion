@@ -98,7 +98,7 @@ from mm_companion.ui.roll_history import (
 from mm_companion.ui.session_bridge import SessionBridge, live_session
 from mm_companion.ui.svg_assets import die_resource, svg_pixmap
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import discard_widget, make_spin_box, tinted_style
+from mm_companion.ui.widgets import ElidingLabel, discard_widget, make_spin_box, tinted_style
 
 # The quick-roll list is stored under this settings key as a list of plain dicts
 # ``{"bonus": int, "penalty": int, "dc": int | None, "name"?: str}`` so no Qt
@@ -883,6 +883,12 @@ class DiceRollerPanel(ReflowBox, QWidget):
 
         The stylesheet is scoped to the object name: a bare rule on a widget reaches
         its children too, and the ``✕`` inside would have grown the border as well.
+
+        The caption **elides** rather than wraps, and the chip never grows taller than
+        its one line. A wrapped caption asked for a second line through
+        height-for-width, which nothing above the Roll box passes on — so a long trait
+        in a narrow strip got one line's height for two and was drawn squashed. The
+        whole name is in the tooltip, and under the die in the readout.
         """
 
         chip = QFrame()
@@ -896,13 +902,13 @@ class DiceRollerPanel(ReflowBox, QWidget):
             "}"
         )
         chip.setVisible(False)
+        chip.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         layout = QHBoxLayout(chip)
         margin = int(theme.metric("space.sm"))
         layout.setContentsMargins(margin, margin, margin, margin)
         layout.setSpacing(int(theme.metric("space.xs")))
 
-        self._spec_label = QLabel()
-        self._spec_label.setWordWrap(True)
+        self._spec_label = ElidingLabel()
         self._spec_label.setStyleSheet(tinted_style("accent.dice", bold=True))
         layout.addWidget(self._spec_label, stretch=1)
 
@@ -1227,7 +1233,11 @@ class DiceRollerPanel(ReflowBox, QWidget):
             self._dc_spin.setValue(0)
         self._spec_chip.setVisible(spec is not None)
         if spec is not None:
-            self._spec_label.setText(spec_caption(spec))
+            caption = spec_caption(spec)
+            self._spec_label.setText(caption)
+            # The label covers most of the chip, so it carries the hint too — beneath
+            # the whole caption, which an elided label would otherwise offer alone.
+            self._spec_label.set_hover_text(f"{caption}\n\n{spec.hint}" if spec.hint else "")
             self._spec_chip.setToolTip(spec.hint)
         self._apply_die_style()
         self._prompt_readout(replace_result=spec is not None)

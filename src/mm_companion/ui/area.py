@@ -10,7 +10,7 @@ every creature's modifiers come from :mod:`mm_companion.core.rules.area_attack`:
   request to dodge. At a table a player only sees it when both they and the GM want
   them to choose (:func:`~mm_companion.ui.action_ui.sets_up_own_actions`); otherwise
   the area goes to the GM bare.
-* :class:`AreaWindow` — the **GM** settles the power and its shape, who is in the area,
+* :class:`AreaWindow` — the **GM** settles the power, who is in the area,
   whether the attack hit the primary, and each creature's cover and adjustments, then
   resolves it and watches each roll come back. What happens in between — the server
   rolling, players being asked, the conditions landing — is
@@ -59,7 +59,6 @@ from mm_companion.core.rules import (
     area_key_index,
     area_key_power_id,
     area_request_specs,
-    area_shape_options,
     area_title,
     area_use_adjusted,
     area_use_heals,
@@ -244,19 +243,10 @@ class AreaDialog(QDialog):
         scroll.setWidget(body)
         outer.addWidget(scroll, stretch=1)
 
-        self._shape: QComboBox | None = None
+        # A free use takes the default shape: which shape an area is changes nothing the
+        # table resolves, so it is not a choice worth a row of the window.
         self._use = power_area_use(power, character, data, effect_index=effect_index)
         heals = self._use is not None and area_use_heals(self._use, data)
-        if self._use is not None and self._use.free:
-            form = QFormLayout()
-            self._shape = QComboBox()
-            guard_wheel(self._shape)
-            for value, label in area_shape_options(data):
-                self._shape.addItem(label, value)
-            self._shape.setCurrentIndex(max(0, self._shape.findData(self._use.shape)))
-            self._shape.currentIndexChanged.connect(self._on_shape)
-            form.addRow("Shape:", self._shape)
-            layout.addLayout(form)
 
         self._summary = QLabel()
         self._summary.setTextFormat(Qt.TextFormat.RichText)
@@ -302,6 +292,10 @@ class AreaDialog(QDialog):
                 mode_host, self._mode_buttons, group = mode_row(self, AREA_MODE_HELP)
                 self._mode_buttons[AREA_MODE_RESOLVE].setChecked(True)
                 layout.addWidget(mode_host)
+        else:
+            # Off the air the summary is all there is: slack goes under it, not around it
+            # (a lone label is otherwise centred in a dialog its buttons make taller).
+            layout.addStretch(1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
         self._ok = QPushButton("Send to GM" if self._online else "Roll")
@@ -406,17 +400,6 @@ class AreaDialog(QDialog):
             for ref in changed.refs():
                 if ref in other.refs():
                     other.remove_ref(ref, notify=False)
-        self._sync()
-
-    def _on_shape(self) -> None:
-        shape = str(self._shape.currentData() or "") if self._shape is not None else ""
-        self._use = power_area_use(
-            self._power,
-            self._character,
-            self._data,
-            shape=shape,
-            effect_index=self._effect_index,
-        )
         self._sync()
 
     def _sync(self) -> None:
@@ -566,12 +549,6 @@ class AreaWindow(ActionWindow):
         self._power = QComboBox()
         guard_wheel(self._power)
         form.addRow("Power:", self._power)
-        self._shape = QComboBox()
-        guard_wheel(self._shape)
-        for value, label in area_shape_options(data):
-            self._shape.addItem(label, value)
-        self._shape.setCurrentIndex(max(0, self._shape.findData(attempt.use.shape)))
-        form.addRow("Shape:", self._shape)
         width = int(theme.metric("column.stat.spin"))
         self._rank_adjust = make_signed_spin_box(ADJUST_LIMIT, max_width=width)
         self._rank_adjust.setToolTip(
@@ -636,7 +613,6 @@ class AreaWindow(ActionWindow):
         if self._attacker is not None:
             self._attacker.currentIndexChanged.connect(self._on_attacker)
         self._power.currentIndexChanged.connect(self._on_build)
-        self._shape.currentIndexChanged.connect(self._on_build)
         self._rank_adjust.valueChanged.connect(lambda _v: self.sync())
         self._attack_adjust.valueChanged.connect(lambda _v: self._on_attack_adjust())
         self._primary.currentIndexChanged.connect(self._on_primary)
@@ -785,7 +761,7 @@ class AreaWindow(ActionWindow):
         return power, area_key_index(key)
 
     def _on_build(self) -> None:
-        """A different attacker, power or shape: work the area out again."""
+        """A different attacker or power: work the area out again."""
         found = self._current_power()
         character = self._source.character
         if found is None or character is None:
@@ -796,7 +772,9 @@ class AreaWindow(ActionWindow):
             power,
             character,
             self._data,
-            shape=str(self._shape.currentData() or ""),
+            # Whatever the attempt was declared with; a free use falls back to the
+            # default shape (see AreaDialog).
+            shape=self.attempt.use.shape,
             npc=self._is_npc(),
             free_use=True,
             effect_index=index,
@@ -813,10 +791,6 @@ class AreaWindow(ActionWindow):
         self.setWindowTitle(f"{ACTION_NAME}: {use.power_name}")
         self.set_heading(self._heading_text())
         self.sync()
-
-    def _shape_free(self) -> bool:
-        """Whether the shape is the GM's to set: a free use, with the sheet to work it from."""
-        return self.attempt.use.free and self._source.character is not None
 
     # -- the parties -----------------------------------------------------------
 
@@ -949,9 +923,6 @@ class AreaWindow(ActionWindow):
         use = self.adjusted_use()
         heals = self.heals()
         self._use_note.setText(use_summary(use, self._data))
-        self._shape.setEnabled(self.phase == PHASE_SETUP and self._shape_free())
-        # A shape nobody can change is already named in the summary under it.
-        self._form.setRowVisible(self._shape, self._shape_free())
         self._primary_box.setVisible(not heals)
         self._mode_host.setVisible(not heals)
         self._attack_caption.setVisible(not heals)
@@ -1045,7 +1016,6 @@ class AreaWindow(ActionWindow):
         super().lock_setup()
         for widget in (
             self._power,
-            self._shape,
             self._rank_adjust,
             self._attack_adjust,
             self._primary,

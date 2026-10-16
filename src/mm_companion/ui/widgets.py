@@ -15,9 +15,10 @@ from contextlib import contextmanager
 from functools import wraps
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QFont, QFontMetrics, QPalette
+from PySide6.QtGui import QFont, QFontMetrics, QMouseEvent, QPalette
 from PySide6.QtWidgets import (
     QAbstractScrollArea,
+    QApplication,
     QDoubleSpinBox,
     QFormLayout,
     QFrame,
@@ -540,6 +541,43 @@ def attach_context_removal(widget: QWidget, on_remove: Callable[[], None], *, wh
     hint = f"Right-click to remove {what}."
     existing = widget.toolTip()
     widget.setToolTip(f"{existing}\n\n{hint}" if existing else hint)
+
+
+# -- a grip to drag by -------------------------------------------------------------
+
+
+class DragHandle(QLabel):
+    """The ``⠿`` grip a card is picked up by; a press-drag on it starts the drag.
+
+    It only *detects* the gesture (a left-press moved past the platform drag
+    threshold) and emits :attr:`dragStarted`; the owning card builds and runs the
+    actual :class:`QDrag`, so the grip stays a dumb, reusable handle. Shared by the
+    sheet's power and equipment cards and the Power Constructor's effect cards.
+    """
+
+    dragStarted = Signal()
+
+    def __init__(self, tooltip: str = "Drag to reorder", parent: QWidget | None = None) -> None:
+        super().__init__("⠿", parent)
+        self._press: QPoint | None = None
+        self.setToolTip(tooltip)
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.setStyleSheet(muted_style())
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802 (Qt override)
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._press = event.position().toPoint()
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802 (Qt override)
+        if self._press is None or not (event.buttons() & Qt.MouseButton.LeftButton):
+            return
+        moved = (event.position().toPoint() - self._press).manhattanLength()
+        if moved >= QApplication.startDragDistance():
+            self._press = None
+            self.dragStarted.emit()
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802, ARG002
+        self._press = None
 
 
 # -- inline style snippets ------------------------------------------------------

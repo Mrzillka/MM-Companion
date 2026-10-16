@@ -687,6 +687,77 @@ def test_linked_has_a_help_button_naming_the_bonus_pick(qapp: QApplication) -> N
     )
 
 
+def test_dragging_a_card_reorders_the_effects_and_the_linked_lead(qapp: QApplication) -> None:
+    char = _pl10_character()
+    char.abilities["ATK"] = 7
+    window = PowerConstructorWindow(load_game_data(), character=char)
+    canvas = window.canvas
+    damage = canvas.add_effect("damage")
+    damage.attach_modifier("accurate")  # Damage +9, Affliction +7
+    affliction = canvas.add_effect("affliction")
+    canvas._mode_bar.changed.emit(STRUCTURE_LINKED)
+    assert power_rolls(window.power, char, window._data)[0].label.endswith("+9 vs. Defense")
+    fired: list[None] = []
+    canvas.changed.connect(lambda: fired.append(None))
+
+    canvas.move_card(1, 0)  # the Affliction now leads
+
+    assert canvas.cards == [affliction, damage]
+    assert [e.effect_id for e in window.power.effects] == ["affliction", "damage"]
+    assert window.power.effects[0] is affliction.instance
+    layout = canvas._layout
+    assert layout.indexOf(affliction) < layout.indexOf(damage)
+    assert affliction._role_badge.text() == "Linked"
+    assert fired
+    assert power_rolls(window.power, char, window._data)[0].label.endswith("+7 vs. Defense")
+
+
+def test_a_card_dropped_back_in_place_changes_nothing(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    first = window.canvas.add_effect("damage")
+    window.canvas.add_effect("affliction")
+    fired: list[None] = []
+    window.canvas.changed.connect(lambda: fired.append(None))
+    window.canvas.move_card(0, 1)  # just after itself
+    assert window.canvas.cards[0] is first and not fired
+
+
+def test_the_canvas_takes_only_its_own_cards_for_a_reorder(qapp: QApplication) -> None:
+    from types import SimpleNamespace
+
+    from PySide6.QtCore import QMimeData
+
+    from mm_companion.ui.power_constructor.common import CARD_MIME
+
+    def drag(source):
+        mime = QMimeData()
+        mime.setData(CARD_MIME, b"1")
+        return SimpleNamespace(mimeData=lambda: mime, source=lambda: source)
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    other = PowerConstructorWindow(load_game_data()).canvas.add_effect("damage")
+    assert window.canvas._reordering(drag(card))
+    assert not window.canvas._reordering(drag(other))
+
+
+def test_a_reorder_drop_lands_in_the_gap_under_the_pointer(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    canvas = window.canvas
+    cards = [canvas.add_effect("damage"), canvas.add_effect("affliction")]
+    window.resize(1200, 900)
+    window.show()
+    qapp.processEvents()
+    first, second = (card.geometry() for card in cards)
+    assert canvas._drop_index(first.top() + 1) == 0
+    assert canvas._drop_index(first.bottom() - 1) == 1
+    assert canvas._drop_index(second.bottom() + 5) == 2
+    canvas._show_indicator(second.bottom() + 5)
+    assert canvas._indicator.isVisible()
+    assert canvas._indicator.geometry().top() > second.bottom() - canvas.INDICATOR_HEIGHT
+    window.close()
+
+
 def test_powers_section_launches_and_locks(qapp: QApplication) -> None:
     sheet = CharacterSheet(load_game_data())
     button = sheet.powers._add_button

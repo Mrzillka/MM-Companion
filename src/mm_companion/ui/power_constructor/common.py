@@ -252,6 +252,10 @@ MODIFIER_MIME = "application/x-mm-modifier"
 CONFIGURATION_MIME = "application/x-mm-configuration"
 # A chip carries its own index when dragged to reorder within its group.
 CHIP_MIME = "application/x-mm-chip"
+# An effect card dragged by its grip to reorder the power's effects; the card itself is
+# read from ``drag.source()``. The order matters: a Linked power's one attack rolls at
+# the first attacking effect's bonus (``system.linkedAttackBonus``).
+CARD_MIME = "application/x-mm-effect-card"
 
 # Object name marking a palette section header, so headers can be addressed as such
 # rather than by their text (a brick may share a group's name).

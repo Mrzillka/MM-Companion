@@ -325,7 +325,13 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   call) and was moved to `"first"` after a search found no official ruling either way:
   the forums agree only that the roll is one roll and that each linked effect meets its
   own PL cap (Skyjacker's Melting Ray, *Rogues Gallery* p114, is the cited example).
-  The constructor cannot reorder cards yet, so "first" means first added. The PL check
+  The player picks the lead by dragging an effect card by its `⠿` grip
+  (`PowerCanvas.move_card`, which moves the cards and `power.effects` together). The
+  grip is the shared `widgets.DragHandle`, moved out of `ui/cards/drag.py`, because the
+  cards package imports the constructor and the constructor could not import it back.
+  A dragged card passes through the card and modifier groups it crosses
+  (`CARD_MIME` is ignored there, not rejected) to the canvas, which draws the
+  insertion bar. The PL check
   caps each linked effect **on its own** — the shared bonus plus that effect's rank,
   never the ranks summed — and `power_linked_bonus_violations` states the pick whenever
   the bonuses differ. The "?" beside the constructor's *Linked* (`linked_help`) says

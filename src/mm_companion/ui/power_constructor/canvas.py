@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QRect, Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
     QFrame,
@@ -28,11 +28,13 @@ from mm_companion.core.rules import (
     power_from_configuration,
 )
 from mm_companion.ui import theme
-from mm_companion.ui.drop_feedback import DropFeedback
+from mm_companion.ui.drop_feedback import DropFeedback, DropIndicator
 from mm_companion.ui.power_constructor.common import (
+    CARD_MIME,
     CONFIGURATION_MIME,
     EFFECT_MIME,
     _mime_id,
+    _move_item,
 )
 from mm_companion.ui.power_constructor.effect_card import EffectCard
 from mm_companion.ui.widgets import HelpButton, discard_widget
@@ -60,7 +62,10 @@ MODE_ARRAY_DYNAMIC = "array_dynamic"
 #: How the one attack check of a Linked power picks its bonus, per the ruleset's
 #: ``system.linkedAttackBonus`` — the sentence :func:`linked_help` puts behind the "?".
 _LINKED_BONUS_WORDS = {
-    "first": "the first attacking effect's bonus, the top card",
+    "first": (
+        "the first attacking effect's bonus, the top card (drag a card by its grip to "
+        "change which one leads)"
+    ),
     "highest": "the best bonus among them",
     "lowest": "the worst bonus among them",
 }
@@ -183,6 +188,10 @@ class PowerCanvas(QFrame):
     """
 
     changed = Signal()
+
+    #: Thickness of the insertion bar between two cards, in pixels.
+    INDICATOR_HEIGHT = 3
+
     #: A standard configuration was dropped; carries its name so the window can title an
     #: untitled power after it. Separate from :attr:`changed` because naming is the
     #: window's business and the canvas holds no name field.
@@ -210,6 +219,7 @@ class PowerCanvas(QFrame):
         self.setObjectName("PowerCanvas")
         self.setAcceptDrops(True)
         self._drops = DropFeedback(self, "PowerCanvas", radius="radius.canvas", wash=0.08)
+        self._indicator = DropIndicator(self)
 
         self._layout = QVBoxLayout(self)
         # The structure switch sits above the cards; it reveals itself only once a
@@ -230,8 +240,17 @@ class PowerCanvas(QFrame):
         """Refresh the canvas's resting border for whether it now holds cards."""
         self._drops.set_idle(_idle_canvas_rules(bool(self._cards)))
 
+    def _reordering(self, event) -> bool:
+        """Whether *event* is one of this canvas's own cards being dragged to reorder."""
+        return event.mimeData().hasFormat(CARD_MIME) and event.source() in self._cards
+
     def dragEnterEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        if event.mimeData().hasFormat(EFFECT_MIME) or event.mimeData().hasFormat(
+        if self._reordering(event):
+            # No wash: the whole canvas lighting up says "drop anywhere", and where it
+            # lands is the one thing the insertion bar is there to say.
+            self._show_indicator(event.position().toPoint().y())
+            event.acceptProposedAction()
+        elif event.mimeData().hasFormat(EFFECT_MIME) or event.mimeData().hasFormat(
             CONFIGURATION_MIME
         ):
             self._drops.show_accept()
@@ -242,12 +261,30 @@ class PowerCanvas(QFrame):
             self._drops.show_reject()
             event.ignore()
 
+    def dragMoveEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        if self._reordering(event):
+            self._show_indicator(event.position().toPoint().y())
+            event.acceptProposedAction()
+        elif event.mimeData().hasFormat(EFFECT_MIME) or event.mimeData().hasFormat(
+            CONFIGURATION_MIME
+        ):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
     def dragLeaveEvent(self, event) -> None:  # noqa: N802 (Qt override)
         self._drops.clear()
+        self._indicator.hide_indicator()
         super().dragLeaveEvent(event)
 
     def dropEvent(self, event) -> None:  # noqa: N802 (Qt override)
         self._drops.clear()
+        self._indicator.hide_indicator()
+        if self._reordering(event):
+            source = self._cards.index(event.source())
+            self.move_card(source, self._drop_index(event.position().toPoint().y()))
+            event.acceptProposedAction()
+            return
         if event.mimeData().hasFormat(CONFIGURATION_MIME):
             self.add_configuration(_mime_id(event.mimeData(), CONFIGURATION_MIME))
         else:
@@ -337,6 +374,55 @@ class PowerCanvas(QFrame):
         self._update_canvas_style()
         self._sync_structure_ui()
         self.changed.emit()
+
+    # -- reordering (the drop delegates to move_card, the test seam) -------
+    def move_card(self, from_index: int, to_index: int) -> None:
+        """Move the card at *from_index* to insertion point *to_index*.
+
+        The cards and the power's effects are kept index-aligned, so both move the
+        same way; *to_index* is a point in the pre-move list, and a drop that settles
+        in place changes nothing and emits nothing. Order is part of the build — a
+        Linked power's single attack rolls at its first attacking effect's bonus —
+        so a real move restates the badges and emits :attr:`changed`.
+        """
+
+        if not 0 <= from_index < len(self._cards):
+            return
+        if not _move_item(self._cards, from_index, to_index):
+            return
+        _move_item(self._power.effects, from_index, to_index)
+        for card in self._cards:
+            self._layout.removeWidget(card)
+        at = self._layout.indexOf(self._hint) + 1
+        for offset, card in enumerate(self._cards):
+            self._layout.insertWidget(at + offset, card)
+        self._refresh_roles()
+        self.changed.emit()
+
+    def _drop_index(self, y: int) -> int:
+        """The insertion index for a drop at height *y*: before the first card whose
+        middle is below it, or past the last."""
+        for index, card in enumerate(self._cards):
+            if y < card.geometry().center().y():
+                return index
+        return len(self._cards)
+
+    def _show_indicator(self, y: int) -> None:
+        """A bar across the gap the dragged card would fall into."""
+        if not self._cards:
+            self._indicator.hide_indicator()
+            return
+        index = self._drop_index(y)
+        gap = self._layout.spacing() // 2
+        if index < len(self._cards):
+            geometry = self._cards[index].geometry()
+            top = geometry.top() - gap - self.INDICATOR_HEIGHT // 2
+        else:
+            geometry = self._cards[-1].geometry()
+            top = geometry.bottom() + gap - self.INDICATOR_HEIGHT // 2
+        self._indicator.move_to(
+            QRect(geometry.left(), top, geometry.width(), self.INDICATOR_HEIGHT)
+        )
 
     def _on_card_changed(self) -> None:
         # A rank/modifier edit can change which effect is the array base, so refresh

@@ -43,7 +43,7 @@ from .area import (
     effect_is_area,
     evasion_negates,
 )
-from .powers_cost import effect_size_rank_shift
+from .powers_cost import effect_resistance_dc_base, effect_size_rank_shift
 from .powers_terms import (
     effect_area_rank,
     effect_attack_skill_bonus,
@@ -353,8 +353,7 @@ def _base(game_data: GameData, effect_id: str):
 
 
 def _resisted(effect: PowerEffectInstance, game_data: GameData) -> bool:
-    base = _base(game_data, effect.effect_id)
-    return base is not None and base.resistance_dc_base is not None
+    return effect_resistance_dc_base(effect, game_data) is not None
 
 
 def _heals(effect_id: str, game_data: GameData) -> bool:

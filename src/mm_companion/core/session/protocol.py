@@ -117,7 +117,13 @@ from typing import ClassVar
 #: strips the spec keys without a word, so a player who made their Stamina check
 #: against Dazed would stay Dazed — and a turn order the GM arranged by hand would
 #: reach every player re-sorted by initiative.
-PROTOCOL_VERSION = 15
+#:
+#: v16 lets one roll provoke **several** follow-ups (``also``, a list of specs beside
+#: ``follow_up``): a Linked power's one attack check lands every save its effects force,
+#: and a Nullify's hit calls for its opposed check. Bumped for the v13 reason: a v15
+#: server strips the key without a word, and a Linked Damage + Affliction would hit and
+#: offer only the first save.
+PROTOCOL_VERSION = 16
 
 #: Hard cap on one encoded message, including its trailing newline. A character
 #: snapshot is the largest thing that legitimately travels (tens of KB); anything
@@ -948,6 +954,8 @@ def decode(line: bytes | str) -> Message:
 MAX_SPEC_TEXT = 200
 MAX_SPEC_OUTCOMES = 12
 MAX_SPEC_DEPTH = 4
+#: How many extra follow-ups (``also``) one spec may carry — a Linked power's saves.
+MAX_SPEC_ALSO = 6
 
 # Everything a spec may carry, and how each value is coerced. Anything else in the
 # dict is dropped: a whitelist, so a field added to RollSpec later does not silently
@@ -1021,6 +1029,12 @@ def sanitize_spec(raw: object, _depth: int = 0) -> dict | None:
     follow_up = sanitize_spec(raw.get("follow_up"), _depth + 1)
     if follow_up is not None:
         spec["follow_up"] = follow_up
+    also = raw.get("also")
+    if isinstance(also, list):
+        kept = [sanitize_spec(a, _depth + 1) for a in also[:MAX_SPEC_ALSO]]
+        kept = [a for a in kept if a is not None]
+        if kept:
+            spec["also"] = kept
     return spec
 
 

@@ -39,6 +39,7 @@ from mm_companion.core.rules import (
     effect_dials_by_default,
     effect_display_name,
     effect_has_rank_dial,
+    effect_resistance_dc_base,
     effective_size,
     effective_size_rank,
     improvised_effect_cost,
@@ -554,8 +555,10 @@ class PowerConstructorWindow(QMainWindow):
         self._extended_toggle = QToolButton()
         self._extended_toggle.setAutoRaise(True)
         self._extended_toggle.setCheckable(True)
-        self._extended_toggle.setChecked(True)
-        self._extended_toggle.setText(f"{self._EXPANDED_GLYPH} Extended settings")
+        # Folded on open, like the Improvise panel below it: these are switches most
+        # builds never touch, and the canvas is what the window is opened for.
+        self._extended_toggle.setChecked(False)
+        self._extended_toggle.setText(f"{self._COLLAPSED_GLYPH} Extended settings")
         self._extended_toggle.toggled.connect(self._on_extended_toggled)
         outer.addWidget(self._extended_toggle, alignment=Qt.AlignmentFlag.AlignLeft)
 
@@ -570,6 +573,7 @@ class PowerConstructorWindow(QMainWindow):
         body.addWidget(self._rank_dial_row)
         self._rank_bands_row = self._build_rank_bands_row()
         body.addWidget(self._rank_bands_row)
+        self._extended_body.setVisible(False)
         outer.addWidget(self._extended_body)
 
         self._extended_row = host
@@ -966,12 +970,10 @@ class PowerConstructorWindow(QMainWindow):
         offer a switch that does nothing.
         """
 
-        by_id = {e.id: e for e in self._data.effects}
         return [
             effect
             for effect in self.power.effects
-            if (base := by_id.get(effect.effect_id)) is not None
-            and base.resistance_dc_base is not None
+            if effect_resistance_dc_base(effect, self._data) is not None
         ]
 
     def _dialable_effects(self) -> list:

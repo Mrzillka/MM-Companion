@@ -24,6 +24,7 @@ from .powers_cost import (
     IMPOSED_EFFECT_ACTION_LIMIT,
     effect_action_at_most,
     effect_build_rank,
+    effect_resistance_dc_base,
     effect_size_rank_shift,
     effect_total_cost,
     imposed_effect_cost,
@@ -32,9 +33,13 @@ from .powers_cost import (
 from .powers_terms import (
     _effect_name,
     _effective_stats,
+    config_field_gate_open,
+    config_field_shown,
     effect_attack_skill_bonus,
     effect_base_attack_bonus,
     effect_makes_attack,
+    linked_attacks,
+    modifier_field_claimed,
 )
 from .runtime import config_trait_allocation, power_display_name, trait_display_name
 from .size import size_resistance_shift, size_skill_shift
@@ -122,9 +127,16 @@ def power_pl_violations(power: Power, char: Character, game_data: GameData) -> l
     base_limit = cap.limit(power_level)
 
     violations: list[str] = []
-    for effect in power.effects:
+    # A Linked power's attacks are one roll at one bonus (p155), so that is the bonus
+    # each of them is capped at — not the one it would have rolled on its own.
+    shared_bonus = {
+        index: attack.bonus
+        for attack in linked_attacks(power, game_data, char)
+        for index in attack.indices
+    }
+    for index, effect in enumerate(power.effects):
         base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
-        if base is None or base.resistance_dc_base is None:
+        if base is None or effect_resistance_dc_base(effect, game_data) is None:
             continue  # not an attack/resisted effect — these caps don't apply
         if effect.pl_cap:
             # A hard-capped effect cannot breach: whichever side the player nominated
@@ -150,7 +162,7 @@ def power_pl_violations(power: Power, char: Character, game_data: GameData) -> l
                     f"rank cap of {rank_limit}."
                 )
         elif effect_makes_attack(effect, game_data):
-            attack = effect_base_attack_bonus(effect, game_data, char)
+            attack = shared_bonus.get(index, effect_base_attack_bonus(effect, game_data, char))
             if attack + rank > limit:
                 violations.append(
                     f"{base.name}: attack +{attack} plus rank {rank} = {attack + rank} "
@@ -246,8 +258,7 @@ def estimated_power_level(char: Character, game_data: GameData) -> int:
         attack_key = game_data.system.trait_keys.attack
         for power in offensive_builds(char, game_data):
             for effect in power.effects:
-                base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
-                if base is None or base.resistance_dc_base is None:
+                if effect_resistance_dc_base(effect, game_data) is None:
                     continue  # not an attack/resisted effect — these caps don't apply
                 # Size raises the effective rank *and* the cap it is measured
                 # against, so it has to come back off here or a big creature reads
@@ -607,6 +618,120 @@ def power_linked_range_violations(power: Power, game_data: GameData) -> list[str
     return violations
 
 
+def power_linked_self_violations(power: Power, game_data: GameData) -> list[str]:
+    """The same effect Linked to itself (a warning, never a refusal).
+
+    "Generally, the same effect cannot be Linked to itself to 'multiply' the results of a
+    failed resistance check, such as two Linked Damage effects causing 'double damage'"
+    (p155). *Generally* — so the GM may allow it, and the app only says so. One message
+    per effect that appears more than once.
+    """
+
+    if power.structure != STRUCTURE_LINKED or len(power.effects) < 2:
+        return []
+    counts: dict[str, int] = {}
+    for effect in power.effects:
+        counts[effect.effect_id] = counts.get(effect.effect_id, 0) + 1
+    names = {e.id: e.name for e in game_data.effects}
+    return [
+        f"{names.get(effect_id, effect_id)} appears {count} times in one Linked power — the "
+        "rules generally forbid linking an effect to itself to multiply its result."
+        for effect_id, count in counts.items()
+        if count > 1
+    ]
+
+
+def power_linked_bonus_violations(
+    power: Power, char: Character | None, game_data: GameData
+) -> list[str]:
+    """A Linked power whose attacks, rolled once, would each have rolled differently.
+
+    One attack check lands all of them (p155), and the book does not say at what bonus;
+    the ruleset's ``linkedAttackBonus`` picks one (:func:`~.powers_terms.linked_attacks`).
+    That is a quiet decision about the dice, so it is stated rather than hidden: which
+    bonus each effect has, and which one the roll uses.
+    """
+
+    messages = []
+    for attack in linked_attacks(power, game_data, char):
+        if len(set(attack.bonuses)) < 2:
+            continue
+        each = ", ".join(
+            f"{_effect_name(power.effects[index], game_data)} {bonus:+d}"
+            for index, bonus in zip(attack.indices, attack.bonuses, strict=True)
+        )
+        messages.append(
+            f"Linked attacks roll once at {attack.bonus:+d} ({game_data.system.linked_attack_bonus}"
+            f" of {each})."
+        )
+    return messages
+
+
+def _field_waived(field, effect: PowerEffectInstance, game_data: GameData) -> bool:
+    """Whether an attached modifier takes *field* off the card (so it needs no answer).
+
+    Variable Conditions defers the degrees to use time (``hidden_with``), and Limited
+    Degree names the one it removes (``hides_field``). Read generously — an attached
+    ``hidden_with`` waives the field outright — so the check never nags about a choice
+    the card is not asking for.
+    """
+
+    catalog = game_data.modifier_catalog()
+    for selection in (*effect.extras, *effect.flaws):
+        if field.hidden_with and selection.modifier_id == field.hidden_with:
+            return True
+        modifier = catalog.get(selection.modifier_id)
+        if modifier is None:
+            continue
+        for own in modifier.config_fields:
+            if own.hides_field and selection.config.get(own.key) == field.key:
+                return True
+    return False
+
+
+def power_unfinished_violations(power: Power, game_data: GameData) -> list[str]:
+    """Choices a build needs and has not had made yet (a warning).
+
+    A config field marked ``required`` that the card is showing and nobody has answered:
+    an Affliction with no resistance and no conditions, a Resistible that does not say
+    which resistance. Without one the power still prices, but its save cannot be rolled
+    with anyone's number and its failure does nothing — so the card says so.
+    """
+
+    catalog = game_data.modifier_catalog()
+    messages: list[str] = []
+    for effect in power.effects:
+        base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+        if base is None:
+            continue
+        name = _effect_name(effect, game_data)
+        missing = [
+            field.label
+            for field in base.config_fields
+            if field.required
+            and config_field_shown(field, effect)
+            and config_field_gate_open(field, effect.config)
+            and not _field_waived(field, effect, game_data)
+            and not effect.config.get(field.key)
+        ]
+        if missing:
+            messages.append(f"{name}: choose {', '.join(missing)}.")
+        for selection in (*effect.extras, *effect.flaws):
+            modifier = catalog.get(selection.modifier_id)
+            if modifier is None:
+                continue
+            unset = [
+                field.label
+                for field in modifier.config_fields
+                if field.required
+                and not modifier_field_claimed(field, base)
+                and not selection.config.get(field.key)
+            ]
+            if unset:
+                messages.append(f"{name}: {modifier.name} needs {', '.join(unset)} chosen.")
+    return messages
+
+
 def power_level_violations(char: Character, game_data: GameData) -> list[str]:
     """Report Power Level cap breaches (``docs/mm-core-mechanics.md`` §7); empty list = valid.
 
@@ -795,6 +920,18 @@ POWER_CHECKS.register(
 POWER_CHECKS.register(
     "mismatched linked Range",
     lambda power, _char, data: power_linked_range_violations(power, data),
+)
+POWER_CHECKS.register(
+    "linked to itself",
+    lambda power, _char, data: power_linked_self_violations(power, data),
+)
+POWER_CHECKS.register(
+    "linked attacks at one bonus",
+    lambda power, char, data: power_linked_bonus_violations(power, char, data),
+)
+POWER_CHECKS.register(
+    "unfinished choice",
+    lambda power, _char, data: power_unfinished_violations(power, data),
 )
 POWER_CHECKS.register(
     "Strength shortfall",

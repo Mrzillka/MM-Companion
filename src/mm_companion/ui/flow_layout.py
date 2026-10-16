@@ -184,7 +184,9 @@ class FlowLayout(QLayout):
         for item in self._items:
             hint = item.sizeHint()
             next_x = x + hint.width() + spacing
-            if next_x - spacing > effective.right() and line_height > 0:
+            # Against the edge itself, not ``right()``: that is the last pixel *inside*
+            # the rect, so a row that fitted exactly used to wrap its last item.
+            if next_x - spacing > effective.x() + effective.width() and line_height > 0:
                 x = effective.x()
                 y = y + line_height + spacing
                 next_x = x + hint.width() + spacing

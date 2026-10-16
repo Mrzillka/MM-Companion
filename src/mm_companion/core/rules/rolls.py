@@ -253,6 +253,13 @@ class RollSpec:
     #: The ladder :attr:`outcomes` renders, as data — what the GM's table applies when
     #: an NPC fails this save. ``None`` for a roll that is no save.
     ladder: SpecLadder | None = None
+    #: The condition a **recovery check** sheds when it succeeds — Dazed's DC 10
+    #: Stamina check, say — with the subject it was applied with, if any. Whoever
+    #: owns the creature the roll was made for takes it off when the roll comes back
+    #: good enough (:func:`~.recovery.recovery_succeeded`); on the wire so a check the
+    #: GM *asks* a player for still knows what it is for when that player rolls it.
+    recovers: str = ""
+    recovers_parameter: str = ""
 
     def with_follow_up(self, follow_up: RollSpec | None) -> RollSpec:
         """A copy of this spec that provokes *follow_up* when it succeeds."""
@@ -301,6 +308,10 @@ class RollSpec:
             raw["actor"] = self.actor
         if self.ladder is not None:
             raw["ladder"] = self.ladder.to_dict()
+        if self.recovers:
+            raw["recovers"] = self.recovers
+        if self.recovers_parameter:
+            raw["recovers_parameter"] = self.recovers_parameter
         if self.follow_up is not None:
             raw["follow_up"] = self.follow_up.to_dict()
         return raw
@@ -347,6 +358,8 @@ class RollSpec:
             title=str(raw.get("title", "")),
             actor=str(raw.get("actor", "")),
             ladder=SpecLadder.from_dict(raw.get("ladder")),
+            recovers=str(raw.get("recovers", "")),
+            recovers_parameter=str(raw.get("recovers_parameter", "")),
         )
 
 

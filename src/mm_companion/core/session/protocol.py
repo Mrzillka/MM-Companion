@@ -110,7 +110,14 @@ from typing import ClassVar
 #: ladder, and heads the card "Mook (GM)". Bumped for the v13 reason: a v13 server's
 #: :func:`sanitize_spec` strips both keys without a word, and every save the GM rolled
 #: for an NPC would quietly apply nothing.
-PROTOCOL_VERSION = 14
+#:
+#: v15 carries a **recovery check** on the spec (``recovers`` and
+#: ``recovers_parameter``: the condition a made check sheds) and a scene entry's place
+#: in the **turn order** (``turn``). Bumped for the v13 reason again: a v14 server
+#: strips the spec keys without a word, so a player who made their Stamina check
+#: against Dazed would stay Dazed — and a turn order the GM arranged by hand would
+#: reach every player re-sorted by initiative.
+PROTOCOL_VERSION = 15
 
 #: Hard cap on one encoded message, including its trailing newline. A character
 #: snapshot is the largest thing that legitimately travels (tens of KB); anything
@@ -955,6 +962,8 @@ _SPEC_TEXT_KEYS = (
     "action_id",
     "title",
     "actor",
+    "recovers",
+    "recovers_parameter",
 )
 _SPEC_INT_KEYS = ("modifier", "dc", "dc_if_resisted")
 #: How many names a spec's ``targets`` may carry — a scene's worth.
@@ -1151,6 +1160,10 @@ def sanitize_scene(raw: object) -> list[dict]:
       :class:`ScenePortrait`, so it is dropped whole rather than kept unusable.
     - ``initiative`` is an ``int`` or absent. Absent means *not rolled yet*, which
       is a different thing from nought and sorts differently.
+    - ``turn`` is the entry's place in the turn order, counting from 1, or absent
+      for an entry that is not in it yet. The GM decides it (protocol v15): a rolled
+      entry always has one, and so does an un-rolled one the GM dragged in among
+      them — which is exactly what sorting by ``initiative`` alone cannot say.
     - ``conditions`` are ``{"id", "parameter", "count"}`` dicts — the shape
       :meth:`~mm_companion.core.character.AppliedCondition.to_dict` writes, minus
       ``provenance``, which is a bookkeeping detail of the sender's own tracker.
@@ -1185,6 +1198,9 @@ def sanitize_scene(raw: object) -> list[dict]:
         initiative = item.get("initiative")
         if isinstance(initiative, int) and not isinstance(initiative, bool):
             entry["initiative"] = initiative
+        turn = item.get("turn")
+        if isinstance(turn, int) and not isinstance(turn, bool) and 0 < turn <= MAX_SCENE_ENTRIES:
+            entry["turn"] = turn
         disposition = item.get("disposition")
         if isinstance(disposition, str) and disposition in SCENE_DISPOSITIONS:
             entry["disposition"] = disposition

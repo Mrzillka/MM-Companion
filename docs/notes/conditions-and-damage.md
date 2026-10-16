@@ -35,7 +35,7 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   groups gets the flat menu back, so both are purely additive. Note
   `QMenu.addMenu(title)` hands ownership *back* to the caller, so each submenu is
   constructed with the menu as its parent or it is collected out from under the
-  open menu. Recovery and turn economy are out of scope for now.
+  open menu. Turn economy is out of scope for now; recovery is below.
 - **The block is no longer the only writer.** Extra Effort charges a rung of the fatigue
   ladder (`fatigued` -> `exhausted` -> `incapacitated`, named in `system.json` rather than
   in Python) from wherever it was spent, straight onto the shared model through
@@ -73,3 +73,15 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   open sheet, so the two copies of the character cannot disagree about an escalation.
   Note `dead` supersedes `staggered` for this: it is the terminal rung, and without
   it the third click left a corpse Staggered.
+- **Recovery checks are rolled** (`core/rules/recovery.py`). A record whose
+  `recoveryCheck` names a `trait` and a `dc` offers a 🎲 on its chip — every chip: the
+  sheet's, the simple sheet's, both GM cards' and the GM's scene cards. The data
+  decides everything: `successDegrees` (Dying needs 2), `becomes` (Dying stabilises to
+  Incapacitated), and `blockedBy` (Staggered waits for nothing worse; nothing recovers
+  while Dead). Only a **directly applied** condition offers one — a bundled member goes
+  when its umbrella does. The roll is the trait's own roll builder against the DC, so
+  its number is the sheet's, penalties and all; the spec carries `recovers`, and a
+  made one sheds one instance (`decrement_condition`, so a Hit stack peels off one) via
+  `apply_recovery`. The **cadence** (end of turn, once a minute) stays the table's:
+  there is no turn clock, and the die is clicked when the time comes. Who applies the
+  result is whoever owns the creature — see [the session notes](session.md).

@@ -52,6 +52,7 @@ from .derived import (
     skill_total,
 )
 from .equipment import item_effective_build
+from .powers_cost import effect_effective_rank
 from .rolls import (
     KIND_ABILITY,
     KIND_INITIATIVE,
@@ -89,6 +90,12 @@ PIN_DEFENSE_CLASS = "defense_class"
 #: :func:`~mm_companion.core.rules.leaf_powers` does not walk, and an item's build
 #: carries an id of its own that nothing else indexes by.
 PIN_EQUIPMENT = "equipment"
+#: One effect's **rank** — the Damage 10 a mook hits with, the Flight 6 it gets about
+#: on. Read, never rolled: a rank is a number a GM consults (what sets the save, how
+#: far it flies), and every power has one, which is what lets the picker list a
+#: creature's *every* power rather than only those that call for a die. ``key`` is
+#: the :attr:`~mm_companion.core.powers.Power.id` and ``index`` which of its effects.
+PIN_EFFECT = "effect"
 
 PIN_KINDS = (
     PIN_ABILITY,
@@ -98,6 +105,7 @@ PIN_KINDS = (
     PIN_POWER,
     PIN_DEFENSE_CLASS,
     PIN_EQUIPMENT,
+    PIN_EFFECT,
 )
 
 #: A late-bound power pin: whichever power carries a Damage effect first, and the
@@ -235,6 +243,8 @@ def resolve_pin(
         return _from_power(char, game_data, ref)
     if ref.kind == PIN_EQUIPMENT:
         return _from_equipment(char, game_data, ref)
+    if ref.kind == PIN_EFFECT:
+        return _from_effect(char, game_data, ref)
     if ref.kind == PIN_DEFENSE_CLASS:
         return _from_defense_class(char, game_data, ref)
     return _missing(ref, pin_label(ref, game_data))
@@ -276,6 +286,8 @@ def pin_label(ref: PinRef, game_data: GameData) -> str:
             (t.label for t in game_data.system.derived_traits if t.key == PIN_INITIATIVE),
             "Initiative",
         )
+    if ref.kind == PIN_EFFECT:
+        return "First Damage rank" if ref.select == SELECT_FIRST_DAMAGE else "Effect rank"
     if ref.kind == PIN_EQUIPMENT:
         # Asked before the flat name for the reason the power side gives below: a
         # late-bound pin is the one that is *written down* unresolved.
@@ -329,11 +341,15 @@ def _from_resistance(
     shown = spec.modifier if with_conditions else resistance_total(char, game_data, ref.key)
     # Unsigned: a defence is a number to beat, not a bonus to add. Writing "+12"
     # on a Defence chip invites it into the wrong side of an attack roll.
+    #
+    # A *derived* resistance (Defence) is read and never rolled: it is what an
+    # attacker rolls against, so a chip that threw it would throw a check nobody
+    # makes. The data says which ones are (``derived`` in resistances.json).
     return PinnedValue(
         ref=ref,
         label=resistance.abbr or resistance.name,
         value=str(shown),
-        spec=spec,
+        spec=None if resistance.derived else spec,
         hint=_hint(resistance.name, spec),
     )
 
@@ -391,6 +407,50 @@ def _from_power(char: Character, game_data: GameData, ref: PinRef) -> PinnedValu
         return _missing(ref, pin_label(ref, game_data))
     power, index = located
     return _from_build_roll(char, game_data, ref, power, index, key=power.id, fallback="Power")
+
+
+def _from_effect(char: Character, game_data: GameData, ref: PinRef) -> PinnedValue:
+    """One effect's rank, as a read-only chip — "Damage rank 10"."""
+    located = _locate_effect(char, ref)
+    if located is None:
+        return _missing(ref, pin_label(ref, game_data))
+    power, index = located
+    effect = power.effects[index]
+    rank = effect_effective_rank(effect, game_data, char)
+    name = _effect_caption(power, effect, game_data)
+    return PinnedValue(
+        ref=replace(ref, key=power.id, index=index, select=""),
+        label=f"{name} rank",
+        value=str(rank),
+        hint=f"{name} — rank {rank}",
+    )
+
+
+def _effect_caption(power: Power, effect: PowerEffectInstance, game_data: GameData) -> str:
+    """The power's name, and which of its effects when it has several."""
+    name = power.name or _effect_name(effect, game_data)
+    if len(power.effects) > 1:
+        return f"{name}: {_effect_name(effect, game_data)}"
+    return name
+
+
+def _effect_name(effect: PowerEffectInstance, game_data: GameData) -> str:
+    record = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    return record.name if record is not None else effect.effect_id
+
+
+def _locate_effect(char: Character, ref: PinRef) -> tuple[Power, int] | None:
+    """The power and effect index *ref* names, resolving a late-bound ``select``."""
+    if ref.select == SELECT_FIRST_DAMAGE:
+        for power in leaf_powers(char.powers):
+            for index, effect in enumerate(power.effects):
+                if _is_damage(effect):
+                    return power, index
+        return None
+    power = next((p for p in leaf_powers(char.powers) if p.id == ref.key), None)
+    if power is None or not 0 <= ref.index < len(power.effects):
+        return None
+    return power, ref.index
 
 
 def _from_equipment(char: Character, game_data: GameData, ref: PinRef) -> PinnedValue:
@@ -603,8 +663,13 @@ def available_pins(
     if skills:
         groups.append(PinGroup("Skills", skills))
 
+    # Every power, not only those that call for a die: each effect's rank first (the
+    # one thing every power has — a Flight with nothing to roll is still a number a
+    # GM reads), then whatever it rolls.
     powers: list[PinnedValue] = []
     for power in leaf_powers(char.powers):
+        for index in range(len(power.effects)):
+            powers.append(read(PinRef(PIN_EFFECT, power.id, index)))
         for index in range(len(power_rolls(power, char, game_data))):
             powers.append(read(PinRef(PIN_POWER, power.id, index)))
     if powers:
@@ -677,7 +742,13 @@ def default_pin_choices(game_data: GameData) -> list[PinGroup]:
     if skills:
         groups.append(PinGroup("Skills", skills))
     groups.append(
-        PinGroup("Powers", (choice(PinRef(PIN_POWER, select=SELECT_FIRST_DAMAGE)),)),
+        PinGroup(
+            "Powers",
+            (
+                choice(PinRef(PIN_EFFECT, select=SELECT_FIRST_DAMAGE)),
+                choice(PinRef(PIN_POWER, select=SELECT_FIRST_DAMAGE)),
+            ),
+        ),
     )
     groups.append(
         PinGroup("Equipment", (choice(PinRef(PIN_EQUIPMENT, select=SELECT_FIRST_WEAPON)),)),

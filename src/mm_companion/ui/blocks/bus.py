@@ -81,6 +81,9 @@ Request topic           Payload / server
                         clever that misfires
 ``hero-point-requested``  a delta (``int``); the System block moves the pips by
                         it, through the one funnel that also writes the note
+``recovery-requested``  ``(condition_id, parameter)``; the Conditions block
+                        sheds a condition whose recovery check the Dice block
+                        just saw made
 ======================  ====================================================
 
 The last exists because **Extra Effort is paid for in another block's currency**
@@ -155,6 +158,10 @@ BONUS_REQUESTED = "bonus-requested"
 #: it opens the window that aims the area. Its own topic so nothing that serves
 #: ``roll-requested`` (a mod's roller included) is ever handed one and rolls a +0 d20.
 AREA_REQUESTED = "area-requested"
+#: A recovery check came back made: take its condition off. The payload is
+#: ``(condition_id, parameter)``. Raised by the roller, which knows the result, and
+#: served by the Conditions block, which owns the change — a roll is not an edit.
+RECOVERY_REQUESTED = "recovery-requested"
 
 #: Request topics whose server is **not** brought into view when they are raised.
 #: A note is a side effect of an edit somewhere else on the sheet, so reopening a
@@ -179,7 +186,9 @@ AREA_REQUESTED = "area-requested"
 #: player who has just spent a rung of fatigue on "+2 on a single check" is about to
 #: roll, and dropping the bonus into a Dice block they cannot see would be the app
 #: charging them for something they never got.
-QUIET_REQUESTS = frozenset({NOTE_REQUESTED, PIN_REQUESTED, UNPIN_REQUESTED, HERO_POINT_REQUESTED})
+QUIET_REQUESTS = frozenset(
+    {NOTE_REQUESTED, PIN_REQUESTED, UNPIN_REQUESTED, HERO_POINT_REQUESTED, RECOVERY_REQUESTED}
+)
 
 #: The requests a sheet passes *out* when it was built without the block that
 #: answers them (see ``CharacterSheet.requestUnserved``). All five are the roller's:

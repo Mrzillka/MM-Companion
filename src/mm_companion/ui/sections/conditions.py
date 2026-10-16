@@ -36,8 +36,13 @@ from mm_companion.core.data_loader import Condition, GameData
 from mm_companion.core.rules import (
     apply_condition,
     apply_damage_step,
+    apply_recovery,
+    can_recover,
     damage_steps,
     decrement_condition,
+    recovery_check,
+    recovery_hint,
+    recovery_roll,
     roll_confused_action,
 )
 from mm_companion.ui import theme
@@ -201,6 +206,10 @@ class ConditionsSection(QGroupBox):
     changed = Signal()
     edited = Signal()
     conditionsChanged = Signal()
+    #: A ``RollSpec`` — a chip's 🎲 asked for its recovery check to be rolled. Served
+    #: by the Dice block (or, on an NPC sheet, the GM window's roller), which reports
+    #: a made one back on ``recovery-requested`` (:meth:`recover_condition`).
+    rollRequested = Signal(object)
 
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -344,6 +353,38 @@ class ConditionsSection(QGroupBox):
         self._emit_conditions_changed()
         return True
 
+    def roll_recovery(self, applied: AppliedCondition) -> bool:
+        """Ask for *applied*'s recovery check to be rolled — the chip's 🎲.
+
+        Only asks: the roller throws it, and what a made check sheds comes back
+        through :meth:`recover_condition`. Returns whether there was a check to ask for.
+        """
+        spec = recovery_roll(self._character, self._data, applied)
+        if spec is None:
+            return False
+        self.rollRequested.emit(spec)
+        return True
+
+    def recover_condition(self, payload: object) -> None:
+        """A recovery check came back made — the ``recovery-requested`` handler.
+
+        *payload* is ``(condition_id, parameter)``. Sheds one instance of it (a Hit
+        stack loses one) or turns it into what it becomes (Dying stabilising), through
+        the core resolver. A condition that has gone meanwhile is left alone.
+        """
+        if not isinstance(payload, tuple) or len(payload) != 2:
+            return
+        condition_id, parameter = payload
+        if not isinstance(condition_id, str):
+            return
+        removed, _added = apply_recovery(
+            self._character, self._data, condition_id, parameter if parameter else None
+        )
+        if not removed:
+            return
+        self._render_conditions()
+        self._emit_conditions_changed()
+
     def roll_confused(self, applied: AppliedCondition) -> None:
         """Roll this turn's random action for a Confused-style condition."""
         self._roll_confused(applied)
@@ -448,6 +489,23 @@ class ConditionsSection(QGroupBox):
             roll_button.setToolTip("Roll this turn's random action")
             roll_button.clicked.connect(lambda checked=False, a=applied: self._roll_confused(a))
             chip_layout.addWidget(roll_button)
+
+        # A condition that is *rolled off* (Dazed, a Hit, Dying) gets a die for its
+        # recovery check: the roll goes to the roller, and a made one takes the
+        # condition off again. Off the record's ``recoveryCheck``, so rest-only ones
+        # (Fatigued) and bundled members (they go with their umbrella) get none.
+        if can_recover(self._character, self._data, applied):
+            check = recovery_check(record)
+            recover_button = QToolButton()
+            recover_button.setText("🎲")
+            recover_button.setAutoRaise(True)
+            recover_button.setToolTip(
+                f"{recovery_hint(check)} — click to roll it; a success takes this off."
+                if check is not None
+                else "Roll the recovery check"
+            )
+            recover_button.clicked.connect(lambda checked=False, a=applied: self.roll_recovery(a))
+            chip_layout.addWidget(recover_button)
 
         # Right-click, not a "×" button — the same gesture the GM cards' chips use,
         # so shedding a condition is one thing to learn wherever a chip appears.

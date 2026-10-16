@@ -113,8 +113,28 @@ def entry_initiative(entry: dict) -> int | None:
     return value
 
 
+def entry_turn(entry: dict) -> int | None:
+    """One entry's place in the turn order (1 acts first), or ``None`` if it has none.
+
+    The GM's answer, sent with the board since protocol v15: every rolled entry has
+    one, and so does an un-rolled one the GM dragged in among them.
+    """
+    value = entry.get("turn")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return None
+    return value
+
+
 def order_scene(entries: list[dict], manual: list[str]) -> list[dict]:
-    """The scene in reading order: rolled first, then the GM's own arrangement.
+    """The scene in reading order: the turn order first, then the GM's own arrangement.
+
+    When the GM numbered the board (``turn``, protocol v15) that numbering *is* the
+    order, because it is the one thing that can put a creature nobody rolled for
+    between two that did — the GM dragged it there. The entries without a number
+    follow in *manual* order.
+
+    A board with no numbers at all (an older GM) falls back to the rule it always
+    had, described below.
 
     The same rule the NPC block sorts by
     (:meth:`~mm_companion.ui.gm_window.GMWindow._ordered_npcs`), and deliberately
@@ -132,6 +152,12 @@ def order_scene(entries: list[dict], manual: list[str]) -> list[dict]:
     known += [entry_ref(e) for e in entries if entry_ref(e) not in known]
     by_ref = {entry_ref(e): e for e in entries}
     base = [by_ref[ref] for ref in known if ref in by_ref]
+    if any(entry_turn(e) is not None for e in base):
+        numbered = sorted(
+            (e for e in base if entry_turn(e) is not None),
+            key=lambda e: entry_turn(e),  # type: ignore[arg-type,return-value]
+        )
+        return numbered + [e for e in base if entry_turn(e) is None]
     rolled = sorted(
         (e for e in base if entry_initiative(e) is not None),
         key=lambda e: entry_initiative(e),  # type: ignore[arg-type,return-value]
@@ -163,6 +189,10 @@ class SceneCard(QFrame):
     #: (:data:`CARD_END_TURN`), impress somebody (:data:`CARD_IMPRESS`), or use an
     #: attack on an area (:data:`CARD_AREA`).
     actionRequested = Signal(str, str)
+    #: ``(ref, condition_id, parameter)`` — take this condition off (GM only).
+    removeConditionRequested = Signal(str, str, object)
+    #: ``(ref, condition_id, parameter)`` — roll its recovery check (GM only).
+    recoveryRequested = Signal(str, str, object)
 
     def __init__(
         self,
@@ -173,6 +203,7 @@ class SceneCard(QFrame):
         gm: bool = False,
         own: bool = False,
         portrait: QPixmap | None = None,
+        recovery_probe=None,
     ) -> None:
         super().__init__(parent)
         # Named for the stylesheet that colours its edge, never a bare ``QFrame``:
@@ -196,6 +227,12 @@ class SceneCard(QFrame):
         #: Where a left-button press landed, to tell a drag from a click.
         self._press_pos: QPoint | None = None
         self._initiative: int | None = None
+        self._turn: int | None = None
+        #: The GM's answer to "does this chip offer a recovery die?" —
+        #: ``probe(ref, condition_id, parameter) -> bool``. The wire carries only a
+        #: condition's id, so the card cannot tell a directly applied condition from a
+        #: bundled member, nor read the creature's Stamina; the GM window can.
+        self._recovery_probe = recovery_probe
 
         layout = QVBoxLayout(self)
         margins = theme.box("card.margins")
@@ -205,6 +242,27 @@ class SceneCard(QFrame):
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
         header.setSpacing(int(theme.metric("space.xs")))
+
+        # Where it stands in the turn order — 1 goes first. The initiative badge says
+        # what it *rolled*; this says *when it acts*, which is the question a board is
+        # read for, and the one an un-rolled creature the GM slotted in between two
+        # rolled ones can answer only here.
+        self._turn_label = QLabel()
+        self._turn_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        turn_font = self._turn_label.font()
+        turn_font.setBold(True)
+        turn_font.setPointSizeF(theme.font_size("size.terms"))
+        self._turn_label.setFont(turn_font)
+        side = int(theme.metric("gm.damage-button"))
+        self._turn_label.setFixedSize(side, side)
+        self._turn_label.setStyleSheet(
+            f"color: {theme.color('text.on-badge')};"
+            f" background: {theme.color('accent')};"
+            f" border-radius: {side // 2}px;"
+        )
+        self._turn_label.setToolTip("Turn order")
+        self._turn_label.hide()
+        header.addWidget(self._turn_label)
 
         thumb_size = int(theme.metric("gm.thumb"))
         self._thumb = QLabel("?")
@@ -287,6 +345,9 @@ class SceneCard(QFrame):
         # that already mean something here.
         self._name.setText(f"{name} (you)" if self._own else name)
         self._initiative = entry_initiative(entry)
+        self._turn = entry_turn(entry)
+        self._turn_label.setText("" if self._turn is None else str(self._turn))
+        self._turn_label.setVisible(self._turn is not None)
         self._disposition = entry_disposition(entry)
         self._restyle()
         # A player's entry carries their id; an NPC's carries nothing that says
@@ -318,6 +379,18 @@ class SceneCard(QFrame):
         """This entry's rolled initiative, or ``None``."""
         return self._initiative
 
+    @property
+    def turn(self) -> int | None:
+        """This entry's place in the turn order, or ``None``."""
+        return self._turn
+
+    def condition_chips(self) -> list[_ConditionChip]:
+        """The chips themselves, in order."""
+        return [
+            self._chip_flow.itemAt(i).widget()  # type: ignore[misc]
+            for i in range(self._chip_flow.count())
+        ]
+
     def condition_names(self) -> list[str]:
         """The chip captions, in order — the readable form of the card's state."""
         return [
@@ -341,19 +414,27 @@ class SceneCard(QFrame):
                 count=int(item.get("count", 1) or 1),
             )
             record = self._conditions_by_id.get(applied.condition_id)
-            # Chips are never removable here on either screen. A player has no
-            # business taking a condition off a creature, and a GM does it on the
-            # card that owns the model — this one is a mirror of it.
-            self._chip_flow.addWidget(
-                _ConditionChip(
-                    condition_display_name(applied, record),
-                    tooltip=condition_tooltip(applied, record, self._conditions_by_id),
-                    compact=True,
-                    parent=self._chips,
-                )
+            chip = _ConditionChip(
+                condition_display_name(applied, record),
+                tooltip=condition_tooltip(applied, record, self._conditions_by_id),
+                compact=True,
+                parent=self._chips,
             )
+            # A GM takes a condition off here as on the creature's own card — the
+            # board is where they are looking mid-round, and the card may be a
+            # scroll away. A player has no business taking one off anybody, so on
+            # their screen the chip stays a readout.
+            if self._gm and self.ref:
+                self._arm_gm_chip(chip, applied.condition_id, applied.parameter)
+            self._chip_flow.addWidget(chip)
             shown += 1
         self._chips.setVisible(bool(shown))
+
+    def _arm_gm_chip(self, chip: _ConditionChip, cid: str, param: str | None) -> None:
+        """Right-click takes it off; a 🎲 rolls it off, where the GM says it can be."""
+        chip.arm_removal(lambda: self.removeConditionRequested.emit(self.ref, cid, param))
+        if self._recovery_probe is not None and self._recovery_probe(self.ref, cid, param):
+            chip.arm_recovery(lambda: self.recoveryRequested.emit(self.ref, cid, param))
 
     def _hover_text(self, name: str) -> str:
         """What the name's tooltip says. On the label, not the card.
@@ -363,6 +444,8 @@ class SceneCard(QFrame):
         pointer sits over a condition chip is answering a question nobody asked.
         """
         parts = [f"{name} (you)" if self._own else name, DISPOSITION_LABELS[self._disposition]]
+        if self._turn is not None:
+            parts.append(f"Turn {self._turn}")
         if self._initiative is not None:
             parts.append(f"Initiative {self._initiative}")
         if self._gm:

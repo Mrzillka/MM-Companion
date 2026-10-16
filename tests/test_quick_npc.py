@@ -399,3 +399,13 @@ def test_a_preset_that_rolls_says_so_on_its_button(dialog) -> None:
 
     assert dialog._preset_buttons["random"].text() == "Random" + RANDOM_MARK
     assert dialog._preset_buttons["brute"].text() == "Brute"
+
+
+def test_the_initiative_bonus_is_what_it_rolls_initiative_with() -> None:
+    from mm_companion.core.rules import initiative_modifier
+
+    data = load_game_data()
+    npc = quick_npc(data, name="Imp", attack=4, effect=4, defence=4, toughness=4, initiative=6)
+
+    assert initiative_modifier(npc, data) == 6
+    assert initiative_modifier(_npc(), data) == 0

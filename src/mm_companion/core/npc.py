@@ -151,6 +151,7 @@ def quick_npc(
     toughness: int,
     fortitude: int = 0,
     will: int = 0,
+    initiative: int = 0,
     power_level: int | None = None,
     image_path: str | None = None,
 ) -> Character:
@@ -165,6 +166,11 @@ def quick_npc(
     *defence*, *toughness*, *fortitude* and *will* are bought ranks. A quick NPC has
     no abilities, so every resistance base is 0 and the numbers entered are the
     numbers the sheet shows; Dodge derives from Defence and follows on its own.
+
+    *initiative* is the bonus it rolls Initiative with. It is written to the ability
+    initiative is rolled off (``system.json``'s ``default_initiative_ability``), the
+    same way *attack* is written to ``ATK``: a quick NPC has no abilities, so that
+    ability's value *is* the bonus.
 
     *power_level* is recorded on the character when given, but nothing reads it as a
     rule: an NPC's PL is *estimated* from what it can do
@@ -186,6 +192,8 @@ def quick_npc(
     npc.resistances[keys.toughness] = int(toughness)
     npc.resistances[keys.fortitude] = int(fortitude)
     npc.resistances[keys.will] = int(will)
+    if initiative:
+        npc.abilities[data.system.default_initiative_ability] = int(initiative)
 
     rank = max(0, int(effect))
     npc.powers = [

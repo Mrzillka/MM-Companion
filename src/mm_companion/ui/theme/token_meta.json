@@ -188,6 +188,9 @@
     "gm.pin-strip.min": {"label": "Pinned strip minimum", "hint": "The narrowest the strip of pinned numbers beside a GM card may get, in pixels."},
     "gm.pin-strip.max": {"label": "Pinned strip maximum", "hint": "The widest the strip of pinned numbers beside a GM card may get, in pixels. A longer caption elides."},
     "gm.thumb": {"label": "Collapsed portrait", "hint": "The portrait on a collapsed GM card, in pixels. It is still what opens the sheet."},
+    "gm.pin-tile.min": {"label": "Pinned tile minimum", "hint": "The narrowest one pinned number on an NPC card may get, in pixels."},
+    "gm.pin-tile.max": {"label": "Pinned tile maximum", "hint": "The widest one pinned number on an NPC card may get, in pixels. A longer caption elides."},
+    "gm.portrait": {"label": "NPC portrait", "hint": "The portrait on an expanded NPC card, in pixels. It is what opens the sheet."},
     "block.min-extent": {
       "label": "Block minimum",
       "hint": "How small a block may be dragged before it stops shrinking and scrolls inside itself, in pixels."
@@ -246,6 +249,7 @@
       "hint": "Leave on the platform default unless you have a reason; the app never sets a size in a stylesheet, so an unusual family can reflow a lot."
     },
     "size.card-name": {"label": "Power name"},
+    "size.pin-value": {"label": "GM card: pinned number", "hint": "The number on each pinned tile of an NPC card."},
     "size.terms": {"label": "Game terms", "hint": "The small print under a power's effects."},
     "size.simple-name": {"label": "Simple sheet: hero name", "hint": "The character's name across the top of the simple sheet."},
     "size.simple-value": {"label": "Simple sheet: key values", "hint": "The numbers a player reads mid-fight — ability and defence totals, skill bonuses, a power's rank and DC."},

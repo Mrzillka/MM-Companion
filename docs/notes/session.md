@@ -145,16 +145,29 @@ The shape:
   field of its own and not `spec is None`: a **forced save** carries no spec
   either (the wielder never rolls their own target's save; it reaches the person
   who does as the attack's follow-up chip) but is perfectly well resolved.
+- **What a pin may *do* is the pin's answer.** A *derived* resistance (Defence —
+  `derived` in `resistances.json`) resolves with no spec, as does an **effect rank**
+  (`PIN_EFFECT`, `key` a power id and `index` which effect, or late-bound
+  `select="first_damage"`): both are read, never thrown, and the tile says so by
+  carrying no accent. The picker lists *every* power through it — each effect's rank
+  first, then whatever the power rolls — so a Flight with nothing to roll is still
+  pinnable. The NPC defaults are DEF, Toughness, Will, Fortitude, the first Damage's
+  rank and that power's attack; a workspace whose GM saved their own defaults keeps
+  them (Settings ▸ GM Mode ▸ Restore shipped, then *Apply to cards*).
 - `ui/pin_panel.py` is the strip: **click loads** into the GM's roller and
   **double-click rolls** — the sheet's own bargain — plus drag to reorder and
   right-click to remove. A click is a release with *no* drag started and *no*
-  double-click just handled, which is what keeps the four apart.
+  double-click just handled, which is what keeps the four apart. It has a second
+  shape, **`grid=True`**, which is the NPC card's: stacked **tiles** (caption over
+  number) in a wrapping flow under the header, every one showing, all one width
+  (`set_width` sets the *tile*, `gm.pin-tile.min`/`max`), and a "+" tile only while it
+  is empty — the card's header 📌 adds the rest. The strip below is the player card's.
   `ui/pin_picker.py` is the modeless browser the "+" opens; it unpins as well as
   pins, and its `set_pinned` is a no-op when it already agrees — without that
   guard the card's echo rebuilds the tree *during* a toggle, deleting the row
   being restated. The chips sit in a `_ChipScroll` whose height is **set, never
   asked for** (`PinPanel._apply_cap` works it out from a real chip's height and
-  `set_max_visible`, which a collapsed card caps at four): a scroll area reports a
+  `set_max_visible`; nothing caps it today — the NPC card that did is a grid now): a scroll area reports a
   size hint unrelated to its content *and* is elastic in a panel that ends with a
   stretch, so left to negotiate the two split the room and a rebuilt strip
   collapsed to nothing with its chips laid out inside it, invisible. The drop
@@ -177,7 +190,13 @@ The shape:
   it is still `_NpcEntry.initiative` — so nothing about the wire changed.
 - **A card's width is not its own.** It reports what its contents need
   (`body_width_hint`, `pin_width_hint`) and `GMWindow._sync_card_widths` gives
-  every card in a block the widest of those. Both halves matter: measuring is what
+  every card in a block the widest of those — and how a card gives way to a block
+  narrower than that is the card's own `apply_width(body, strip, room)`: a player's
+  strip gives up its slack, an NPC's tiles wrap into fewer columns (it is measured
+  to hold `TILE_COLUMNS` = 3 abreast). `_card_room` measures the block **as though
+  its scroll bar were showing**: read off the live viewport, a collapsing card that
+  shortened the block dropped the bar, widened the viewport and widened every card,
+  and the next taller card brought it back. Both halves matter: measuring is what
   gets a card down from the flat `210 + 150 + spacing` = 372px it used to cost
   regardless of what was on it (a strip pinned to "Dodge 12" spent most of a card
   on white space), and *sharing* is what keeps the cards column-aligned, since the
@@ -189,20 +208,20 @@ The shape:
   and the cap is the old fixed width, so a long caption elides exactly as it always
   did and nothing is ever *wider* than before. `PinPanel.widthHintChanged` is what
   re-triggers the measurement when a pin comes or goes.
-- **An NPC card collapses** (`ui/npc_card.py`). Expanded it is a good roster entry
-  and a bad combat readout — a 96px portrait, a PL and two buttons, times a dozen
-  mooks, is two cards on screen. Collapsed it keeps only what a GM reads mid-round:
-  a thumbnail (still the *only* thing that opens the sheet), the name, the pinned
-  strip, the conditions and the damage row. The win is **height**: the portrait is
-  in `body_width_hint` and a collapsed card sheds it, so a wholly shut board *can*
-  narrow — but with the bundled ruleset the damage ladder is wider than 96px
-  anyway, so in practice it does not. Two other things worth knowing. The two name
-  labels share **one slot**, exactly one showing: collapsed it elides (a wrapped
-  name would need a second line the thumbnail's row height hasn't got), expanded it
-  wraps, and giving the wrapped one a row of its own left a near-empty strip above
-  the card's own name. And `set_collapsed` is **silent** like `PinPanel.set_pins`;
-  only the caret emits `collapsedChanged`, since the owner telling a card what it
-  already decided must not have the window save what it just read.
+- **An NPC card is one shape at two sizes** (`ui/npc_card.py`). Top to bottom, in
+  both states: a header (picture | name, PL, buttons | 🗣 💥 📌 caret), the pinned
+  **tiles**, the conditions, the damage row. Collapsing shrinks the picture from
+  `gm.portrait` to `gm.thumb` and folds Copy/Impress/Area into icons — nothing else
+  moves, so a number is in the same place on a shut card and an open one. It
+  replaced a card whose pins were a strip down its right side, capped at four on a
+  collapsed card with the rest scrolled away: the shipped six did not fit on exactly
+  the card a GM collapses for a fight. Both pictures are the creature's own
+  (`_set_portrait` sets both — the thumbnail used to stay a "?"), and either opens
+  the sheet. The two name labels share **one slot**, exactly one showing: collapsed
+  it elides, expanded it wraps. `set_collapsed` is **silent** like
+  `PinPanel.set_pins`; only the caret emits `collapsedChanged`, since the owner
+  telling a card what it already decided must not have the window save what it just
+  read. Every new card starts **expanded**, Quick NPC's included.
 - **Right-click means "take that away"**, and the specific answer always wins over
   the general one. A condition chip sheds its condition, a scene card's badge
   clears its roll, and an NPC card itself offers Remove/Delete — so the first two
@@ -214,7 +233,23 @@ The shape:
   like "Hit ×3" back, at the cost of an affordance you cannot see, so the helper
   writes "Right-click to remove" into the tooltip. A chip that *cannot* be removed
   (an offline player's) still swallows the click: falling through to the card's
-  "Remove player" is not what someone aiming at a chip asked for.
+  "Remove player" is not what someone aiming at a chip asked for. A **scene card**'s
+  chips take the same gesture on the GM's board (`SceneCard.removeConditionRequested`
+  → `_remove_scene_condition`, the creature's own path) and stay readouts on a
+  player's.
+- **A condition that is rolled off carries a 🎲** (`_ConditionChip.arm_recovery`,
+  and a button of its own on the sheet's and the simple sheet's chips) — the recovery
+  check `core/rules/recovery.py` reads off `conditions.json`'s `recoveryCheck`. Who
+  rolls is who owns the creature. An **NPC**'s is rolled on the GM's roller as that
+  creature (`_roll_npc_recovery`), held in `_recovering`, and settled by
+  `_on_recovery_back` on whichever path the roll comes back by — matched on its
+  label, which names the creature. A **player** rolls their own: the GM's 🎲 on their
+  card (or their scene card) leaves a *request* in the history carrying the condition
+  (`RollSpec.recovers`), and their Dice block's `settle_recovery` reads a made one off
+  the record and raises `recovery-requested` for their Conditions block to shed — the
+  same path as the 🎲 on their own sheet. A scene card cannot tell a bundled member
+  from a direct condition (the wire strips `provenance`), so whether a chip there gets
+  a die is the GM window's answer (`SceneBoard.set_recovery_probe`).
 - The NPC block's header carries **one** Collapse all / Expand all button, whose
   caption is the action it will take — which makes it a readout of the board too.
   Anything still open means "collapse"; only a wholly shut board offers to expand.
@@ -302,8 +337,11 @@ The shape:
   creature whose file went away is simply not found; it rebuilds in the *public*
   scene's order (that is the list the refs were written in) and brings the rolled
   initiatives with it, since a turn order without its numbers is most of the way to
-  no turn order. **NPCs only** — a restored seat would be dropped by the very next
-  roster anyway, which is the rule `_sync_scene_players` already keeps.
+  no turn order. **Players too** (with their numbers): a seat keeps its place across a
+  disconnect, and a GM restarting is the same thing from the other side — the first
+  roster that has no such seat at all is what drops it. Its place in the turn order
+  comes back as well (`turn`, so a hand-placed creature stays placed); a board saved
+  before turns were numbered is put back in initiative order.
 - **What a creature is to the table is public, and it is the only field on an
   entry that is a *judgement*.** Everything else on the wire is read off a model;
   `disposition` is the GM's answer to a question nothing else can answer, and
@@ -393,16 +431,28 @@ The shape:
   apart by whether the wire entry carries a `player_id`. Rolling no longer rebuilds
   the NPC grid, which it had to while that grid sorted by initiative and which cost
   every hover and scroll position on the board.
-- **The scene is the only board that sorts by initiative** (`order_scene`): rolled
-  entries by initiative descending, then the un-rolled ones in the GM's
-  arrangement. The NPC grid used to sort the same way, deliberately — and that was
-  the mistake: it is one ordering shown twice, and the second copy re-arranged the
-  cast under the GM's hands mid-round. A drop here clears the dragged entry's
-  initiative, plus a rolled neighbour it was put in front of, because putting an
-  un-rolled creature before a rolled one is impossible while the other keeps a
-  number to sort by. A drop back on the entry's **own** slot is not a move and
-  clears nothing (`_is_same_slot`) — both gaps either side of a card name its own
-  place, and without that a GM who nudged a rolled card silently lost the roll.
+- **The scene is the turn order, and its numbers are turns** (protocol v15). The
+  GM's `_scene` list *is* the order: entries **in the turn order** — rolled, or
+  `placed` — are kept at its head, numbered 1..n down it (`turn` on the payload, drawn
+  as a badge on each scene card), and the rest follow in the GM's arrangement.
+  `order_scene` sorts by `turn` when there is one (and falls back to initiative for an
+  older GM). A roll seats its creature by its number (`_seat_by_initiative`: in front
+  of the first rolled entry that rolled lower, going round any placed ones). **A drop
+  changes only the dragged card**: it gives up its roll and lands exactly where it was
+  dropped; anywhere up to just after the last numbered card it is *placed* — numbered,
+  no initiative — and further down it is only rearranged. It used to clear the rolled
+  neighbour it was dropped in front of too, because a board sorted by initiative could
+  not otherwise put it there — punishing the creature the GM was not touching. Clearing
+  a roll (the badge's right-click) takes the card out of the turn order to the head of
+  the un-numbered. A drop back on the entry's **own** slot is not a move and clears
+  nothing (`_is_same_slot`). The NPC grid does not sort at all: it is one ordering, and
+  a second copy re-arranged the cast under the GM's hands mid-round.
+- **A dragged card scrolls the page** (`card_chips.DragAutoScroll`, started by
+  `start_card_drag`): a `QScrollArea` does not scroll under a `QDrag`, so a Scene block
+  above the cast was out of reach. Polled on a timer — the drag events go to whatever
+  is under the pointer, and a pointer held at the edge sends none — scrolling the
+  innermost area under the pointer that can move, or, past the edge of everything,
+  the areas around the dragged card.
 - **The reorder gesture had to become a real `QDrag`.** The NPC card used to track
   the pointer itself and emit a preview for the window to draw, which is a fine
   gesture inside one container and cannot leave it: nothing crosses a widget
@@ -441,8 +491,12 @@ The shape:
 - **Quick NPC opens nothing.** It used to throw the new mook's full sheet up,
   which is exactly wrong for what the button is for: a handful of numbers is all a
   mook needs, and a GM making five of them wanted five cards, not five windows to
-  close. The card lands **collapsed** for the same reason. The sheet is one click on
-  the card's portrait away either way.
+  close. The card lands **expanded** (it used to land collapsed; the GM has just made
+  it and wants to see it whole — **Collapse all** shrinks a batch). The sheet is one
+  click on the card's portrait away either way. Its **Initiative** box sits under
+  the six and no preset touches it; `quick_npc(initiative=…)` writes it to the
+  ability initiative is rolled off (`default_initiative_ability`), as *attack* is
+  written to ATK.
 - **Quick NPC is a Power Level and a preset.** The PL is the master field; a preset
   (Brute, Speed, Balance, Random) turns it into all six numbers — attack, effect,
   defence, toughness, fortitude, will — via `core.npc.preset_stats`. Everything about a
@@ -493,7 +547,11 @@ The shape:
   otherwise (Settings ▸ GM Mode; read through **`storage.gm_scene_auto_players()`**,
   never off `load_settings()`, for the reason spelled out on `gm_default_pins` — a
   key added after a workspace was created reads back as `None`, which is falsy, and
-  would have turned the default off for every existing GM). With it off the player
+  would have turned the default off for every existing GM). "By themselves" means
+  **as they connect** (`_connected_seats` remembers who already had), not on every
+  roster: an offline seat is never seated, a disconnecting one is never unseated, a
+  seat the GM took off stays off until it next connects, and **New scene** seats the
+  connected players only. Turning the preference on seats everyone connected. With it off the player
   cards grow a 👁; with it on that eye is hidden, since an action that does nothing
   is worse than none. It is the **only** eye left — an NPC card has none — and it
   survives because it is also the readout for the one case a drag cannot express:
@@ -639,6 +697,12 @@ The shape:
   nothing. The **hub must be redeployed** again. The first try avoided the bump by
   parsing the ladder back out of the outcome *words*, and the user asked for the bump
   instead: ask before designing around one.
+- **Protocol v15 carries recovery checks and the turn order** — `RollSpec.recovers` /
+  `recovers_parameter` (the condition a made recovery check sheds) and a scene entry's
+  `turn`. Bumped for the v13 reason: a v14 server strips the spec keys without a word,
+  so a player who made the Stamina check the GM asked for would stay Dazed, and a turn
+  order arranged by hand would reach the players re-sorted by initiative. The **hub
+  must be redeployed** with the release.
 - Deployment lives in `deploy/` (systemd units, `deploy.sh`, runbook) — tracked
   and secret-free. The operator's addresses and key paths are in a gitignored
   `SERVER.md`.

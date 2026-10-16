@@ -192,11 +192,13 @@ def test_the_protocol_version_is_the_one_the_keepalive_needs() -> None:
     and a v11 server would drop that request the same silent way. v13 carries area
     attacks on the spec, and a v12 server's whitelist would strip those keys without
     a word. v14 carries a save's ladder (and the creature a roll was made as) on the
-    spec, which a v13 server's whitelist would strip the same way. Either way changing
+    spec, which a v13 server's whitelist would strip the same way. v15 carries a
+    recovery check's condition on the spec and the turn order on the scene, and a v14
+    server would strip both the same way again. Either way changing
     this number is a decision about who can still join,
     so it should not be possible to do by accident.
     """
-    assert PROTOCOL_VERSION == 14
+    assert PROTOCOL_VERSION == 15
 
 
 def test_every_registered_type_is_reachable_by_tag() -> None:
@@ -650,3 +652,28 @@ def test_mod_state_is_clamped_to_the_aggregate_cap() -> None:
 
     assert protocol.mod_state_chars(state) <= protocol.MAX_MOD_STATE_CHARS
     assert state, "the cap should trim the tail, not empty the map"
+
+
+def test_a_scene_entry_keeps_its_place_in_the_turn_order() -> None:
+    """v15: the GM numbers the board, so an un-rolled creature slotted in by hand
+    still reaches every player in its place."""
+    from mm_companion.core.session.protocol import sanitize_scene
+
+    entries = sanitize_scene(
+        [
+            {"ref": "a", "turn": 1, "initiative": 18},
+            {"ref": "b", "turn": 2},
+            {"ref": "c", "turn": 0},
+            {"ref": "d", "turn": True},
+        ]
+    )
+
+    assert [e.get("turn") for e in entries] == [1, 2, None, None]
+
+
+def test_a_spec_keeps_the_condition_its_recovery_check_is_for() -> None:
+    from mm_companion.core.session.protocol import sanitize_spec
+
+    spec = sanitize_spec({"label": "Recover", "recovers": "dazed", "recovers_parameter": "x"})
+
+    assert spec == {"label": "Recover", "recovers": "dazed", "recovers_parameter": "x"}

@@ -35,7 +35,7 @@ from mm_companion.ui.power_constructor.common import (
     _mime_id,
 )
 from mm_companion.ui.power_constructor.effect_card import EffectCard
-from mm_companion.ui.widgets import discard_widget
+from mm_companion.ui.widgets import HelpButton, discard_widget
 
 
 def _idle_canvas_rules(filled: bool) -> str:
@@ -56,6 +56,37 @@ def _idle_canvas_rules(filled: bool) -> str:
 #: "is this an array?" in some fifty places — correct without being touched, and it is
 #: the honest model besides, since the rules price Dynamic per member.
 MODE_ARRAY_DYNAMIC = "array_dynamic"
+
+#: How the one attack check of a Linked power picks its bonus, per the ruleset's
+#: ``system.linkedAttackBonus`` — the sentence :func:`linked_help` puts behind the "?".
+_LINKED_BONUS_WORDS = {
+    "first": "the first attacking effect's bonus, the top card",
+    "highest": "the best bonus among them",
+    "lowest": "the worst bonus among them",
+}
+
+
+def linked_help(game_data: GameData | None = None) -> str:
+    """How a Linked power works, behind the "?" beside the mode bar's *Linked*.
+
+    The bonus sentence follows the ruleset's ``linkedAttackBonus``, so a mod that
+    retunes the pick is described as it plays.
+    """
+
+    policy = game_data.system.linked_attack_bonus if game_data is not None else "first"
+    pick = _LINKED_BONUS_WORDS.get(policy, _LINKED_BONUS_WORDS["first"])
+    return (
+        "Linked effects always work together, as one power. They take one action (the "
+        "slowest of theirs) and must share the same Range.\n\n"
+        "Every effect that makes an attack roll is rolled once, together: a single "
+        "attack check that lands all of them. The book does not say which bonus that "
+        f"roll uses when the effects' differ; this app uses {pick}, and the power "
+        "warns whenever they differ.\n\n"
+        "Each effect is still resisted on its own, and each is held to the Power Level "
+        "cap on its own: the shared attack bonus plus that effect's rank.\n\n"
+        "Linking an effect to itself, such as two Damage effects for double damage, is "
+        "generally not allowed."
+    )
 
 
 class PowerModeBar(QWidget):
@@ -91,7 +122,7 @@ class PowerModeBar(QWidget):
         ),
     )
 
-    def __init__(self) -> None:
+    def __init__(self, game_data: GameData | None = None) -> None:
         super().__init__()
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -108,6 +139,11 @@ class PowerModeBar(QWidget):
             self._group.addButton(button)
             self._buttons[structure] = button
             layout.addWidget(button)
+            if structure == STRUCTURE_LINKED:
+                # Linked carries rules a tooltip line cannot hold (one attack roll, at
+                # which bonus, capped how), so it gets a "?" of its own.
+                self._linked_help = HelpButton(linked_help(game_data))
+                layout.addWidget(self._linked_help, alignment=Qt.AlignmentFlag.AlignVCenter)
         layout.addStretch()
         self._buttons[STRUCTURE_INDEPENDENT].setChecked(True)
         self._group.buttonClicked.connect(self._on_clicked)
@@ -178,7 +214,7 @@ class PowerCanvas(QFrame):
         self._layout = QVBoxLayout(self)
         # The structure switch sits above the cards; it reveals itself only once a
         # second effect makes the choice meaningful (§4).
-        self._mode_bar = PowerModeBar()
+        self._mode_bar = PowerModeBar(game_data)
         self._mode_bar.setVisible(False)
         self._mode_bar.changed.connect(self._on_structure_changed)
         self._layout.addWidget(self._mode_bar)

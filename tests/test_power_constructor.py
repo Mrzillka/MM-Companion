@@ -669,6 +669,24 @@ def test_linked_badges_every_card(qapp: QApplication) -> None:
     assert b._role_badge.text() == "Linked"
 
 
+def test_linked_has_a_help_button_naming_the_bonus_pick(qapp: QApplication) -> None:
+    from dataclasses import replace
+
+    data = load_game_data()
+    window = PowerConstructorWindow(data)
+    window.canvas.add_effect("damage")
+    window.canvas.add_effect("affliction")
+    help_ = window.canvas._mode_bar._linked_help
+    assert help_.isVisibleTo(window)
+    assert "single attack check" in help_.help_text()
+    assert "the first attacking effect's bonus" in help_.help_text()
+    lowest = replace(data, system=replace(data.system, linked_attack_bonus="lowest"))
+    assert (
+        "the worst bonus"
+        in PowerConstructorWindow(lowest).canvas._mode_bar._linked_help.help_text()
+    )
+
+
 def test_powers_section_launches_and_locks(qapp: QApplication) -> None:
     sheet = CharacterSheet(load_game_data())
     button = sheet.powers._add_button

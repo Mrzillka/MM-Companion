@@ -198,10 +198,33 @@ def test_a_linked_power_rolls_one_attack_that_lands_every_save(data, hero) -> No
 def test_the_linked_attack_uses_the_rulesets_pick_of_the_bonuses(data, hero) -> None:
     (attack,) = linked_attacks(_linked(data), data, hero)
     assert attack.bonuses == (11, 7)
-    assert attack.bonus == 11  # system.linkedAttackBonus: "highest"
+    assert attack.bonus == 11  # system.linkedAttackBonus: "first" — the Accurate Damage
+    reordered = _linked(data)
+    reordered.effects.reverse()
+    assert linked_attacks(reordered, data, hero)[0].bonus == 7  # now the Affliction leads
+    highest = replace(data, system=replace(data.system, linked_attack_bonus="highest"))
+    assert linked_attacks(reordered, highest, hero)[0].bonus == 11
     lowest = replace(data, system=replace(data.system, linked_attack_bonus="lowest"))
     assert linked_attacks(_linked(data), lowest, hero)[0].bonus == 7
-    assert any("roll once at +11" in m for m in power_violations(_linked(data), hero, data))
+    assert any(
+        "roll once at +11, the first effect's (Damage +11, Affliction +7)" in m
+        for m in power_violations(_linked(data), hero, data)
+    )
+
+
+def test_each_linked_effect_is_capped_on_its_own_at_the_shared_bonus(data, hero) -> None:
+    """Attack plus rank per effect, never summed — and the attack is the one rolled.
+
+    Damage +11 rank 6 (17) and Affliction rank 8: alone at +7 that is 15, but it rolls
+    at the lead Damage's +11, so 19 — over PL 9's 18. Put it first and nothing breaches.
+    """
+    hero.power_level = 9
+    power = _linked(data)
+    power.effects[0].rank = 6
+    (breach,) = power_pl_violations(power, hero, data)
+    assert breach.startswith("Affliction: attack +11 plus rank 8 = 19")
+    power.effects.reverse()
+    assert power_pl_violations(power, hero, data) == []
 
 
 def test_a_critical_on_the_linked_attack_raises_every_save(data, hero) -> None:

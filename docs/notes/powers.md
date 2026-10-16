@@ -320,11 +320,16 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   aimed at Defense — and the footer carries one `Damage + Affliction: Attack +8 vs.
   Defense` line where the first of them used to be, provoking every member's save through
   `RollSpec.also` (protocol v16). The book does not say which bonus that roll uses when
-  the effects' differ, so the ruleset does: `system.linkedAttackBonus`, **`"highest"`**
-  — the user's call, made provisionally ("it can be changed later"), and the reason it
-  is a data dial rather than a `max()`. The PL check caps each linked effect at the bonus
-  it actually rolls at, and `power_linked_bonus_violations` states the pick whenever the
-  bonuses differ. Saves stay one line per effect: the book's "resistance check, if both
+  the effects' differ, so the ruleset does: `system.linkedAttackBonus`, **`"first"`** —
+  the lead effect's, the top card's. It shipped as `"highest"` (the user's provisional
+  call) and was moved to `"first"` after a search found no official ruling either way:
+  the forums agree only that the roll is one roll and that each linked effect meets its
+  own PL cap (Skyjacker's Melting Ray, *Rogues Gallery* p114, is the cited example).
+  The constructor cannot reorder cards yet, so "first" means first added. The PL check
+  caps each linked effect **on its own** — the shared bonus plus that effect's rank,
+  never the ranks summed — and `power_linked_bonus_violations` states the pick whenever
+  the bonuses differ. The "?" beside the constructor's *Linked* (`linked_help`) says
+  all of this, its bonus sentence read off the dial. Saves stay one line per effect: the book's "resistance check, if both
   effects use the same type of check" would merge two same-resistance saves into one
   roll against two DCs, which one spec cannot carry. The header names the bundle's one
   action, the slowest of its effects' (`linked_action`). The same effect Linked to itself

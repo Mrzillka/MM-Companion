@@ -32,6 +32,7 @@ from mm_companion.ui.blocks.bus import (
     LOAD_REQUESTED,
     NOTE_REQUESTED,
     PIN_REQUESTED,
+    RECOVERY_REQUESTED,
     ROLL_REQUESTED,
     UNPIN_REQUESTED,
     SignalBus,
@@ -58,6 +59,7 @@ REQUEST_TOPICS = {
     HERO_POINT_REQUESTED,
     BONUS_REQUESTED,
     AREA_REQUESTED,
+    RECOVERY_REQUESTED,
 }
 
 

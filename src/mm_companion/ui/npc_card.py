@@ -394,10 +394,19 @@ class NPCCard(QFrame):
         fewer columns and the card stays the width it was given — see
         :meth:`~mm_companion.ui.gm_window.GMWindow._sync_card_widths`.
         """
-        self.pins.set_width(strip)
         width = self.card_width(body, strip)
-        if room > 0:
-            width = min(width, max(int(theme.metric("gm.card.min")), room))
+        if room > 0 and width > room:
+            width = max(int(theme.metric("gm.card.min")), room)
+            # Narrower tiles before fewer of them: a block a few pixels short of three
+            # tiles abreast would otherwise drop a whole row of card height — and those
+            # few pixels come and go with the page's own scroll bar. Only once a tile
+            # is down to its minimum do the tiles wrap into fewer columns.
+            left, _top, right, _bottom = theme.box("card.margins")
+            gap = int(theme.metric("space.xs"))
+            inner = width - left - right - 2 * self.frameWidth()
+            fit = (inner - (TILE_COLUMNS - 1) * gap) // TILE_COLUMNS
+            strip = max(int(theme.metric("gm.pin-tile.min")), min(strip, fit))
+        self.pins.set_width(strip)
         self.setFixedWidth(width)
 
     @property

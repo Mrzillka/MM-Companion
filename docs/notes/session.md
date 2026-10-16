@@ -709,6 +709,14 @@ The shape:
   so a player who made the Stamina check the GM asked for would stay Dazed, and a turn
   order arranged by hand would reach the players re-sorted by initiative. The **hub
   must be redeployed** with the release.
+- **Protocol v16 lets one roll provoke several** — `RollSpec.also`, a list of specs
+  beside `follow_up` (capped at `MAX_SPEC_ALSO`, each sanitized one level deeper). A
+  Linked power's single attack check lands every save its effects force (p155), and a
+  Nullify's hit calls for its opposed check; `follow_ups_for_result` applies the crit
+  and graze rules to each, and `chain_widgets` draws a chip per roll. Bumped for the
+  v13 reason: a v15 server strips the key without a word and a Linked Damage + Affliction
+  would hit and offer only the first save. v15 never shipped, so both reach the hub in
+  the same release — **redeploy it** with that release.
 - **A join code is version 2, and a public-server session's is 24 characters.**
   Version 1 spelled the relay URL out byte by byte and came to 130 characters for
   a session on the hub. `discovery.encode_join_code` now packs every field as

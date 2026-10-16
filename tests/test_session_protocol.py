@@ -194,11 +194,12 @@ def test_the_protocol_version_is_the_one_the_keepalive_needs() -> None:
     a word. v14 carries a save's ladder (and the creature a roll was made as) on the
     spec, which a v13 server's whitelist would strip the same way. v15 carries a
     recovery check's condition on the spec and the turn order on the scene, and a v14
-    server would strip both the same way again. Either way changing
+    server would strip both the same way again. v16 lets one roll provoke several
+    follow-ups (``also``), which a v15 server would strip the same way. Either way changing
     this number is a decision about who can still join,
     so it should not be possible to do by accident.
     """
-    assert PROTOCOL_VERSION == 15
+    assert PROTOCOL_VERSION == 16
 
 
 def test_every_registered_type_is_reachable_by_tag() -> None:

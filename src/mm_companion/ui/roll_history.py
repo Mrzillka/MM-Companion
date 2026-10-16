@@ -41,7 +41,7 @@ from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.rules import (
     KIND_IMPRESS,
     RollSpec,
-    follow_up_for_result,
+    follow_ups_for_result,
     outcome_is_failure,
     resistance_outcome,
 )
@@ -325,7 +325,8 @@ def chain_widgets(
     * a **follow-up button** when the roll provoked another one and landed — an
       attack that hit makes its target save, and the button primes that save with
       its DC already filled in, adjusted for a critical hit or a natural 1
-      (:func:`~mm_companion.core.rules.follow_up_for_result`);
+      (:func:`~mm_companion.core.rules.follow_ups_for_result`), one per roll
+      it provoked;
     * an **outcome line** — "Incapacitated!" on a failed save, or the Hit a *made*
       Toughness save still costs, rather than a bare "2 degrees of failure".
 
@@ -353,10 +354,10 @@ def chain_widgets(
     if resolved is None:
         return []
     widgets: list[QWidget] = []
-    follow_up = follow_up_for_result(resolved, die, degree, load_game_data(), total)
-    if follow_up is not None and not localize:
-        follow_up = replace(follow_up, trait_key="")
-    if follow_up is not None:
+    # Usually one; a Linked power's single attack lands a save per effect, each its own.
+    for follow_up in follow_ups_for_result(resolved, die, degree, load_game_data(), total):
+        if not localize:
+            follow_up = replace(follow_up, trait_key="")
         widgets.append(
             roll_button(
                 follow_up,

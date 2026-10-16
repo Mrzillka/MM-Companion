@@ -1506,7 +1506,9 @@ def test_an_over_budget_imposed_effect_warns_in_the_constructor(qapp: QApplicati
 
     rank = [s for s in card._config_host.findChildren(QAbstractSpinBox) if s.isVisibleTo(card)][-1]
     rank.setValue(3)  # Morph 3 = 15 PP against a 6 PP Affliction
-    assert "Imposed effect over budget" in window._warning.text()
+    # The Affliction is otherwise unfinished (no resistance, two degrees unset), so the
+    # headline names that check too; the budget is the one this test is about.
+    assert "imposed effect over budget" in window._warning.text().lower()
     assert "15 PP" in window._warning.toolTip()
 
 
@@ -2192,6 +2194,22 @@ def test_extended_settings_appear_only_once_something_could_use_them(
 
     window.canvas.add_effect("damage")
     assert window._extended_row.isVisibleTo(window) is True
+
+
+def test_extended_settings_open_folded(qapp: QApplication) -> None:
+    """Shown once something could use them, but folded until asked for — new or edited."""
+    laser = Power(name="Laser", effects=[PowerEffectInstance("damage", rank=8)])
+    for power in (None, laser):
+        window = PowerConstructorWindow(load_game_data(), character=_pl10_character(), power=power)
+        window.canvas.add_effect("damage")
+        assert window._extended_row.isVisibleTo(window) is True
+        assert window._extended_toggle.isChecked() is False
+        assert window._extended_body.isVisibleTo(window) is False
+        assert window._extended_toggle.text().startswith(window._COLLAPSED_GLYPH)
+
+        window._extended_toggle.setChecked(True)
+        assert window._extended_body.isVisibleTo(window) is True
+        window.close()
 
 
 def test_the_size_switch_writes_every_effect_it_covers(qapp: QApplication) -> None:

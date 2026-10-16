@@ -11,6 +11,7 @@ from ..character import Character
 from ..data_loader import Effect, EffectConfigField, GameData, Modifier
 from ..powers import (
     STRUCTURE_ARRAY,
+    ModifierSelection,
     Power,
     PowerEffectInstance,
     PowerGroup,
@@ -708,6 +709,53 @@ def effect_rank_trait_bonus(
     return bonus
 
 
+def effect_resistance_grant(
+    effect: PowerEffectInstance, game_data: GameData
+) -> tuple[Modifier, ModifierSelection] | None:
+    """The attached modifier that gives *effect* a resistance check, with its chip.
+
+    ``None`` when the effect is resisted already (its own record has a resistance), or
+    when nothing attached grants one. A grant with no ``placeholder`` counts only once
+    its ``grants`` field holds a choice: the Attack extra makes a Teleport *something
+    to hit*, and whether it is also resisted is the player's to say.
+    """
+
+    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if base is None or base.resistance or base.resistance_dc_base is not None:
+        return None
+    catalog = game_data.modifier_catalog()
+    for selection in (*effect.extras, *effect.flaws):
+        modifier = catalog.get(selection.modifier_id)
+        if modifier is None or modifier.grants_resistance is None:
+            continue
+        if modifier.grants_resistance.placeholder or any(
+            field.grants and selection.config.get(field.key) for field in modifier.config_fields
+        ):
+            return modifier, selection
+    return None
+
+
+def effect_resistance_dc_base(effect: PowerEffectInstance, game_data: GameData) -> int | None:
+    """The fixed part of the DC *effect*'s resistance check is made against, or ``None``.
+
+    The effect's own ``resistanceDcBase`` when it has one, otherwise what a granting
+    modifier supplies (:func:`effect_resistance_grant`). This is the one answer to "is
+    this effect resisted at all", which the save DC, the Power Level caps, the size
+    shift and the area's Dodge all ask — so a Teleport given the Attack extra and a
+    Will save is capped and priced as the attack it has become.
+    """
+
+    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if base is None:
+        return None
+    if base.resistance_dc_base is not None:
+        return base.resistance_dc_base
+    granted = effect_resistance_grant(effect, game_data)
+    if granted is None:
+        return None
+    return granted[0].grants_resistance.dc_base
+
+
 def effect_size_rank_shift(
     effect: PowerEffectInstance, game_data: GameData, char: Character | None
 ) -> int:
@@ -724,7 +772,7 @@ def effect_size_rank_shift(
     Zero in three cases, and each is a decision:
 
     * **The effect forces no resistance.** Size cannot make a Flight faster or a
-      Concealment thicker. The test is the base effect's ``resistance_dc_base``, which is
+      Concealment thicker. The test is :func:`effect_resistance_dc_base`, which is
       the same "not an attack/resisted effect" question
       :func:`~.validation.power_pl_violations` already asks.
     * **The player switched it off** (``size_scales_damage`` — the constructor's
@@ -739,8 +787,7 @@ def effect_size_rank_shift(
     column = game_data.measurements.size_rank_column
     if not column:
         return 0
-    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
-    if base is None or base.resistance_dc_base is None:
+    if effect_resistance_dc_base(effect, game_data) is None:
         return 0
     row = game_data.measurements.size_row(effective_size_rank(char, game_data))
     return row.modifier(column) if row is not None else 0

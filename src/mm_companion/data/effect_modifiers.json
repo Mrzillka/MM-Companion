@@ -456,6 +456,22 @@
           "costFormula": "-1 point per rank",
           "costValue": 1,
           "flat": false,
+          "grantsResistance": {
+            "dcBase": 10,
+            "placeholder": "Resistance (not chosen yet) vs. Effect DC"
+          },
+          "config": [
+            {
+              "key": "resistance",
+              "label": "Resisted by",
+              "type": "select",
+              "source": "resistance_targets",
+              "overrides": "resistance",
+              "grants": true,
+              "required": true,
+              "hint": "What an observer resists with to see through it, against 10 + Concealment rank (p113)."
+            }
+          ],
           "description": "Anyone aware of or looking for you gets a resistance check to see through it."
         }
       ]
@@ -1073,6 +1089,22 @@
           "costFormula": "-1 point per rank",
           "costValue": 1,
           "flat": false,
+          "grantsResistance": {
+            "dcBase": 10,
+            "placeholder": "Dodge or Will vs. Effect DC",
+            "dcTrait": "WILL"
+          },
+          "config": [
+            {
+              "key": "resistance",
+              "label": "Resisted by",
+              "type": "select",
+              "source": "resistance_targets",
+              "overrides": "resistance",
+              "grants": true,
+              "hint": "What a target resists with, usually Dodge or Will, against 10 + your Will (p127). Leave unset for the usual Dodge or Will, which the target picks between."
+            }
+          ],
           "description": "Targets get a resistance check to avoid its effects."
         },
         {
@@ -1671,6 +1703,21 @@
           "costFormula": "-1 point per rank",
           "costValue": 1,
           "flat": false,
+          "grantsResistance": {
+            "dcBase": 10,
+            "placeholder": "Will vs. Effect DC"
+          },
+          "config": [
+            {
+              "key": "resistance",
+              "label": "Resisted by",
+              "type": "select",
+              "source": "resistance_targets",
+              "overrides": "resistance",
+              "grants": true,
+              "hint": "What an observer resists with to see you as you are, most often Will (p134)."
+            }
+          ],
           "description": "A successful resistance check sees through your disguised form."
         }
       ]
@@ -2180,6 +2227,21 @@
           "costFormula": "-1 point per rank",
           "costValue": 1,
           "flat": false,
+          "grantsResistance": {
+            "dcBase": 10,
+            "placeholder": "Will vs. Effect DC"
+          },
+          "config": [
+            {
+              "key": "resistance",
+              "label": "Resisted by",
+              "type": "select",
+              "source": "resistance_targets",
+              "overrides": "resistance",
+              "grants": true,
+              "hint": "What a minion resists being summoned with, typically Will, against your effect DC (p144)."
+            }
+          ],
           "description": "Minions get a resistance check to avoid being summoned at all."
         }
       ]

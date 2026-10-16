@@ -97,6 +97,8 @@
   },
   "alternate_effect_modifier": "alternate_effect",
     "linked_modifier": "linked",
+    "_linkedAttackBonus": "Linked effects use a single attack check (PDF p157, printed p155), and the book does not say at which bonus when theirs differ. highest, lowest, or first (the first attacking effect on the card).",
+    "linkedAttackBonus": "highest",
     "derived_traits": [
       { "key": "DEF", "label": "Defence" },
       { "key": "initiative", "label": "Initiative" }

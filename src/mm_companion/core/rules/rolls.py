@@ -25,6 +25,7 @@ other roll, so there is one way to say "and +2 for cover".
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, replace
 
 from ..character import Character
@@ -45,13 +46,16 @@ from .derived import (
     skill_total,
 )
 from .improvised import ImprovisedPlan
-from .powers_cost import effect_action_at_most, effect_effective_rank
+from .powers_cost import effect_action_at_most, effect_resistance_dc_base
 from .powers_terms import (
     effect_attack_skill_bonus,
+    effect_live_rank,
     effect_makes_attack,
     effect_opposed_check,
     effect_roll_numbers,
     effect_stat_rows,
+    effective_effect_stats,
+    linked_attacks,
     required_checks,
 )
 from .targeting import concrete_rung, opposed_dc, rung_caption
@@ -260,6 +264,16 @@ class RollSpec:
     #: GM *asks* a player for still knows what it is for when that player rolls it.
     recovers: str = ""
     recovers_parameter: str = ""
+    #: More rolls this one provokes **alongside** :attr:`follow_up`, offered on the same
+    #: terms (a hit, a critical, a graze). A Linked power's one attack check lands every
+    #: effect in it at once, and each is resisted separately (p155); a Nullify's hit
+    #: calls for the opposed check as well as any save.
+    also: tuple[RollSpec, ...] = ()
+
+    def follow_ups(self) -> tuple[RollSpec, ...]:
+        """Every roll this one provokes: :attr:`follow_up`, then :attr:`also`."""
+
+        return (self.follow_up, *self.also) if self.follow_up is not None else self.also
 
     def with_follow_up(self, follow_up: RollSpec | None) -> RollSpec:
         """A copy of this spec that provokes *follow_up* when it succeeds."""
@@ -314,6 +328,8 @@ class RollSpec:
             raw["recovers_parameter"] = self.recovers_parameter
         if self.follow_up is not None:
             raw["follow_up"] = self.follow_up.to_dict()
+        if self.also:
+            raw["also"] = [spec.to_dict() for spec in self.also]
         return raw
 
     @classmethod
@@ -334,6 +350,7 @@ class RollSpec:
             return None
         outcomes = raw.get("outcomes")
         targets = raw.get("targets")
+        also = raw.get("also")
         return cls(
             label=label,
             modifier=_as_int(raw.get("modifier")) or 0,
@@ -360,6 +377,11 @@ class RollSpec:
             ladder=SpecLadder.from_dict(raw.get("ladder")),
             recovers=str(raw.get("recovers", "")),
             recovers_parameter=str(raw.get("recovers_parameter", "")),
+            also=(
+                tuple(s for s in (cls.from_dict(a) for a in also) if s is not None)
+                if isinstance(also, list)
+                else ()
+            ),
         )
 
 
@@ -547,7 +569,7 @@ def follow_up_offered(spec: RollSpec, degree: int | None) -> bool:
     and lets them decide; only a roll that visibly failed withholds it.
     """
 
-    if spec.follow_up is None:
+    if spec.follow_up is None and not spec.also:
         return False
     return spec.follow_up_always or degree is None or degree > 0
 
@@ -580,7 +602,7 @@ def follow_up_for_result(
     knowing any of these rules.
     """
 
-    if not follow_up_offered(spec, degree):
+    if not follow_up_offered(spec, degree) or spec.follow_up is None:
         return None
     follow_up = spec.follow_up
     if spec.follow_up_always:
@@ -629,6 +651,30 @@ def follow_up_for_result(
     return follow_up
 
 
+def follow_ups_for_result(
+    spec: RollSpec,
+    die: int,
+    degree: int | None,
+    game_data: GameData,
+    total: int | None = None,
+) -> list[RollSpec]:
+    """Every roll *spec* provokes, as the roll that just happened leaves each one.
+
+    :func:`follow_up_for_result` applied to :attr:`~RollSpec.follow_up` and to each of
+    :attr:`~RollSpec.also` in turn — so a critical hit with a Linked Damage and
+    Affliction raises *both* saves' DCs, as it would have raised either alone.
+    """
+
+    results = []
+    for follow_up in spec.follow_ups():
+        one = follow_up_for_result(
+            replace(spec, follow_up=follow_up, also=()), die, degree, game_data, total
+        )
+        if one is not None:
+            results.append(one)
+    return results
+
+
 def _own_trait_roll(spec: RollSpec, char: Character, game_data: GameData) -> RollSpec | None:
     """This character's own roll of the trait *spec* names, or ``None``.
 
@@ -655,6 +701,14 @@ def _own_trait_roll(spec: RollSpec, char: Character, game_data: GameData) -> Rol
     elif spec.kind in (KIND_RESISTANCE, KIND_POWER_SAVE, KIND_AREA_DODGE, ""):
         if any(r.key == key for r in game_data.resistances):
             return resistance_roll(char, game_data, key)
+        if spec.kind == KIND_POWER_SAVE:
+            # A save need not be a resistance: Move Object is resisted by Strength, and
+            # Alternate Resistance may name any ability or skill.
+            if any(a.key == key for a in game_data.abilities):
+                return ability_roll(char, game_data, key)
+            base = key.partition("::spec::")[0].partition(": ")[0]
+            if any(s.name == base for s in game_data.skills):
+                return skill_roll(char, game_data, key)
     elif spec.kind == KIND_SKILL:
         base = key.partition("::spec::")[0].partition(": ")[0]
         if any(s.name == base for s in game_data.skills):
@@ -803,16 +857,82 @@ def _resistance_key(phrase: str, game_data: GameData) -> str:
     return ""
 
 
-def _effect_rolls(
-    effect: PowerEffectInstance, game_data: GameData, char: Character | None, prefix: str
-) -> list[RollSpec]:
-    """The ordered chain of rolls one effect calls for.
+def _save_key(phrase: str, game_data: GameData) -> str:
+    """The trait key a power's save phrase names: a resistance, an ability or a skill.
 
-    A Check Required leads (it is rolled *before* the effect goes off), then the
-    attack check, then the save it forces — which is attached to the attack as its
-    :attr:`~RollSpec.follow_up` as well as listed in its own right, since the two are
-    rolled by different people and either may be the one someone needs.
+    :func:`_resistance_key` first, then an ability (Move Object is resisted by
+    Strength), then a skill (an Alternate Resistance naming Athletics) — the three
+    things :func:`_own_trait_roll` can fill in for a power's save. The area layer keeps
+    the narrower lookup, since it rolls an ability or a skill as a best-of candidate.
     """
+
+    key = _resistance_key(phrase, game_data)
+    text = phrase.strip().lower()
+    if key or " or " in text.partition(" vs")[0]:
+        return key
+    for ability in game_data.abilities:
+        if text.startswith(ability.name.lower()):
+            return ability.key
+    for skill in game_data.skills:
+        if text.startswith(skill.name.lower()):
+            return skill.name
+    return ""
+
+
+#: The leading number of a resolved check phrase — ``"8 vs. Defense"``.
+_LEADING_BONUS = re.compile(r"^[+-]?\d+ vs\.")
+#: The actor of an unresolved check phrase — ``"Attack vs. Defense"``.
+_CHECK_ACTOR = re.compile(r"^(Attack|Deflect|Effect) vs\.")
+#: How each actor word is named on a roll line.
+_ACTOR_NAMES = {"Attack": "Attack", "Deflect": "Deflect", "Effect": "Effect check"}
+
+
+def _check_label(value: str, modifier: int, effect: PowerEffectInstance, game_data) -> str:
+    """A check row's value made into a roll line: ``"Attack +8 vs. Defense"``.
+
+    The terms table reads ``8 vs. Defense`` beside a row already labelled Check; a
+    footer line has no such label, and a bare number read as nothing in particular. The
+    actor word comes from the phrase before its numbers were filled in, and a phrase a
+    Dev-mode override wrote with a number of its own is named for what the effect does.
+    """
+
+    if not _LEADING_BONUS.match(value):
+        return value
+    phrase = effective_effect_stats(effect, game_data).get("check", "")
+    actor = _CHECK_ACTOR.match(phrase)
+    if actor:
+        word = _ACTOR_NAMES[actor.group(1)]
+    else:
+        word = "Attack" if effect_makes_attack(effect, game_data) else "Check"
+    return _LEADING_BONUS.sub(f"{word} {modifier:+d} vs.", value, count=1)
+
+
+def _check_against(value: str) -> str:
+    """What a check row is rolled against — ``"Defense"`` out of ``"8 vs. Defense (…)"``."""
+
+    return value.partition(" vs. ")[2].partition(" (")[0].strip()
+
+
+@dataclass(frozen=True)
+class _EffectRolls:
+    """One effect's rolls, in the pieces :func:`power_rolls` arranges.
+
+    ``required`` are Check Required rolls, made before anything else; ``check`` is the
+    wielder's own check (an attack, or an effect check), carrying what it provokes;
+    ``after`` are the lines that follow it — the save the target makes and an opposed
+    check of the effect's own — listed in their own right as well, since either may be
+    the one somebody needs.
+    """
+
+    required: tuple[RollSpec, ...] = ()
+    check: RollSpec | None = None
+    after: tuple[RollSpec, ...] = ()
+
+
+def _effect_roll_parts(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None, prefix: str
+) -> _EffectRolls:
+    """The rolls one effect calls for, before :func:`power_rolls` orders them."""
 
     attack_bonus = effect_attack_skill_bonus(effect, char, game_data)
     rows = {r.key: r for r in effect_stat_rows(effect, game_data, char, attack_bonus)}
@@ -833,40 +953,101 @@ def _effect_rolls(
             outcomes=effect_outcome_ladder(effect, game_data, base_effect),
             success_outcome=effect_success_outcome(effect, game_data, base_effect),
             rolled_by_target=True,
-            trait_key=_resistance_key(resistance_row.value, game_data),
+            trait_key=_save_key(resistance_row.value, game_data),
             ladder=effect_spec_ladder(effect, game_data, base_effect),
         )
 
-    specs: list[RollSpec] = []
-    for note, dc in required_checks(effect, game_data):
-        specs.append(RollSpec(label=named(note), dc=dc, kind=KIND_POWER_CHECK))
-    check_row = rows.get("check")
-    if check_row is not None:
-        specs.append(
-            RollSpec(
-                label=named(check_row.value),
-                modifier=numbers.check_actor,
-                kind=KIND_POWER_CHECK,
-                hint="The target's Defense goes in the DC box.",
-                follow_up=save,
-            )
-        )
-    if save is not None:
-        specs.append(save)
+    opposed: RollSpec | None = None
     if base_effect is not None and base_effect.opposed_check:
         # The effect's *own* opposed check (Nullify's), which the wielder makes at their
         # effective rank. Distinct from the counter roll below: this one is what the
         # effect does, not a tactic it can be turned to.
         bonus, against = effect_opposed_check(effect, game_data, char)
-        specs.append(
-            RollSpec(
-                label=named(f"opposed vs. {against}"),
-                modifier=bonus,
-                kind=KIND_EFFECT_CHECK,
-                hint="The opposed number goes in the DC box.",
-            )
+        opposed = RollSpec(
+            label=named(f"opposed vs. {against}"),
+            modifier=bonus,
+            kind=KIND_EFFECT_CHECK,
+            hint="The opposed number goes in the DC box.",
         )
-    return specs
+
+    required = tuple(
+        RollSpec(label=named(note), dc=dc, kind=KIND_POWER_CHECK)
+        for note, dc in required_checks(effect, game_data)
+    )
+    check: RollSpec | None = None
+    check_row = rows.get("check")
+    if check_row is not None:
+        provoked: list[RollSpec] = []
+        if save is not None:
+            if base_effect is not None and base_effect.resistance_vs_check:
+                # Mind Reading: the target's Will is rolled against the check's *result*
+                # (p133), not the effect DC — an opposed check. The listed save keeps
+                # the DC, for the end-of-turn checks that shut the reader out.
+                head = resistance_row.value.partition(" vs.")[0]
+                provoked.append(
+                    replace(
+                        save,
+                        label=named(f"{head} vs. the check result"),
+                        dc=None,
+                        dc_from_total=True,
+                    )
+                )
+            else:
+                provoked.append(save)
+        if opposed is not None:
+            # Nullify's opposed check is what a hit is *for* (p136): offer it off the hit.
+            provoked.append(opposed)
+        dc = numbers.check_dc
+        against = _check_against(check_row.value)
+        hint = "" if dc is not None else f"The target's {against} goes in the DC box."
+        check = RollSpec(
+            label=named(_check_label(check_row.value, numbers.check_actor, effect, game_data)),
+            modifier=numbers.check_actor,
+            dc=dc,
+            kind=KIND_POWER_CHECK,
+            hint=hint,
+            follow_up=provoked[0] if provoked else None,
+            also=tuple(provoked[1:]),
+        )
+    after = tuple(spec for spec in (save, opposed) if spec is not None)
+    return _EffectRolls(required=required, check=check, after=after)
+
+
+def _effect_rolls(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None, prefix: str
+) -> list[RollSpec]:
+    """The ordered chain of rolls one effect calls for.
+
+    A Check Required leads (it is rolled *before* the effect goes off), then the
+    attack check, then the save it forces — which is attached to the attack as its
+    :attr:`~RollSpec.follow_up` as well as listed in its own right, since the two are
+    rolled by different people and either may be the one someone needs.
+    """
+
+    parts = _effect_roll_parts(effect, game_data, char, prefix)
+    check = (parts.check,) if parts.check is not None else ()
+    return [*parts.required, *check, *parts.after]
+
+
+def _linked_check(power: Power, attack, parts: list[_EffectRolls], prefixes: list[str]) -> RollSpec:
+    """The one attack check a Linked group rolls, provoking every member's save."""
+
+    members = [parts[i] for i in attack.indices]
+    provoked = [fu for part in members if part.check is not None for fu in part.check.follow_ups()]
+    names = " + ".join(prefixes[i] for i in attack.indices if prefixes[i])
+    label = f"Attack {attack.bonus:+d} vs. {attack.against}"
+    differ = len(set(attack.bonuses)) > 1
+    hint = f"The target's {attack.against} goes in the DC box. One roll lands every linked effect."
+    if differ:
+        hint += " The effects' bonuses differ; this rolls the ruleset's pick of them."
+    return RollSpec(
+        label=f"{names}: {label}" if names else label,
+        modifier=attack.bonus,
+        kind=KIND_POWER_CHECK,
+        hint=hint,
+        follow_up=provoked[0] if provoked else None,
+        also=tuple(provoked[1:]),
+    )
 
 
 def power_rolls(power: Power, char: Character | None, game_data: GameData) -> list[RollSpec]:
@@ -880,16 +1061,39 @@ def power_rolls(power: Power, char: Character | None, game_data: GameData) -> li
     is prefixed by *that*, whether or not it has company: a tank's two Damage effects
     are "Cannon" and "Heavy machine gun", and prefixing both with "Damage" would name
     neither. Nothing in the base ruleset's powers sets one, so no power's footer moves.
+
+    A **Linked** power rolls its attacks once (p155): the effects that share a target
+    share one attack check, at the bonus :func:`~.powers_terms.linked_attacks` picks,
+    and that check provokes every one of their saves. It sits where the first of them
+    would have, and each save is still listed after its own effect.
     """
 
     multi = len(power.effects) > 1
-    specs: list[RollSpec] = []
+    prefixes: list[str] = []
     for effect in power.effects:
         prefix = effect.label
         if not prefix and multi:
             base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
             prefix = base.name if base else effect.effect_id
-        specs.extend(_effect_rolls(effect, game_data, char, prefix))
+        prefixes.append(prefix)
+    parts = [
+        _effect_roll_parts(effect, game_data, char, prefix)
+        for effect, prefix in zip(power.effects, prefixes, strict=True)
+    ]
+    shared = {}
+    for attack in linked_attacks(power, game_data, char):
+        for index in attack.indices:
+            shared[index] = attack
+    specs: list[RollSpec] = []
+    for index, part in enumerate(parts):
+        specs.extend(part.required)
+        attack = shared.get(index)
+        if attack is None:
+            if part.check is not None:
+                specs.append(part.check)
+        elif index == attack.indices[0]:
+            specs.append(_linked_check(power, attack, parts, prefixes))
+        specs.extend(part.after)
     return specs
 
 
@@ -961,12 +1165,13 @@ def counter_rolls(power: Power, char: Character | None, game_data: GameData) -> 
         base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
         if base is None:
             continue
-        if not effect_makes_attack(effect, game_data) and base.resistance_dc_base is None:
+        resisted = effect_resistance_dc_base(effect, game_data) is not None
+        if not effect_makes_attack(effect, game_data) and not resisted:
             continue
         if not effect_action_at_most(base, COUNTER_ACTION_LIMIT, game_data):
             continue
         prefix = effect.label or (base.name if multi else "")
-        rank = effect_effective_rank(effect, game_data, char)
+        rank = effect_live_rank(effect, game_data, char)
         specs.append(
             RollSpec(
                 label=f"Counter with {prefix or base.name} (effect check)",

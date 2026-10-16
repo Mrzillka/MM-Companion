@@ -62,7 +62,7 @@
       "duration": "Instant",
       "check": null,
       "implicitModifiers": ["attack"],
-      "resistance": "Chosen resistance vs. Effect DC",
+      "resistance": "Resistance (not chosen yet) vs. Effect DC",
       "baseCost": "1 per rank",
       "baseCostValue": 1,
       "configurableTarget": false,
@@ -76,6 +76,7 @@
           "label": "Resisted by",
           "type": "select",
           "overrides": "resistance",
+          "required": true,
           "widenWith": "alternate_resistance",
           "widenSource": "resistance_targets",
           "options": [
@@ -119,6 +120,7 @@
           "key": "degree1",
           "label": "1st degree",
           "type": "select",
+          "required": true,
           "multiselectWith": "extra_condition",
           "hiddenWith": "variable_conditions",
           "options": [
@@ -139,6 +141,7 @@
           "key": "degree2",
           "label": "2nd degree",
           "type": "select",
+          "required": true,
           "multiselectWith": "extra_condition",
           "hiddenWith": "variable_conditions",
           "options": [
@@ -162,6 +165,7 @@
           "key": "degree3",
           "label": "3rd degree",
           "type": "select",
+          "required": true,
           "multiselectWith": "extra_condition",
           "hiddenWith": "variable_conditions",
           "options": [
@@ -898,6 +902,8 @@
       "duration": "Sustained",
       "check": "Effect vs. Will",
       "resistance": "Will vs. Effect",
+      "_resistanceVsCheck": "PDF p135 (printed p133): the target's first Will check is made against the Mind Reading check result, an opposed check; the end-of-turn checks that shut the reader out are against the effect DC.",
+      "resistanceVsCheck": true,
       "baseCost": "2 per rank",
       "baseCostValue": 2,
       "configurableTarget": false,
@@ -944,7 +950,8 @@
         "affects": "none"
       },
       "description": "Telekinetically lifts and moves objects or people at a distance.",
-      "resistanceDcBase": 0
+      "_resistanceDcBase": "PDF p136 (printed p134): RESISTANCE: Strength vs. Effect DC, and the effect DC is 10 + rank (PDF p107, printed p105).",
+      "resistanceDcBase": 10
     },
     {
       "id": "nullify",

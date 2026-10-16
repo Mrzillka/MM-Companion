@@ -74,7 +74,7 @@ def effects_block(power: Power, character: Character, data: GameData) -> QWidget
     layout = QVBoxLayout(host)
     layout.setContentsMargins(6, 0, 0, 0)
     layout.setSpacing(3)
-    header = structure_header(power)
+    header = structure_header(power, data)
     if header:
         line = QLabel(header)
         line.setStyleSheet(muted_style(italic=True))
@@ -321,7 +321,7 @@ def simple_effects_block(power: Power, character: Character, data: GameData) -> 
     layout = QVBoxLayout(host)
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(int(theme.metric("space.xs")))
-    header = structure_header(power)
+    header = structure_header(power, data)
     if header:
         layout.addWidget(term_label(header))
     for index, effect in enumerate(power.effects):

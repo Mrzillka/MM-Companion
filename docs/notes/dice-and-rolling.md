@@ -537,7 +537,9 @@ clearing is precisely what `_settle_spec` does one line after the roll wrote one
   reading the same shared history, clicks the save straight off it. So the spec
   travels: `RollSpec.to_dict()` → `RollRequest.spec` → `RollRecord.spec` → every
   client. An earlier version kept it local "because it's derived data", which left
-  the chip in front of the one person who had no use for it.
+  the chip in front of the one person who had no use for it. A roll may provoke **several**
+  (`RollSpec.also`, beside `follow_up`; `follow_ups_for_result` adjusts each): a
+  Linked power's one attack lands a save per effect, and each gets its own chip.
 - The server stays **rules-free**. It validates the spec's *shape*
   (`protocol.sanitize_spec` — a key whitelist, text/ladder caps, a `follow_up` depth
   cap, since this is client-supplied data rendered on other people's screens) and

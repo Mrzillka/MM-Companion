@@ -151,8 +151,63 @@
       "flat": false,
       "config": [
         {
+          "key": "defense",
+          "label": "Against",
+          "type": "select",
+          "overrides": "check",
+          "template": "Attack vs. {value} + 10",
+          "hint": "What the attack check is made against instead of Defense: that resistance + 10 (p149).",
+          "options": [
+            {
+              "value": "Fortitude",
+              "label": "Fortitude"
+            },
+            {
+              "value": "Will",
+              "label": "Will"
+            },
+            {
+              "value": "Dodge",
+              "label": "Dodge"
+            },
+            {
+              "value": "Toughness",
+              "label": "Toughness"
+            }
+          ]
+        },
+        {
+          "key": "defenseSecond",
+          "label": "Or",
+          "type": "select",
+          "overrides": "check",
+          "hint": "A second defense, for an attack aimed at the worst of two (+1) or settling for the best of two (-1). Leave unset for a plain swap.",
+          "options": [
+            {
+              "value": "Defense",
+              "label": "Defense"
+            },
+            {
+              "value": "Fortitude",
+              "label": "Fortitude"
+            },
+            {
+              "value": "Will",
+              "label": "Will"
+            },
+            {
+              "value": "Dodge",
+              "label": "Dodge"
+            },
+            {
+              "value": "Toughness",
+              "label": "Toughness"
+            }
+          ]
+        },
+        {
           "key": "against",
-          "label": "Attack lands against",
+          "label": "Worth",
           "type": "select",
           "hint": "The attack check is made against Fortitude or Will (that resistance + 10) instead of Defense. Whether that is worth anything is the GM's call: a generally easier number to beat is +1, no real gain is +0, the worst of two is +1, and settling for the best of two is a -1 flaw.",
           "options": [
@@ -272,6 +327,20 @@
         "effectType": "Attack",
         "check": "Attack vs. Defense"
       },
+      "grantsResistance": {
+        "dcBase": 10
+      },
+      "config": [
+        {
+          "key": "resistance",
+          "label": "Resisted by",
+          "type": "select",
+          "source": "resistance_targets",
+          "overrides": "resistance",
+          "grants": true,
+          "hint": "What a target hit by this attack resists with, against the effect DC (10 + rank): a teleporting attack resisted by Will, say. Leave unset for an attack nobody resists. Not offered on an effect that already has a resistance of its own."
+        }
+      ],
       "description": "The effect is delivered with an attack roll against the target's Defense. Attacking effects (Damage, Affliction, and the offensive Control effects) carry this implicitly; any other effect can take it to become deliverable as an attack."
     },
     {
@@ -915,6 +984,23 @@
       "costFormula": "-1 point per rank",
       "costValue": 1,
       "flat": false,
+      "_source": "PDF p162 (printed p160): gives an effect that allows no resistance check one; the resistance is chosen when the flaw is configured.",
+      "grantsResistance": {
+        "dcBase": 10,
+        "placeholder": "Resistance (not chosen yet) vs. Effect DC"
+      },
+      "config": [
+        {
+          "key": "resistance",
+          "label": "Resisted by",
+          "type": "select",
+          "source": "resistance_targets",
+          "overrides": "resistance",
+          "grants": true,
+          "required": true,
+          "hint": "What the effect is resisted by, against the effect DC (10 + rank)."
+        }
+      ],
       "description": "Grants a resistance check to an effect that normally wouldn't allow one."
     },
     {

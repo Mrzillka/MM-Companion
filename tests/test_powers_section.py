@@ -538,7 +538,7 @@ def test_a_power_that_rolls_nothing_has_no_dice_footer(qapp: QApplication) -> No
 
     # An attack and the save it forces are two rolls, made by two people: a line each.
     attack, save = sec._rolls_lines(blast)
-    assert attack == "0 vs. Defense"
+    assert attack == "Attack +0 vs. Defense"
     assert save.startswith("Toughness vs. ")
 
     # But only the attack is the wielder's to roll. The save is written down and left

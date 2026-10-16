@@ -31,7 +31,9 @@ from .rolls import (
     KIND_IMPRESS,
     KIND_RESISTANCE,
     KIND_SKILL,
+    LADDER_IMPRESS,
     RollSpec,
+    SpecLadder,
     best_of_key,
     best_own_rolls,
     skill_roll,
@@ -269,6 +271,7 @@ def impress_resist_spec(
         outcomes=impression_outcomes(game_data, impression),
         rolled_by_target=True,
         dc_from_total=True,
+        ladder=SpecLadder(LADDER_IMPRESS, impression.outcomes),
     )
 
 

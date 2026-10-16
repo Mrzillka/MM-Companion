@@ -629,6 +629,16 @@ The shape:
   offered the full-rank save after a made Dodge, or no save at all after a failed one.
   The **hub on the VPS must be redeployed** with the clients for this one. See [the
   actions notes](actions.md).
+- **Protocol v14 carries a save's ladder as data** — `RollSpec.ladder` (a `SpecLadder`:
+  each rung's condition ids, escalation and parameter templates, and the ladder's kind)
+  and `RollSpec.actor` (the creature a roll was made *as*). The GM's table applies what
+  an NPC's failed save did off the ladder and heads its card "Mook (GM)". The ladder is
+  the first spec key nested deeper than a list of strings, so `sanitize_spec` checks
+  it explicitly (`_sanitize_ladder`). Bumped for the v13 reason: a v13 server strips
+  both keys without a word, and every save the GM rolled for an NPC would apply
+  nothing. The **hub must be redeployed** again. The first try avoided the bump by
+  parsing the ladder back out of the outcome *words*, and the user asked for the bump
+  instead: ask before designing around one.
 - Deployment lives in `deploy/` (systemd units, `deploy.sh`, runbook) — tracked
   and secret-free. The operator's addresses and key paths are in a gitignored
   `SERVER.md`.

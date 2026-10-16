@@ -8,11 +8,12 @@ asked rather than rolled for, and that a group lands in the history as one table
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QPushButton
 
 from mm_companion.core import library, storage
 from mm_companion.core.character import Character
@@ -35,6 +36,7 @@ from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.gm_window import SCENE_NPC, GMWindow
 from mm_companion.ui.impress import PARTY_NPC, PARTY_PLAYER, ImpressParty
 from mm_companion.ui.roll_history import (
+    UNDO_MARK,
     ActionCard,
     GroupTableCard,
     RollHistoryPanel,
@@ -1128,3 +1130,149 @@ def test_a_creature_on_the_board_offers_end_turn_impress_and_area(qapp, data) ->
     card = SceneCard({"ref": "s1", "name": "Nova", "kind": "player"}, data, gm=True)
     texts = [a.text() for a in card.build_context_menu().actions() if a.text()]
     assert texts[:3] == ["End turn", "Impress…", "Area attack…"]
+
+
+# -- answering a history roll as an NPC ------------------------------------------------
+
+
+def _damage_save(data, **extra) -> RollSpec:
+    from mm_companion.core.powers import PowerEffectInstance
+    from mm_companion.core.rules import effect_spec_ladder
+
+    fields = {"ladder": effect_spec_ladder(PowerEffectInstance("damage", rank=10), data)}
+    fields.update(extra)
+    return RollSpec(label="Toughness", dc=20, kind="power-save", trait_key="TOUGHNESS", **fields)
+
+
+def _answer_as_npc(window: GMWindow, spec: RollSpec, party, degree: int, monkeypatch, *, seq=-7):
+    """Roll *spec* as *party* and bring its record back, as the roller would."""
+    from mm_companion.ui.roll_history import AnswerContext
+
+    rolled: list[RollSpec] = []
+    monkeypatch.setattr(window._roller, "roll_spec", lambda s: rolled.append(s) or True)
+    window._roll_as(spec, party, AnswerContext(seq=3))
+    (sent,) = rolled
+    record = {
+        "seq": seq,
+        "kind": "roll",
+        "player_name": "GM",
+        "label": sent.label,
+        "die": 5,
+        "bonus": 2,
+        "penalty": 0,
+        "dc": spec.dc,
+        "degree": degree,
+        "spec": sent.to_dict(),
+    }
+    window._history.add_roll(record)
+    window._on_answer_back(record)
+    return record
+
+
+def _menu_texts(window: GMWindow, spec: RollSpec, monkeypatch, context=None) -> list[str]:
+    from PySide6.QtWidgets import QMenu
+
+    from mm_companion.ui import gm_window
+
+    seen: list[list[str]] = []
+
+    class Recording(QMenu):
+        def exec(self, *_args):  # noqa: A003 - Qt's name
+            seen.append([a.text() for a in self.actions()])
+
+    monkeypatch.setattr(gm_window, "QMenu", Recording)
+    window._on_history_roll(spec, context)
+    return [t for t in seen[0] if t]
+
+
+def test_a_failed_save_lands_on_the_npc_and_its_card_can_take_it_back(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    from mm_companion.ui.roll_history import SessionRollCard
+
+    _thug, mook, _sheet = _cast(window, data)
+    party = next(p for p in window.impress_parties()[1] if p.source == mook)
+    _answer_as_npc(window, _damage_save(data), party, -2, monkeypatch)
+    model = window._npc_state[mook].character
+    applied = {c.condition_id for c in model.conditions if c.provenance is None}
+    assert {"hit", "stunned", "staggered"} <= applied
+    card = next(c for c in window._history.cards() if isinstance(c, SessionRollCard))
+    assert card.undo is not None
+    card.undo.click()
+    assert not [c for c in model.conditions if c.provenance is None]
+    assert card.undo is None
+
+
+def test_the_gm_setting_keeps_a_kind_of_save_from_applying(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    _thug, mook, _sheet = _cast(window, data)
+    storage.set_gm_auto_apply({"damage": False, "effect": True, "impress": True, "area": True})
+    party = next(p for p in window.impress_parties()[1] if p.source == mook)
+    _answer_as_npc(window, _damage_save(data), party, -2, monkeypatch)
+    assert not window._npc_state[mook].character.conditions
+    # The area switch governs an area's save, whatever its effect.
+    storage.set_gm_auto_apply({"damage": True, "effect": True, "impress": True, "area": False})
+    area_ladder = replace(_damage_save(data).ladder, kind="area")
+    _answer_as_npc(window, _damage_save(data, ladder=area_ladder), party, -2, monkeypatch)
+    assert not window._npc_state[mook].character.conditions
+
+
+def test_the_menu_lists_the_board_npcs_with_their_numbers_and_ticks(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    from mm_companion.ui.gm_window import ANSWERED_MARK, NO_NPCS_TO_ANSWER
+    from mm_companion.ui.roll_history import AnswerContext
+
+    save = _damage_save(data)
+    assert NO_NPCS_TO_ANSWER in _menu_texts(window, save, monkeypatch)
+    _thug, mook, _sheet = _cast(window, data)
+    window._npc_state[mook].character.resistances["TOUGHNESS"] = 6
+    texts = _menu_texts(window, save, monkeypatch, AnswerContext(seq=3))
+    # Only the Mook is on the board; the Thug is in the cast but not the scene.
+    mook_line = next(t for t in texts if "Mook" in t)
+    assert "Toughness" in mook_line and not any("Thug" in t for t in texts)
+    party = next(p for p in window.impress_parties()[1] if p.source == mook)
+    _answer_as_npc(window, save, party, 2, monkeypatch)
+    texts = _menu_texts(window, save, monkeypatch, AnswerContext(seq=3))
+    assert next(t for t in texts if "Mook" in t).startswith(ANSWERED_MARK)
+
+
+def test_a_roll_answered_as_an_npc_is_headed_by_it(qapp) -> None:
+    from mm_companion.ui.roll_history import roll_heading
+
+    record = {
+        "player_name": "Alex",
+        "label": "Mook: Toughness",
+        "spec": RollSpec(label="Mook: Toughness", actor="Mook").to_dict(),
+    }
+    heading = roll_heading(record)
+    assert "Mook (GM)" in heading and "Mook: " not in heading and "Alex" not in heading
+
+
+def test_a_right_click_rolls_a_request_as_written(qapp) -> None:
+    from PySide6.QtCore import QPoint
+
+    from mm_companion.ui.roll_history import request_widgets
+
+    clicked: list[RollSpec] = []
+    plain: list[RollSpec] = []
+    (button,) = request_widgets(
+        RollSpec(label="Dodge", dc=18), on_roll=clicked.append, on_plain=plain.append
+    )
+    button.customContextMenuRequested.emit(QPoint())
+    assert plain and not clicked
+
+
+def test_an_npc_answering_an_area_card_gets_its_undo_in_the_table(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    _thug, mook, _sheet = _cast(window, data)
+    party = next(p for p in window.impress_parties()[1] if p.source == mook)
+    save = _damage_save(data, action_id="a9", title="Thug: Fire Burst (area)")
+    _answer_as_npc(window, save, party, -1, monkeypatch)
+    table = next(c for c in window._history.cards() if isinstance(c, GroupTableCard))
+    (undo,) = [b for b in table.findChildren(QPushButton) if b.text() == UNDO_MARK]
+    undo.click()
+    assert not [c for c in window._npc_state[mook].character.conditions if not c.provenance]
+    assert not [b for b in table.findChildren(QPushButton) if b.text() == UNDO_MARK]

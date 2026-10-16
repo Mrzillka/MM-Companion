@@ -60,6 +60,7 @@ from mm_companion.core.rules import (
     area_key_power_id,
     area_request_specs,
     area_shape_options,
+    area_title,
     area_use_adjusted,
     area_use_heals,
     defense_class,
@@ -471,7 +472,7 @@ class AreaPlan:
 
     @property
     def title(self) -> str:
-        return f"{self.source.name}: {self.use.power_name} (area)"
+        return area_title(self.source.name, self.use.power_name)
 
 
 class AreaRow(ActionRow):

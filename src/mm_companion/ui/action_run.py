@@ -228,9 +228,15 @@ class ActionRun(QObject):
         key = (name, spec.kind == KIND_POWER_CHECK)
         self._asks[key] = _Ask(party, spec, about, finish)
         payload = spec.to_dict()
+        # The prompt goes without the ladder. An action's payload is nested at most four
+        # deep and capped at 4 KB (sanitize_mod_payload), so a ladder would be cut down
+        # without a word, or sink the whole prompt; and the player needs none of it,
+        # since this table applies what their save did. The request card keeps it: an
+        # NPC the GM answers it with is put through it (see GMWindow._apply_answer).
+        prompt = replace(spec, ladder=None).to_dict()
         prompted = bool(
             self._bridge.prompt_action(
-                party.source, KIND_ROLL_ASK, self.action_id, {"spec": payload, "asker": self._asker}
+                party.source, KIND_ROLL_ASK, self.action_id, {"spec": prompt, "asker": self._asker}
             )
         )
         carded = bool(self._bridge.prompt_roll(payload))

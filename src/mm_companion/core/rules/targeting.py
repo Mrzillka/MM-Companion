@@ -40,6 +40,7 @@ __all__ = [
     "rung_caption",
     "ladder_captions",
     "resolve_rung",
+    "concrete_rung",
     "apply_rung",
     "success_removals",
 ]
@@ -192,6 +193,31 @@ def _parameter(
         return _scope(rung, condition_id, game_data, config) or None
     value = template.replace(SOURCE_PLACEHOLDER, source).strip()
     return value or None
+
+
+def concrete_rung(
+    rung: ResistanceOutcome,
+    game_data: GameData,
+    config: Mapping[str, object] | None = None,
+) -> ResistanceOutcome:
+    """*rung* with everything an effect instance decides folded in.
+
+    Its condition ids read off *config* (an Affliction's picks), and a Weaken's scope
+    turned into each scoped condition's parameter — so the rung means the same thing
+    with no config at all, which is what lets it travel on a spec. Escalation and the
+    ``{source}`` templates stay as they are: those are decided when it is applied.
+    """
+
+    ids = rung_condition_ids(rung, config)
+    templates = dict(rung.parameters)
+    parameters = []
+    for cid in ids:
+        template = templates.get(cid)
+        if template is None:
+            template = _scope(rung, cid, game_data, config) or None
+        if template is not None:
+            parameters.append((cid, template))
+    return ResistanceOutcome(conditions=ids, escalates=rung.escalates, parameters=tuple(parameters))
 
 
 def resolve_rung(

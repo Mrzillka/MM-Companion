@@ -177,7 +177,7 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   then says what it came to. The heading says only whose declaration it is, and is
   gone for the GM's own (`set_heading`).
 
-## The wire (protocol v13, unchanged)
+## The wire (protocol v14)
 
 - `ActionRequest` (any seat → the GM alone, stamped with the sender, like
   `ModRequest`), `ActionPrompt` (GM → one named player) and `GroupRollRequest` (GM
@@ -187,7 +187,13 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   `resist` / `resist-closed` pre-roll question is gone.
 - **No protocol bump** for the asks. Nothing new crosses the server, and an older
   client that ignores a `roll` prompt still has the request card in its history,
-  whose roll carries the action id home all the same.
+  whose roll carries the action id home all the same. (v14 is for the spec's `ladder`
+  and `actor`: see *Answering a history roll as an NPC*.)
+- **An ask's prompt goes without the spec's ladder** (`ActionRun.ask`). An action's
+  payload is nested at most four deep and capped at 4 KB by `sanitize_mod_payload`, so
+  a ladder would be cut down without a word or sink the prompt. The player does not
+  need it, since the GM's table applies what their save did. The request card keeps
+  it, for an NPC the GM answers it with.
 - **A group roll lands as ordinary records**, a line per creature, each tagged with
   `RollRecord.group` and attributed to the seat its line names (or the GM's, for a
   creature nobody plays). Nothing about drawing a card changed. The run gathers them
@@ -417,10 +423,7 @@ The second action on this layer, following the 4e rules (Area Effect extra, PDF 
   else is caught or it takes a different rank. Creatures the GM set the same cover and
   adjustment for share their cards. Off the air the dialog leaves the same two.
 - Each card carries the action id, so the answers fill the action's table.
-- **The GM answers one as an NPC.** A trait roll clicked in the GM's history (a request
-  card, a save chip) used to roll at +0 — the GM's roller has no sheet. It now offers a
-  menu of the NPCs on the board, the ones the spec names first (`_on_history_roll`),
-  and rolls it with that NPC's own number under its name; "As written" is the old way.
+- The GM answers these cards as an NPC — see *Answering a history roll as an NPC*, below.
 
 ### Area Healing
 
@@ -431,6 +434,47 @@ The second action on this layer, following the 4e rules (Area Effect extra, PDF 
   of a player, and each degree of success takes a condition off everyone in the area,
   least severe first (`targeting.success_removals`, worked on a copy). They come off
   through `action_remove` — an NPC's model, a player's app's remove commands.
+
+## Answering a history roll as an NPC
+
+A trait roll clicked in the GM's history — a request card, or a save chip under a roll
+— used to roll at +0, because the GM's roller has no sheet. Now:
+
+- **A click opens a menu of the NPCs on the board** (`GMWindow._on_history_roll`), never
+  the cast and never players. The ones the spec names come first, then the board's
+  order. Each row is the scene card's picture, the name, and the number it would roll
+  (`answer_reading`): a best-of names the trait it picks ("Will +8"). A trained-only
+  skill the NPC lacks is marked ⚠ but still rolls, and an NPC that already answered
+  this card (by the card's `seq`) is ticked ✓ and may roll again. An empty board shows
+  a disabled line rather than quietly rolling +0. It is one NPC per click: the user
+  dropped picking several, to keep it a plain context menu.
+- **A right-click rolls it as written**, with nobody's number (`roll_button`'s
+  `on_plain`, the panel's `rollPlain`). The menu's last line does the same. A player's
+  panel connects nothing to it, so there a right-click does nothing.
+- **The roll is the roller's**, so its adjustment and Hidden apply. The spec carries
+  the NPC as `RollSpec.actor`, and every history heads the card "Mook (GM)" with the
+  "Mook: " label prefix dropped (`roll_heading`). `actor` is a v14 spec key. An answer
+  to an action's card still carries its `action_id` and title, so it lands as the NPC's
+  row of that action's table.
+- **A failed save applies itself.** When the roll comes back (`sessionRollRevealed`, or
+  `_show_offline_roll` off the air), `_apply_answer` applies the rung of the ladder the
+  spec carries (`RollSpec.ladder`, a `SpecLadder`, protocol v14). Whoever built the
+  save made it concrete with `concrete_rung`: an Affliction's ids as the wielder picked
+  them, a Weaken's scope as a parameter, the damage ladder's escalation, an impression's
+  `{source}` template. The builders are `effect_spec_ladder` (a power's save),
+  `impress_resist_spec` and `area_resist_spec`. Whose `{source}` it is comes from the
+  roll the chip hangs off (`answer_context`). The rung goes on through `impress_apply`.
+  The first version read the ladder back out of the outcome *words* to avoid a bump,
+  and the user asked for the bump instead.
+- **Four GM switches** (GM Mode ▸ *Saves you roll for NPCs*, `gm_auto_apply`, all on by
+  default): damage, afflictions and other effects, impressions, and area attacks.
+  The switch is the ladder's own `kind`, and an area's save is `area` whatever its
+  effect.
+- **↶ takes it back.** The card (or the table row) of a roll that applied something
+  gets a small ↶ (`RollHistoryPanel.set_undo`, kept by `seq` so a replay rebuilds it).
+  It removes what the rung added and puts back what it replaced, by `condition_changes`
+  between the NPC's conditions before and after. So a Stunned that escalated from a
+  Dazed comes off and the Dazed returns.
 
 ## End of turn
 

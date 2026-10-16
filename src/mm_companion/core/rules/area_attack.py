@@ -62,14 +62,22 @@ from .rolls import (
     KIND_RESISTANCE,
     KIND_SKILL,
     KIND_WORST_OF,
+    LADDER_AREA,
     RollSpec,
+    SpecLadder,
     _resistance_key,
     best_of_key,
     localize_spec,
     power_rolls,
     resistance_roll,
 )
-from .targeting import ladder_captions, outcome_rung, rung_caption, success_removals
+from .targeting import (
+    concrete_rung,
+    ladder_captions,
+    outcome_rung,
+    rung_caption,
+    success_removals,
+)
 from .validation import estimated_power_level, leaf_powers
 
 __all__ = [
@@ -81,6 +89,8 @@ __all__ = [
     "power_offers_area",
     "power_area_use",
     "power_area_uses",
+    "AREA_TITLE_SUFFIX",
+    "area_title",
     "area_key",
     "area_key_index",
     "area_key_power_id",
@@ -115,9 +125,19 @@ __all__ = [
 AREA_MODE_RESOLVE = "resolve"
 AREA_MODE_REQUEST = "request"
 
+#: What ends the title of every table and card an area attack leaves.
+AREA_TITLE_SUFFIX = " (area)"
+
 #: What separates a build's id from the index of one of its area effects in an area
 #: line's key — ``"<build id>#1"`` is the build's second area effect.
 _KEY_SEPARATOR = "#"
+
+
+def area_title(source: str, power_name: str) -> str:
+    """What an area attack's table is headed by — "Thug: Fire Blast (area)"."""
+
+    head = f"{source}: {power_name}" if source else power_name
+    return f"{head}{AREA_TITLE_SUFFIX}"
 
 
 def area_key(power_id: str, effect_index: int = 0) -> str:
@@ -674,7 +694,7 @@ def area_heal_spec(
         hint="Each degree of success takes a condition off everyone in the area.",
         targets=(source,) if source else (),
         action_id=action_id,
-        title=f"{source}: {use.power_name} (area)" if source else f"{use.power_name} (area)",
+        title=area_title(source, use.power_name),
     )
 
 
@@ -763,7 +783,7 @@ def area_attack_spec(
         ),
         action_id=action_id,
         targets=(target,) if target else (),
-        title=f"{source}: {use.power_name} (area)" if source else f"{use.power_name} (area)",
+        title=area_title(source, use.power_name),
     )
 
 
@@ -835,6 +855,15 @@ def area_resist_spec(
         rolled_by_target=True,
         trait_key=effect.resistance,
         targets=targets,
+        ladder=SpecLadder(
+            LADDER_AREA,
+            tuple(concrete_rung(r, game_data, effect.config) for r in base.resistance_outcomes),
+            (
+                None
+                if base.resistance_success is None
+                else concrete_rung(base.resistance_success, game_data, effect.config)
+            ),
+        ),
     )
     if full:
         return spec
@@ -882,7 +911,7 @@ def area_dodge_spec(
         follow_up=follow_up,
         follow_up_always=follow_up is not None,
         targets=targets,
-        title=f"{source}: {use.power_name} (area)" if source else f"{use.power_name} (area)",
+        title=area_title(source, use.power_name),
     )
 
 
@@ -915,7 +944,7 @@ def area_request_specs(
 
     if area_use_heals(use, game_data):
         return []
-    title = f"{source}: {use.power_name} (area)" if source else f"{use.power_name} (area)"
+    title = area_title(source, use.power_name)
     specs: list[RollSpec] = []
     if caught:
         dodge = area_dodge_spec(
@@ -1024,7 +1053,7 @@ def area_ask_save_spec(
         dc=dc,
         label=f"{spec.label}{halved}",
         action_id=action_id,
-        title=f"{source}: {use.power_name} (area)" if source else f"{use.power_name} (area)",
+        title=area_title(source, use.power_name),
         hint="The GM's table applies what it does to you.",
     )
 

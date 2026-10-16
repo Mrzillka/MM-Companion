@@ -188,6 +188,10 @@ class SceneBoard(QWidget):
         if card is not None:
             card.set_portrait(pixmap)
 
+    def portrait(self, ref: str):
+        """One entry's decoded thumbnail (a ``QPixmap``), or ``None`` for none."""
+        return self._portraits.get(ref)
+
     def set_placeholder(self, text: str) -> None:
         """What an empty board says. Shown only while there is nothing on it."""
         self._placeholder_text = text

@@ -56,6 +56,7 @@ from mm_companion.core.rules import (
     area_primary_rank,
     area_request_specs,
     area_stage_rank,
+    area_title,
     power_area_use,
     power_area_uses,
     resolve_rung,
@@ -224,7 +225,7 @@ class AreaController(QObject):
             self._bridge,
             self._host,
             attempt.action_id,
-            title=f"{source.name}: {attempt.use.power_name} (area)",
+            title=area_title(source.name, attempt.use.power_name),
             asker="The GM",
             parent=self,
         )

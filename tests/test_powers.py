@@ -2236,6 +2236,8 @@ def test_affliction_exposes_config_fields() -> None:
         "degree1",
         "degree2",
         "degree3",
+        # The trait a Weaken-style Affliction's Impaired is scoped to.
+        "scope",
         # The Transformed condition may impose a Personal Range effect (p110); both
         # fields are gated shut until a degree actually reads Transformed.
         "imposedEffect",

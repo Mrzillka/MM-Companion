@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from functools import wraps
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QFont, QFontMetrics
+from PySide6.QtGui import QFont, QFontMetrics, QPalette
 from PySide6.QtWidgets import (
     QAbstractScrollArea,
     QDoubleSpinBox,
@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QTableWidgetItem,
     QToolButton,
@@ -201,6 +202,66 @@ class ElidingLabel(QLabel):
             else metrics.elidedText(self._full_text, Qt.TextElideMode.ElideRight, width)
         )
         self.setToolTip(self._hover_text or ("" if fits else self._full_text))
+
+
+class WrappingButton(QPushButton):
+    """A push button whose caption word-wraps, so it is never wider than it is given.
+
+    A ``QPushButton`` lays its caption out on one line and reports that line as its
+    minimum width, so one long caption ("🎲 Toughness vs. Thug's Fire Burst (half) —
+    no effect at all with Evasion 2 vs. DC 15") holds a whole history card — and the
+    history's scroll area — open at that width. Here the caption is a word-wrapped
+    label inside the button, and the button is height-for-width like any wrapped
+    label: one line while there is room, as many as it needs when there is not, and
+    a minimum of its longest word.
+
+    The caption is the label's, not the button's own (which stays empty so nothing
+    is painted twice): :meth:`text` and :meth:`setText` read and write it. It takes
+    the button's text colour, and the padding the theme gives a push button.
+    """
+
+    def __init__(self, text: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._caption = QLabel(text, self)
+        self._caption.setTextFormat(Qt.TextFormat.PlainText)
+        self._caption.setWordWrap(True)
+        self._caption.setForegroundRole(QPalette.ColorRole.ButtonText)
+        self._caption.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        layout = QHBoxLayout(self)
+        # What the theme's QPushButton padding would have been, since a layout inside
+        # the button is placed by its margins rather than by the stylesheet's padding.
+        across = int(theme.metric("space.lg"))
+        down = int(theme.metric("space.xs")) + int(theme.metric("border.width"))
+        layout.setContentsMargins(across, down, across, down)
+        layout.addWidget(self._caption)
+        # A push button is vertically Fixed by default, which pins it at one line's
+        # height however many its caption wraps to.
+        policy = self.sizePolicy()
+        policy.setHorizontalPolicy(QSizePolicy.Policy.Preferred)
+        policy.setVerticalPolicy(QSizePolicy.Policy.Minimum)
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
+        self.setAccessibleName(text)
+
+    def text(self) -> str:  # noqa: D102 - QPushButton's, redirected to the caption
+        return self._caption.text()
+
+    def setText(self, text: str) -> None:  # noqa: N802 - Qt's name
+        self._caption.setText(text)
+        self.setAccessibleName(text)
+        self.updateGeometry()
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        return self.layout().sizeHint()
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        return self.layout().minimumSize()
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802 - Qt override
+        return True
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802 - Qt override
+        return self.layout().totalHeightForWidth(width)
 
 
 #: How long a :class:`ConfirmButton` stays armed with nobody touching it. Long

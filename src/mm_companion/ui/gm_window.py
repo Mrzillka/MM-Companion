@@ -39,7 +39,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, QEvent, Qt, QTimer
-from PySide6.QtGui import QCloseEvent, QCursor, QShowEvent
+from PySide6.QtGui import QCloseEvent, QCursor, QIcon, QShowEvent
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -65,11 +65,14 @@ from mm_companion.core.rules import (
     KIND_INITIATIVE,
     PinRef,
     RollSpec,
+    answer_reading,
+    answer_rung,
     apply_condition,
     apply_damage_step,
     area_capable_builds,
     area_key_index,
     area_key_power_id,
+    condition_changes,
     damage_step_summary,
     damage_steps,
     decrement_condition,
@@ -79,6 +82,7 @@ from mm_companion.core.rules import (
     localize_spec,
     parse_pins,
     requested_roll_choices,
+    resolve_rung,
 )
 from mm_companion.core.session import client as session_client
 from mm_companion.core.session import discovery, store
@@ -138,7 +142,7 @@ from mm_companion.ui.npc_window import NPCWindow
 from mm_companion.ui.pin_picker import PinPickerDialog
 from mm_companion.ui.pinned_panel import PinnedBoard
 from mm_companion.ui.player_card import PlayerCard
-from mm_companion.ui.roll_history import RollHistoryPanel
+from mm_companion.ui.roll_history import AnswerContext, RollHistoryPanel
 from mm_companion.ui.scene_board import NO_SCENE_GM, SceneBoard
 from mm_companion.ui.scene_card import CARD_AREA, CARD_END_TURN, CARD_IMPRESS
 from mm_companion.ui.sections.conditions import condition_display_name, matching_condition
@@ -174,6 +178,25 @@ EXPAND_ALL = "Expand all"
 #: looking at them.
 SCENE_NPC = "npc"
 SCENE_PLAYER = "player"
+
+#: The history's answer menu, when there is nobody on the board to answer with.
+NO_NPCS_TO_ANSWER = "No NPCs on the board"
+#: Its last entry — the roll with nobody's number, which a right-click also gives.
+AS_WRITTEN_CAPTION = "As written (nobody's number) — or right-click the button"
+#: Marks a creature that already answered this card.
+ANSWERED_MARK = "✓"
+#: Marks a trained-only skill the creature has no training in. It still rolls.
+UNTRAINED_MARK = "⚠"
+
+
+@dataclass
+class _Answering:
+    """A roll an NPC is answering off the history, until it comes back."""
+
+    #: The spec as the card offered it — the ladder it carries is what is applied.
+    spec: RollSpec
+    party: ImpressParty
+    where: AnswerContext
 
 
 @dataclass
@@ -422,6 +445,10 @@ class GMWindow(QMainWindow):
         # Ids for rolls made before hosting: negative so they never collide with a
         # session's positive seqs, and still removable from the local view.
         self._offline_seq = 0
+        # The history roll an NPC is answering right now (see _roll_as), and which
+        # creatures have answered each card, by its seq — so the menu can tick them.
+        self._answering: _Answering | None = None
+        self._answered: dict[int, set[str]] = {}
         # The connection choices this window hosts with, picked in the launch dialog
         # before the window opened. A sane default lets the relay fallback and the
         # port read something even when a caller passes none (e.g. the test fixture).
@@ -806,9 +833,13 @@ class GMWindow(QMainWindow):
         # player's, an NPC's) reaches it by the same name it always did.
         self._roller = self._view.panel
         # A save or a request clicked in this history is answered for a creature the GM
-        # plays — whose number goes in is asked first (see _on_history_roll).
+        # plays — whose number goes in is asked first (see _on_history_roll). A
+        # right-click rolls it as written, for nobody.
         self._history.rollFollowUp.disconnect(self._roller.roll_spec)
-        self._history.rollFollowUp.connect(self._on_history_roll)
+        self._history.rollAnswer.connect(self._on_history_roll)
+        self._history.rollPlain.connect(self._roller.roll_spec)
+        # The roll an NPC answered with, once it is back: what failing did goes on it.
+        self._roller.sessionRollRevealed.connect(self._on_answer_back)
         # While hosting, a roll made here goes through the server like everyone
         # else's and comes back on the shared feed. Before that there is no
         # session to record it in, so it is shown as a card and nothing more.
@@ -832,36 +863,153 @@ class GMWindow(QMainWindow):
         layout.addWidget(self._view)
         return box
 
-    def _on_history_roll(self, spec: object) -> None:
+    def _on_history_roll(self, spec: object, context: object = None) -> None:
         """A save chip or a request card clicked in the GM's history.
 
         A spec that names a trait is answered with *someone's* number, and here that is
         an NPC's: a menu of the creatures nobody plays on the board (those it names
-        first) rolls it with that one's own number, under its name. "As written" rolls
-        it with nobody's, as before.
+        first, then the board's order), each with its picture and the number it would
+        roll, rolls it with that one's own number under its name. A creature that
+        already answered this card is ticked, and a trained-only skill it lacks is
+        flagged — both still roll. "As written" (or a right-click on the button) rolls
+        it with nobody's.
         """
         if not isinstance(spec, RollSpec):
             return
-        _sources, targets = self.impress_parties()
-        npcs = [p for p in targets if p.kind == PARTY_NPC and p.character is not None]
-        if not spec.trait_key or not npcs:
+        where = context if isinstance(context, AnswerContext) else AnswerContext()
+        if not spec.trait_key:
             self._roller.roll_spec(spec)
             return
+        _sources, targets = self.impress_parties()
+        npcs = [p for p in targets if p.kind == PARTY_NPC and p.character is not None]
         named = set(spec.targets)
         npcs.sort(key=lambda p: p.name not in named)
+        answered = self._answered.get(where.seq, set()) if where.seq is not None else set()
         menu = QMenu(self)
         menu.setToolTipsVisible(True)
+        if not npcs:
+            menu.addAction(NO_NPCS_TO_ANSWER).setEnabled(False)
         for party in npcs:
-            menu.addAction(party.name, lambda p=party: self._roll_as(spec, p))
+            reading = answer_reading(spec, party.character, self._data)
+            text = party.name
+            tips = []
+            if reading is not None:
+                text = f"{text} — {reading.label} {reading.modifier:+d}"
+                if not reading.usable:
+                    text = f"{text} {UNTRAINED_MARK}"
+                    tips.append(f"{reading.label} can't be used untrained; it rolls anyway.")
+            if party.name in answered:
+                text = f"{ANSWERED_MARK} {text}"
+                tips.append("Already rolled for this one.")
+            action = menu.addAction(text, lambda p=party: self._roll_as(spec, p, where))
+            if tips:
+                action.setToolTip(" ".join(tips))
+            portrait = self._scene_board.portrait(party.ref)
+            if portrait is not None:
+                action.setIcon(QIcon(portrait))
         menu.addSeparator()
-        menu.addAction("As written (nobody's number)", lambda: self._roller.roll_spec(spec))
+        menu.addAction(AS_WRITTEN_CAPTION, lambda: self._roller.roll_spec(spec))
         menu.exec(QCursor.pos())
 
-    def _roll_as(self, spec: RollSpec, party: ImpressParty) -> None:
-        """Roll *spec* as *party* rolls it: their own number in, their name on it."""
+    def _roll_as(
+        self, spec: RollSpec, party: ImpressParty, where: AnswerContext | None = None
+    ) -> None:
+        """Roll *spec* as *party* rolls it: their own number in, their name on it.
+
+        The roller's own adjustment and Hidden still apply. Once the roll is back,
+        :meth:`_on_answer_back` puts what a failed save did on the creature.
+        """
+        where = where or AnswerContext()
         own = localize_spec(spec, party.character, self._data)
-        self._roller.roll_spec(
-            replace(own, label=f"{party.name}: {own.label}", targets=(party.name,), trait_key="")
+        rolled = replace(
+            own,
+            label=f"{party.name}: {own.label}",
+            targets=(party.name,),
+            trait_key="",
+            actor=party.name,
+        )
+        # Set first: the roll can come back before roll_spec returns (a hosted
+        # server answers in-process, and a test's die does not tumble).
+        self._answering = _Answering(spec, party, where)
+        if not self._roller.roll_spec(rolled):
+            self._answering = None
+            return
+        if where.seq is not None:
+            self._answered.setdefault(where.seq, set()).add(party.name)
+
+    def _on_answer_back(self, roll: object) -> None:
+        """A roll of the GM's own is back: if an NPC answered with it, apply its rung."""
+        answering = self._answering
+        if answering is None or not isinstance(roll, dict):
+            return
+        spec = RollSpec.from_dict(roll.get("spec"))
+        name = answering.party.name
+        actor = spec.actor if spec is not None else ""
+        if actor != name and not str(roll.get("label", "")).startswith(f"{name}: "):
+            return
+        self._answering = None
+        self._apply_answer(answering, roll)
+
+    def _apply_answer(self, answering: _Answering, roll: dict) -> None:
+        """Put what the NPC's roll did on it — if the GM's setting says to.
+
+        The ladder is the one the spec carries (:class:`SpecLadder`), the rung resolved
+        against the creature as it stands, and what actually changed is kept so the
+        card's ↶ can take it back off.
+        """
+        degree = roll.get("degree")
+        ladder = answering.spec.ladder
+        if degree is None or ladder is None:
+            return
+        if not storage.gm_auto_apply().get(ladder.kind, True):
+            return
+        rung = answer_rung(ladder, int(degree))
+        party = answering.party
+        entry = self._npc_state.get(party.source)
+        if rung is None or entry is None:
+            return
+        before = deepcopy(entry.character.conditions)
+        changes = resolve_rung(entry.character, rung, self._data, source=answering.where.source)
+        if not changes:
+            return
+        self.impress_apply(party, list(changes))
+        added, removed = condition_changes(before, entry.character.conditions)
+        if not added and not removed:
+            return
+        names = self._change_names(changes)
+        self._show_notice(f"{party.name}: {names}", theme.color("tint.worse"))
+        seq = roll.get("seq")
+        if isinstance(seq, int):
+            self._history.set_undo(
+                seq,
+                f"Take {names} back off {party.name}",
+                lambda: self._undo_answer(seq, party, added, removed, names),
+            )
+
+    def _undo_answer(
+        self,
+        seq: int,
+        party: ImpressParty,
+        added: list[tuple[str, str | None]],
+        removed: list[tuple[str, str | None]],
+        names: str,
+    ) -> None:
+        """Take back what an NPC's roll applied: off what it added, on what it replaced."""
+        self._history.set_undo(seq, "", None)
+        if party.source not in self._npc_state:
+            return
+        if added:
+            self.action_remove(party, added)
+        if removed:
+            self.impress_apply(party, removed)
+        self._show_notice(f"{party.name}: took back {names}", theme.color("text.muted.rich"))
+
+    def _change_names(self, changes) -> str:
+        """``(id, parameter)`` pairs as the chips would name them."""
+        catalog = self._data.condition_catalog()
+        return ", ".join(
+            condition_display_name(AppliedCondition(cid, parameter), catalog.get(cid))
+            for cid, parameter in changes
         )
 
     def _on_roller_action(self, kind: str) -> None:
@@ -1432,6 +1580,8 @@ class GMWindow(QMainWindow):
             "spec": roll.get("spec"),
         }
         self._history.add_roll(record)
+        # A save an NPC answered off the history: what failing did goes on it.
+        self._on_answer_back(record)
         # An NPC's attack against an area's primary, rolled from the area window: off
         # the air there is no rollAdded to bring its total back, so it is handed over.
         if getattr(self, "_area", None) is not None:

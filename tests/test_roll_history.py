@@ -657,3 +657,73 @@ def test_a_reveal_that_did_not_reach_the_server_changes_nothing(qapp: QApplicati
     assert seen == []
     assert len(_show_buttons(panel)) == 1  # still hidden on this screen too
     panel._bridge = None
+
+
+# -- narrow cards ------------------------------------------------------------------
+
+LONG_SAVE = (
+    "Toughness vs. Thug's Fire Burst (half) — no effect at all with Evasion 2, "
+    "and a good deal more besides"
+)
+
+
+def test_a_long_roll_button_wraps_rather_than_widening_its_card(qapp) -> None:
+    from mm_companion.core.rules import RollSpec
+    from mm_companion.ui.roll_history import MIN_HISTORY_WIDTH, RequestCard, SessionRollCard
+    from mm_companion.ui.widgets import WrappingButton
+
+    follow = RollSpec(label=LONG_SAVE, dc=20, trait_key="TOUGHNESS")
+    roll = {
+        "seq": 5,
+        "player_name": "Gamemaster",
+        "label": "Thug: Fire Burst",
+        "die": 12,
+        "bonus": 8,
+        "penalty": 0,
+        "dc": 18,
+        "degree": 1,
+        "hidden": True,
+        "spec": RollSpec(label="Attack", follow_up=follow).to_dict(),
+    }
+    card = SessionRollCard(roll, own=True, can_remove=True)
+    card.set_undo(("t", lambda: None))
+    request = RequestCard(
+        {"seq": 6, "kind": "request", "player_name": "GM", "spec": follow.to_dict()},
+        can_remove=True,
+    )
+    for built in (card, request):
+        (button,) = built.findChildren(WrappingButton)
+        assert "besides" in button.text()
+        assert built.minimumSizeHint().width() < MIN_HISTORY_WIDTH
+        # Narrower means taller, never clipped.
+        assert button.heightForWidth(120) > button.heightForWidth(2000)
+
+
+def test_a_narrow_history_never_scrolls_sideways(qapp) -> None:
+    from mm_companion.core.rules import RollSpec
+    from mm_companion.ui.roll_history import MIN_HISTORY_WIDTH
+
+    panel = RollHistoryPanel(gm=True)
+    follow = RollSpec(label=LONG_SAVE, dc=20, trait_key="TOUGHNESS")
+    panel.add_roll(
+        {
+            "seq": 5,
+            "kind": "roll",
+            "player_name": "Gamemaster",
+            "label": "Thug: Fire Burst",
+            "die": 12,
+            "bonus": 8,
+            "penalty": 0,
+            "dc": 18,
+            "degree": 1,
+            "hidden": True,
+            "spec": RollSpec(label="Attack", follow_up=follow).to_dict(),
+        }
+    )
+    panel.add_roll({"seq": 6, "kind": "request", "player_name": "GM", "spec": follow.to_dict()})
+    panel.resize(MIN_HISTORY_WIDTH, 500)
+    panel.show()
+    for _ in range(5):
+        qapp.processEvents()
+    assert panel._scroll.horizontalScrollBar().maximum() == 0
+    panel.close()

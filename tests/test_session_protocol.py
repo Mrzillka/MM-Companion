@@ -191,10 +191,12 @@ def test_the_protocol_version_is_the_one_the_keepalive_needs() -> None:
     the request and the group roll unread. v12 lets the GM reveal a hidden roll,
     and a v11 server would drop that request the same silent way. v13 carries area
     attacks on the spec, and a v12 server's whitelist would strip those keys without
-    a word. Either way changing this number is a decision about who can still join,
+    a word. v14 carries a save's ladder (and the creature a roll was made as) on the
+    spec, which a v13 server's whitelist would strip the same way. Either way changing
+    this number is a decision about who can still join,
     so it should not be possible to do by accident.
     """
-    assert PROTOCOL_VERSION == 13
+    assert PROTOCOL_VERSION == 14
 
 
 def test_every_registered_type_is_reachable_by_tag() -> None:

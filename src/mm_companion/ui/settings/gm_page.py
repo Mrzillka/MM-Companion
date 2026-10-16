@@ -21,6 +21,8 @@ Above the lists sit the table's standing decisions — the same kind of thing, m
 once rather than per session: whether joining puts a player on the Scene, and whether
 players set up their own Impress and area attacks or leave that to the GM. The second
 is published to the table when it is saved, so a player's next click already reads it.
+Below them, which kinds of failed save put their conditions on an NPC by themselves when
+the GM rolls one for it off the history.
 """
 
 from __future__ import annotations
@@ -44,7 +46,15 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core import storage
 from mm_companion.core.data_loader import GameData, load_game_data
-from mm_companion.core.rules import PinRef, default_pins, pin_label
+from mm_companion.core.rules import (
+    CATEGORY_AREA,
+    CATEGORY_DAMAGE,
+    CATEGORY_EFFECT,
+    CATEGORY_IMPRESS,
+    PinRef,
+    default_pins,
+    pin_label,
+)
 from mm_companion.ui.pin_picker import PinPickerDialog
 from mm_companion.ui.settings.page import SettingsPage
 from mm_companion.ui.widgets import (
@@ -79,6 +89,21 @@ PLAYERS_CHOOSE_HINT = (
     "attack reaches you bare and you set it up. Either way you resolve it."
 )
 
+AUTO_APPLY_HINT = (
+    "When you roll a save for an NPC off the history (a request card, or a save chip "
+    "under an attack) and it fails, what failing does goes on the NPC by itself, and "
+    "the roll's card gets a ↶ button that takes it back off. Off, the card only says "
+    "what it did and you apply it by hand."
+)
+
+#: The automatic-application switches, in the order the page lists them.
+AUTO_APPLY_LABELS: tuple[tuple[str, str], ...] = (
+    (CATEGORY_DAMAGE, "Damage (Toughness saves)"),
+    (CATEGORY_EFFECT, "Afflictions and other effects"),
+    (CATEGORY_IMPRESS, "Impressions"),
+    (CATEGORY_AREA, "Area attacks"),
+)
+
 NOTE_TEXT = (
     "A card's strip starts from these and is then its own: editing a list here "
     "does not rearrange a card already on the board, only the ones a GM has yet "
@@ -99,10 +124,13 @@ class GMPage(SettingsPage):
         self._saved: dict[str, list[PinRef]] = {}
         self._saved_auto_players = True
         self._saved_players_choose = True
+        self._auto_apply: dict[str, QCheckBox] = {}
+        self._saved_auto_apply: dict[str, bool] = {}
 
         column = QVBoxLayout(self)
         column.addWidget(self._build_scene())
         column.addWidget(self._build_actions_box())
+        column.addWidget(self._build_auto_apply_box())
         column.addWidget(self._build_heading())
         column.addLayout(self._build_lists(), stretch=1)
         column.addLayout(self._build_actions())
@@ -130,6 +158,19 @@ class GMPage(SettingsPage):
         self._players_choose.setToolTip(help_tooltip(PLAYERS_CHOOSE_HINT))
         self._players_choose.toggled.connect(self._on_edited)
         column.addWidget(with_help(self._players_choose, PLAYERS_CHOOSE_HINT))
+        return box
+
+    def _build_auto_apply_box(self) -> QWidget:
+        """Which failed saves an NPC rolled off the history takes on by itself."""
+        box = QGroupBox("Saves you roll for NPCs")
+        column = QVBoxLayout(box)
+        heading = QLabel("Apply what a failed save does, for:")
+        column.addWidget(with_help(heading, AUTO_APPLY_HINT))
+        for key, label in AUTO_APPLY_LABELS:
+            check = QCheckBox(label)
+            check.toggled.connect(self._on_edited)
+            self._auto_apply[key] = check
+            column.addWidget(check)
         return box
 
     def _build_heading(self) -> QWidget:
@@ -205,6 +246,8 @@ class GMPage(SettingsPage):
             return True
         if self._players_choose.isChecked() != self._saved_players_choose:
             return True
+        if self.auto_apply() != self._saved_auto_apply:
+            return True
         return any(self.pins(kind) != self._saved.get(kind, []) for kind, _heading in KINDS)
 
     def save(self) -> None:
@@ -219,6 +262,8 @@ class GMPage(SettingsPage):
         )
         storage.set_gm_scene_auto_players(self._auto_players.isChecked())
         storage.set_gm_players_choose_actions(self._players_choose.isChecked())
+        storage.set_gm_auto_apply(self.auto_apply())
+        self._saved_auto_apply = self.auto_apply()
         self._saved = {kind: self.pins(kind) for kind, _heading in KINDS}
         self._saved_auto_players = self._auto_players.isChecked()
         self._saved_players_choose = self._players_choose.isChecked()
@@ -232,6 +277,10 @@ class GMPage(SettingsPage):
         for picker in list(self._pickers.values()):
             picker.close()
         self._pickers.clear()
+
+    def auto_apply(self) -> dict[str, bool]:
+        """Which kinds of failed save the switches say apply by themselves."""
+        return {key: check.isChecked() for key, check in self._auto_apply.items()}
 
     # -- the lists -----------------------------------------------------------------
 
@@ -266,6 +315,12 @@ class GMPage(SettingsPage):
         self._players_choose.setChecked(storage.gm_players_choose_actions())
         self._players_choose.blockSignals(False)
         self._saved_players_choose = self._players_choose.isChecked()
+        stored = storage.gm_auto_apply()
+        for key, check in self._auto_apply.items():
+            check.blockSignals(True)
+            check.setChecked(stored.get(key, True))
+            check.blockSignals(False)
+        self._saved_auto_apply = self.auto_apply()
 
     def _on_edited(self, *_args: object) -> None:
         self._set_status("")

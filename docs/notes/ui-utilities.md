@@ -68,6 +68,13 @@ through rather than reinvent. When building new sheet widgets, use it:
   Senses' twenty check boxes, a `widgetResizable` `QScrollArea` showing the first
   row of the launcher's character library with no scroll bar to reach the rest.
   Neither container asks a second time, which is why the host has to answer right.
+- **`WrappingButton`** (`ui/widgets.py`) is a push button whose caption word-wraps, for
+  any button whose caption is data rather than a word (a roll's "🎲 Toughness vs. … vs.
+  DC 15"). A `QPushButton` reports its one-line caption as its minimum width, so one
+  long caption held a history card, and the history, open at that width. Its caption
+  is a label inside it (`text()`/`setText()` redirect there), it is height-for-width
+  like a wrapped label, and it is vertically `Minimum`. A push button is vertically
+  `Fixed` by default, which clipped every wrapped line past the first.
 - A word-wrapped `QLabel` inside a composite widget will be sized for one line
   and clipped: `heightForWidth` only reaches it if every layout in between agrees
   to ask, and `QFormLayout` does not reliably ask. Pin the column to a width token

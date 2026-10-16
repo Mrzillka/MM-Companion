@@ -217,8 +217,11 @@ The shape:
   collapsed card with the rest scrolled away: the shipped six did not fit on exactly
   the card a GM collapses for a fight. Both pictures are the creature's own
   (`_set_portrait` sets both — the thumbnail used to stay a "?"), and either opens
-  the sheet. The two name labels share **one slot**, exactly one showing: collapsed
-  it elides, expanded it wraps. `set_collapsed` is **silent** like
+  the sheet. The name **wraps** in both states and has the top row to itself bar the
+  caret — the icons sit on the PL line — since a collapsed card's eliding name cut
+  "Mechanised Siege Golem" to "Mechanised Sieg…". A scene card's name wraps too, and
+  the card reports its height at its fixed width (`SceneCard.sizeHint`) so the flow
+  does not clip the second line. `set_collapsed` is **silent** like
   `PinPanel.set_pins`; only the caret emits `collapsedChanged`, since the owner
   telling a card what it already decided must not have the window save what it just
   read. Every new card starts **expanded**, Quick NPC's included.

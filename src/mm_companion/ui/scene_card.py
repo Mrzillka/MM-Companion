@@ -22,7 +22,7 @@ disagree about what an id means.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, Qt, Signal
+from PySide6.QtCore import QPoint, QSize, Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QVBoxLayout, QWidget
 
@@ -43,7 +43,7 @@ from mm_companion.ui.card_chips import (
 )
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.sections.conditions import condition_display_name, condition_tooltip
-from mm_companion.ui.widgets import ElidingLabel, discard_widget
+from mm_companion.ui.widgets import discard_widget
 
 #: How wide one card's column is, so a row of them lines up in the flow. Stated
 #: rather than measured, unlike a GM card (whose ``body_width_hint`` is), and
@@ -271,10 +271,12 @@ class SceneCard(QFrame):
         self._thumb.setFrameShape(QLabel.Shape.Box)
         header.addWidget(self._thumb)
 
-        # Elides rather than wraps, for the reason a collapsed NPC card's name
-        # does: it shares a row with the thumbnail, whose height is the row's, and
-        # a second line would have nowhere to go but out of the card.
-        self._name = ElidingLabel("")
+        # Wraps rather than elides: the card is narrow and shared with a turn badge,
+        # a thumbnail and an initiative, so a long name came out as "Captain Maxi…"
+        # and the board's whole job is saying who is who. A second line makes the
+        # row taller than the thumbnail, which is a fair price for the name.
+        self._name = QLabel("")
+        self._name.setWordWrap(True)
         name_font = self._name.font()
         name_font.setBold(True)
         self._name.setFont(name_font)
@@ -331,6 +333,20 @@ class SceneCard(QFrame):
 
     # -- what the card is showing -----------------------------------------
 
+    def sizeHint(self) -> QSize:  # noqa: N802 (Qt override)
+        """As tall as the card is at the one width it ever has.
+
+        The board's flow lays a card out at its size hint, and a plain hint measures
+        the name on one line — so a name that wrapped to two or three was clipped at
+        the bottom of the card. The width is fixed, so the honest height is the
+        layout's height *for that width*.
+        """
+        hint = super().sizeHint()
+        layout = self.layout()
+        if layout is not None:
+            hint.setHeight(max(hint.height(), layout.totalHeightForWidth(SCENE_CARD_WIDTH)))
+        return QSize(SCENE_CARD_WIDTH, hint.height())
+
     def set_entry(self, entry: dict) -> None:
         """Restate the card from a wire entry. The portrait is not touched.
 
@@ -355,7 +371,7 @@ class SceneCard(QFrame):
         self._badge.set_live(self._gm and not entry.get("player_id"))
         self._badge.set_initiative(self._initiative)
         self._show_conditions(entry.get("conditions") or [])
-        self._name.set_hover_text(self._hover_text(name))
+        self._name.setToolTip(self._hover_text(name))
 
     def set_portrait(self, pixmap: QPixmap | None) -> None:
         """Show a decoded thumbnail, or fall back to the placeholder."""

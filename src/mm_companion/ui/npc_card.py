@@ -79,7 +79,7 @@ from mm_companion.ui.sections.conditions import (
     condition_display_name,
     condition_tooltip,
 )
-from mm_companion.ui.widgets import ElidingLabel, discard_widget, muted_style
+from mm_companion.ui.widgets import discard_widget, muted_style
 
 #: How far the pointer must move with the button down to count as a drag rather
 #: than a click, in pixels.
@@ -211,49 +211,56 @@ class NPCCard(QFrame):
         name_row = QHBoxLayout()
         name_row.setContentsMargins(0, 0, 0, 0)
         name_row.setSpacing(int(theme.metric("space.xs")))
-        # Two labels for one name, in the same slot, exactly one of them showing:
-        # collapsed it shares a short row with the icons and *elides*; expanded it
-        # has the column to itself and wraps.
-        self._header_name = ElidingLabel(summary.name)
+        # The name has the top row to itself, bar the caret, and **wraps** in both
+        # states rather than eliding: a creature called "Mechanised Siege Golem" read
+        # as "Mechanised Sieg…" on a collapsed card, where the icons used to share its
+        # row. A long name costs the header a line; a cropped one costs the GM the name.
         self._name_label = QLabel(summary.name)
         self._name_label.setWordWrap(True)
-        for label in (self._header_name, self._name_label):
-            font = label.font()
-            font.setBold(True)
-            label.setFont(font)
-            name_row.addWidget(label, stretch=1)
-
-        # The actions against other characters, as icons beside the caret on a
-        # collapsed card (labelled buttons on an open one, below). Only ever hidden
-        # here: showing a button before the card's layout is installed would show it
-        # as a window of its own — set_collapsed settles them once they are parented.
-        self._impress_icon = _small_button("🗣")
-        self._impress_icon.setToolTip("Impress — this creature uses an interaction skill")
-        self._impress_icon.clicked.connect(lambda: self.impressRequested.emit(self.name_key))
-        self._impress_icon.hide()
-        name_row.addWidget(self._impress_icon, alignment=Qt.AlignmentFlag.AlignTop)
-        self._area_icon = _small_button("💥")
-        self._area_icon.setToolTip("Area — use one of this creature's attacks on an area")
-        self._area_icon.clicked.connect(lambda: self._show_area_menu(self._area_icon))
-        self._area_icon.hide()
-        name_row.addWidget(self._area_icon, alignment=Qt.AlignmentFlag.AlignTop)
-        # Pinning another number. In the header rather than as a tile after the last
-        # pin, where it took a row of the card to itself under a full grid.
-        self._pin_button = _small_button("📌")
-        self._pin_button.setToolTip("Pin a parameter from this creature to its card")
-        self._pin_button.clicked.connect(lambda: self.pinPickerRequested.emit(self.name_key))
-        name_row.addWidget(self._pin_button, alignment=Qt.AlignmentFlag.AlignTop)
+        font = self._name_label.font()
+        font.setBold(True)
+        self._name_label.setFont(font)
+        name_row.addWidget(self._name_label, stretch=1)
+        #: The same label under its old name — there used to be a second, eliding one
+        #: for the collapsed card.
+        self._header_name = self._name_label
         self._collapse_button = _small_button()
         self._collapse_button.clicked.connect(self._toggle_collapsed)
         name_row.addWidget(self._collapse_button, alignment=Qt.AlignmentFlag.AlignTop)
         info.addLayout(name_row)
 
+        # The Power Level, and the small controls after it on the same line: the
+        # actions against other characters as icons on a collapsed card (labelled
+        # buttons on an open one, below), and the 📌 that pins another number. Only
+        # ever hidden here: showing a button before the card's layout is installed
+        # would show it as a window of its own — set_collapsed settles them.
+        pl_row = QHBoxLayout()
+        pl_row.setContentsMargins(0, 0, 0, 0)
+        pl_row.setSpacing(int(theme.metric("space.xs")))
         self._pl_label = QLabel(f"PL {summary.power_level}")
         self._pl_label.setStyleSheet(muted_style())
         pl_font = self._pl_label.font()
         pl_font.setPointSizeF(theme.font_size("size.terms"))
         self._pl_label.setFont(pl_font)
-        info.addWidget(self._pl_label)
+        pl_row.addWidget(self._pl_label)
+        pl_row.addStretch()
+        self._impress_icon = _small_button("🗣")
+        self._impress_icon.setToolTip("Impress — this creature uses an interaction skill")
+        self._impress_icon.clicked.connect(lambda: self.impressRequested.emit(self.name_key))
+        self._impress_icon.hide()
+        pl_row.addWidget(self._impress_icon)
+        self._area_icon = _small_button("💥")
+        self._area_icon.setToolTip("Area — use one of this creature's attacks on an area")
+        self._area_icon.clicked.connect(lambda: self._show_area_menu(self._area_icon))
+        self._area_icon.hide()
+        pl_row.addWidget(self._area_icon)
+        # Pinning another number, rather than a tile after the last pin, where it took
+        # a row of the card to itself under a full grid.
+        self._pin_button = _small_button("📌")
+        self._pin_button.setToolTip("Pin a parameter from this creature to its card")
+        self._pin_button.clicked.connect(lambda: self.pinPickerRequested.emit(self.name_key))
+        pl_row.addWidget(self._pin_button)
+        info.addLayout(pl_row)
 
         # A flow, not a row: Copy and the two actions wrap onto a second line on a
         # narrow card rather than widen it.
@@ -320,9 +327,9 @@ class NPCCard(QFrame):
         layout.addStretch()
 
         #: The widgets only the full card shows.
-        self._expanded_only = (self._name_label, self._portrait, self._buttons_host)
+        self._expanded_only = (self._portrait, self._buttons_host)
         #: And their collapsed counterparts.
-        self._collapsed_only = (self._header_name, self._thumb)
+        self._collapsed_only = (self._thumb,)
 
         self._set_portrait(summary.image_path)
         self.set_collapsed(collapsed)
@@ -456,12 +463,7 @@ class NPCCard(QFrame):
         tile or the degree button a GM was lining up. The name is the part of the
         card that *is* the creature, so it is the part that describes it.
         """
-        summary = self.summary_html()
-        self._name_label.setToolTip(summary)
-        # Through the label's own seam: it owns its tooltip (it shows the full name
-        # there when the name is clipped) and would wipe a plain setToolTip on the
-        # next resize.
-        self._header_name.set_hover_text(summary)
+        self._name_label.setToolTip(self.summary_html())
 
     def summary_html(self) -> str:
         """A compact abilities / resistances / powers summary, as tooltip HTML."""

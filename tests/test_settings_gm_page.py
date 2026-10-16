@@ -16,7 +16,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from mm_companion.core import storage
 from mm_companion.core.rules import (
-    PIN_ABILITY,
+    PIN_EFFECT,
     PIN_INITIATIVE,
     PIN_POWER,
     PIN_RESISTANCE,
@@ -59,7 +59,14 @@ def captions(page: GMPage, kind: str) -> list[str]:
 
 def test_both_lists_open_on_what_is_stored(page: GMPage) -> None:
     assert captions(page, "player") == ["DEF", "Toughness", "Initiative", "Perception"]
-    assert captions(page, "npc") == ["DEF", "Toughness", "ATK", "First Damage"]
+    assert captions(page, "npc") == [
+        "DEF",
+        "Toughness",
+        "Will",
+        "Fortitude",
+        "First Damage rank",
+        "First Damage",
+    ]
     assert not page.is_dirty()
 
 
@@ -74,9 +81,9 @@ def test_adding_a_pin_marks_the_page_dirty_and_saving_writes_it(page: GMPage) ->
 
 
 def test_a_pin_already_in_the_list_is_not_added_twice(page: GMPage) -> None:
-    page._add_pin("npc", PinRef(PIN_ABILITY, "ATK"))
+    page._add_pin("npc", PinRef(PIN_RESISTANCE, "WILL"))
 
-    assert captions(page, "npc").count("ATK") == 1
+    assert captions(page, "npc").count("Will") == 1
     assert not page.is_dirty()
 
 
@@ -87,7 +94,9 @@ def test_removing_leaves_the_other_list_alone(page: GMPage) -> None:
     assert storage.gm_default_pins()["npc"] == [
         {"kind": "resistance", "key": "DEF"},
         {"kind": "resistance", "key": "TOUGHNESS"},
-        {"kind": "ability", "key": "ATK"},
+        {"kind": "resistance", "key": "WILL"},
+        {"kind": "resistance", "key": "FORTITUDE"},
+        {"kind": "effect", "select": "first_damage"},
     ]
     assert storage.gm_default_pins()["player"] == DEFAULT_SETTINGS["gm_default_pins"]["player"]
 
@@ -115,7 +124,14 @@ def test_restore_shipped_puts_one_list_back_without_touching_the_other(page: GMP
 
     page._restore_shipped("npc")
 
-    assert captions(page, "npc") == ["DEF", "Toughness", "ATK", "First Damage"]
+    assert captions(page, "npc") == [
+        "DEF",
+        "Toughness",
+        "Will",
+        "Fortitude",
+        "First Damage rank",
+        "First Damage",
+    ]
     assert captions(page, "player") == ["Initiative"]
 
 
@@ -136,8 +152,11 @@ def test_the_picker_offers_only_what_a_default_can_name(page: GMPage) -> None:
         )
 
         assert "Skills" in groups
-        assert powers.childCount() == 1
-        assert powers.child(0).data(0, PIN_ROLE) == PinRef(PIN_POWER, select=SELECT_FIRST_DAMAGE)
+        # The two late-bound ones — the first Damage's rank and its attack — and no
+        # concrete power at all.
+        assert powers.childCount() == 2
+        assert powers.child(0).data(0, PIN_ROLE) == PinRef(PIN_EFFECT, select=SELECT_FIRST_DAMAGE)
+        assert powers.child(1).data(0, PIN_ROLE) == PinRef(PIN_POWER, select=SELECT_FIRST_DAMAGE)
         # No reading to show without a character, so no column claiming there is.
         assert tree.isColumnHidden(1)
     finally:
@@ -162,12 +181,12 @@ def test_a_removal_made_here_reaches_an_open_picker(page: GMPage) -> None:
     page._open_picker("npc")
     picker = page._pickers["npc"]
     try:
-        assert picker.action_text(PinRef(PIN_ABILITY, "ATK")) == "Unpin"
+        assert picker.action_text(PinRef(PIN_RESISTANCE, "WILL")) == "Unpin"
 
         page.set_pins("npc", [])
         page._push_to_picker("npc")
 
-        assert picker.action_text(PinRef(PIN_ABILITY, "ATK")) == "Pin"
+        assert picker.action_text(PinRef(PIN_RESISTANCE, "WILL")) == "Pin"
     finally:
         picker.close()
 

@@ -44,6 +44,7 @@ from PySide6.QtWidgets import (
 from mm_companion.core import library
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import Condition, GameData
+from mm_companion.core.rules import can_recover
 from mm_companion.ui import theme
 from mm_companion.ui.card_chips import _ConditionChip, _SceneEye, start_card_drag
 from mm_companion.ui.card_summary import PORTRAIT_SIZE, PortraitButton, character_summary_html
@@ -78,6 +79,10 @@ class PlayerCard(QFrame):
     applyConditionRequested = Signal(str, str, object)
     #: ``(player_id, condition_id, parameter)`` — take it off again.
     removeConditionRequested = Signal(str, str, object)
+    #: ``(player_id, condition_id, parameter)`` — ask the player to roll this
+    #: condition's recovery check. The player rolls their own dice, so the GM only
+    #: leaves the request; a made check takes it off on their side.
+    recoveryRequested = Signal(str, str, object)
     #: ``(player_id, value)`` — set this player's hero-point total. Like a
     #: condition, the GM only *asks*; the player's app applies it and pushes back.
     setHeroPointsRequested = Signal(str, int)
@@ -215,10 +220,22 @@ class PlayerCard(QFrame):
         """How wide this card's pinned strip wants to be."""
         return self.pins.natural_width()
 
-    def apply_width(self, body: int, strip: int) -> None:
-        """Wear *body* and *strip* — the block's widest, not this card's own."""
+    def apply_width(self, body: int, strip: int, room: int = 0) -> None:
+        """Wear *body* and *strip* — the block's widest, not this card's own.
+
+        Past *room* (the block's own width, when it has one) the strip gives up its
+        slack first, down to ``gm.pin-strip.min`` since a narrower strip only elides
+        its captions, and the body follows; past what both can give the card stays
+        legible and the block scrolls.
+        """
+        gap = int(theme.metric("space.sm")) * 3
+        if room > 0 and body + strip + gap > room:
+            strip_floor = int(theme.metric("gm.pin-strip.min"))
+            body_floor = int(theme.metric("gm.card.min"))
+            strip = max(strip_floor if strip else 0, min(strip, room - gap - body_floor))
+            body = max(body_floor, min(body, room - gap - strip))
         self.pins.set_width(strip)
-        self.setFixedWidth(body + strip + int(theme.metric("space.sm")) * 3)
+        self.setFixedWidth(body + strip + gap)
 
     # -- what the card is showing -----------------------------------------
 
@@ -319,6 +336,13 @@ class PlayerCard(QFrame):
                         self.removeConditionRequested.emit(self.player_id, cid, param)
                     )
                 )
+                if can_recover(self._character, self._data, applied):
+                    chip.arm_recovery(
+                        lambda cid=applied.condition_id, param=applied.parameter: (
+                            self.recoveryRequested.emit(self.player_id, cid, param)
+                        ),
+                        "Ask them to roll the recovery check — a success takes this off.",
+                    )
             self._chip_flow.addWidget(chip)
         self._chips.setVisible(bool(conditions))
 

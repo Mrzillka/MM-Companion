@@ -318,13 +318,25 @@ class StackingRule:
 
 @dataclass(frozen=True)
 class RecoveryCheck:
-    """Structured recovery check (§8). Loaded now; consumed by the future roll layer."""
+    """Structured recovery check (§8), rolled by :mod:`mm_companion.core.rules.recovery`.
+
+    ``trait`` and ``dc`` are the check; a record with either missing (Fatigued's rest)
+    is not a check at all and offers no die. ``success_degrees`` is how many degrees of
+    success clear it (Dying needs two to stabilise), ``becomes`` what the condition
+    turns into when it does (Dying stabilises to Incapacitated), and ``blocked_by`` the
+    conditions whose presence means no check may be made yet (Staggered recovers only
+    once nothing worse is on the creature). ``cadence``/``condition``/``outcome`` are
+    the prose the tooltip carries.
+    """
 
     trait: str | None = None
     dc: int | None = None
     cadence: str = ""
     condition: str = ""
     outcome: str = ""
+    success_degrees: int = 1
+    becomes: str = ""
+    blocked_by: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -2690,6 +2702,9 @@ def _parse_recovery_check(raw: dict | None) -> RecoveryCheck | None:
         cadence=raw.get("cadence", ""),
         condition=raw.get("condition", ""),
         outcome=raw.get("outcome", ""),
+        success_degrees=max(1, int(raw.get("successDegrees", 1) or 1)),
+        becomes=str(raw.get("becomes", "") or ""),
+        blocked_by=tuple(str(c) for c in raw.get("blockedBy", ()) or ()),
     )
 
 

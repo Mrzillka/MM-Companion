@@ -52,6 +52,10 @@ from mm_companion.ui.widgets import dialog_buttons, make_spin_box, tinted_style
 #: right.
 STAT_MIN, STAT_MAX = 0, 40
 
+#: The range the Initiative box accepts. Below zero is a real answer — a lumbering
+#: golem acts last — so it is not held to the stats' floor.
+INITIATIVE_MIN, INITIATIVE_MAX = -10, 40
+
 #: The Power Levels the dialog offers.
 PL_MIN, PL_MAX = 1, 20
 
@@ -123,6 +127,9 @@ class QuickNPC:
     fortitude: int
     will: int
     icon: str
+    #: The bonus it rolls Initiative with. Not one of the preset's six: a preset sets
+    #: what a Power Level caps, and nothing caps how quick a mook is off the mark.
+    initiative: int = 0
 
 
 class QuickNPCDialog(QDialog):
@@ -178,6 +185,7 @@ class QuickNPCDialog(QDialog):
 
         layout.addWidget(self._build_presets())
         layout.addLayout(self._build_stats())
+        layout.addLayout(self._build_initiative())
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -220,6 +228,7 @@ class QuickNPCDialog(QDialog):
         chain: list[QWidget] = [self._name, self._reroll, self._power_level]
         chain += list(self._preset_buttons.values())
         chain += [self._spins[key] for row in STAT_ROWS for key, _caption in row]
+        chain += [self._initiative]
         chain += [self._previous_icon, self._next_icon, self._ok_button]
         for before, after in zip(chain, chain[1:], strict=False):
             QWidget.setTabOrder(before, after)
@@ -319,6 +328,24 @@ class QuickNPCDialog(QDialog):
         grid.setColumnStretch(4, 1)
         return grid
 
+    def _build_initiative(self) -> QHBoxLayout:
+        """The Initiative bonus, on a line of its own under the six.
+
+        Apart from them because a preset never touches it: the six are what a Power
+        Level caps, and this is not. Remembered for the run like the level, since a
+        batch of goons is usually a batch of equally quick goons.
+        """
+        row = QHBoxLayout()
+        row.setSpacing(int(theme.metric("space.sm")))
+        self._initiative = make_spin_box(
+            INITIATIVE_MIN, INITIATIVE_MAX, value=int(_memory.get("initiative", 0))
+        )
+        self._initiative.setToolTip("The bonus it rolls Initiative with.")
+        row.addWidget(QLabel("Initiative:"))
+        row.addWidget(self._initiative)
+        row.addStretch()
+        return row
+
     # -- the preset ----------------------------------------------------------
 
     def _choose_preset(self, preset_id: str) -> None:
@@ -342,7 +369,13 @@ class QuickNPCDialog(QDialog):
         if preset is None:
             return preset_id
         caption = preset.name
-        if any(share == "random" for _stat, share in preset.shares):
+        # Only a preset that rolls the *headline* numbers wears the die. Every preset
+        # rolls Fortitude and Will, so a die for that would sit on every button and
+        # tell the GM nothing.
+        filled = {
+            stat for pair in self._data.system.quick_npc.pairs if pair.fill for stat in pair.stats
+        }
+        if any(share == "random" and stat in filled for stat, share in preset.shares):
             caption += RANDOM_MARK
         if self._edited and preset_id == self._preset:
             caption += EDITED_MARK
@@ -425,6 +458,7 @@ class QuickNPCDialog(QDialog):
         """Remember this run's Power Level, preset and picked icon, then close."""
         _memory["power_level"] = self._power_level.value()
         _memory["preset"] = self._preset
+        _memory["initiative"] = self._initiative.value()
         if self._icon_picked:
             _memory["icon"] = self._icon
         else:
@@ -437,5 +471,6 @@ class QuickNPCDialog(QDialog):
             name=self._name.text().strip(),
             power_level=self._power_level.value(),
             icon=self._icon,
+            initiative=self._initiative.value(),
             **{key: spin.value() for key, spin in self._spins.items()},
         )

@@ -264,8 +264,15 @@ recoveryCheck {
   cadence: "end_of_turn" | "start_of_turn" | "per_minute" | "time_rank_9_rest" | ...
   condition?: string             // gate, e.g. "damage-caused", "no worse damage condition present"
   outcome?: string               // non-standard result (Dying's degree logic; Hit removes one instance)
+  successDegrees?: int           // degrees of success needed to clear it (default 1; Dying 2)
+  becomes?: string               // what it turns into when cleared (Dying -> incapacitated)
+  blockedBy?: string[]           // no check while any of these is on (Staggered: anything worse)
 }
 ```
+
+The roll layer is `core/rules/recovery.py`: a record with both a `trait` and a `dc` offers a
+recovery die on its chip (rest-based ones offer none), only when applied directly and not
+blocked; a made check sheds one instance, or turns into `becomes`.
 
 Cadence differences matter to the turn scheduler: Dazed/Stunned check **at the end of the turn**,
 Dying checks **at the start of each turn** (with degree-of-failure death tracking), Hit/Incapacitated

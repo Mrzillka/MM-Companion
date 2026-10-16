@@ -39,6 +39,7 @@ from mm_companion.ui.blocks.bus import (
     LOAD_REQUESTED,
     NOTE_REQUESTED,
     PIN_REQUESTED,
+    RECOVERY_REQUESTED,
     ROLL_REQUESTED,
     UNPIN_REQUESTED,
 )
@@ -262,8 +263,10 @@ _BASE_BLOCKS = [
         # wherever the effort was spent. Subscribing means the chips follow it there —
         # including this block's own changes, which re-render idempotently.
         {CONDITION_CHANGED: "reseed"},
-        {},
-        {},
+        # A recovery check off a chip's 🎲 is rolled by whoever serves rolls, and
+        # comes back here as the condition to shed once the roller has seen it made.
+        {"rollRequested": (ROLL_REQUESTED,)},
+        {RECOVERY_REQUESTED: "recover_condition"},
     ),
     (
         "advantages",
@@ -425,7 +428,8 @@ _BASE_BLOCKS = [
         # one that owns a history for a note to be written in.
         {},
         {},
-        {},
+        # A recovery check it saw made: the Conditions block sheds the condition.
+        {"recovered": (RECOVERY_REQUESTED,)},
         {
             ROLL_REQUESTED: "perform_roll",
             LOAD_REQUESTED: "load_roll",

@@ -969,7 +969,7 @@ def build(target: str):
             # And filter down to the tokens the demo actually changed, so the shot
             # shows what the filter box is for rather than the top of a long form.
             page._filter_field.setText("accent")
-    elif target in ("gm", "gm-collapsed"):
+    elif target in ("gm", "gm-collapsed", "gm-scene", "gm-cast"):
         # GM Mode with a cast already in it, so the NPC panel is not an empty
         # state: NPCs are written into the workspace gm_characters/ dir and
         # registered with the session exactly as "Create NPC" would. Built through
@@ -989,11 +989,50 @@ def build(target: str):
         data = load_game_data()
         win = GMWindow(bind="127.0.0.1")
         cast = (("Bank Robber", 4), ("Ogre", 9))
-        if target == "gm-collapsed":
+        if target in ("gm-collapsed", "gm-scene", "gm-cast"):
             cast = (("Bank Robber", 4), ("Ogre", 9), ("Goon", 3), ("Sniper", 5), ("Thug", 3))
-        for name, rank in cast:
-            npc = quick_npc(data, name=name, attack=rank, effect=rank, defence=rank, toughness=rank)
+        from mm_companion.ui import npc_icons
+
+        for index, (name, rank) in enumerate(cast):
+            icon = npc_icons.NPC_ICONS[index % len(npc_icons.NPC_ICONS)].id
+            npc = quick_npc(
+                data,
+                name=name,
+                attack=rank,
+                effect=rank,
+                defence=rank,
+                toughness=rank,
+                image_path=npc_icons.store_icon(icon),
+            )
             win._register_npc(library.save_character(npc, directory=win._npc_dir()))
+        if target in ("gm-scene", "gm-cast"):
+            # The board in a fight: everyone seated, three of them rolled, one the GM
+            # slotted in by hand between two rolled ones (numbered, no initiative), and
+            # a couple of them hurt — so the turn numbers, the recovery dice and the
+            # collapsed cards are all on one screen.
+            win.resize(1100, 1000)
+            win.show()
+            from mm_companion.ui.gm_window import SCENE_NPC
+
+            names = list(win._npc_state)
+            for name in names:
+                win._set_in_scene(SCENE_NPC, name, True)
+            for name, value in zip(names[:3], (21, 15, 9), strict=False):
+                win._npc_state[name].initiative = value
+                win._seat_by_initiative(win._scene_entry_for(SCENE_NPC, name))
+            win._push_scene()
+            ref = win._scene_entry_for(SCENE_NPC, names[4]).ref
+            win._drop_on_scene(ref, 2)
+            win._apply_npc_damage(names[0], 1)
+            win._apply_npc_damage(names[1], 2)
+            for index, entry in enumerate(win._npc_state.values()):
+                if entry.card is not None and index >= 2:
+                    entry.card._collapse_button.click()
+            # The scene first, so the shot shows the board with the cast under it —
+            # or, for "gm-cast", the page scrolled down to the collapsed cards.
+            _pump(_app())
+            bar = win._scroll.verticalScrollBar()
+            bar.setValue(bar.maximum() if target == "gm-cast" else 0)
         if target == "gm-collapsed":
             win.show()
             # Through the caret each card really carries, so the shot is of the
@@ -1628,6 +1667,8 @@ def main(argv: list[str] | None = None) -> int:
             "settings-demo",
             "gm",
             "gm-collapsed",
+            "gm-scene",
+            "gm-cast",
             "gm-settings",
             "npc",
             "array-cost",

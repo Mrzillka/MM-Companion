@@ -69,9 +69,11 @@ from mm_companion.core.rules import (
     answer_rung,
     apply_condition,
     apply_damage_step,
+    apply_recovery,
     area_capable_builds,
     area_key_index,
     area_key_power_id,
+    can_recover,
     condition_changes,
     damage_step_summary,
     damage_steps,
@@ -81,6 +83,9 @@ from mm_companion.core.rules import (
     initiative_modifier,
     localize_spec,
     parse_pins,
+    recovery_request,
+    recovery_roll,
+    recovery_succeeded,
     requested_roll_choices,
     resolve_rung,
 )
@@ -200,6 +205,17 @@ class _Answering:
 
 
 @dataclass
+class _Recovering:
+    """An NPC's recovery check, rolled and not back yet."""
+
+    #: The NPC's file name.
+    source: str
+    #: The spec as rolled — its label is what the result is matched on, and its
+    #: ``recovers`` what a made check sheds.
+    spec: RollSpec
+
+
+@dataclass
 class _NpcEntry:
     """One NPC in the session's cast, with its loaded model and runtime state.
 
@@ -265,6 +281,11 @@ class _SceneEntry:
     #: than derived, because it is the GM's judgement and there is nowhere else it
     #: could be read from — an NPC's model has no opinion about whose side it is on.
     disposition: str = DISPOSITION_ENEMY
+    #: In the turn order without an initiative: the GM dragged this creature in
+    #: among the rolled ones, which places it there without giving it a number. It
+    #: keeps the place the drop gave it until it rolls, is cleared, or is dragged
+    #: back out past the last numbered entry.
+    placed: bool = False
 
     def wire_source(self) -> str:
         """How the private map records it: ``"npc:<file>"`` / ``"player:<id>"``."""
@@ -439,6 +460,10 @@ class GMWindow(QMainWindow):
         # through its accessor; the Settings page's change reaches an open window
         # on the next roster.
         self._scene_auto_players = storage.gm_scene_auto_players()
+        # Which seats the last roster said were connected, so a seat is put on the
+        # board as it *comes* online rather than on every roster (see
+        # _sync_scene_players).
+        self._connected_seats: set[str] = set()
         # One relay attempt per hosting run: the fallback republishes, and a
         # second attempt off that would loop.
         self._relay_attempted = False
@@ -449,6 +474,9 @@ class GMWindow(QMainWindow):
         # creatures have answered each card, by its seq — so the menu can tick them.
         self._answering: _Answering | None = None
         self._answered: dict[int, set[str]] = {}
+        # An NPC's recovery check, rolled and waiting for its result (see
+        # _roll_npc_recovery).
+        self._recovering: _Recovering | None = None
         # The connection choices this window hosts with, picked in the launch dialog
         # before the window opened. A sane default lets the relay fallback and the
         # port read something even when a caller passes none (e.g. the test fixture).
@@ -714,6 +742,9 @@ class GMWindow(QMainWindow):
         self._scene_board.initiativeRollRequested.connect(self._roll_entry_initiative)
         self._scene_board.dispositionChanged.connect(self._set_disposition)
         self._scene_board.actionRequested.connect(self._on_scene_action)
+        self._scene_board.removeConditionRequested.connect(self._remove_scene_condition)
+        self._scene_board.recoveryRequested.connect(self._roll_scene_recovery)
+        self._scene_board.set_recovery_probe(self._scene_can_recover)
         # Every pixel of the box below the buttons, and no trailing stretch: the
         # board's drop target fills what it is given, so what a GM aims a dragged
         # card at is the whole block rather than the band its cards sit in.
@@ -840,6 +871,8 @@ class GMWindow(QMainWindow):
         self._history.rollPlain.connect(self._roller.roll_spec)
         # The roll an NPC answered with, once it is back: what failing did goes on it.
         self._roller.sessionRollRevealed.connect(self._on_answer_back)
+        # And a recovery check an NPC rolled: what making it sheds comes off it.
+        self._roller.sessionRollRevealed.connect(self._on_recovery_back)
         # While hosting, a roll made here goes through the server like everyone
         # else's and comes back on the shared feed. Before that there is no
         # session to record it in, so it is shown as a card and nothing more.
@@ -1582,6 +1615,8 @@ class GMWindow(QMainWindow):
         self._history.add_roll(record)
         # A save an NPC answered off the history: what failing did goes on it.
         self._on_answer_back(record)
+        # A recovery check an NPC rolled: what making it shed comes off it.
+        self._on_recovery_back(record)
         # An NPC's attack against an area's primary, rolled from the area window: off
         # the air there is no rollAdded to bring its total back, so it is handed over.
         if getattr(self, "_area", None) is not None:
@@ -1716,6 +1751,7 @@ class GMWindow(QMainWindow):
         grid flicker whenever anybody edited their sheet.
         """
         seen: set[str] = set()
+        connected: set[str] = set()
         for entry in players:
             player_id = str(entry.get("player_id", ""))
             if not player_id:
@@ -1725,12 +1761,15 @@ class GMWindow(QMainWindow):
             if entry.get("is_gm"):
                 continue
             seen.add(player_id)
+            if entry.get("connected"):
+                connected.add(player_id)
             card = self._cards.get(player_id)
             if card is None:
                 card = PlayerCard(self._data)
                 card.openSheetRequested.connect(self._open_player_sheet)
                 card.applyConditionRequested.connect(self._apply_condition)
                 card.removeConditionRequested.connect(self._remove_condition)
+                card.recoveryRequested.connect(self._request_player_recovery)
                 card.setHeroPointsRequested.connect(self._set_hero_points)
                 card.removePlayerRequested.connect(self._remove_player)
                 card.pinsChanged.connect(lambda pid, refs: self._store_pins(_player_key(pid), refs))
@@ -1751,15 +1790,24 @@ class GMWindow(QMainWindow):
             self._drop_card(player_id)
         self._no_players.setVisible(not self._cards)
         self._sync_card_widths()
-        self._sync_scene_players(seen)
+        self._sync_scene_players(seen, connected)
 
-    def _sync_scene_players(self, seated: set[str]) -> None:
+    def _sync_scene_players(
+        self, seated: set[str], connected: set[str] | None = None, *, all_connected: bool = False
+    ) -> None:
         """Keep the board's player entries in step with the roster.
 
         A seat that has gone leaves the board whichever way the preference is set —
-        there is nothing left to show. Whether a seat *arrives* on it is the
-        preference: on, joining the table is enough; off, the GM puts them there by
-        hand and their card grows an eye to do it with.
+        there is nothing left to show. A seat that has merely **disconnected** stays:
+        a dropped laptop is not a player leaving the fight, and their place in the
+        turn order should be there when they redial.
+
+        Whether a seat *arrives* on it is the preference: on, **connecting** is
+        enough — the moment a seat comes online (a join, or a redial), not on every
+        roster, so an offline seat is never seated for them and a player the GM took
+        off the board stays off until they next connect. *all_connected* seats every
+        connected player at once, which is what turning the preference on means. Off,
+        the GM puts them there by hand and their card grows an eye to do it with.
 
         Turning the preference off does **not** clear whoever is already on the
         board. "Put every player in the Scene automatically", unticked, says *from
@@ -1772,9 +1820,13 @@ class GMWindow(QMainWindow):
         a GM who changes it in Settings and comes straight back to a quiet table.
         """
         self._scene_auto_players = storage.gm_scene_auto_players()
+        if connected is None:
+            connected = {pid for pid, card in self._cards.items() if card.connected}
+        arrived = set(connected) if all_connected else connected - self._connected_seats
+        self._connected_seats = set(connected)
         before = list(self._scene)
         self._scene = [e for e in self._scene if e.kind != SCENE_PLAYER or e.source in seated]
-        for player_id in [p for p in self._cards if p in seated]:
+        for player_id in [p for p in self._cards if p in seated and p in arrived]:
             if self._scene_auto_players and self._scene_entry_for(SCENE_PLAYER, player_id) is None:
                 self._scene.append(
                     _SceneEntry(
@@ -2186,11 +2238,12 @@ class GMWindow(QMainWindow):
         initiatives come back with it, because a turn order without its numbers is
         most of the way to no turn order at all.
 
-        **NPCs only.** A player's entry is restored by the player: with the
-        preference on they re-seat themselves the moment they reconnect, and with
-        it off ``_sync_scene_players`` would drop a restored entry on the very
-        next roster anyway — there is nothing to show for a seat that is not
-        there, which is the rule that method already keeps.
+        **Players too**, with their rolled numbers. A disconnected seat keeps its
+        place on the board, and a GM restarting the app is the same thing from the
+        other side; the first roster then drops any seat that has left the table for
+        good, which is the rule ``_sync_scene_players`` keeps. Each entry's place in
+        the turn order comes back as well (``turn``), so a creature the GM had slotted
+        in by hand is still slotted in.
 
         Called once, after :meth:`_refresh_npcs` has built the cast, so a creature
         whose file was deleted between sessions is simply not found and its place
@@ -2216,18 +2269,33 @@ class GMWindow(QMainWindow):
             entry = _SceneEntry.from_wire_source(
                 ref, sources[ref], raw if isinstance(raw, str) else ""
             )
-            if entry is None or entry.kind != SCENE_NPC:
-                continue
-            npc = self._npc_state.get(entry.source)
-            if npc is None:
+            if entry is None:
                 continue
             initiative = item.get("initiative")
-            if isinstance(initiative, int) and not isinstance(initiative, bool):
-                npc.initiative = initiative
+            rolled = isinstance(initiative, int) and not isinstance(initiative, bool)
+            if entry.kind == SCENE_NPC:
+                npc = self._npc_state.get(entry.source)
+                if npc is None:
+                    continue
+                if rolled:
+                    npc.initiative = initiative
+            elif rolled:
+                self._player_initiative[entry.source] = initiative  # type: ignore[assignment]
+            turn = item.get("turn")
+            entry.placed = (
+                not rolled and isinstance(turn, int) and not isinstance(turn, bool) and turn > 0
+            )
             restored.append(entry)
         if not restored:
             return
         self._scene = restored
+        if not any(isinstance(item.get("turn"), int) for item in stored.values()):
+            # Saved before turns were numbered, when the list was the GM's
+            # arrangement and the board sorted the rolled ones by their numbers: put
+            # them in that order at the head, which is what the board showed.
+            rolled = [e for e in restored if self._entry_initiative(e) is not None]
+            rolled.sort(key=lambda e: self._entry_initiative(e), reverse=True)  # type: ignore[arg-type,return-value]
+            self._scene = rolled + [e for e in restored if e not in rolled]
         self._push_scene()
 
     def _warn_if_scene_is_truncated(self, entries: list[dict]) -> None:
@@ -2254,6 +2322,46 @@ class GMWindow(QMainWindow):
             theme.color("tint.warning"),
         )
 
+    def _remove_scene_condition(self, ref: str, condition_id: str, parameter: object) -> None:
+        """A scene card's chip, right-clicked: take that condition off its creature.
+
+        The same path as the creature's own card — the NPC's model, or a command to
+        the player's app — so the board and the card cannot disagree about it.
+        """
+        entry = self._scene_entry(ref)
+        if entry is None:
+            return
+        if entry.kind == SCENE_NPC:
+            self._remove_npc_condition(entry.source, condition_id, parameter)
+        else:
+            self._remove_condition(entry.source, condition_id, parameter)
+
+    def _roll_scene_recovery(self, ref: str, condition_id: str, parameter: object) -> None:
+        """A scene card's 🎲: roll an NPC's recovery check, or ask a player for theirs."""
+        entry = self._scene_entry(ref)
+        if entry is None:
+            return
+        if entry.kind == SCENE_NPC:
+            self._roll_npc_recovery(entry.source, condition_id, parameter)
+        else:
+            self._request_player_recovery(entry.source, condition_id, parameter)
+
+    def _scene_can_recover(self, ref: str, condition_id: str, parameter: object) -> bool:
+        """Whether a scene card's chip offers a 🎲 — read off the creature behind it."""
+        entry = self._scene_entry(ref)
+        if entry is None:
+            return False
+        if entry.kind == SCENE_NPC:
+            npc = self._npc_state.get(entry.source)
+            character = npc.character if npc is not None else None
+        else:
+            snapshot = self._snapshots.get(entry.source)
+            character = Character.from_dict(snapshot) if snapshot else None
+        if character is None:
+            return False
+        applied = matching_condition(character, condition_id, parameter or None)
+        return applied is not None and can_recover(character, self._data, applied)
+
     def _remove_from_scene(self, ref: str) -> None:
         """Take one entry off the board, by ref (a scene card's right-click)."""
         entry = self._scene_entry(ref)
@@ -2263,40 +2371,72 @@ class GMWindow(QMainWindow):
     def _drop_on_scene(self, ref: str, index: int) -> None:
         """A card was dropped at *index* — a move if we know the ref, else an add.
 
-        A drop always lands in the **manual** zone, so the dragged entry loses any
-        initiative it had; and dropping in front of a *rolled* entry clears that
-        one too. Both are the rule :meth:`_reorder_npc` already spells out, for the
-        reason it gives: putting an un-rolled creature before a rolled one is the
-        GM saying it acts first, which is impossible while the other keeps a number
-        to sort by. One of the two has to go, and taking both into the manual zone
-        is the answer that does what was asked.
+        **The dragged card is the only one that changes.** It lands exactly where it
+        was dropped and gives up the initiative it rolled, since the GM has just
+        overruled that number; every other card keeps its number and its place. It
+        used to clear a rolled neighbour too, because the board sorted by initiative
+        and an un-rolled card could not otherwise sit in front of a rolled one — which
+        punished the creature the GM was *not* touching.
+
+        The board can say it now because the order is the GM's list and the numbers
+        on the cards are **turns**, not initiatives. Dropped in among the numbered
+        cards — anywhere up to just after the last of them — the card is *placed*:
+        it has no initiative, but it has a turn, and every card after it moves down
+        one. Dropped further down, among the creatures nobody has rolled for, it is
+        only rearranged.
         """
         entry = self._scene_entry(ref) or self._adopt_dropped(ref)
         if entry is None:
             return
+        # The index was measured on the board as drawn, which can be shorter than the
+        # GM's list (a seat with no card yet is not drawn), so it is turned into "in
+        # front of that card" and found again in the list.
         order = self._scene_board.ordered_refs()
         # A card put back where it already was is not a move, and must not cost the
-        # roll it is carrying: every path below clears an initiative, so a GM who
-        # nudged a rolled card and let go would silently lose it.
+        # roll it is carrying: a GM who nudged a rolled card and let go would
+        # silently lose it.
         if self._is_same_slot(entry.ref, index, order):
             return
-        neighbour_ref = order[index] if 0 <= index < len(order) else ""
-        neighbour = self._scene_entry(neighbour_ref) if neighbour_ref != entry.ref else None
-        if (
-            self._entry_initiative(entry) is None
-            and neighbour is not None
-            and self._entry_initiative(neighbour) is not None
-        ):
-            self._clear_entry_initiative(neighbour)
+        # The index is a gap in the board *with* the dragged card still in it, so a
+        # card dragged down the board lands one earlier once it has been lifted out.
+        if entry.ref in order and order.index(entry.ref) < index:
+            index -= 1
+        drawn = [r for r in order if r != entry.ref]
+        before = drawn[index] if 0 <= index < len(drawn) else ""
         self._clear_entry_initiative(entry)
-
-        # Rebuilt against the *rendered* order, which is what the index was
-        # measured in; its un-rolled tail is the arrangement being edited.
-        rest = [r for r in self._scene_board.ordered_refs() if r != entry.ref]
-        rest.insert(max(0, min(index, len(rest))), entry.ref)
-        by_ref = {e.ref: e for e in self._scene}
-        self._scene = [by_ref[r] for r in rest if r in by_ref]
+        rest = [e for e in self._scene if e is not entry]
+        index = next((i for i, e in enumerate(rest) if e.ref == before), len(rest))
+        numbered = sum(1 for e in rest if self._in_turn_order(e))
+        entry.placed = numbered > 0 and index <= numbered
+        rest.insert(index, entry)
+        self._scene = rest
         self._push_scene()
+
+    def _in_turn_order(self, entry: _SceneEntry) -> bool:
+        """Whether *entry* has a turn: it rolled, or the GM dragged it in among them."""
+        return entry.placed or self._entry_initiative(entry) is not None
+
+    def _seat_by_initiative(self, entry: _SceneEntry) -> None:
+        """Move an entry that has just rolled to its place in the turn order.
+
+        In front of the first *rolled* entry that rolled lower (a tie keeps the one
+        already there first), or after the last numbered entry if none did. Placed
+        entries are not compared — they have no number — so they keep their places
+        among the rolled ones and the newcomer simply goes round them.
+        """
+        value = self._entry_initiative(entry)
+        if value is None or entry not in self._scene:
+            return
+        entry.placed = False
+        rest = [e for e in self._scene if e is not entry]
+        index = sum(1 for e in rest if self._in_turn_order(e))
+        for position, other in enumerate(rest):
+            other_value = self._entry_initiative(other)
+            if other_value is not None and other_value < value:
+                index = position
+                break
+        rest.insert(index, entry)
+        self._scene = rest
 
     @staticmethod
     def _is_same_slot(ref: str, index: int, order: list[str]) -> bool:
@@ -2309,6 +2449,19 @@ class GMWindow(QMainWindow):
             return False
         current = order.index(ref)
         return index in (current, current + 1)
+
+    def _out_of_turn_order(self, entry: _SceneEntry) -> None:
+        """Take an entry out of the turn order: no number, no place, first in the tail.
+
+        First among the un-numbered rather than last, so a GM clearing a roll by
+        mistake finds the card where they were looking — just under the numbers.
+        """
+        self._clear_entry_initiative(entry)
+        entry.placed = False
+        rest = [e for e in self._scene if e is not entry]
+        index = sum(1 for e in rest if self._in_turn_order(e))
+        rest.insert(index, entry)
+        self._scene = rest
 
     def _adopt_dropped(self, ref: str) -> _SceneEntry | None:
         """Make an entry for a card dragged in from one of the rosters.
@@ -2351,20 +2504,16 @@ class GMWindow(QMainWindow):
             self._player_initiative.pop(entry.source, None)
 
     def _clear_scene_initiative(self, ref: str) -> None:
-        """A scene card's right-click: take this entry back out of the rolled zone.
+        """A scene card's right-click: take this entry out of the turn order.
 
-        Routed through :meth:`_refresh_npcs` for an NPC rather than pushing from
-        here, because the cast's own grid sorts by that same number: clearing it on
-        the board alone would leave the two boards disagreeing about one value.
+        A push and nothing more: the cast's own grid no longer sorts by the number,
+        so there is no second board to keep in step.
         """
         entry = self._scene_entry(ref)
         if entry is None:
             return
-        self._clear_entry_initiative(entry)
-        if entry.kind == SCENE_NPC:
-            self._refresh_npcs()
-        else:
-            self._push_scene()
+        self._out_of_turn_order(entry)
+        self._push_scene()
 
     # -- publishing --------------------------------------------------------
 
@@ -2377,6 +2526,7 @@ class GMWindow(QMainWindow):
         on the way through the server.
         """
         payload: list[dict] = []
+        turn = 0
         for entry in self._scene:
             if entry.kind == SCENE_NPC:
                 npc = self._npc_state.get(entry.source)
@@ -2404,6 +2554,12 @@ class GMWindow(QMainWindow):
             initiative = self._entry_initiative(entry)
             if initiative is not None:
                 item["initiative"] = initiative
+            # The turn order, counted down the board: the numbered entries are kept
+            # at its head (see _drop_on_scene), so counting them in list order *is*
+            # the order they act in.
+            if self._in_turn_order(entry):
+                turn += 1
+                item["turn"] = turn
             if conditions:
                 # ``provenance`` is a detail of the sender's own tracker — which
                 # umbrella bundled this condition — and means nothing on a card.
@@ -2552,6 +2708,7 @@ class GMWindow(QMainWindow):
             if npc is None:
                 continue
             npc.initiative = roll_d20() + initiative_modifier(npc.character, self._data)
+            self._seat_by_initiative(entry)
         # A push and no rebuild: the cast's order does not depend on initiative any
         # more, so the twelve cards this used to destroy and remake — losing every
         # hover and scroll position with them — stay exactly where they are.
@@ -2572,6 +2729,7 @@ class GMWindow(QMainWindow):
         if npc is None:
             return
         npc.initiative = roll_d20() + initiative_modifier(npc.character, self._data)
+        self._seat_by_initiative(entry)
         self._push_scene()
 
     def _ask_players_for_initiative(self) -> None:
@@ -2619,23 +2777,33 @@ class GMWindow(QMainWindow):
         self._player_initiative[entry.source] = (
             int(roll.get("die", 0)) + int(roll.get("bonus", 0)) - int(roll.get("penalty", 0))
         )
+        self._seat_by_initiative(entry)
         self._push_scene()
 
     def _new_scene(self) -> None:
         """Clear the board and every initiative on it.
 
         Reached only through :class:`~mm_companion.ui.widgets.ConfirmButton`'s
-        second click, which is the confirmation — there is no dialog. The players
-        stay if the GM has them joining automatically: clearing them would be
-        undone by the next roster anyway, and a button that visibly does not do
-        what it says is worse than one that does less.
+        second click, which is the confirmation — there is no dialog. With players
+        joining the board automatically, the new one starts with every player who
+        is **connected** — and only them: a seat whose player is away is not in this
+        fight, and seating it would be the app guessing.
         """
         for entry in list(self._scene):
             self._clear_entry_initiative(entry)
         self._player_initiative.clear()
-        self._scene = (
-            [e for e in self._scene if e.kind == SCENE_PLAYER] if self._scene_auto_players else []
-        )
+        self._scene = []
+        if self._scene_auto_players:
+            for player_id, card in self._cards.items():
+                if card.connected:
+                    self._scene.append(
+                        _SceneEntry(
+                            ref=new_id(8),
+                            kind=SCENE_PLAYER,
+                            source=player_id,
+                            disposition=DISPOSITION_PLAYER,
+                        )
+                    )
         self._push_scene()
 
     def _npc_dir(self) -> Path:
@@ -2729,6 +2897,7 @@ class GMWindow(QMainWindow):
             card.deleteRequested.connect(self._delete_npc)
             card.applyConditionRequested.connect(self._apply_npc_condition)
             card.removeConditionRequested.connect(self._remove_npc_condition)
+            card.recoveryRequested.connect(self._roll_npc_recovery)
             card.sceneToggled.connect(lambda n, on: self._set_in_scene(SCENE_NPC, n, on))
             card.copyRequested.connect(self._copy_npc)
             card.pinsChanged.connect(lambda n, refs: self._store_pins(_npc_key(n), refs))
@@ -2814,9 +2983,10 @@ class GMWindow(QMainWindow):
         And **nothing opens**. It used to throw the new NPC's full sheet up, which
         is exactly wrong for the thing this button is for: a handful of numbers is all a
         mook needs, and a GM making five of them wanted five cards, not five
-        windows to close. It lands **collapsed** for the same reason — a batch of
-        goons is a batch, and a shrunk card is what the board wants a dozen of. The
-        sheet is one click on the card's portrait away either way.
+        windows to close. It lands **expanded**, like every new card: a creature the
+        GM has just made is one they want to see whole, and shrinking it is one click
+        on its caret (or **Collapse all** for the batch). The sheet is one click on
+        the card's portrait away either way.
         """
         dialog = QuickNPCDialog(self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
@@ -2832,13 +3002,11 @@ class GMWindow(QMainWindow):
             toughness=entered.toughness,
             fortitude=entered.fortitude,
             will=entered.will,
+            initiative=entered.initiative,
             # A bare workspace filename, shared by every creature with this icon.
             image_path=npc_icons.store_icon(entered.icon),
         )
         path = library.save_character(npc, directory=self._npc_dir())
-        # Recorded before the refresh, since that is where a card reads its state.
-        self._collapsed_cards[_npc_key(path.name)] = True
-        storage.set_gm_collapsed_cards(self._collapsed_cards)
         self._register_npc(path)
 
     def _add_existing_npc(self) -> None:
@@ -3018,7 +3186,16 @@ class GMWindow(QMainWindow):
         roller a GM is already watching. A bad payload costs the roll, not the
         window: a mod block can publish on these topics too.
         """
-        if topic == ROLL_REQUESTED and isinstance(payload, RollSpec):
+        if topic == ROLL_REQUESTED and isinstance(payload, RollSpec) and payload.recovers:
+            # A recovery check off the sheet's own condition chip: rolled as the
+            # card's 🎲 rolls it, so a made one sheds the condition here too.
+            path = Path(window.path) if window is not None and window.path else None
+            key = next((n for n, e in self._npc_state.items() if e.path == path), "")
+            if key:
+                self._roll_npc_recovery(key, payload.recovers, payload.recovers_parameter)
+            else:
+                self._roller.roll_spec(payload)
+        elif topic == ROLL_REQUESTED and isinstance(payload, RollSpec):
             self._roller.roll_spec(payload)
         elif topic == AREA_REQUESTED and isinstance(payload, str) and window is not None:
             # Not a die: the NPC uses a power on an area, and the GM picks who is in it.
@@ -3188,9 +3365,6 @@ class GMWindow(QMainWindow):
         the widest hint still includes a portrait — but with every card shed of its
         portrait at once, the shared width falls with them.
         """
-        gap = int(theme.metric("space.sm")) * 3
-        strip_floor = int(theme.metric("gm.pin-strip.min"))
-        body_floor = int(theme.metric("gm.card.min"))
         for container, cards in (
             (
                 self._npc_container,
@@ -3202,12 +3376,11 @@ class GMWindow(QMainWindow):
                 continue
             body = max(card.body_width_hint() for card in cards)
             strip = max(card.pin_width_hint() for card in cards)
+            # How a card gives way to a narrow block is its own business — a player's
+            # strip gives up its slack, an NPC's tiles wrap into fewer columns.
             room = self._card_room(container)
-            if room > 0 and body + strip + gap > room:
-                strip = max(strip_floor if strip else 0, min(strip, room - gap - body_floor))
-                body = max(body_floor, min(body, room - gap - strip))
             for card in cards:
-                card.apply_width(body, strip)
+                card.apply_width(body, strip, room)
 
     @staticmethod
     def _card_room(container) -> int:
@@ -3230,7 +3403,19 @@ class GMWindow(QMainWindow):
         margins = layout.contentsMargins() if layout is not None else None
         inset = (margins.left() + margins.right()) if margins is not None else 0
         # The innermost is the block's own; anything further out is the page.
-        return max(0, areas[0].viewport().width() - inset)
+        area = areas[0]
+        if area.viewport().width() <= 0:
+            return 0
+        # Measured as though the vertical scroll bar were always showing, rather than
+        # off the viewport as it stands. Otherwise the answer feeds itself: a card
+        # that collapses makes the block short enough to drop its scroll bar, which
+        # widens the viewport, which widens every card — and the next taller card
+        # brings the bar back. A few pixels of slack is the price of one answer.
+        bar = 0
+        if area.verticalScrollBarPolicy() != Qt.ScrollBarPolicy.ScrollBarAlwaysOff:
+            bar = area.verticalScrollBar().sizeHint().width()
+        width = area.width() - 2 * area.frameWidth() - bar
+        return max(0, width - inset)
 
     def _refresh_collapse_all(self) -> None:
         """Restate the button from the board — a caption that lies is worse than none."""
@@ -3276,6 +3461,111 @@ class GMWindow(QMainWindow):
         if applied is not None:
             decrement_condition(entry.character, applied)
         self._after_npc_condition_change(entry, [(condition_id, subject)], applying=False)
+
+    # -- recovery checks ----------------------------------------------------
+
+    def _roll_npc_recovery(self, name: str, condition_id: str, parameter: object) -> None:
+        """Roll an NPC's recovery check for one condition — the 🎲 on its chip.
+
+        Rolled on this window's roller as the creature (its number in, its name on
+        the card), and *held* until the result is back: what a made check does is
+        applied by :meth:`_on_recovery_back`, on whichever path the roll returns by.
+        """
+        entry = self._npc_state.get(name)
+        if entry is None:
+            return
+        subject = str(parameter) if parameter else None
+        applied = next(
+            (
+                c
+                for c in entry.character.conditions
+                if c.condition_id == condition_id
+                and c.parameter == subject
+                and c.provenance is None
+            ),
+            None,
+        )
+        if applied is None:
+            return
+        spec = recovery_roll(entry.character, self._data, applied)
+        if spec is None:
+            return
+        who = self._npc_display_name(name)
+        rolled = replace(spec, label=f"{who}: {spec.label}", actor=who)
+        # Set first, as _roll_as does: a hosted server can answer before roll_spec
+        # returns, and a test's die does not tumble at all.
+        self._recovering = _Recovering(name, rolled)
+        if not self._roller.roll_spec(rolled):
+            self._recovering = None
+
+    def _npc_display_name(self, name: str) -> str:
+        """What an NPC is called on the board — numbered if it shares a name there."""
+        entry = self._scene_entry_for(SCENE_NPC, name)
+        if entry is not None:
+            _sources, targets = self.impress_parties()
+            party = next((p for p in targets if p.ref == entry.ref), None)
+            if party is not None:
+                return party.name
+        npc = self._npc_state.get(name)
+        return npc.summary.name if npc is not None else name
+
+    def _on_recovery_back(self, roll: object) -> None:
+        """A roll of the GM's own is back: if it was a held recovery check, settle it.
+
+        Matched on the label it was rolled under — which the server keeps, and which
+        names the creature — so an unrelated roll landing first is not mistaken for
+        it. A made check sheds the condition through the path every NPC condition
+        change takes (the card, an open sheet, the file, the board); a failed one says
+        so and leaves the creature as it was.
+        """
+        pending = self._recovering
+        if pending is None or not isinstance(roll, dict):
+            return
+        if str(roll.get("label", "")) != pending.spec.label:
+            return
+        self._recovering = None
+        entry = self._npc_state.get(pending.source)
+        if entry is None:
+            return
+        who = pending.spec.actor or entry.summary.name
+        condition = self._change_names(
+            [(pending.spec.recovers, pending.spec.recovers_parameter or None)]
+        )
+        if not recovery_succeeded(self._data, pending.spec, roll.get("degree")):
+            self._show_notice(f"{who} is still {condition}.", theme.color("text.muted.rich"))
+            return
+        removed, added = apply_recovery(
+            entry.character,
+            self._data,
+            pending.spec.recovers,
+            pending.spec.recovers_parameter or None,
+        )
+        if not removed:
+            return
+        self._after_npc_condition_change(entry, removed, applying=False)
+        if added:
+            self._after_npc_condition_change(entry, added, applying=True)
+        text = f"{who} recovered from {condition}"
+        if added:
+            text += f" — now {self._change_names(added)}"
+        self._show_notice(f"{text}.", theme.color("tint.better"))
+
+    def _request_player_recovery(
+        self, player_id: str, condition_id: str, parameter: object
+    ) -> None:
+        """Ask a player to roll their recovery check — the 🎲 on their chip here.
+
+        A player rolls their own dice, so the GM's die leaves a **request** in the
+        history addressed to them, carrying the condition it is for; their app takes
+        the condition off when they make it (see
+        :meth:`~mm_companion.ui.sections.dice.DiceSection.settle_recovery`).
+        """
+        subject = str(parameter) if parameter else None
+        spec = recovery_request(self._data, AppliedCondition(condition_id, subject))
+        if spec is None:
+            return
+        name = self._player_name(player_id)
+        self._request_roll(replace(spec, label=f"{name}: {spec.label}", targets=(name,)))
 
     def _apply_npc_damage(self, name: str, step_index: int) -> None:
         """Walk a rung of the damage ladder onto an NPC.
@@ -3448,7 +3738,9 @@ class GMWindow(QMainWindow):
         if wanted == self._scene_auto_players:
             return
         self._scene_auto_players = wanted
-        self._sync_scene_players({pid for pid, card in self._cards.items() if card is not None})
+        self._sync_scene_players(
+            {pid for pid, card in self._cards.items() if card is not None}, all_connected=True
+        )
 
     def showEvent(self, event: QShowEvent) -> None:  # noqa: N802 (Qt override)
         """Re-arm as the process-wide session — the window is reusable after a close."""

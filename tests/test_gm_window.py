@@ -47,6 +47,7 @@ from mm_companion.core.rules import (
     apply_condition,
     attach_accessory,
     build_item_from_entry,
+    initiative_modifier,
 )
 from mm_companion.core.session import discovery, store
 from mm_companion.core.session import server as server_mod
@@ -1381,8 +1382,8 @@ def test_the_quick_wizard_saves_a_playable_npc_and_opens_nothing(
     """A level and a preset, and the creature is in the cast before anything else is filled in.
 
     And **no window**: a GM making five mooks wanted five cards, not five sheets to
-    close. The card lands collapsed for the same reason — a batch of goons is a
-    batch, and a shrunk card is what a board wants a dozen of.
+    close. The card lands **expanded**, like every new card: the GM has just made it
+    and wants to see it whole — and its initiative bonus is on the creature.
     """
     entered = QuickNPC(
         name="Bandit",
@@ -1394,6 +1395,7 @@ def test_the_quick_wizard_saves_a_playable_npc_and_opens_nothing(
         fortitude=5,
         will=3,
         icon="brute",
+        initiative=7,
     )
     monkeypatch.setattr(QuickNPCDialog, "exec", lambda self: QDialog.DialogCode.Accepted)
     monkeypatch.setattr(QuickNPCDialog, "value", lambda self: entered)
@@ -1406,12 +1408,13 @@ def test_the_quick_wizard_saves_a_playable_npc_and_opens_nothing(
     assert npc_names(window) == ["Bandit"]
     assert window._npc_windows == {}
     (card,) = npc_cards(window)
-    assert card.collapsed is True
+    assert card.collapsed is False
     # It is still a playable creature, carrying its two powers.
     bandit = window._npc_state["bandit.json"].character
     assert [p.name for p in bandit.powers] == ["Damage", "Affliction"]
     assert bandit.power_level == 8
     assert bandit.resistances["FORTITUDE"] == 5 and bandit.resistances["WILL"] == 3
+    assert initiative_modifier(bandit, load_game_data()) == 7
 
 
 def test_quick_npcs_wearing_one_icon_share_one_picture(
@@ -2092,11 +2095,18 @@ def chip_index(card, caption: str) -> int:
 
 
 def test_a_new_npc_card_starts_with_the_default_strip(window: GMWindow) -> None:
-    """DEF, Toughness, ATK and the first Damage power's attack roll."""
+    """Its defences, then the first Damage power's rank and its attack roll."""
     quick_npc_file(window)
     (card,) = npc_cards(window)
 
-    assert card.pins.chip_texts() == ["DEF 6", "Toughness 6", "ATK +6", "Damage +6"]
+    assert card.pins.chip_texts() == [
+        "DEF 6",
+        "Toughness 6",
+        "Will 0",
+        "Fortitude 0",
+        "Damage rank 6",
+        "Damage +6",
+    ]
 
 
 def test_a_new_player_card_starts_with_the_default_strip(
@@ -2140,22 +2150,22 @@ def test_clicking_a_chip_loads_it_and_double_clicking_rolls_it(window: GMWindow)
     (card,) = npc_cards(window)
     assert window._roller._spec is None
 
-    attack = card.pins._chips[chip_index(card, "ATK")]
+    attack = card.pins._chips[chip_index(card, "Toughness")]
     attack.loadRequested.emit(attack.value.spec)
 
     assert window._roller._spec is not None
-    assert window._roller._spec.label == "Attack"
+    assert window._roller._spec.label == "Toughness"
     assert window._roller._rolling is False  # loaded, not thrown
 
     attack.rollRequested.emit(attack.value.spec)
 
     assert window._roller._rolling is True
-    assert window._roller._spec.label == "Attack"  # the roll is made of it...
+    assert window._roller._spec.label == "Toughness"  # the roll is made of it...
 
     window._roller._finish_roll()
 
     # ...and let go of once the die settles, so the GM's next click of the die is
-    # a plain one rather than another Attack nobody asked for.
+    # a plain one rather than another Toughness check nobody asked for.
     assert window._roller._spec is None
 
 
@@ -2197,7 +2207,7 @@ def test_a_strip_can_be_reordered_and_the_order_persists(window: GMWindow) -> No
     name = quick_npc_file(window)
     (card,) = npc_cards(window)
 
-    card.pins.move_pin(chip_index(card, "Damage"), 0)
+    card.pins.move_pin(chip_index(card, "Damage +"), 0)
 
     assert card.pins.chip_texts()[0] == "Damage +6"
     stored = storage.load_settings()["gm_pins"]["npc:" + name]
@@ -2205,7 +2215,9 @@ def test_a_strip_can_be_reordered_and_the_order_persists(window: GMWindow) -> No
         "power",
         "resistance",
         "resistance",
-        "ability",
+        "resistance",
+        "resistance",
+        "effect",
     ]
     # And it survives the wholesale card rebuild every cast change does.
     window._refresh_npcs()
@@ -2216,10 +2228,16 @@ def test_a_chip_can_be_removed(window: GMWindow) -> None:
     name = quick_npc_file(window)
     (card,) = npc_cards(window)
 
-    card.pins.remove_pin(chip_index(card, "ATK"))
+    card.pins.remove_pin(chip_index(card, "Will"))
 
-    assert card.pins.chip_texts() == ["DEF 6", "Toughness 6", "Damage +6"]
-    assert len(storage.load_settings()["gm_pins"]["npc:" + name]) == 3
+    assert card.pins.chip_texts() == [
+        "DEF 6",
+        "Toughness 6",
+        "Fortitude 0",
+        "Damage rank 6",
+        "Damage +6",
+    ]
+    assert len(storage.load_settings()["gm_pins"]["npc:" + name]) == 5
 
 
 def test_a_strip_the_gm_emptied_stays_empty(window: GMWindow) -> None:
@@ -2266,22 +2284,29 @@ def test_applying_the_defaults_reseeds_a_card_the_gm_had_tailored(window: GMWind
 
     window.reseed_pins_from_defaults()
 
-    assert card.pins.chip_texts() == ["DEF 6", "Toughness 6", "ATK +6", "Damage +6"]
-    assert len(storage.load_settings()["gm_pins"]["npc:" + name]) == 4
+    assert card.pins.chip_texts() == [
+        "DEF 6",
+        "Toughness 6",
+        "Will 0",
+        "Fortitude 0",
+        "Damage rank 6",
+        "Damage +6",
+    ]
+    assert len(storage.load_settings()["gm_pins"]["npc:" + name]) == 6
 
 
 def test_reseeding_restates_an_open_picker(window: GMWindow) -> None:
     """Or its menu offers to pin something the card already has back."""
     name = quick_npc_file(window)
     (card,) = npc_cards(window)
-    card.pins.remove_pin(chip_index(card, "ATK"))
+    card.pins.remove_pin(chip_index(card, "Will"))
     window._open_npc_pin_picker(name)
     picker = window._pin_pickers["npc:" + name]
-    assert picker.action_text(PinRef("ability", "ATK")) == "Pin"
+    assert picker.action_text(PinRef("resistance", "WILL")) == "Pin"
 
     window.reseed_pins_from_defaults()
 
-    assert picker.action_text(PinRef("ability", "ATK")) == "Unpin"
+    assert picker.action_text(PinRef("resistance", "WILL")) == "Unpin"
     picker.close()
 
 
@@ -2304,9 +2329,9 @@ def test_the_picker_pins_onto_the_card_behind_it(window: GMWindow) -> None:
 
     window._open_npc_pin_picker(name)
     picker = window._pin_pickers["npc:" + name]
-    picker.pinRequested.emit(PinRef("resistance", "WILL"))
+    picker.pinRequested.emit(PinRef("resistance", "DODGE"))
 
-    assert card.pins.chip_texts()[-1] == "Will 0"
+    assert card.pins.chip_texts()[-1] == "Dodge 6"
     picker.close()
 
 
@@ -2351,7 +2376,7 @@ def test_a_copied_npc_inherits_the_strip_it_was_copied_from(window: GMWindow) ->
     """A duplicate is the same creature under a new name."""
     name = quick_npc_file(window)
     card = npc_cards(window)[0]
-    card.pins.move_pin(chip_index(card, "Damage"), 0)
+    card.pins.move_pin(chip_index(card, "Damage +"), 0)
 
     window._copy_npc(name)
 
@@ -2406,7 +2431,7 @@ def test_a_pin_to_a_power_the_npc_lost_still_shows_and_can_be_taken_off(
     index = chip_index(card, "First Damage")
     assert card.pins.chip_texts()[index].endswith("—")
     card.pins.remove_pin(index)
-    assert len(card.pins.chip_texts()) == 3
+    assert len(card.pins.chip_texts()) == 5
 
 
 def test_pinning_from_an_npcs_own_sheet_lands_on_its_card(window: GMWindow) -> None:
@@ -2418,9 +2443,9 @@ def test_pinning_from_an_npcs_own_sheet_lands_on_its_card(window: GMWindow) -> N
     sheet_window = next(iter(window._npc_windows.values()))
     assert sheet_window.sheet.abilities._pins.enabled is True
 
-    sheet_window.sheet.resistances.pinRequested.emit(PinRef("resistance", "WILL"))
+    sheet_window.sheet.resistances.pinRequested.emit(PinRef("resistance", "DODGE"))
 
-    assert card.pins.chip_texts()[-1] == "Will 0"
+    assert card.pins.chip_texts()[-1] == "Dodge 6"
 
 
 def test_pinning_from_a_players_read_only_sheet_lands_on_their_card(
@@ -2468,7 +2493,14 @@ def test_a_card_on_an_older_workspace_still_gets_its_default_strip(
     quick_npc_file(window)
     (card,) = npc_cards(window)
 
-    assert card.pins.chip_texts() == ["DEF 6", "Toughness 6", "ATK +6", "Damage +6"]
+    assert card.pins.chip_texts() == [
+        "DEF 6",
+        "Toughness 6",
+        "Will 0",
+        "Fortitude 0",
+        "Damage rank 6",
+        "Damage +6",
+    ]
 
 
 def test_the_picker_unpins_what_is_already_on_the_card(window: GMWindow) -> None:
@@ -2490,7 +2522,7 @@ def test_a_pickers_row_menu_says_which_way_it_will_go(window: GMWindow) -> None:
     picker = window._pin_pickers["npc:" + name]
 
     assert picker_row_action(picker, "Resistances", "DEF") == "Unpin"  # a default
-    assert picker_row_action(picker, "Resistances", "Will") == "Pin"
+    assert picker_row_action(picker, "Resistances", "Dodge") == "Pin"
 
     picker.close()
 
@@ -2500,15 +2532,15 @@ def test_double_clicking_a_picker_row_toggles_it(window: GMWindow) -> None:
     (card,) = npc_cards(window)
     window._open_npc_pin_picker(name)
     picker = window._pin_pickers["npc:" + name]
-    row = picker_row(picker, "Resistances", "Will")
+    row = picker_row(picker, "Resistances", "Dodge")
 
     picker._toggle(row)
-    assert card.pins.chip_texts()[-1] == "Will 0"
-    assert picker_row_action(picker, "Resistances", "Will") == "Unpin"
+    assert card.pins.chip_texts()[-1] == "Dodge 6"
+    assert picker_row_action(picker, "Resistances", "Dodge") == "Unpin"
 
     picker._toggle(row)
-    assert "Will 0" not in card.pins.chip_texts()
-    assert picker_row_action(picker, "Resistances", "Will") == "Pin"
+    assert "Dodge 6" not in card.pins.chip_texts()
+    assert picker_row_action(picker, "Resistances", "Dodge") == "Pin"
     picker.close()
 
 
@@ -2561,12 +2593,14 @@ def test_a_sheet_row_offers_unpin_once_the_card_has_it(window: GMWindow) -> None
 
     # DEF is a default, so it is on the card before the sheet ever opened.
     assert sheet.resistances._pins.action_text(PinRef("resistance", "DEF")) == "Unpin from GM card"
-    assert sheet.resistances._pins.action_text(PinRef("resistance", "WILL")) == "Pin to GM card"
+    assert sheet.resistances._pins.action_text(PinRef("resistance", "DODGE")) == "Pin to GM card"
 
-    sheet.resistances.pinRequested.emit(PinRef("resistance", "WILL"))
+    sheet.resistances.pinRequested.emit(PinRef("resistance", "DODGE"))
 
-    assert card.pins.chip_texts()[-1] == "Will 0"
-    assert sheet.resistances._pins.action_text(PinRef("resistance", "WILL")) == "Unpin from GM card"
+    assert card.pins.chip_texts()[-1] == "Dodge 6"
+    assert (
+        sheet.resistances._pins.action_text(PinRef("resistance", "DODGE")) == "Unpin from GM card"
+    )
 
 
 def test_unpinning_from_the_sheet_takes_it_off_the_card(window: GMWindow) -> None:
@@ -2627,19 +2661,19 @@ def test_a_card_starts_expanded_and_shrinks_from_the_caret(window: GMWindow) -> 
     card._collapse_button.click()
 
     assert card.collapsed is True
-    # The full portrait, the PL and the roster buttons are what a collapse sheds.
+    # The full portrait and the roster buttons are what a collapse sheds.
     assert card._portrait.isVisibleTo(card) is False
-    assert card._pl_label.isVisibleTo(card) is False
     assert card._copy_button.isVisibleTo(card) is False
-    # What it keeps: a thumbnail that still opens the sheet, the "+", the damage
-    # row, and the pinned strip.
+    # What it keeps: a thumbnail that still opens the sheet, the Power Level under
+    # the name, the "+", the damage row, and every pinned tile.
     assert card._thumb.isVisibleTo(card) is True
+    assert card._pl_label.isVisibleTo(card) is True
     assert card._condition_button.isVisibleTo(card) is True
     assert card._damage.isVisibleTo(card) is True
     assert card.pins.isVisibleTo(card) is True
 
 
-def test_a_collapsed_card_is_much_shorter(qapp: QApplication, window: GMWindow) -> None:
+def test_a_collapsed_card_is_shorter_by_its_portrait(qapp: QApplication, window: GMWindow) -> None:
     quick_npc_file(window)
     window.show()
     qapp.processEvents()
@@ -2649,7 +2683,9 @@ def test_a_collapsed_card_is_much_shorter(qapp: QApplication, window: GMWindow) 
     card.set_collapsed(True)
     qapp.processEvents()
 
-    assert card.sizeHint().height() < expanded / 1.5
+    # The portrait and the button row go; the tiles, conditions and damage row stay,
+    # so what it saves is the header's height rather than half the card.
+    assert card.sizeHint().height() < expanded - int(theme.metric("gm.portrait")) // 2
     window.hide()
 
 
@@ -2663,19 +2699,17 @@ def test_a_collapsed_card_is_much_shorter(qapp: QApplication, window: GMWindow) 
 # --------------------------------------------------------------------------
 
 
-def test_the_pinned_strip_fits_what_is_on_it(window: GMWindow) -> None:
-    """It was a flat 150px whatever was pinned, which on a card reading "Dodge 12"
-    is most of the card's width spent on white space."""
+def test_the_pinned_tiles_fit_what_is_on_them(window: GMWindow) -> None:
+    """A tile is as wide as its caption needs, clamped, and the grid's floor is the
+    tile minimum — on an NPC card the pins are a grid, not a strip."""
     quick_npc_file(window)
     (card,) = npc_cards(window)
     seeded = card.pins.natural_width()
-    assert seeded < 150  # what the strip used to cost regardless
+    assert int(theme.metric("gm.pin-tile.min")) <= seeded <= int(theme.metric("gm.pin-tile.max"))
 
     card.pins.set_pins([])
 
-    # Nothing pinned, nothing to fit — down to the floor that keeps the "+" reachable.
-    assert card.pins.natural_width() < seeded
-    assert card.pins.natural_width() == int(theme.metric("gm.pin-strip.min"))
+    assert card.pins.natural_width() == int(theme.metric("gm.pin-tile.min"))
 
 
 def test_a_chip_measures_its_own_caption_and_reading(qapp: QApplication) -> None:
@@ -2688,9 +2722,8 @@ def test_a_chip_measures_its_own_caption_and_reading(qapp: QApplication) -> None
     assert short.natural_width() < long.natural_width()
 
 
-def test_the_strip_never_grows_past_what_it_used_to_cost(window: GMWindow) -> None:
-    """The cap is the old fixed width, so a long caption elides exactly as it
-    always did and no strip is ever *wider* than before."""
+def test_a_tile_never_grows_past_its_ceiling(window: GMWindow) -> None:
+    """A long caption elides inside the tile rather than widening every card."""
     quick_npc_file(window)
     (card,) = npc_cards(window)
     card.pins.values = lambda: [  # type: ignore[method-assign]
@@ -2702,7 +2735,7 @@ def test_the_strip_never_grows_past_what_it_used_to_cost(window: GMWindow) -> No
     ]
     card.pins.refresh()
 
-    assert card.pins.natural_width() == int(theme.metric("gm.pin-strip.max"))
+    assert card.pins.natural_width() == int(theme.metric("gm.pin-tile.max"))
 
 
 def test_every_card_in_a_block_is_one_width(window: GMWindow) -> None:
@@ -2716,7 +2749,7 @@ def test_every_card_in_a_block_is_one_width(window: GMWindow) -> None:
     window._sync_card_widths()
 
     assert len({card.width() for card in cards}) == 1
-    assert len({card.pins.width() for card in cards}) == 1
+    assert len({card.pins.tile_width() for card in cards}) == 1
 
 
 def test_collapsing_a_card_never_reflows_its_neighbours(
@@ -2725,10 +2758,9 @@ def test_collapsing_a_card_never_reflows_its_neighbours(
     """One card shrinking must not shuffle the columns the others sit in.
 
     That is what the shared width buys, and it is why the width is the *block's*
-    and not the card's. The 96px portrait is still in `body_width_hint` and a
-    collapsed card sheds it — a ruleset whose damage ladder is narrower than a
-    portrait would see a wholly shut board narrow — but with the bundled one the
-    ladder wins, so the collapse takes its room out of the height as it always has.
+    and not the card's — and why the room a card is measured against ignores
+    whether the block's scroll bar is showing: collapsing a card can drop it, and a
+    width read off the viewport then widened every card on the board.
     """
     quick_npc_file(window, name="Goon")
     quick_npc_file(window, name="Brute")
@@ -2758,8 +2790,8 @@ def test_the_board_is_far_narrower_than_the_constant_it_replaced(
     quick_npc_file(window)
     (card,) = npc_cards(window)
 
-    asked = card.body_width_hint() + card.pin_width_hint() + int(theme.metric("space.sm")) * 3
-    assert asked < 300
+    asked = card.card_width(card.body_width_hint(), card.pin_width_hint())
+    assert asked < 372
     # At most what the card asked for. It may be *less*: the block's own width is
     # a ceiling now, so a board dragged narrower than one card squeezes the card
     # rather than growing a scrollbar and showing the GM a letterbox.
@@ -2776,7 +2808,7 @@ def test_a_card_takes_its_full_width_when_the_block_has_the_room(
         qapp.processEvents()
     (card,) = npc_cards(window)
 
-    asked = card.body_width_hint() + card.pin_width_hint() + int(theme.metric("space.sm")) * 3
+    asked = card.card_width(card.body_width_hint(), card.pin_width_hint())
     assert card.width() == asked
     window.hide()
 
@@ -2784,8 +2816,7 @@ def test_a_card_takes_its_full_width_when_the_block_has_the_room(
 def test_a_narrow_block_squeezes_its_cards_rather_than_clipping_them(
     qapp: QApplication, window: GMWindow
 ) -> None:
-    """The pinned strip gives up its slack first — a narrower strip elides its
-    captions and loses least — and the body follows only after that."""
+    """The card narrows to the block, and its tiles wrap into fewer columns."""
     quick_npc_file(window)
     window.resize(1400, 900)
     window.show()
@@ -2867,20 +2898,18 @@ def test_deleting_an_npc_forgets_that_it_was_shrunk(
     assert storage.gm_collapsed_cards() == {}
 
 
-def test_the_collapsed_strip_shows_four_pins_and_scrolls_for_the_rest(
-    window: GMWindow,
-) -> None:
+def test_a_collapsed_card_still_shows_every_pin(window: GMWindow) -> None:
+    """The strip used to stop at four on a collapsed card and scroll the rest away —
+    on the card a GM collapses for a fight. The grid hides none of them."""
     quick_npc_file(window)
     (card,) = npc_cards(window)
-    card.pins.set_pins([PinRef("ability", ability.key) for ability in load_game_data().abilities])
-    uncapped = card.pins.sizeHint().height()
+    abilities = load_game_data().abilities
+    card.pins.set_pins([PinRef("ability", ability.key) for ability in abilities])
 
     card.set_collapsed(True)
 
-    assert card.pins.sizeHint().height() < uncapped
-    assert card.pins._scroll.maximumHeight() > 0
-    # Every pin is still *there* — the strip is a window onto them, not a cap.
-    assert len(card.pins.chip_texts()) == len(load_game_data().abilities)
+    assert len(card.pins.chip_texts()) == len(abilities)
+    assert all(chip.isVisibleTo(card) for chip in card.pins._chips)
 
 
 def test_the_damage_row_is_on_both_states(window: GMWindow) -> None:
@@ -3305,22 +3334,102 @@ def test_a_card_dropped_back_on_its_own_slot_keeps_its_roll(window: GMWindow) ->
     assert window._scene_board.ordered_refs() == order
 
 
-def test_dropping_an_unrolled_card_in_front_of_a_rolled_one_clears_both(
+def test_dropping_a_card_between_rolled_ones_numbers_it_and_touches_nothing_else(
     window: GMWindow,
 ) -> None:
-    """Putting an un-rolled creature first is the GM saying it acts first, which is
-    impossible while the other keeps a number to sort by. One of the two has to go."""
-    goon, boss = _npc_files(window, "Goon", "Boss")
-    window._set_in_scene(SCENE_NPC, goon, True)
-    window._set_in_scene(SCENE_NPC, boss, True)
-    window._npc_state[goon].initiative = 18
+    """Only the dragged card changes. It lands where it was dropped, with a turn and
+    no initiative; the creatures either side keep their rolls and their order."""
+    goon, boss, thug = _npc_files(window, "Goon", "Boss", "Thug")
+    for name in (goon, boss, thug):
+        window._set_in_scene(SCENE_NPC, name, True)
+    for name, value in ((goon, 18), (boss, 12)):
+        window._npc_state[name].initiative = value
+        window._seat_by_initiative(window._scene_entry_for(SCENE_NPC, name))
     window._push_scene()
-    boss_ref = window._scene_entry_for(SCENE_NPC, boss).ref
+    goon_ref, boss_ref, thug_ref = (
+        window._scene_entry_for(SCENE_NPC, name).ref for name in (goon, boss, thug)
+    )
+    assert window._scene_board.ordered_refs() == [goon_ref, boss_ref, thug_ref]
 
-    window._drop_on_scene(boss_ref, 0)
+    window._drop_on_scene(thug_ref, 1)
+
+    assert window._npc_state[goon].initiative == 18
+    assert window._npc_state[boss].initiative == 12
+    assert window._scene_board.ordered_refs() == [goon_ref, thug_ref, boss_ref]
+    turns = {item["ref"]: item.get("turn") for item in window._scene_payload()}
+    assert turns == {goon_ref: 1, thug_ref: 2, boss_ref: 3}
+    assert window._scene_board.card(thug_ref).turn == 2
+
+
+def test_dragging_a_rolled_card_costs_it_its_roll_and_only_its_roll(window: GMWindow) -> None:
+    goon, boss = _npc_files(window, "Goon", "Boss")
+    for name in (goon, boss):
+        window._set_in_scene(SCENE_NPC, name, True)
+    for name, value in ((goon, 18), (boss, 12)):
+        window._npc_state[name].initiative = value
+        window._seat_by_initiative(window._scene_entry_for(SCENE_NPC, name))
+    window._push_scene()
+    goon_ref = window._scene_entry_for(SCENE_NPC, goon).ref
+
+    # Past the Boss: the Goon now acts after it, numbered but no longer rolled.
+    window._drop_on_scene(goon_ref, 2)
 
     assert window._npc_state[goon].initiative is None
-    assert window._scene_board.ordered_refs()[0] == boss_ref
+    assert window._npc_state[boss].initiative == 12
+    assert window._scene_board.ordered_refs()[-1] == goon_ref
+    assert window._scene_board.card(goon_ref).turn == 2
+
+
+def test_a_card_dropped_among_the_unrolled_gets_no_number(window: GMWindow) -> None:
+    """Past the slot right after the last numbered card, a drop only rearranges."""
+    goon, boss, thug, imp = _npc_files(window, "Goon", "Boss", "Thug", "Imp")
+    for name in (goon, boss, thug, imp):
+        window._set_in_scene(SCENE_NPC, name, True)
+    window._npc_state[goon].initiative = 18
+    window._seat_by_initiative(window._scene_entry_for(SCENE_NPC, goon))
+    window._push_scene()
+    imp_ref = window._scene_entry_for(SCENE_NPC, imp).ref
+
+    window._drop_on_scene(imp_ref, 2)  # between the Boss and the Thug, neither rolled
+
+    assert window._scene_board.card(imp_ref).turn is None
+    assert window._scene_board.ordered_refs()[2] == imp_ref
+
+
+def test_a_roll_seats_the_creature_by_its_number_around_a_placed_one(window: GMWindow) -> None:
+    goon, boss, thug = _npc_files(window, "Goon", "Boss", "Thug")
+    for name in (goon, boss, thug):
+        window._set_in_scene(SCENE_NPC, name, True)
+    window._npc_state[goon].initiative = 18
+    window._seat_by_initiative(window._scene_entry_for(SCENE_NPC, goon))
+    window._push_scene()
+    thug_ref = window._scene_entry_for(SCENE_NPC, thug).ref
+    window._drop_on_scene(thug_ref, 1)  # placed, right after the Goon
+    boss_ref = window._scene_entry_for(SCENE_NPC, boss).ref
+
+    window._npc_state[boss].initiative = 10
+    window._seat_by_initiative(window._scene_entry_for(SCENE_NPC, boss))
+    window._push_scene()
+
+    goon_ref = window._scene_entry_for(SCENE_NPC, goon).ref
+    assert window._scene_board.ordered_refs() == [goon_ref, thug_ref, boss_ref]
+    assert [window._scene_board.card(r).turn for r in (goon_ref, thug_ref, boss_ref)] == [1, 2, 3]
+
+
+def test_clearing_an_initiative_takes_the_card_out_of_the_turn_order(window: GMWindow) -> None:
+    goon, boss = _npc_files(window, "Goon", "Boss")
+    for name in (goon, boss):
+        window._set_in_scene(SCENE_NPC, name, True)
+    for name, value in ((goon, 18), (boss, 12)):
+        window._npc_state[name].initiative = value
+        window._seat_by_initiative(window._scene_entry_for(SCENE_NPC, name))
+    window._push_scene()
+    goon_ref = window._scene_entry_for(SCENE_NPC, goon).ref
+
+    window._clear_scene_initiative(goon_ref)
+
+    assert window._scene_board.card(goon_ref).turn is None
+    assert window._scene_board.ordered_refs()[-1] == goon_ref
 
 
 def test_dragging_a_roster_card_onto_the_scene_adds_it(window: GMWindow) -> None:
@@ -3581,18 +3690,18 @@ def test_a_creature_deleted_between_sessions_is_not_restored(
         reopened.close()
 
 
-def test_the_seats_are_left_for_the_players_to_take_back(
-    qapp: QApplication, window: GMWindow
-) -> None:
-    """A restored seat would be dropped by the very next roster anyway — there is
-    nothing to show for a player who is not there, which is the rule
-    ``_sync_scene_players`` already keeps."""
+def test_a_seat_keeps_its_place_on_a_restored_board(qapp: QApplication, window: GMWindow) -> None:
+    """A dropped laptop is not a player leaving the fight, and neither is a GM
+    restarting the app: the seat comes back on the board, and the first roster that
+    no longer has it at all is what takes it off."""
     start_hosting(qapp, window, canned())
     window._show_roster(roster({"display_name": "Aria"}))
     assert any(e.kind == SCENE_PLAYER for e in window._scene)
 
     reopened = _reopened(qapp, window)
     try:
+        assert [(e.kind, e.source) for e in reopened._scene] == [(SCENE_PLAYER, "p0")]
+        reopened._show_roster([])
         assert reopened._scene == []
     finally:
         reopened.close()
@@ -3992,3 +4101,170 @@ def test_registering_the_same_gm_block_twice_is_refused(qapp: QApplication) -> N
         gm_registry.register_gm_block(descriptor, replace=True)
     finally:
         gm_registry.unregister_gm_block("timers")
+
+
+# -- seating players: only those who are here --------------------------------------
+
+
+def test_an_offline_seat_is_not_put_on_the_board(qapp: QApplication, window: GMWindow) -> None:
+    start_hosting(qapp, window, canned())
+
+    window._show_roster(roster({"display_name": "Aria", "connected": False}))
+
+    assert window._scene == []
+
+
+def test_a_seat_that_connects_is_put_on_the_board(qapp: QApplication, window: GMWindow) -> None:
+    start_hosting(qapp, window, canned())
+    window._show_roster(roster({"display_name": "Aria", "connected": False}))
+
+    window._show_roster(roster({"display_name": "Aria"}))
+
+    assert [(e.kind, e.source) for e in window._scene] == [(SCENE_PLAYER, "p0")]
+
+
+def test_a_seat_that_disconnects_stays_on_the_board(qapp: QApplication, window: GMWindow) -> None:
+    start_hosting(qapp, window, canned())
+    window._show_roster(roster({"display_name": "Aria"}))
+
+    window._show_roster(roster({"display_name": "Aria", "connected": False}))
+
+    assert [(e.kind, e.source) for e in window._scene] == [(SCENE_PLAYER, "p0")]
+
+
+def test_a_seat_the_gm_took_off_stays_off_until_it_reconnects(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    start_hosting(qapp, window, canned())
+    window._show_roster(roster({"display_name": "Aria"}))
+    window._set_in_scene(SCENE_PLAYER, "p0", False)
+
+    window._show_roster(roster({"display_name": "Aria"}))  # e.g. a snapshot re-broadcast
+
+    assert window._scene == []
+
+
+def test_a_new_scene_seats_only_the_connected_players(qapp: QApplication, window: GMWindow) -> None:
+    start_hosting(qapp, window, canned())
+    window._show_roster(roster({"display_name": "Aria"}, {"display_name": "Bram"}))
+    window._show_roster(
+        roster({"display_name": "Aria"}, {"display_name": "Bram", "connected": False})
+    )
+
+    window._new_scene()
+
+    assert [(e.kind, e.source) for e in window._scene] == [(SCENE_PLAYER, "p0")]
+
+
+# -- conditions on the board, and recovery checks -----------------------------------
+
+
+def test_a_scene_chip_right_click_takes_the_condition_off_the_npc(window: GMWindow) -> None:
+    (goon,) = _npc_files(window, "Goon")
+    window._set_in_scene(SCENE_NPC, goon, True)
+    window._apply_npc_condition(goon, "dazed", None)
+    ref = window._scene_entry_for(SCENE_NPC, goon).ref
+    (chip,) = window._scene_board.card(ref).condition_chips()
+    assert chip.removable
+
+    window._scene_board.card(ref).removeConditionRequested.emit(ref, "dazed", None)
+
+    assert window._npc_state[goon].character.conditions == []
+    assert window._scene_board.card(ref).condition_names() == []
+
+
+def test_a_recoverable_chip_carries_a_die_on_the_card_and_the_board(window: GMWindow) -> None:
+    (goon,) = _npc_files(window, "Goon")
+    window._set_in_scene(SCENE_NPC, goon, True)
+    window._apply_npc_damage(goon, 2)  # Hit, Staggered (with its Dazed), Stunned
+    card = window._npc_state[goon].card
+    ref = window._scene_entry_for(SCENE_NPC, goon).ref
+
+    dice = {chip.text(): chip.recoverable for chip in card.condition_chips()}
+    board = {
+        chip.text(): chip.recoverable for chip in window._scene_board.card(ref).condition_chips()
+    }
+
+    # Staggered waits on the Stunned; its bundled Hindered goes with it.
+    assert dice == {"Hit": True, "Staggered": False, "Hindered": False, "Stunned": True}
+    assert board == dice
+
+
+def _finish_npc_roll(window: GMWindow, die: int) -> None:
+    """Settle the roll in flight on the GM's roller with a known die."""
+    import mm_companion.ui.dice_roller as roller_module
+
+    original = roller_module.roll_d20
+    roller_module.roll_d20 = lambda: die
+    try:
+        window._roller._finish_roll()
+    finally:
+        roller_module.roll_d20 = original
+
+
+def test_a_made_recovery_check_takes_the_condition_off_the_npc(window: GMWindow) -> None:
+    (goon,) = _npc_files(window, "Goon")
+    window._apply_npc_condition(goon, "dazed", None)
+    card = window._npc_state[goon].card
+    (chip,) = card.condition_chips()
+
+    chip.roll_recovery()
+    assert window._roller._spec is not None
+    assert window._roller._spec.recovers == "dazed"
+    _finish_npc_roll(window, 20)
+
+    assert window._npc_state[goon].character.conditions == []
+    assert window._npc_state[goon].card.condition_names() == []
+
+
+def test_a_failed_recovery_check_leaves_the_condition_on(window: GMWindow) -> None:
+    (goon,) = _npc_files(window, "Goon")
+    window._apply_npc_condition(goon, "dazed", None)
+    (chip,) = window._npc_state[goon].card.condition_chips()
+
+    chip.roll_recovery()
+    _finish_npc_roll(window, 1)
+
+    assert [c.condition_id for c in window._npc_state[goon].character.conditions] == ["dazed"]
+
+
+def test_a_players_recovery_die_asks_them_to_roll(qapp: QApplication, window: GMWindow) -> None:
+    start_hosting(qapp, window, canned())
+    window._show_roster(roster({"display_name": "Aria"}))
+    window._on_snapshot("p0", a_character(conditions=["dazed"]))
+    sent: list[dict] = []
+    window._bridge.prompt_roll = lambda spec: sent.append(spec) or True  # type: ignore[method-assign]
+    (chip,) = [
+        window._cards["p0"]._chip_flow.itemAt(i).widget()
+        for i in range(window._cards["p0"]._chip_flow.count())
+    ]
+
+    chip.roll_recovery()
+
+    (spec,) = sent
+    assert spec["recovers"] == "dazed"
+    assert spec["trait_key"] == "STA" and spec["dc"] == 10
+    assert spec["label"].endswith("Recover from Dazed (Stamina)")
+    assert len(spec["targets"]) == 1
+
+
+def test_a_collapsed_card_shows_the_creatures_picture(window: GMWindow) -> None:
+    """The thumbnail used to stay a "?" whatever the creature looked like."""
+    from mm_companion.ui import npc_icons
+
+    npc = quick_npc(
+        load_game_data(),
+        name="Goon",
+        attack=4,
+        effect=4,
+        defence=4,
+        toughness=4,
+        image_path=npc_icons.store_icon(npc_icons.NPC_ICONS[0].id),
+    )
+    window._register_npc(library.save_character(npc, directory=window._npc_dir()))
+    (card,) = npc_cards(window)
+
+    card.set_collapsed(True)
+
+    assert card._thumb.text() == ""
+    assert card._thumb.pixmap() is not None and not card._thumb.pixmap().isNull()

@@ -20,7 +20,8 @@ rung resolver it shares, and under ``rolls``; ``impress`` sits on ``rolls``.
 ``area`` (an area's shape, size and Dodge DC) sits below ``powers_terms``, which states
 an area's size on the card; ``area_attack`` (resolving one against a scene) sits on
 ``rolls``, beside ``impress``. ``answering`` (a roll answered for a creature, and what
-its spec's ladder does to it) sits on ``rolls``.
+its spec's ladder does to it) sits on ``rolls``, and so does ``recovery`` (the check
+that rolls a condition off, and what making it sheds).
 
 ``costs`` moved above ``powers_terms`` (it used to sit beside it) when Morph's Metamorph
 needed a note saying what its alternate forms cost: the rules put that budget at "the
@@ -66,6 +67,7 @@ from .pins import *  # noqa: F401,F403
 from .platforms import *  # noqa: F401,F403
 from .powers_cost import *  # noqa: F401,F403
 from .powers_terms import *  # noqa: F401,F403
+from .recovery import *  # noqa: F401,F403
 from .rolls import *  # noqa: F401,F403
 from .runtime import *  # noqa: F401,F403
 from .size import *  # noqa: F401,F403

@@ -193,10 +193,16 @@ DEFAULT_SETTINGS: dict[str, object] = {
             {"kind": "initiative"},
             {"kind": "skill", "key": "Perception"},
         ],
+        # A creature's whole defensive line, then what it hits with: the rank of
+        # its first Damage (read — it sets the save) and that power's attack bonus
+        # (rolled — the chip clicked when it swings). Six, because the NPC card lays
+        # its pins out as a grid two rows of three deep rather than a strip.
         "npc": [
             {"kind": "resistance", "key": "DEF"},
             {"kind": "resistance", "key": "TOUGHNESS"},
-            {"kind": "ability", "key": "ATK"},
+            {"kind": "resistance", "key": "WILL"},
+            {"kind": "resistance", "key": "FORTITUDE"},
+            {"kind": "effect", "select": "first_damage"},
             {"kind": "power", "select": "first_damage"},
         ],
     },

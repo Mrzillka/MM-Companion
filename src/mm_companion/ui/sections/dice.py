@@ -30,7 +30,7 @@ Two things about it are deliberately unlike its neighbours:
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QGroupBox, QVBoxLayout, QWidget
 
 from mm_companion.core import library
@@ -44,6 +44,7 @@ from mm_companion.core.rules import (
     find_area_power,
     localize_spec,
     power_area_use,
+    recovery_succeeded,
     requested_roll_choices,
 )
 from mm_companion.core.session.protocol import sanitize_mod_payload
@@ -66,6 +67,12 @@ class DiceSection(QGroupBox):
     #: and it is the history *inside* it that wants the room.
     fills_height = True
 
+    #: ``(condition_id, parameter)`` — a recovery check this roller threw came back
+    #: good enough, so the condition it was for comes off. Raised on the bus's
+    #: ``recovery-requested`` topic, which the Conditions block serves: a roll is not
+    #: an edit, so the roller never touches the character itself.
+    recovered = Signal(object)
+
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         strip_groupbox_caption(self)
@@ -87,6 +94,10 @@ class DiceSection(QGroupBox):
         # purpose: a request is answered on somebody else's sheet.
         self.view.panel.set_roll_choices(requested_roll_choices(self._data))
         self.view.panel.rollRequested.connect(self.request_roll)
+        # A recovery check is settled when its result is in, on either path a roll
+        # comes back by: the session's record, or the die this panel threw itself.
+        self.view.panel.sessionRollRevealed.connect(self.settle_recovery)
+        self.view.panel.localRoll.connect(self.settle_recovery)
         # Actions against other characters, when the ruleset has any.
         if data.impress.available:
             self.view.panel.set_actions([IMPRESS_ACTION])
@@ -119,6 +130,31 @@ class DiceSection(QGroupBox):
         """
         if isinstance(spec, RollSpec):
             self.view.panel.roll_spec(spec)
+
+    def settle_recovery(self, roll: object) -> None:
+        """A roll of this seat's is back: if it was a recovery check and it made it,
+        say which condition comes off.
+
+        Read off the roll itself — the record the session kept (its spec carries
+        ``recovers``), or the local roll's own spec and result — rather than off
+        something remembered when the die was thrown. That is what makes a check the
+        GM *asked* for work too: the player clicked it on a request card, not on a
+        chip, and the request is what carried the condition.
+        """
+        if not isinstance(roll, dict):
+            return
+        spec = roll.get("spec")
+        if not isinstance(spec, RollSpec):
+            spec = RollSpec.from_dict(spec)
+        if spec is None or not spec.recovers:
+            return
+        if "result" in roll:
+            result = roll.get("result")
+            degree = getattr(result, "degree", None)
+        else:
+            degree = roll.get("degree")
+        if recovery_succeeded(self._data, spec, degree):
+            self.recovered.emit((spec.recovers, spec.recovers_parameter or None))
 
     def load_roll(self, spec: object) -> None:
         """Put what another block named in the chip, without throwing the die — the

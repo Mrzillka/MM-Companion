@@ -27,7 +27,7 @@
         "label": "Fortitude + Will"
       }
     ],
-    "_quick_npc": "The GM's Quick NPC presets. A quick NPC is six numbers (attack, effect, defence, toughness, fortitude, will) set from a Power Level. Each pair shares the costs.json power_level cap named by its 'cap', whose total is mult x PL + add. A preset gives each stat a share of that total: 'high' is high_share of it rounded up, 'low' is what 'high' leaves, 'even' is half, 'random' is anywhere from low to high. A 'fill' pair sums to its cap exactly: the stat the preset names takes its share and the other the remainder (name one stat per fill pair; if both are named, the pair's first stat wins). A pair that does not fill sets each stat on its own share and never passes the cap between them. A stat a preset does not name takes 'even'.",
+    "_quick_npc": "The GM's Quick NPC presets. A quick NPC is six numbers (attack, effect, defence, toughness, fortitude, will) set from a Power Level. Each pair shares the costs.json power_level cap named by its 'cap', whose total is mult x PL + add. A preset gives each stat a share of that total: 'high' is high_share of it rounded up, 'low' is what 'high' leaves, 'even' is half, 'random' is anywhere from low to high. A 'fill' pair sums to its cap exactly: the stat the preset names takes its share and the other the remainder (name one stat per fill pair; if both are named, the pair's first stat wins). A pair that does not fill sets each stat on its own share and never passes the cap between them; two random shares there take turns going first, and the second is drawn from what the first left. Every preset rolls Fortitude and Will, so no two creatures resist alike. A stat a preset does not name takes 'even'.",
     "quick_npc": {
       "default_power_level": 10,
       "high_share": [2, 3],
@@ -41,19 +41,19 @@
           "id": "brute",
           "name": "Brute",
           "description": "Hits hard and shrugs blows off, but is easy to hit and hits less often.",
-          "shares": {"effect": "high", "toughness": "high", "fortitude": "low", "will": "low"}
+          "shares": {"effect": "high", "toughness": "high", "fortitude": "random", "will": "random"}
         },
         {
           "id": "speed",
           "name": "Speed",
           "description": "Accurate and hard to hit, but its blows are light and it goes down easily.",
-          "shares": {"effect": "low", "toughness": "low", "fortitude": "low", "will": "low"}
+          "shares": {"effect": "low", "toughness": "low", "fortitude": "random", "will": "random"}
         },
         {
           "id": "balance",
           "name": "Balance",
           "description": "An even split: attack and effect, defence and toughness, half each.",
-          "shares": {"effect": "even", "toughness": "even", "fortitude": "low", "will": "low"}
+          "shares": {"effect": "even", "toughness": "even", "fortitude": "random", "will": "random"}
         },
         {
           "id": "random",

@@ -54,7 +54,8 @@ from mm_companion.core.data_loader import GameData
 from mm_companion.core.rules import PinnedValue, PinRef, resolve_pins
 from mm_companion.ui import theme
 from mm_companion.ui.drop_feedback import DropIndicator
-from mm_companion.ui.widgets import ElidingLabel, discard_widget, muted_style
+from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
+from mm_companion.ui.widgets import ElidingLabel, discard_widget, muted_style, rebuilding
 
 #: What a chip's own layout costs it beside its text: the margin at each end, and
 #: the gap between the caption and the reading. Named rather than written inline
@@ -132,10 +133,18 @@ class PinChip(QFrame):
     #: This chip's index in the strip — the GM asked to take it off.
     removeRequested = Signal(int)
 
-    def __init__(self, value: PinnedValue, index: int, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        value: PinnedValue,
+        index: int,
+        parent: QWidget | None = None,
+        *,
+        stacked: bool = False,
+    ) -> None:
         super().__init__(parent)
         self._value = value
         self._index = index
+        self._stacked = stacked
         self._press_pos: QPoint | None = None
         self._dragging = False
         # Set by a double-click so the release that ends it is not read as a
@@ -147,13 +156,23 @@ class PinChip(QFrame):
         if value.hint:
             self.setToolTip(value.hint)
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(CHIP_MARGIN, 1, CHIP_MARGIN, 1)
-        layout.setSpacing(CHIP_SPACING)
+        # *stacked* is the NPC card's tile: the caption in small print over the
+        # reading, both centred, the way a statblock sets its numbers. A strip reads
+        # down a column and wants them side by side; a grid reads across rows and
+        # wants each cell narrow, which the caption on top of the number buys.
+        layout = QVBoxLayout(self) if stacked else QHBoxLayout(self)
+        if stacked:
+            layout.setContentsMargins(CHIP_MARGIN, 1, CHIP_MARGIN, 2)
+            layout.setSpacing(0)
+        else:
+            layout.setContentsMargins(CHIP_MARGIN, 1, CHIP_MARGIN, 1)
+            layout.setSpacing(CHIP_SPACING)
 
         self._label = ElidingLabel(value.label)
-        self._label.setStyleSheet("border: none; background: transparent;")
-        layout.addWidget(self._label, stretch=1)
+        self._label.setStyleSheet(
+            "border: none; background: transparent;" + (muted_style() if stacked else "")
+        )
+        layout.addWidget(self._label, stretch=0 if stacked else 1)
 
         self._reading = QLabel(value.value)
         reading_font = self._reading.font()
@@ -168,6 +187,12 @@ class PinChip(QFrame):
             font = widget.font()
             font.setPointSizeF(theme.font_size("size.terms"))
             widget.setFont(font)
+        if stacked:
+            self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._reading.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            font = self._reading.font()
+            font.setPointSizeF(theme.font_size("size.pin-value"))
+            self._reading.setFont(font)
 
     @property
     def value(self) -> PinnedValue:
@@ -190,6 +215,15 @@ class PinChip(QFrame):
         every time. The font is asked instead, plus :data:`LABEL_SLACK`.
         """
         metrics = QFontMetrics(self._label.font())
+        if self._stacked:
+            return (
+                max(
+                    metrics.horizontalAdvance(self._value.label) + LABEL_SLACK,
+                    self._reading.sizeHint().width(),
+                )
+                + 2 * CHIP_MARGIN
+                + 2 * int(theme.metric("border.width"))
+            )
         return (
             metrics.horizontalAdvance(self._value.label)
             + LABEL_SLACK
@@ -303,7 +337,9 @@ class PinPanel(QWidget):
     #: re-measures the block and hands every card in it a new width.
     widthHintChanged = Signal()
 
-    def __init__(self, data: GameData, parent: QWidget | None = None) -> None:
+    def __init__(
+        self, data: GameData, parent: QWidget | None = None, *, grid: bool = False
+    ) -> None:
         super().__init__(parent)
         self.setAcceptDrops(True)
 
@@ -311,6 +347,14 @@ class PinPanel(QWidget):
         self._character: Character | None = None
         self._pins: list[PinRef] = []
         self._chips: list[PinChip] = []
+        #: The NPC card's arrangement: tiles in a wrapping grid under the card's
+        #: header rather than a strip down its side. See :meth:`_build_grid`.
+        self._grid = grid
+        self._max_visible: int | None = None
+        self._indicator = DropIndicator(self)
+        if grid:
+            self._build_grid()
+            return
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -340,7 +384,6 @@ class PinPanel(QWidget):
         # (:meth:`set_max_visible`). One code path rather than two: an uncapped
         # scroll area reports its content's height and behaves exactly as the bare
         # column it replaces.
-        self._max_visible: int | None = None
         self._chip_host = QWidget()
         self._chip_layout = QVBoxLayout(self._chip_host)
         self._chip_layout.setContentsMargins(0, 0, 0, 0)
@@ -350,8 +393,49 @@ class PinPanel(QWidget):
         outer.addWidget(self._scroll)
         outer.addStretch()
 
-        self._indicator = DropIndicator(self)
+        self._indicator.raise_()
         self.set_width(self.natural_width())
+
+    def _build_grid(self) -> None:
+        """The tiles: every pin at once, in rows — and a "+" tile while there are none.
+
+        For the NPC card, whose strip down the side was capped at four chips and
+        scrolled the rest out of sight — on a card collapsed for combat, the one
+        place a GM needs all of them. A grid of tiles (caption over number) packs
+        six into two short rows of the card's own width, and nothing scrolls.
+
+        Every tile is one width — the board's widest (:meth:`set_width` is told it)
+        — so the rows line up in columns. The "+" is a tile only while the grid is
+        empty, so a bare card still offers the way in: once there are pins it would
+        sit alone on a row of its own under a full grid, and the card carries a 📌 in
+        its header for adding more (it emits :attr:`pickRequested` the same way).
+        """
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self._tile_width = int(theme.metric("gm.pin-tile.min"))
+        self._chip_host = FlowContainer()
+        self._chip_flow = FlowLayout(self._chip_host, spacing=int(theme.metric("space.xs")))
+        # Flush with the card's own margins: the style's default would inset the grid
+        # by a few pixels each side, which is the difference between three tiles abreast
+        # and two.
+        self._chip_flow.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(self._chip_host)
+        self._add_button = QToolButton()
+        self._add_button.setText("+")
+        self._add_button.setToolTip("Pin a parameter from this character")
+        self._add_button.setAutoRaise(True)
+        self._add_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._add_button.setStyleSheet(
+            f"QToolButton {{ border: {int(theme.metric('border.width'))}px dashed"
+            f" {theme.color('border.empty')};"
+            f" border-radius: {int(theme.metric('radius.chip'))}px;"
+            f" color: {theme.color('text.muted')}; background: transparent; }}"
+        )
+        self._add_button.clicked.connect(self.pickRequested)
+        self._chip_flow.addWidget(self._add_button)
+        self._indicator.raise_()
+        self._size_add_tile()
 
     # -- how wide the strip is ----------------------------------------------
 
@@ -370,8 +454,12 @@ class PinPanel(QWidget):
         strikes for the sheet's name columns.
         """
         widest = max((chip.natural_width() for chip in self._chips), default=0)
-        floor = int(theme.metric("gm.pin-strip.min"))
-        cap = int(theme.metric("gm.pin-strip.max"))
+        if self._grid:
+            floor = int(theme.metric("gm.pin-tile.min"))
+            cap = int(theme.metric("gm.pin-tile.max"))
+        else:
+            floor = int(theme.metric("gm.pin-strip.min"))
+            cap = int(theme.metric("gm.pin-strip.max"))
         return max(floor, min(widest, cap))
 
     def set_width(self, width: int) -> None:
@@ -380,8 +468,44 @@ class PinPanel(QWidget):
         A card's strip is not sized alone: every card in a block wears the widest
         one, so the cards keep lining up in columns of the wrapping flow. The
         panel only says what it *wants* (:meth:`natural_width`).
+
+        On a **grid** it is one *tile's* width instead: the grid itself is as wide as
+        the card it sits in, and what has to agree across the board is the column.
         """
+        if self._grid:
+            width = max(1, width)
+            if width == self._tile_width:
+                return
+            self._tile_width = width
+            for chip in self._chips:
+                chip.setFixedWidth(width)
+            self._size_add_tile()
+            self._chip_host.refresh_height()
+            return
         self.setFixedWidth(max(1, width))
+
+    @property
+    def is_grid(self) -> bool:
+        """Whether this panel lays its pins out as tiles (the NPC card) or a strip."""
+        return self._grid
+
+    def tile_width(self) -> int:
+        """One tile's width, on a grid (the strip's own width otherwise)."""
+        return self._tile_width if self._grid else self.width()
+
+    def _size_add_tile(self) -> None:
+        """The "+" tile: as tall as a pin tile, and narrower — it holds one glyph."""
+        if not self._grid:
+            return
+        height = self._chips[0].sizeHint().height() if self._chips else self._tile_height()
+        self._add_button.setFixedSize(
+            max(int(theme.metric("gm.damage-button")), self._tile_width // 2), height
+        )
+
+    def _tile_height(self) -> int:
+        """How tall a tile is, without one to measure: two lines of small print."""
+        metrics = QFontMetrics(self.font())
+        return metrics.height() * 2 + 4
 
     # -- what the strip is showing ------------------------------------------
 
@@ -422,7 +546,8 @@ class PinPanel(QWidget):
         on a four-chip cap is still two chips tall.
         """
         self._max_visible = count
-        self._apply_cap()
+        if not self._grid:
+            self._apply_cap()
 
     def _apply_cap(self) -> None:
         """Tell the chip window how tall to be: its chips, capped at
@@ -450,6 +575,9 @@ class PinPanel(QWidget):
         reconciling a list whose entries can change label, value *and* whether they
         resolve at all.
         """
+        if self._grid:
+            self._refresh_grid()
+            return
         while self._chip_layout.count():
             item = self._chip_layout.takeAt(0)
             widget = item.widget() if item is not None else None
@@ -472,6 +600,30 @@ class PinPanel(QWidget):
         self.updateGeometry()
         # Last, and against the chips that now exist: the owner answers this by
         # re-measuring every card in the block and handing them all one width.
+        self.widthHintChanged.emit()
+
+    def _refresh_grid(self) -> None:
+        """:meth:`refresh` for a grid: rebuild the tiles, the "+" tile kept last."""
+        with rebuilding(self):
+            while self._chip_flow.count():
+                item = self._chip_flow.takeAt(0)
+                widget = item.widget() if item is not None else None
+                if widget is not None and widget is not self._add_button:
+                    discard_widget(widget)
+            self._chips = []
+            for index, value in enumerate(self.values()):
+                chip = PinChip(value, index, stacked=True)
+                chip.setFixedWidth(self._tile_width)
+                chip.loadRequested.connect(self.loadRequested)
+                chip.rollRequested.connect(self.rollRequested)
+                chip.removeRequested.connect(self.remove_pin)
+                self._chip_flow.addWidget(chip)
+                self._chips.append(chip)
+            self._chip_flow.addWidget(self._add_button)
+            self._add_button.setVisible(not self._chips)
+            self._size_add_tile()
+        self._chip_host.refresh_height()
+        self.updateGeometry()
         self.widthHintChanged.emit()
 
     # -- editing the strip ---------------------------------------------------
@@ -559,6 +711,15 @@ class PinPanel(QWidget):
         strip scrolled down drops everything at the wrong index.
         """
         local = self._chip_host.mapFrom(self, pos)
+        if self._grid:
+            # Rows and columns, the way a wrapping flow of cards is read: the first
+            # tile whose row the point is above the bottom of and whose left half it
+            # is in front of (see CardDropFlow.drop_index).
+            for index, chip in enumerate(self._chips):
+                geometry = chip.geometry()
+                if local.y() < geometry.bottom() and local.x() < geometry.center().x():
+                    return index
+            return len(self._chips)
         for index, chip in enumerate(self._chips):
             geometry = chip.geometry()
             if local.y() < geometry.center().y():
@@ -582,6 +743,13 @@ class PinPanel(QWidget):
         """
         if not self._chips:
             return QRect()
+        if self._grid:
+            # A vertical bar in the gap before the tile, or after the last one.
+            last = index >= len(self._chips)
+            geometry = self._chips[-1 if last else index].geometry()
+            x = geometry.right() + 1 if last else geometry.left() - INDICATOR_HEIGHT
+            top_left = self._chip_host.mapTo(self, QPoint(x, geometry.top()))
+            return QRect(top_left.x(), top_left.y(), INDICATOR_HEIGHT, geometry.height())
         gap = self._chip_layout.spacing() // 2
         if index < len(self._chips):
             geometry = self._chips[index].geometry()

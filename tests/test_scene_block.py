@@ -461,3 +461,73 @@ def test_an_empty_flow_takes_a_drop_at_slot_zero(qapp: QApplication) -> None:
     _drop(flow, "npc:goon.json", (50, 20))
 
     assert seen == [("npc:goon.json", 0)]
+
+
+def test_a_numbered_board_reads_in_the_gms_turn_order() -> None:
+    """An un-rolled creature the GM put second is read second, between two that
+    rolled — which sorting by initiative could never say."""
+    entries = [
+        {"ref": "a", "initiative": 18, "turn": 1},
+        {"ref": "b", "initiative": 9, "turn": 3},
+        {"ref": "c", "turn": 2},
+        {"ref": "d"},
+    ]
+
+    assert [e["ref"] for e in order_scene(entries, ["d", "c", "b", "a"])] == ["a", "c", "b", "d"]
+
+
+def test_a_card_shows_its_turn_and_hides_it_without_one(qapp) -> None:
+    from mm_companion.ui.scene_card import SceneCard
+
+    card = SceneCard({"ref": "a", "name": "Goon", "turn": 3}, load_game_data())
+    assert card.turn == 3
+    assert card._turn_label.text() == "3"
+
+    card.set_entry({"ref": "a", "name": "Goon"})
+    assert card.turn is None
+    assert card._turn_label.isVisibleTo(card) is False
+
+
+def test_a_players_board_never_offers_to_take_a_condition_off(qapp) -> None:
+    from mm_companion.ui.scene_card import SceneCard
+
+    entry = {"ref": "a", "name": "Goon", "conditions": [{"id": "dazed"}]}
+    player = SceneCard(entry, load_game_data())
+    gm = SceneCard(entry, load_game_data(), gm=True, recovery_probe=lambda *_: True)
+
+    assert [c.removable for c in player.condition_chips()] == [False]
+    assert [(c.removable, c.recoverable) for c in gm.condition_chips()] == [(True, True)]
+
+
+def test_a_drag_near_an_edge_scrolls_faster_the_closer_it_gets() -> None:
+    """The page scrolls under a dragged card — the Scene block is often above it."""
+    from mm_companion.ui.card_chips import AUTOSCROLL_MARGIN, _edge_step
+
+    height = 600
+    assert _edge_step(height // 2, height) == 0
+    assert _edge_step(AUTOSCROLL_MARGIN - 4, height) < 0
+    assert _edge_step(0, height) < _edge_step(AUTOSCROLL_MARGIN - 4, height)
+    assert _edge_step(height - 1, height) > 0
+    # Past the edge (the pointer has left the viewport) is the fastest of all.
+    assert _edge_step(-50, height) == _edge_step(0, height)
+
+
+def test_a_row_that_fits_exactly_does_not_wrap(qapp) -> None:
+    """Three tiles in a row exactly three tiles wide used to drop the third."""
+    from PySide6.QtCore import QRect
+    from PySide6.QtWidgets import QWidget
+
+    from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
+
+    host = FlowContainer()
+    flow = FlowLayout(host, spacing=4)
+    flow.setContentsMargins(0, 0, 0, 0)
+    for _ in range(3):
+        tile = QWidget()
+        tile.setFixedSize(50, 20)
+        flow.addWidget(tile)
+
+    assert flow.heightForWidth(3 * 50 + 2 * 4) == 20
+    assert flow.heightForWidth(3 * 50 + 2 * 4 - 1) > 20
+    flow.setGeometry(QRect(0, 0, 158, 20))
+    assert [flow.itemAt(i).geometry().y() for i in range(3)] == [0, 0, 0]

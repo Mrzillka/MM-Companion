@@ -135,9 +135,19 @@ def preset_stats(
             values[leader] = _share_value(preset.share(leader), total, bounds, rng)
             values[follower] = total - values[leader]
             continue
+        # Two random shares take turns going first, and the second is drawn from
+        # what the first left rather than drawn freely and clipped: clipping piled the
+        # odds onto pairs that sum to the cap exactly, and always on the second stat.
+        if preset.share(first) == preset.share(second) == "random" and rng.random() < 0.5:
+            first, second = second, first
         values[first] = _share_value(preset.share(first), total, bounds, rng)
-        value = _share_value(preset.share(second), total, bounds, rng)
-        values[second] = max(0, min(value, total - values[first]))
+        room = total - values[first]
+        if preset.share(second) == "random":
+            low, high = bounds
+            value = rng.randint(min(low, room), max(min(low, room), min(high, room)))
+        else:
+            value = _share_value(preset.share(second), total, bounds, rng)
+        values[second] = max(0, min(value, room))
     return QuickStats(**values)
 
 

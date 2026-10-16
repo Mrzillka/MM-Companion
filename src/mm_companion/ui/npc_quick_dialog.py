@@ -369,7 +369,13 @@ class QuickNPCDialog(QDialog):
         if preset is None:
             return preset_id
         caption = preset.name
-        if any(share == "random" for _stat, share in preset.shares):
+        # Only a preset that rolls the *headline* numbers wears the die. Every preset
+        # rolls Fortitude and Will, so a die for that would sit on every button and
+        # tell the GM nothing.
+        filled = {
+            stat for pair in self._data.system.quick_npc.pairs if pair.fill for stat in pair.stats
+        }
+        if any(share == "random" and stat in filled for stat, share in preset.shares):
             caption += RANDOM_MARK
         if self._edited and preset_id == self._preset:
             caption += EDITED_MARK

@@ -121,20 +121,39 @@ def test_a_pl_10_brute_hits_hard_and_shrugs_blows_off() -> None:
     stats = preset_stats(load_game_data(), "brute", 10)
     assert (stats.effect, stats.attack) == (14, 6)
     assert (stats.toughness, stats.defence) == (14, 6)
-    assert (stats.fortitude, stats.will) == (6, 6)
+    assert 6 <= stats.fortitude <= 14 and 6 <= stats.will <= 14
 
 
 def test_speed_is_the_brute_turned_round() -> None:
     stats = preset_stats(load_game_data(), "speed", 10)
     assert (stats.attack, stats.effect) == (14, 6)
     assert (stats.defence, stats.toughness) == (14, 6)
-    assert (stats.fortitude, stats.will) == (6, 6)
+    assert 6 <= stats.fortitude <= 14 and 6 <= stats.will <= 14
 
 
 def test_balance_splits_every_cap_down_the_middle() -> None:
     stats = preset_stats(load_game_data(), "balance", 10)
     assert (stats.attack, stats.effect, stats.defence, stats.toughness) == (10, 10, 10, 10)
-    assert (stats.fortitude, stats.will) == (6, 6)
+    assert 6 <= stats.fortitude <= 14 and 6 <= stats.will <= 14
+
+
+@pytest.mark.parametrize("preset", ["brute", "speed", "balance", "random"])
+def test_every_preset_rolls_fortitude_and_will(preset: str) -> None:
+    """Each from a third to two thirds of twice the level, the two never past it:
+    a PL 10 creature can be 6/6, 6/10, 11/9 or 10/10 — and either can be the high one."""
+    data = load_game_data()
+    total = pair_total(data, "fortitude_will", 10)
+    low, high = share_bounds(data, total)
+    assert (total, low, high) == (20, 6, 14)
+    rng = random.Random(3)
+    seen = set()
+    for _ in range(400):
+        stats = preset_stats(data, preset, 10, rng)
+        assert low <= stats.fortitude <= high and low <= stats.will <= high
+        assert stats.fortitude + stats.will <= total
+        seen.add((stats.fortitude, stats.will))
+    assert {(6, 6), (14, 6), (6, 14)} <= seen
+    assert any(f + w < total for f, w in seen) and any(f + w == total for f, w in seen)
 
 
 @pytest.mark.parametrize("preset", ["brute", "speed", "balance", "random"])
@@ -202,7 +221,7 @@ def test_a_first_dialog_opens_on_pl_10_balanced(dialog) -> None:
     entered = dialog.value()
     assert entered.power_level == 10
     assert (entered.attack, entered.effect, entered.defence, entered.toughness) == (10,) * 4
-    assert (entered.fortitude, entered.will) == (6, 6)
+    assert 6 <= entered.fortitude <= 14 and 6 <= entered.will <= 14
     assert entered.icon == "balance"
 
 
@@ -387,7 +406,7 @@ def test_a_hand_edit_marks_the_lit_preset_until_it_is_applied_again(dialog) -> N
     assert "Edited by hand" in button.toolTip()
     button.click()
     assert not button.text().endswith(EDITED_MARK)
-    assert dialog.value().will == 6
+    assert 6 <= dialog.value().will <= 14
     # A level change re-applies too, and so clears the mark.
     dialog._spins["will"].setValue(2)
     dialog._power_level.setValue(9)

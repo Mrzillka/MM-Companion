@@ -507,14 +507,17 @@ The shape:
   `costs.json` cap, each preset's `high`/`low`/`even`/`random` share per stat, and
   `high_share` (⅔). A **fill** pair always lands *exactly* on its cap (the stat the
   preset names takes its share, rounded up for `high`; the other the rest), which is what makes a
-  PL 10 Brute effect 14 / attack 6. Fortitude and Will do not fill: each takes its own
-  share and the pair never passes its cap. Changing the PL re-applies the preset over
+  PL 10 Brute effect 14 / attack 6. Fortitude and Will do not fill, and **every preset
+  rolls them**: each from ⅓ to ⅔ of the pair's cap (2×PL — so 6–14 at PL 10), the second
+  drawn from what the first left so the pair never passes the cap (6/6, 6/10, 11/9…), the
+  two taking turns to go first so neither is the habitually lower one. Changing the PL re-applies the preset over
   hand edits; clicking a preset again re-applies it (that is how Random re-rolls).
   The last PL and preset are **process memory** (`npc_quick_dialog._memory`), not a
   setting — a batch of goons is one run, next session's fight is another. An icon the
   GM picked with the arrows is remembered the same way and **survives a preset click**;
   one that only followed the preset is not. A hand edit marks the lit preset ` *` until
-  it is applied again, and a preset with a random share carries a die on its button.
+  it is applied again, and a preset that rolls a headline number (a *fill* pair's) carries a die on its
+  button — not one that only rolls Fortitude and Will, which every preset does.
   The in-dialog buttons (presets, arrows, 🎲) are **not auto-default** and take no
   focus on click: in a `QDialog` every push button is auto-default, so a clicked preset
   used to take Enter from Create NPC, and on Random Enter re-rolled. It opens in the

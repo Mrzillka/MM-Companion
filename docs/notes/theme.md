@@ -51,11 +51,10 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
   1. Never select a bare `QFrame`/`QLabel`/`QGroupBox`/`QScrollArea` — every
      nested separator and label inherits it. Use an object name or a class that
      names a whole component. The same goes for a widget's **own** inline sheet: a
-     bare `border: …; background: …` on a widget reaches every child, and that
-     includes a right-click `QMenu` parented to it — the pin chip's menu drew itself
-     in the chip's border, radius and fill and clipped its own item. Scope it
-     (`#pinChip { … }`, `#specChip { … }`). Not test-guarded: an inline sheet is
-     not in the built stylesheet `tests/test_theme_qss.py` reads.
+     bare `border: …; background: …` on a widget reaches every child, a
+     right-click `QMenu` parented to it included. Scope it (`#pinChip { … }`,
+     `#specChip { … }`). Not test-guarded: an inline sheet is not in the built
+     stylesheet `tests/test_theme_qss.py` reads.
   2. Never set `font-size` in a stylesheet. It outranks the widget's `QFont`,
      which is what the powers cards animate through; use
      `QFont.setPointSizeF(theme.font_size(...))`.
@@ -81,6 +80,12 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
      carries `theme.ARROWLESS_PROPERTY` so the sheet hands the room straight back.
      `tests/test_input_arrow_columns.py` clicks a real arrow, per preset, across
      every base style Qt ships.
+- **A stated `QMenu` box needs a stated `QMenu::item` padding.** The styled presets
+  give `QMenu` a border and background, which hands the items to `QStyleSheetStyle`,
+  and it pads them by nothing: every context menu in a styled preset had items exactly
+  their text's height, flush with the menu's edges and clipped at the right (a
+  one-item "Remove Damage" menu was the report, 2026-10-17). `_chrome_rules` now pads
+  the menu and its items; `test_a_stated_menu_box_pads_its_items` guards it.
 - A plain `QWidget` ignores a stylesheet `background` unless it sets
   `WA_StyledBackground` (a `QFrame` honours it natively). If a wash you applied
   doesn't paint, that is why.

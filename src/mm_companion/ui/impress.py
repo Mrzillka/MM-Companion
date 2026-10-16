@@ -29,7 +29,7 @@ import html
 import uuid
 from dataclasses import dataclass, field
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QStandardItemModel, QValidator
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -284,6 +284,13 @@ class StepSpin(QSpinBox):
         self._low = low
         self.setRange(0, (high - low) // modifier.step)
         self.setValue(self.position_of(0))
+        # Arrowless and as narrow as the window's Adjust boxes, which it sits among: a
+        # scale of a few small numbers has no use for the row's whole width, and the
+        # wide arrowed box it was widened the window the moment the modifiers unfolded.
+        # The arrow keys still step it, a position at a time.
+        self.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self.setProperty(theme.ARROWLESS_PROPERTY, True)
+        self.setMaximumWidth(int(theme.metric("column.stat.spin")))
         guard_wheel(self)
 
     def position_of(self, raw: object) -> int:
@@ -381,6 +388,19 @@ class ModifiersPanel(QWidget):
         self._body.hide()
         self._show_sum()
 
+    def sizeHint(self) -> QSize:  # noqa: N802 (Qt override)
+        """As wide as the modifiers unfolded, even while they are folded away.
+
+        So the window opens at the width they need, and unfolding them only makes it
+        taller — it used to widen as well, and narrow again never.
+        """
+        hint = super().sizeHint()
+        if self._body.isHidden():
+            margins = self.layout().contentsMargins()
+            body = self._body.sizeHint().width() + margins.left() + margins.right()
+            hint.setWidth(max(hint.width(), body))
+        return hint
+
     # -- folding -------------------------------------------------------------
 
     def is_expanded(self) -> bool:
@@ -392,6 +412,11 @@ class ModifiersPanel(QWidget):
     def _on_fold(self, expanded: bool) -> None:
         self._fold.setArrowType(Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
         self._body.setVisible(expanded)
+        # Tell the layouts above at once rather than on the next pass of the event loop:
+        # the window is measured below, and a parent's cached hint of this panel is only
+        # dropped by updateGeometry — without it a fold left the window unfolded-tall.
+        self.layout().activate()
+        self.updateGeometry()
         # The window was sized to what it held; it holds more (or less) now.
         window = self.window()
         if window is not self and window.isVisible():
@@ -542,6 +567,8 @@ class ImpressDialog(QDialog):
             self._modifiers = ModifiersPanel(data)
             self._modifiers.changed.connect(self._sync)
             layout.addWidget(self._modifiers)
+            # Slack under the modifiers, not between the rows — see ActionWindow.
+            layout.addStretch(1)
 
         self._total = QLabel()
         self._total.setWordWrap(True)

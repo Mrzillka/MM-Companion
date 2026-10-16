@@ -152,6 +152,7 @@ class PinChip(QFrame):
         self._rolled = False
 
         self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setObjectName("pinChip")
         self._restyle()
         if value.hint:
             self.setToolTip(value.hint)
@@ -246,10 +247,13 @@ class PinChip(QFrame):
             border, background = theme.color("accent"), theme.wash("accent", 0.10)
         else:
             border, background = theme.color("border.card"), "transparent"
+        # Scoped to the chip by name. A bare declaration reaches every child — its
+        # right-click menu too, which is parented here, and which drew itself with
+        # the chip's border, radius and fill and clipped its own item.
         self.setStyleSheet(
-            f"border: {width}px solid {border};"
-            f"background: {background};"
-            f"border-radius: {radius}px;"
+            f"#pinChip {{ border: {width}px solid {border};"
+            f" background: {background};"
+            f" border-radius: {radius}px; }}"
         )
         self.setCursor(
             Qt.CursorShape.PointingHandCursor if self.rollable else Qt.CursorShape.ArrowCursor

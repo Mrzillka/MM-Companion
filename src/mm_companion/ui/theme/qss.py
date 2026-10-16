@@ -238,7 +238,13 @@ def _chrome_rules(theme: Theme) -> str:
             # but does nothing reads as broken rather than as empty.
             f"QMenuBar::item:disabled {{ color: {muted}; }}\n"
             f"QMenu {{ background: {block}; color: {text};"
-            f" border: {width}px solid {border}; }}\n"
+            f" border: {width}px solid {border}; padding: {pad}px 0px; }}\n"
+            # Stating the menu's box hands its items to QStyleSheetStyle too, which
+            # pads them by nothing: an item was its text's height, flush against the
+            # menu's edges and clipped at the right. Room around each, and on the
+            # right for a submenu's arrow.
+            f"QMenu::item {{ padding: {pad}px {m('space.indent')}px"
+            f" {pad}px {m('space.lg')}px; }}\n"
             f"QMenu::item:disabled {{ color: {muted}; }}\n"
             f"QMenu::item:selected {{ background: {c('accent')};"
             f" color: {c('text.on-badge')}; }}",

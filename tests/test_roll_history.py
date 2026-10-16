@@ -27,6 +27,7 @@ from mm_companion.ui.roll_history import (
     MAX_CARDS,
     MIN_HISTORY_HEIGHT,
     MIN_HISTORY_WIDTH,
+    GroupTableCard,
     NoteCard,
     RollHistoryPanel,
     degree_label,
@@ -444,7 +445,9 @@ def test_the_gm_removing_a_roll_clears_it_for_a_player(
 
 
 def _show_buttons(panel: RollHistoryPanel) -> list[QPushButton]:
-    return [b for b in panel.findChildren(QPushButton) if b.text() == "Show"]
+    # Not hidden, rather than visible: the panel is never shown. A table builds its Show
+    # once and hides it while it holds nothing hidden.
+    return [b for b in panel.findChildren(QPushButton) if b.text() == "Show" and not b.isHidden()]
 
 
 def test_only_a_gms_hidden_roll_offers_show(qapp: QApplication) -> None:
@@ -516,6 +519,71 @@ def test_an_off_air_reveal_redraws_and_reports(qapp: QApplication) -> None:
 
     assert seen == [3]
     assert _show_buttons(panel) == []
+
+
+def test_a_hidden_table_offers_one_show_for_all_its_rolls(qapp: QApplication) -> None:
+    """A group's rolls land as one table card, and the GM must be able to show it too.
+
+    The table had no Show at all, so a hidden impression or area — every NPC's save
+    in one card — could never be shown to the table.
+    """
+    panel = RollHistoryPanel(gm=True)
+    seen: list[int] = []
+    panel.rollRevealedLocally.connect(seen.append)
+    panel.add_roll(roll(seq=1, group="g", hidden=True, label="Thug: Will"))
+    panel.add_roll(roll(seq=2, group="g", hidden=True, label="Mook: Will"))
+    (table,) = panel.cards()
+    assert isinstance(table, GroupTableCard)
+    assert HIDDEN_MARK in table.lines()[0]
+
+    (show,) = _show_buttons(panel)
+    show.click()
+
+    assert seen == [1, 2]
+    assert _show_buttons(panel) == []
+    assert HIDDEN_MARK not in table.lines()[0]
+    assert len(panel.cards()) == 1  # still the one table
+
+
+def test_a_players_table_offers_no_show(qapp: QApplication) -> None:
+    panel = RollHistoryPanel()
+    panel.add_roll(roll(seq=1, group="g", hidden=True))
+    assert _show_buttons(panel) == []
+
+
+def test_showing_a_hidden_table_reaches_a_player(
+    qapp: QApplication, hosting: SessionBridge
+) -> None:
+    gm_panel = RollHistoryPanel(gm=True)
+    gm_panel.attach(hosting)
+    player = SessionBridge()
+    player_panel = RollHistoryPanel()
+    try:
+        player.join(_code_for(hosting), "Aria")
+        player_panel.attach(player)
+
+        hosting.server.group_roll(
+            "ambush",
+            [{"label": "Thug: Will", "bonus": 2}, {"label": "Mook: Will", "bonus": 0}],
+            dc=15,
+            hidden=True,
+        )
+        hosting.server.roll(label="open", bonus=1)
+        _pump(qapp, lambda: len(player_panel.cards()) == 1)
+
+        _show_buttons(gm_panel)[0].click()
+
+        def tables() -> list[GroupTableCard]:
+            return [c for c in player_panel.cards() if isinstance(c, GroupTableCard)]
+
+        _pump(qapp, lambda: len(tables()) == 1 and len(tables()[0].records) == 2)
+
+        rows = " ".join(tables()[0].lines())
+        assert "Thug" in rows and "Mook" in rows
+        assert _show_buttons(gm_panel) == []
+    finally:
+        player_panel.detach()
+        player.stop()
 
 
 # -- following a session ----------------------------------------------------

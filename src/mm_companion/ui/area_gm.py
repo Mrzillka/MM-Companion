@@ -310,9 +310,9 @@ class AreaController(QObject):
         """The GM picked *party* — an NPC or a player — to use an attack on an area.
 
         From a creature's card on the board, or the roller's Area button. The window
-        opens on the creature's first area, and the GM may switch the attacker, the
-        power and its shape there. A player is read off their latest snapshot, and asked
-        for the attack like one who declared it.
+        opens on the creature's first area, and the GM may switch the attacker and the
+        power there. A player is read off their latest snapshot, and asked for the
+        attack like one who declared it.
         """
         sources, _targets = self._host.impress_parties()
         party = next((p for p in sources if p.ref == party.ref), party)
@@ -384,7 +384,7 @@ class AreaController(QObject):
             return declared.window
         _sources, targets = self._host.impress_parties()
         if declared.source.character is None:
-            # A player's snapshot, for the shape and their own attack's numbers.
+            # A player's snapshot, for their own attack's numbers.
             found = next((p for p in targets if p.ref == declared.source.ref), None)
             if found is not None:
                 declared.source.character = found.character

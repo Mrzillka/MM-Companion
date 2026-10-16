@@ -1127,6 +1127,29 @@ def test_a_chosen_shape_is_offered_the_width_it_asks_for(qapp, preference: str) 
     assert history_width > panel_width
 
 
+def test_a_long_trait_name_keeps_the_chip_one_line_tall(qapp) -> None:
+    """A wrapped caption asked for a second line nothing above the Roll box passed on.
+
+    So a long name in a narrow strip was drawn squashed into one line's height. The
+    caption elides instead, the whole of it in the tooltip, and the chip never grows.
+    """
+    panel = DiceRollerPanel()
+    panel.resize(300, 600)
+    panel.show()
+    try:
+        panel.load_spec(RollSpec(label="Toughness against a very long attack name", modifier=12))
+        qapp.processEvents()
+        chip, label = panel._spec_chip, panel._spec_label
+
+        assert not label.wordWrap()
+        assert label.text().endswith("Toughness against a very long attack name +12")
+        assert label.fontMetrics().horizontalAdvance(label.text()) > label.width()
+        assert "very long attack name" in label.toolTip()
+        assert chip.height() == chip.sizeHint().height()
+    finally:
+        panel.close()
+
+
 def test_clearing_the_chip_takes_back_the_dc_it_brought(qapp) -> None:
     """The ✕ on the chip means "forget what I loaded", DC included.
 

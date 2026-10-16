@@ -85,7 +85,7 @@ from mm_companion.core import library
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import Condition, GameData
 from mm_companion.core.library import CharacterSummary
-from mm_companion.core.rules import area_capable_builds
+from mm_companion.core.rules import area_capable_builds, power_area_uses
 from mm_companion.ui import theme
 from mm_companion.ui.card_chips import _ConditionChip, start_card_drag
 from mm_companion.ui.card_summary import PORTRAIT_SIZE, PortraitButton, character_summary_html
@@ -170,7 +170,7 @@ class NPCCard(QFrame):
     #: index, not the conditions: what a degree of failure *means* is the rules
     #: layer's answer, and it depends on what the creature already carries.
     damageRequested = Signal(str, int)
-    #: ``(file_name, build id)`` — use that power on an area.
+    #: ``(file_name, area key)`` — use that power (that area effect of it) on an area.
     areaRequested = Signal(str, str)
     #: The NPC's file name — this creature impresses somebody.
     impressRequested = Signal(str)
@@ -545,26 +545,39 @@ class NPCCard(QFrame):
         self._impress_icon.setVisible(impress and collapsed)
         self._area_icon.setVisible(area and collapsed)
 
+    def area_choices(self) -> list[tuple[str, str]]:
+        """``(area key, caption)`` for each area this creature could make.
+
+        One per area effect of each build: a build of several areas (Linked) is used as
+        one area per effect, each its own entry.
+        """
+        choices: list[tuple[str, str]] = []
+        for build in self.area_builds():
+            uses = power_area_uses(build, self._character, self._data, npc=True, free_use=True)
+            for use in uses:
+                caption = build.name or use.power_name or "Power"
+                if len(uses) > 1:
+                    caption = f"{caption} — {use.effects[0].name}"
+                choices.append((use.key, caption))
+        return choices
+
     def _show_area_menu(self, button: QToolButton | None = None) -> None:
-        """One attack goes straight to the area window; several are offered first."""
-        builds = self.area_builds()
-        if len(builds) == 1:
-            self.areaRequested.emit(self.name_key, builds[0].id)
+        """One area goes straight to the area window; several are offered first."""
+        choices = self.area_choices()
+        if len(choices) == 1:
+            self.areaRequested.emit(self.name_key, choices[0][0])
             return
-        if not builds:
+        if not choices:
             return
-        menu = self.area_menu(builds)
+        menu = self.area_menu(choices)
         button = button or self._area_button
         menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
 
-    def area_menu(self, builds: list | None = None) -> QMenu:
-        """The menu of this creature's attacks to use on an area, built but not shown."""
+    def area_menu(self, choices: list[tuple[str, str]] | None = None) -> QMenu:
+        """The menu of this creature's areas to use, built but not shown."""
         menu = QMenu(self)
-        for build in builds if builds is not None else self.area_builds():
-            menu.addAction(
-                build.name or "Power",
-                lambda b=build.id: self.areaRequested.emit(self.name_key, b),
-            )
+        for key, caption in choices if choices is not None else self.area_choices():
+            menu.addAction(caption, lambda k=key: self.areaRequested.emit(self.name_key, k))
         return menu
 
     # -- interaction -------------------------------------------------------

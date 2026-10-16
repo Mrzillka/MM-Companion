@@ -341,11 +341,26 @@ def request_widgets(spec: object, *, on_roll: Callable[[RollSpec], None]) -> lis
     resolved = spec if isinstance(spec, RollSpec) else RollSpec.from_dict(spec)
     if resolved is None:
         return []
-    button = QPushButton(f"🎲 {request_caption(resolved)}")
-    button.setCursor(Qt.CursorShape.PointingHandCursor)
-    button.setToolTip(resolved.hint or f"Roll {resolved.label} on this sheet")
-    button.clicked.connect(lambda _=False, s=resolved: on_roll(s))
-    return [button]
+    choices = [resolved]
+    if resolved.dc_if_resisted is not None:
+        # A save offered at two DCs — an area's, at full rank or at half after a made
+        # Dodge: one button each, so whoever answers picks the one that is theirs.
+        plain = replace(resolved, dc_if_resisted=None, note_if_resisted="")
+        half = f"{resolved.label} (half)"
+        if resolved.note_if_resisted:
+            half = f"{half} — {resolved.note_if_resisted}"
+        choices = [
+            replace(plain, label=f"{resolved.label} (full)"),
+            replace(plain, label=half, dc=resolved.dc_if_resisted),
+        ]
+    buttons: list[QWidget] = []
+    for choice in choices:
+        button = QPushButton(f"🎲 {request_caption(choice)}")
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setToolTip(choice.hint or f"Roll {choice.label} on this sheet")
+        button.clicked.connect(lambda _=False, s=choice: on_roll(s))
+        buttons.append(button)
+    return buttons
 
 
 def reroll_label(label: str, reroll: bool) -> str:

@@ -52,6 +52,8 @@ def _modifier_selections(
                 modifier_id=ref.modifier,
                 rank=ref.rank or 1,
                 config=dict(getattr(ref, "config", {})),
+                applies_from=1 if getattr(ref, "applies_to", 0) else 0,
+                applies_to=getattr(ref, "applies_to", 0),
             )
             for ref in refs
         ),

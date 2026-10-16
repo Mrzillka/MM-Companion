@@ -677,8 +677,9 @@ def test_a_players_impression_waits_in_the_history_and_they_roll_the_check(
         impress: ImpressWindow = window._impress.windows["act1"]
         assert impress.source().source == player.player_id
         assert [r.party.ref for r in impress.included()] == [thug_ref]
-        assert not impress._source.isEnabled()  # the player's choices are theirs
-        assert not impress._impression.isEnabled()
+        assert not impress._source.isEnabled()  # the player impresses, nobody else
+        # What they declared is picked, and still the GM's to change.
+        assert impress._impression.isEnabled() and impress.impression().id == "distracted"
         # An impresser is never offered as their own target.
         assert all(r.party.ref != nova_ref for r in impress._rows)
 
@@ -788,3 +789,150 @@ def test_a_bare_declaration_lets_the_gm_choose_off_the_players_sheet(
         assert card.button.isHidden() and "Dismissed" in card.status()
     finally:
         player.close()
+
+
+# -- the GM changing a declaration, a player impressing, and the end of a turn -------------
+
+
+def test_the_gm_may_change_a_declared_impression_and_skill(qapp, data) -> None:
+    nova = talker(data, "Nova")
+    nova.skill_ranks["Deception"] = 3
+    attempt = ImpressAttempt(
+        action_id="d1",
+        impression="distracted",
+        skill_row="skill:Deception",
+        skill_label="Deception",
+        skill_modifier=5,
+        targets=("s-mook",),
+    )
+    window = ImpressWindow(
+        data,
+        action_id="d1",
+        sources=[ImpressParty("s-nova", "Nova", PARTY_PLAYER, "p-nova", nova)],
+        targets=[ImpressParty("s-mook", "Mook", PARTY_NPC, "mook.json", talker(data, "Mook"))],
+        attempt=attempt,
+        from_card=True,
+    )
+    # What the player declared is picked...
+    assert window.impression().id == "distracted" and window.skill().label == "Deception"
+    # ...out of everything their sheet offers, and the GM may change both.
+    assert window._skill.count() > 1
+    window._impression.setCurrentIndex(window._impression.findData("demoralized"))
+    window._skill.setCurrentIndex(window._skill.findText("Intimidation", Qt.MatchStartsWith))
+    plan = window.plan()
+    assert plan.impression.id == "demoralized" and plan.skill.label == "Intimidation"
+    assert not window._source.isEnabled()  # the impresser is still the player
+    window.close()
+
+
+def test_the_gm_may_have_a_player_impress(qapp, window: GMWindow, data, monkeypatch) -> None:
+    _thug, _mook = _cast(window, data)
+    sources, targets = window.impress_parties()
+    nova = ImpressParty("s-nova", "Nova", PARTY_PLAYER, "p-nova", talker(data, "Nova"))
+    monkeypatch.setattr(window, "impress_parties", lambda: ([*sources, nova], [*targets, nova]))
+    asked: list = []
+    monkeypatch.setattr(
+        window.bridge,
+        "prompt_action",
+        lambda pid, kind, aid, payload=None: asked.append((pid, kind, payload)) or True,
+    )
+    monkeypatch.setattr(window.bridge, "prompt_roll", lambda spec: True)
+    monkeypatch.setattr(type(window.bridge), "in_session", property(lambda self: True))
+    impress = window._impress.open_new(source_key="p-nova")
+    assert impress.source().kind == PARTY_PLAYER and impress.source().name == "Nova"
+    assert not impress._row("s-nova").include.isEnabled()  # not their own target
+    impress._rows[0].include.setChecked(True)
+    impress._roll.click()
+    # The check is the player's: they are asked for it.
+    ((pid, kind, payload),) = asked
+    assert pid == "p-nova" and kind == KIND_ROLL_ASK
+    assert RollSpec.from_dict(payload["spec"]).targets == ("Nova",)
+    impress.close()
+
+
+def _demoralize(window: GMWindow, data, monkeypatch) -> tuple[str, ImpressParty]:
+    """The Thug Demoralizes the Mook (one degree: Impaired); the Mook and its party."""
+    _thug, mook = _cast(window, data)
+    monkeypatch.setattr(action_run, "resolve_group", staged(12, 20, [-1]))
+    impress = window._impress.open_new()
+    impress._impression.setCurrentIndex(impress._impression.findData("demoralized"))
+    impress._rows[0].include.setChecked(True)
+    impress._roll.click()
+    assert [c.condition_id for c in window._npc_state[mook].character.conditions] == ["impaired"]
+    _sources, targets = window.impress_parties()
+    return mook, next(p for p in targets if p.source == mook)
+
+
+def test_end_of_turn_shakes_off_an_impression_the_npc_resists(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    mook, party = _demoralize(window, data, monkeypatch)
+    (linger,) = window._impress.lingering(party.ref)
+    assert linger.impression.id == "demoralized" and linger.dc == 20
+    seen: list = []
+
+    def made(lines, **kwargs):
+        seen.append(lines)
+        return staged(0, 0, [1])(lines, **kwargs)
+
+    monkeypatch.setattr(action_run, "resolve_group", made)
+    window._on_scene_action(party.ref, "end-turn")
+    ((line,),) = seen
+    assert line[1] == 20  # against the original DC
+    assert window._npc_state[mook].character.conditions == []
+    assert window._impress.lingering(party.ref) == []
+    assert "shakes off Demoralized" in window._notice_label.text()
+
+
+def test_end_of_turn_keeps_an_impression_the_npc_fails_to_shake(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    mook, party = _demoralize(window, data, monkeypatch)
+    monkeypatch.setattr(action_run, "resolve_group", staged(0, 0, [-1]))
+    window._impress.end_turn(party)
+    assert [c.condition_id for c in window._npc_state[mook].character.conditions] == ["impaired"]
+    assert len(window._impress.lingering(party.ref)) == 1
+    assert "still Demoralized" in window._notice_label.text()
+
+
+def test_end_of_turn_forgets_an_impression_already_taken_off(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    mook, party = _demoralize(window, data, monkeypatch)
+    window._npc_state[mook].character.conditions.clear()
+    rolled: list = []
+    monkeypatch.setattr(action_run, "resolve_group", lambda lines, **kw: rolled.append(lines))
+    assert window._impress.end_turn(party) is None
+    assert rolled == [] and "no impression" in window._notice_label.text()
+
+
+def test_end_of_turn_asks_a_player_to_shake_each_impression_off(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    from mm_companion.ui.impress_gm import _Lingering
+
+    nova = ImpressParty("s-nova", "Nova", PARTY_PLAYER, "p-nova", None)
+    demoralized = data.impress.impression("demoralized")
+    window._impress._lingering["s-nova"] = [
+        _Lingering(demoralized, "skill:Intimidation", 19, None, [("impaired", None)], "Thug")
+    ]
+    asked: list = []
+    monkeypatch.setattr(
+        window.bridge,
+        "prompt_action",
+        lambda pid, kind, aid, payload=None: asked.append((kind, payload)) or True,
+    )
+    monkeypatch.setattr(window.bridge, "prompt_roll", lambda spec: True)
+    removed: list = []
+    monkeypatch.setattr(
+        window, "action_remove", lambda party, changes: removed.append(changes) or True
+    )
+    run = window._impress.end_turn(nova)
+    ((kind, payload),) = asked
+    spec = RollSpec.from_dict(payload["spec"])
+    assert kind == KIND_ROLL_ASK and spec.dc == 19 and "Shake off Demoralized" in spec.label
+    # They make it: it comes off, and they are told.
+    record = {"seq": 3, "kind": "roll", "die": 15, "bonus": 6, "penalty": 0, "dc": 19}
+    window._impress.take_roll({**record, "degree": 1, "spec": spec.to_dict()})
+    assert removed == [[("impaired", None)]]
+    assert run.closed and window._impress.lingering("s-nova") == []

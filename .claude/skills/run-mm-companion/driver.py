@@ -1372,6 +1372,8 @@ ACTION_TARGETS = (
     "area-dialog",
     "area-dialog-offline",
     "area-gm",
+    "area-gm-own",
+    "area-gm-heal",
     "roll-prompt",
 )
 
@@ -1472,6 +1474,37 @@ def _action_window(target: str):
             ],
             from_card=True,
         )
+    elif target in ("area-gm-own", "area-gm-heal"):
+        # The GM started it: an Attacker combo, the Rank / Attack adjusts, the mode row —
+        # or, for an area Healing, one check and no Dodge.
+        thug = who("Thug")
+        if target == "area-gm-heal":
+            thug.powers.append(
+                Power(
+                    name="Mending Wave",
+                    effects=[
+                        PowerEffectInstance(
+                            "healing", rank=6, extras=[ModifierSelection("area_effect")]
+                        )
+                    ],
+                )
+            )
+        else:
+            thug.powers.append(burst)
+        source = ImpressParty("s1", "Thug", PARTY_NPC, "thug.json", thug)
+        use = power_area_use(thug.powers[0], thug, data, npc=True, free_use=True)
+        attempt = AreaAttempt("act", use, primary="s3", targets=("s2",), source_name="Thug")
+        targets = [
+            source,
+            ImpressParty("s3", "Nova", PARTY_PLAYER, "me", nova),
+            ImpressParty("s2", "Mook", PARTY_NPC, "mook.json", who("Mook")),
+        ]
+        win = AreaWindow(
+            data, attempt=attempt, source=source, targets=targets, sources=[source, targets[1]]
+        )
+        if target == "area-gm-own":
+            win.set_rank_adjust(2)
+            win.set_attack_adjust(-1)
     else:  # roll-prompt
         spec = RollSpec(
             label="Resist Demoralized",

@@ -9,14 +9,19 @@ it is the only part of the action that touches the session:
   GM is to. The attack check against the primary lands as an ordinary roll carrying the
   attempt's id and is paired up with it here; a bare one's attack is asked of the
   player from the window once the GM has picked a primary;
-* the GM can start one for an NPC from its card or its sheet, which opens the window
-  straight away;
+* the GM can start one for anybody — an NPC from its card or its sheet, a player from
+  their card on the board, either from the roller — which opens the window straight
+  away, the attacker still the GM's to change;
 * **resolving** rolls the creatures nobody plays in two stages, each a server-side group
   roll: every NPC's Dodge check, then — once those are in — each one's save at the rank
   its Dodge left. A **player** in the area is asked for their Dodge, and once it is back,
   for the save at the rank it left. Every roll lands in one table in the history and in
   the window's Result column, and the rung each failed save lands on is applied — onto
-  an NPC's model, or as condition commands to a player's app.
+  an NPC's model, or as condition commands to a player's app;
+* **requesting** instead leaves the history a Dodge card and a save card (full rank or
+  half) for everyone caught, and rolls nothing more;
+* an area **Healing** is one check of the wielder's, and each degree of success takes a
+  condition off everyone in the area.
 
 It reaches the GM window only through :class:`AreaHost`, the Impress host surface plus
 two methods. :mod:`mm_companion.ui.action_run` does the rolling and the asking.
@@ -35,6 +40,7 @@ from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.powers import Power
 from mm_companion.core.rules import (
+    AREA_MODE_REQUEST,
     KIND_POWER_CHECK,
     AreaAttempt,
     AreaEffect,
@@ -43,10 +49,15 @@ from mm_companion.core.rules import (
     area_ask_save_spec,
     area_capable_builds,
     area_effect_rung,
+    area_heal_removals,
+    area_heal_spec,
     area_npc_dodge_spec,
     area_npc_save_specs,
+    area_primary_rank,
+    area_request_specs,
     area_stage_rank,
     power_area_use,
+    power_area_uses,
     resolve_rung,
     rung_caption,
 )
@@ -82,6 +93,12 @@ class AreaHost(Protocol):
 
     def area_roll_attack(self, spec: RollSpec) -> None:
         """Roll an NPC's attack against the primary on the GM's roller."""
+
+    def action_remove(self, party: ImpressParty, changes: list[tuple[str, str | None]]) -> bool:
+        """Take conditions off one party; ``False`` if that could not be delivered."""
+
+    def action_request(self, spec: RollSpec) -> None:
+        """Leave a request card for *spec* in the history (the table's, or the GM's own)."""
 
 
 def roll_cell(label: str, record: dict) -> str:
@@ -121,6 +138,9 @@ class _Declared:
     resolving: _Resolving | None = None
     #: A player's declaration waiting in the history, rather than the GM's own.
     from_card: bool = True
+    #: Who the GM may switch the attacker to — an area the GM started; empty for a
+    #: player's declaration, whose attacker is theirs.
+    sources: list[ImpressParty] = field(default_factory=list)
 
 
 class AreaController(QObject):
@@ -249,16 +269,25 @@ class AreaController(QObject):
         declared.card.set_text(text)
 
     def start_for_npc(
-        self, character: Character, power: Power, key: str, *, name: str = ""
+        self,
+        character: Character,
+        power: Power,
+        key: str,
+        *,
+        name: str = "",
+        effect_index: int = 0,
     ) -> AreaWindow | None:
         """The GM used an NPC's power on an area — from its card or its sheet: open it.
 
         *key* is the NPC's cast key (its file), which is how it is found among the
         parties — never by *name*, which two identical minions share. *name* is what to
         call it when it is not in the cast at all. Any attack will do: the GM is the one
-        choosing to spread it, so the free use is read as on.
+        choosing to spread it, so the free use is read as on. *effect_index* is which of
+        the power's area effects (see :func:`~mm_companion.core.rules.area_key`).
         """
-        use = power_area_use(power, character, self._data, npc=True, free_use=True)
+        use = power_area_use(
+            power, character, self._data, npc=True, free_use=True, effect_index=effect_index
+        )
         if use is None:
             return None
         sources, _targets = self._host.impress_parties()
@@ -270,9 +299,74 @@ class AreaController(QObject):
         )
         if source.character is None:
             source.character = character
+        if source not in sources:
+            sources = [source, *sources]
+        return self._open_new(
+            source, use, sources, builds=area_capable_builds(character, self._data)
+        )
+
+    def start_for(self, party: ImpressParty) -> AreaWindow | None:
+        """The GM picked *party* — an NPC or a player — to use an attack on an area.
+
+        From a creature's card on the board, or the roller's Area button. The window
+        opens on the creature's first area, and the GM may switch the attacker, the
+        power and its shape there. A player is read off their latest snapshot, and asked
+        for the attack like one who declared it.
+        """
+        sources, _targets = self._host.impress_parties()
+        party = next((p for p in sources if p.ref == party.ref), party)
+        character = party.character
+        if character is None:
+            self._host.impress_notice(
+                f"No sheet from {party.name} yet — their attacks are not known.",
+                theme.color("tint.warning"),
+            )
+            return None
+        npc = party.kind != PARTY_PLAYER
+        use = next(
+            (
+                use
+                for build in area_capable_builds(character, self._data)
+                for use in power_area_uses(build, character, self._data, npc=npc, free_use=True)
+            ),
+            None,
+        )
+        if use is None:
+            self._host.impress_notice(
+                f"{party.name} has no attack to use on an area.", theme.color("tint.warning")
+            )
+            return None
+        if party not in sources:
+            sources = [party, *sources]
+        return self._open_new(party, use, sources)
+
+    def open_new(self) -> AreaWindow | None:
+        """The roller's Area button: the first creature with an attack, the GM to change it."""
+        sources, _targets = self._host.impress_parties()
+        for party in sources:
+            character = party.character
+            if character is None:
+                continue
+            if area_capable_builds(character, self._data):
+                return self.start_for(party)
+        self._host.impress_notice(
+            "Nobody in the cast or on the scene has an attack to use on an area.",
+            theme.color("tint.warning"),
+        )
+        return None
+
+    def _open_new(
+        self,
+        source: ImpressParty,
+        use,
+        sources: list[ImpressParty],
+        *,
+        builds: list[Power] | None = None,
+    ) -> AreaWindow | None:
         attempt = AreaAttempt(new_action_id(), use, source_name=source.name, source_ref=source.ref)
         declared = self._make(attempt, source, from_card=False)
-        declared.builds = area_capable_builds(character, self._data)
+        declared.builds = list(builds or [])
+        declared.sources = list(sources)
         return self.open(attempt.action_id)
 
     # -- the window -------------------------------------------------------------
@@ -298,6 +392,7 @@ class AreaController(QObject):
             attempt=declared.attempt,
             source=declared.source,
             targets=targets,
+            sources=declared.sources or None,
             builds=declared.builds,
             from_card=declared.from_card,
             parent=self._parent_window,
@@ -305,8 +400,10 @@ class AreaController(QObject):
         if declared.attack is not None:
             window.set_attack(*declared.attack)
         declared.window = window
-        window.resolveRequested.connect(lambda plan, d=declared: self._resolve(d, plan))
-        window.attackRequested.connect(lambda spec, d=declared: self._attack(d, spec))
+        window.resolveRequested.connect(lambda plan, d=declared: self._go(d, plan))
+        window.attackRequested.connect(
+            lambda spec, source, d=declared: self._attack(d, spec, source)
+        )
         window.cancelled.connect(lambda d=declared: self._on_cancelled(d))
         window.dismissed.connect(lambda d=declared: self._on_dismissed(d))
         window.calledOff.connect(lambda d=declared: self._call_off(d))
@@ -332,8 +429,9 @@ class AreaController(QObject):
             window.deleteLater()
         self._declared.pop(declared.attempt.action_id, None)
 
-    def _attack(self, declared: _Declared, spec: RollSpec) -> None:
+    def _attack(self, declared: _Declared, spec: RollSpec, source: ImpressParty) -> None:
         """The window asked for the attack: rolled for an NPC, asked of a player."""
+        declared.source = source
         if declared.source.kind != PARTY_PLAYER:
             self._host.area_roll_attack(spec)
             return
@@ -367,7 +465,12 @@ class AreaController(QObject):
         for declared in list(self._declared.values()):
             if declared.run.take_roll(roll):
                 spec = RollSpec.from_dict(roll.get("spec"))
-                if spec is not None and spec.kind == KIND_POWER_CHECK and not roll.get("group"):
+                if (
+                    spec is not None
+                    and spec.kind == KIND_POWER_CHECK
+                    and not roll.get("group")
+                    and declared.resolving is None
+                ):
                     self._take_attack(declared, roll)
                 return
         if roll.get("group") or roll.get("kind", "roll") != "roll":
@@ -382,29 +485,47 @@ class AreaController(QObject):
         self._take_attack(declared, roll)
 
     def _take_attack(self, declared: _Declared, roll: dict) -> None:
+        """The attack against the primary came in — or was rerolled — before resolving.
+
+        Once the GM has resolved (or requested) the area, an attack that comes in
+        changes nothing: what it decided has already been rolled on.
+        """
+        if declared.resolving is not None:
+            return
         attack = (total_of(roll), int(roll.get("die", 0)))
         declared.attack = attack
         self._describe(declared)
         if declared.window is not None:
-            declared.window.set_attack(*attack)
+            declared.window.set_attack(*attack, reroll=bool(roll.get("reroll")))
 
     # -- resolving ------------------------------------------------------------------
 
-    def _resolve(self, declared: _Declared, plan: AreaPlan) -> None:
-        """Roll the NPCs' Dodge checks, ask the players, and go on to the saves."""
+    def _go(self, declared: _Declared, plan: AreaPlan) -> None:
+        """The window's go: resolve the area, heal with it, or only request the rolls."""
+        declared.source = plan.source
         declared.attempt = AreaAttempt(
             declared.attempt.action_id,
             plan.use,
-            source_name=declared.attempt.source_name,
-            source_ref=declared.attempt.source_ref,
+            source_name=plan.source.name,
+            source_ref=plan.source.ref,
+            mode=plan.mode,
         )
         resolving = _Resolving(plan, pending={t.party.name for t in plan.targets})
         declared.resolving = resolving
         self._show_card(declared)
         if declared.card is not None:
             declared.card.set_status("Rolling…", button="Open")
+        declared.run.title = plan.title
+        if plan.heals:
+            self._heal(declared, plan)
+        elif plan.mode == AREA_MODE_REQUEST:
+            self._request(declared, plan)
+        else:
+            self._resolve(declared, plan)
+
+    def _resolve(self, declared: _Declared, plan: AreaPlan) -> None:
+        """Roll the NPCs' Dodge checks, ask the players, and go on to the saves."""
         run = declared.run
-        run.title = plan.title
 
         for target in plan.targets:
             if target.party.kind != PARTY_PLAYER:
@@ -443,6 +564,111 @@ class AreaController(QObject):
             for target in dodging
         ]
         run.roll_group(lines, list(dodging), lambda pairs, d=declared: self._npc_dodged(d, pairs))
+
+    # -- requesting ----------------------------------------------------------------------
+
+    def _request(self, declared: _Declared, plan: AreaPlan) -> None:
+        """Leave the history a Dodge card and a save card, and roll nothing more.
+
+        Creatures the GM set the same cover and adjustment for share their cards; the
+        primary target the attack hit makes no Dodge, so it is named on the save alone.
+        """
+        groups: dict[tuple[int, int], list[str]] = {}
+        hit: AreaTarget | None = None
+        for target in plan.targets:
+            if target.primary:
+                hit = target
+                continue
+            groups.setdefault((target.cover, target.adjust), []).append(target.party.name)
+        specs: list[RollSpec] = []
+        for (cover, adjust), names in groups.items():
+            specs += area_request_specs(
+                plan.use,
+                self._data,
+                source=plan.source.name,
+                caught=tuple(names),
+                action_id=plan.action_id,
+                cover=cover,
+                adjust=adjust,
+            )
+        if hit is not None:
+            specs += area_request_specs(
+                plan.use,
+                self._data,
+                source=plan.source.name,
+                primary=hit.party.name,
+                action_id=plan.action_id,
+                adjust=hit.adjust,
+            )
+        for spec in specs:
+            self._host.action_request(spec)
+        resolving = declared.resolving
+        if resolving is not None:
+            resolving.pending.clear()
+        if declared.window is not None:
+            for target in plan.targets:
+                declared.window.set_result(
+                    target.party.ref,
+                    "save from the card" if target.primary else "Dodge and save from the cards",
+                )
+        self._host.impress_notice(
+            f"{plan.use.power_name}: the Dodge and the save are in the history — everyone "
+            "caught rolls from the cards.",
+            theme.color("accent"),
+        )
+        if declared.card is not None:
+            declared.card.set_done("Requested — the cards are in the history.")
+        if declared.window is not None:
+            declared.window.finish("Requested — everyone caught rolls from the cards.")
+        declared.run.close()
+        self._retire(declared)
+
+    # -- healing ------------------------------------------------------------------------
+
+    def _heal(self, declared: _Declared, plan: AreaPlan) -> None:
+        """An area Healing: the wielder's one check, then a condition off each per degree."""
+        spec = area_heal_spec(
+            plan.use, self._data, source=plan.source.name, action_id=plan.action_id
+        )
+        if spec is None:
+            return
+        run = declared.run
+        if plan.source.kind == PARTY_PLAYER:
+            if not run.ask(plan.source, spec, None, lambda _a, r, d=declared: self._healed(d, r)):
+                self._host.impress_notice(
+                    f"Could not ask {plan.source.name} for the check.", theme.color("tint.worse")
+                )
+            return
+        line = group_line(plan.source.name, spec, title=plan.title, dc=spec.dc)
+        run.roll_group([line], [None], lambda pairs, d=declared: self._healed(d, pairs[0][1]))
+
+    def _healed(self, declared: _Declared, record: dict) -> None:
+        resolving = declared.resolving
+        if resolving is None:
+            return
+        plan = resolving.plan
+        degree = record.get("degree")
+        successes = max(0, int(degree)) if degree is not None else 0
+        check = roll_cell("Check", record)
+        for target in plan.targets:
+            self._cell(declared, target, check)
+            character = target.party.character
+            if character is None:
+                self._land(declared, target, "no sheet seen yet — heal by hand", "tint.warning")
+                continue
+            removals = list(area_heal_removals(plan.use, character, successes, self._data))
+            if not removals:
+                text = "nothing to heal" if successes else "the check failed"
+                self._land(declared, target, text, "")
+                continue
+            catalog = self._data.condition_catalog()
+            names = [catalog[c].name if c in catalog else c for c, _p in removals]
+            text = "removed " + ", ".join(names)
+            if not self._host.action_remove(target.party, removals):
+                text += " (not delivered)"
+            elif target.party.kind == PARTY_PLAYER:
+                declared.run.tell(target.party, f"{plan.use.power_name}: {text}")
+            self._land(declared, target, text, "tint.better")
 
     # -- the NPCs ---------------------------------------------------------------------
 
@@ -521,7 +747,7 @@ class AreaController(QObject):
         queue: list[tuple[AreaEffect, int]] = []
         for effect in use.effects:
             rank = (
-                effect.rank
+                area_primary_rank(effect)
                 if made is None
                 else area_stage_rank(effect.rank, made, target.party.character, self._data)
             )

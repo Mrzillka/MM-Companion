@@ -232,7 +232,9 @@ def targets_help(data: GameData) -> str:
     )
 
 
-def mode_row(owner: QWidget) -> tuple[QWidget, dict[str, QRadioButton], QButtonGroup]:
+def mode_row(
+    owner: QWidget, help_text: str = MODE_HELP
+) -> tuple[QWidget, dict[str, QRadioButton], QButtonGroup]:
     """The two ways to run the resistances, as a row of radios with the "?" beside them."""
     host = QWidget()
     row = QHBoxLayout(host)
@@ -245,7 +247,7 @@ def mode_row(owner: QWidget) -> tuple[QWidget, dict[str, QRadioButton], QButtonG
         group.addButton(button)
         row.addWidget(button)
         buttons[mode] = button
-    row.addWidget(HelpButton(MODE_HELP))
+    row.addWidget(HelpButton(help_text))
     row.addStretch(1)
     return host, buttons, group
 
@@ -758,12 +760,13 @@ class ImpressRow(ActionRow):
 class ImpressWindow(ActionWindow):
     """The GM setting up and resolving an Impress — a player's, or one of their NPCs'.
 
-    The GM's controls are the impresser (an NPC of theirs), the impression and the skill
-    (a player's own when they chose them, the GM's when they sent it bare), a bonus and a
-    penalty on the impresser's check, the situational modifiers, each target's resistance
-    ("Highest" by default, or a pick), and a bonus and penalty on the check against
-    each target alone. :attr:`rollRequested` hands the finished :class:`ImpressPlan` to
-    whoever rolls it; the window then shows each roll as it comes back.
+    The GM's controls are the impresser (an NPC of theirs or a player, fixed for a
+    player's declaration), the impression and the skill (opening on a player's own
+    picks when they declared them, and still the GM's to change), an adjustment to the
+    impresser's check, the situational modifiers, each target's resistance ("Highest" by
+    default, or a pick), and an adjustment to the check against each target alone.
+    :attr:`rollRequested` hands the finished :class:`ImpressPlan` to whoever rolls it;
+    the window then shows each roll as it comes back.
     """
 
     rollRequested = Signal(object)  # ImpressPlan
@@ -793,8 +796,10 @@ class ImpressWindow(ActionWindow):
         )
         self._attempt = attempt
         self._sources = sources
-        #: The player chose the impression and skill; they are theirs, read-only here.
+        #: The player chose the impression and skill. They open picked, and the GM may
+        #: still change either; :meth:`_on_source` reads them once, on the first fill.
         self._declared = attempt is not None and not attempt.bare
+        self._prefill = self._declared
 
         setup = QWidget()
         form = QFormLayout(setup)
@@ -822,9 +827,6 @@ class ImpressWindow(ActionWindow):
         if attempt is not None:
             # A player's declaration: they impress, nobody else.
             self._source.setEnabled(False)
-        if self._declared:
-            self._impression.setEnabled(False)
-            self._skill.setEnabled(False)
         form.addRow("Impresser:", source_row)
         form.addRow("Impression:", self._impression)
         form.addRow("Skill:", self._skill)
@@ -908,18 +910,28 @@ class ImpressWindow(ActionWindow):
         source = self.source()
         character = source.character if source is not None else None
         attempt = self._attempt
-        if self._declared and attempt is not None:
-            _fill_impressions(self._impression, self._data, None, attempt.impression)
-            self._skills = [
-                TraitChoice("skill", attempt.skill_row, attempt.skill_label, attempt.skill_modifier)
-            ]
-            _fill_choices(self._skill, self._skills)
+        prefill, self._prefill = self._prefill, False
+        if prefill and attempt is not None:
+            # What the player declared, picked — out of everything their sheet offers,
+            # so the GM can still change it. The declared skill keeps the number their
+            # own sheet gave it; without a snapshot yet, it is the one row there is.
+            _fill_impressions(self._impression, self._data, character, attempt.impression)
+            declared = TraitChoice(
+                "skill", attempt.skill_row, attempt.skill_label, attempt.skill_modifier
+            )
+            offered = impress_skill_choices(character, self._data) if character else []
+            self._skills = [declared if c.ref == declared.ref else c for c in offered]
+            if declared not in self._skills:
+                self._skills.insert(0, declared)
+            _fill_choices(self._skill, self._skills, declared.ref)
         else:
             current = str(self._impression.currentData() or "")
+            skill = self._skill.currentData()
             _fill_impressions(self._impression, self._data, character, current)
             self._skills = impress_skill_choices(character, self._data) if character else []
-            _fill_choices(self._skill, self._skills)
-            _preselect_skill(self._skill, self.impression(), self._data)
+            _fill_choices(self._skill, self._skills, str(skill or ""))
+            if self._skill.currentData() != skill:
+                _preselect_skill(self._skill, self.impression(), self._data)
         # The impresser cannot be their own target.
         for row in self._rows:
             mine = source is not None and row.party.ref == source.ref
@@ -929,8 +941,7 @@ class ImpressWindow(ActionWindow):
         self._on_skill()
 
     def _on_impression(self) -> None:
-        if not self._declared:
-            _preselect_skill(self._skill, self.impression(), self._data)
+        _preselect_skill(self._skill, self.impression(), self._data)
         self.sync()
 
     def _on_skill(self) -> None:
@@ -976,7 +987,7 @@ class ImpressWindow(ActionWindow):
             if self.phase == PHASE_SETUP:
                 self._refresh_choices(row, self.skill())
         source = self.source()
-        if source is not None and source.ref == ref and not self._declared:
+        if source is not None and source.ref == ref:
             source.character = character
             if self.phase == PHASE_SETUP:
                 self._on_source()

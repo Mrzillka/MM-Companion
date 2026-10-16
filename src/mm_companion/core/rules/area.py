@@ -26,6 +26,7 @@ __all__ = [
     "AREA_SPREAD_KEY",
     "area_modifier",
     "area_selection",
+    "area_band_ranks",
     "effect_is_area",
     "area_shape_options",
     "area_shape",
@@ -62,6 +63,20 @@ def area_selection(effect: PowerEffectInstance, game_data: GameData) -> Modifier
 
     wanted = set(game_data.area.modifiers)
     return next((s for s in effect.extras if s.modifier_id in wanted), None)
+
+
+def area_band_ranks(selection: ModifierSelection | None) -> int | None:
+    """How many ranks a banded area covers — ``None`` when it covers them all.
+
+    An area bought on part of an effect (a Rocket Launcher's Area on 7 of its 10 Damage
+    ranks) is an area of that many ranks: the Dodge DC and the save everyone in the
+    blast makes are figured from them, while the creature the attack hits directly
+    takes the full effect.
+    """
+
+    if selection is None or not selection.applies_to:
+        return None
+    return max(1, selection.applies_to - max(1, selection.applies_from) + 1)
 
 
 def effect_is_area(effect: PowerEffectInstance, game_data: GameData) -> bool:

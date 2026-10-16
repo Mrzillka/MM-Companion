@@ -55,6 +55,13 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   - The GM resolves it either way, and the GM's own sheets never get the dialog — the
     GM's window is where they set things up.
   - Off the air there is no GM, so the dialog always opens.
+- **The GM may start either action for anybody**, a player included: the roller's
+  Impress and Area buttons, an NPC card's 🗣 and 💥, and a creature's card on the board
+  (right-click: **Impress…**, **Area attack…**). Impress's impresser combo lists the cast
+  and the players; the area window grows an **Attacker** combo for one the GM started,
+  and switching it reads that creature's builds afresh (a player's off their snapshot —
+  `start_for` refuses one whose snapshot has not come). A player picked as the
+  attacker is asked for their check or attack exactly as one who declared it.
 - **The GM's setting is published, not asked for.** It rides the session's
   shared-state channel as the core app's own entry (`TABLE_MOD_ID`
   `"mm-companion.table"`, key `"actions"`), so it is stored, replayed in a joiner's
@@ -77,12 +84,16 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   a penalty "-2" — it was two boxes, which doubled every row). A player's dialog in
   a session therefore carries no modifiers at all; it declares (impression, skill,
   targets off the scene, mode) and the GM's window opens on it, the player's own
-  choices read-only. Toggles sharing an `exclusive` group (simple vs. full action)
+  choices picked (and still the GM's to change). Toggles sharing an `exclusive` group (simple vs. full action)
   turn each other off; a range's `StepSpin` stops only on its `step`, so "earlier
   attempts" moves in fives. The panel is **folded by default** behind a header saying
   what the modifiers add up to ("none", or the tinted total), and unfolds itself when
   `set_values` sets one that counts. Each modifier's `label` is a short caption and its
   `hint` the explanation, shown as the control's tooltip.
+- **A declared impression is the player's pick, not a lock.** The GM window opens on the
+  impression and skill they declared, picked out of everything their snapshot offers, and
+  the GM may change either (the declared skill keeps the number the player's own sheet
+  sent with it). Only the impresser is fixed — it is still their action.
 - **Several targets is a group impression**: one check, the group penalty once, each
   target resisting separately. Every target also gets an **adjustment to the check
   against them alone** (its row's **Adjust**) — applied as an offset to the DC that
@@ -256,11 +267,18 @@ The second action on this layer, following the 4e rules (Area Effect extra, PDF 
     blocks learn they are on an NPC sheet through `set_npc_mode` and redraw.
   - The book's version is the size rule (PDF p58). Here it is the GM's call, not a
     gate the app checks.
-- **The area line.** `power_rolls_with_area` appends one `KIND_AREA` spec to the
-  footer. It is not a die, and it **never travels as one**.
+- **The area line.** `power_rolls_with_area` appends a `KIND_AREA` spec to the
+  footer for each area the build makes. It is not a die, and it **never travels as one**.
+  - **A linked area is one area per effect.** A build whose effects are several areas
+    gets a line for each (`power_area_uses`, the effect's name in the label), and each
+    runs as an area of its own: its own Dodge against its own rank, its own save. It
+    used to be one Dodge against the first effect's rank with the rest as further
+    saves; the user asked for two buttons rather than that. An `AreaUse` carries one
+    effect and its `effect_index`, and the line's key is `area_key` —
+    `"<build id>#<index>"`, the bare id for the first (`find_area_power` strips it).
   - It goes *last*, so a pin's index keeps naming the roll it was made on. The footer
     offers no pin menu on it.
-  - Its `trait_key` is the build's id, which `find_area_power` looks up. That lookup
+  - Its `trait_key` is the area key, which `find_area_power` looks up. That lookup
     is why `item_effective_build` now keeps the host's id.
   - Clicking it raises `RollsFooter.areaRequested(build id)`, not `rollRequested`. It
     reaches the bus as its own topic, `area-requested`, which the Dice block serves
@@ -278,6 +296,8 @@ The second action on this layer, following the 4e rules (Area Effect extra, PDF 
 - **It is modeless** (`show()`, not `exec()`). The cards are dragged off the Scene
   block on the same window, and a modal dialog swallows the press that starts the drag.
 - A player's scene cards are draggable now; only the GM's board takes the drop back.
+- A **mode** row (**GM resolves** / **Request only**) rides on `AreaAttempt.mode`, and
+  the GM's window opens on it. An area Healing has neither: no primary box and no mode.
 - At a table, sending it does three things:
   1. sends the `AreaAttempt` (`ActionRequest` kind `"area"`);
   2. posts a note naming who is caught;
@@ -318,8 +338,15 @@ The second action on this layer, following the 4e rules (Area Effect extra, PDF 
   are all keyed by display name. Without the numbers, two Thugs share one row and the
   last roll stands for both.
 - `AreaWindow` lets the GM edit:
+  - the attacker (one the GM started), the **power** — every area of every build the
+    attacker's sheet offers, a player's off their snapshot — and, for a free use, the
+    shape;
+  - an **Adjust** to the area's **rank** (`area_use_adjusted`: the Dodge DC and every
+    save DC move with it) and one to the **attack** check. The attack's is added when
+    Hit is judged, never to the spec asked for, so an attack the player rolled at
+    declaration counts it the same way as one asked for later;
   - who is in the area. A dropped card ticks a row, and a roster card's `kind:source`
-    ref works too.
+    ref works too. The attacker's own row is shown but cannot be ticked.
   - the primary, and whether it was hit. "Hit" is pre-ticked from the attack's total
     against the primary's Defense class.
   - per creature, a cover combo (Dodge only) and an Adjust (both of that creature's
@@ -331,6 +358,10 @@ The second action on this layer, following the 4e rules (Area Effect extra, PDF 
 - A player's fresh snapshot reaches open area windows as it does Impress ones
   (`AreaController.windows`). If the primary's Defense changed, the Hit tick is
   re-read, unless the GM set Hit by hand.
+- **A rerolled attack is followed until the GM resolves.** A reroll travels with the
+  same spec, so it reaches `_take_attack` like the first roll; the window replaces the
+  attack, says "(rerolled)" and judges Hit afresh. Once the area is resolved or
+  requested, an attack that comes in changes nothing (`declared.resolving` is set).
 
 ### Resolving
 
@@ -365,10 +396,52 @@ The second action on this layer, following the 4e rules (Area Effect extra, PDF 
     the save, and the label names both.
   - **The GM applies what the save did**, as for an NPC — condition commands to the
     player's app — and tells them with an `"outcome"`. Players used to apply their own
-    off a chained request (`area_request_specs`, which off the air still does).
+    off a chained request; off the air they still answer the two request cards.
+- **A heavy weapon's two ranks.** An area bought on part of an effect — a rank band on
+  the area selection, which an equipment modifier ref gives with `appliesTo` (the Rocket
+  Launcher's Area on 7 of its 10 Damage ranks) — is an area of that many ranks
+  (`area_band_ranks`, read by `effect_area_rank`, so the card's Area row agrees). The
+  creature the attack hits directly resists the whole effect: `AreaEffect.primary_rank`,
+  read through `area_primary_rank` by both the NPC saves and the player's ask.
 - **No crits on the area half.** An area's Dodge and save follow-ups take no natural-20
   bump and no natural-1 graze, because area effects make no attack check (PDF p195).
   The primary's attack is an ordinary attack and keeps its own.
+
+### Request only
+
+- The GM's **Request** rolls nothing more: `_request` leaves the history two cards per
+  effect (`area_request_specs`) — the **Dodge**, for everyone caught but a primary the
+  attack hit, and the **save**, offered at full rank and at half through
+  `dc_if_resisted`, which `request_widgets` draws as two buttons. A hit primary shares
+  the save card (its button the full one), or gets a full-rank card alone when nobody
+  else is caught or it takes a different rank. Creatures the GM set the same cover and
+  adjustment for share their cards. Off the air the dialog leaves the same two.
+- Each card carries the action id, so the answers fill the action's table.
+- **The GM answers one as an NPC.** A trait roll clicked in the GM's history (a request
+  card, a save chip) used to roll at +0 — the GM's roller has no sheet. It now offers a
+  menu of the NPCs on the board, the ones the spec names first (`_on_history_roll`),
+  and rolls it with that NPC's own number under its name; "As written" is the old way.
+
+### Area Healing
+
+- An area of an effect that is **checked** rather than resisted — Healing, by its
+  `checkOutcomes` (DC, and the conditions each degree removes in order) — has no Dodge,
+  no primary and no request mode: `area_use_heals`. The wielder makes one check
+  (`area_heal_spec`: the rank against the DC), rolled by the server for an NPC and asked
+  of a player, and each degree of success takes a condition off everyone in the area,
+  least severe first (`targeting.success_removals`, worked on a copy). They come off
+  through `action_remove` — an NPC's model, a player's app's remove commands.
+
+## End of turn
+
+- A creature's card on the GM's board offers **End turn**. For now it does one thing:
+  every impression the table resolved onto that creature (`ImpressController._lingering`,
+  remembered as each rung lands, with its DC and how the target resisted) is resisted
+  again **against the original DC** — the server rolls an NPC's, a player is asked for
+  each in turn (`Shake off Demoralized`). One that is made comes off; one that is
+  failed stays. An impression whose conditions are already gone is forgotten unrolled.
+- The rolls land in their own table (`"<name>: end of turn"`) and the outcome on the
+  notice. What it does not do yet is in the debts.
 
 ## One table per group (Impress too)
 
@@ -394,7 +467,9 @@ The second action on this layer, following the 4e rules (Area Effect extra, PDF 
 
 These are in [the debts](debts.md):
 
-- the end-of-turn save to shake an impression off;
-- counting earlier attempts automatically;
-- the area pieces left out: a Hero Point inside the table, areas that do not resolve
-  to conditions, heavy weapons' two ranks, and linked areas.
+- End turn's other checks (Stunned recovery, Affliction overcome, Suffocation), and a
+  memory of impressions that outlives the GM's app;
+- the area pieces left out: a Hero Point inside the table, and Nullify and Move Object
+  areas.
+
+Counting earlier Impress attempts automatically was dropped: the GM sets the slider.

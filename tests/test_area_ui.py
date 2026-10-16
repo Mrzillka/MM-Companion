@@ -232,8 +232,9 @@ def test_a_free_use_picks_its_shape_in_the_dialog(qapp, data) -> None:
 def test_off_the_air_the_dialog_rolls_and_leaves_a_dodge_request(qapp, data) -> None:
     dialog = AreaDialog(data, creature(data, "Ana"), burst())
     assert dialog.primary is None and dialog._ok.isEnabled()
-    (request,) = dialog.offline_requests(source_name="Ana")
-    assert request.kind == KIND_AREA_DODGE and request.follow_up is not None
+    dodge, save = dialog.offline_requests(source_name="Ana")
+    assert dodge.kind == KIND_AREA_DODGE and dodge.follow_up is None
+    assert save.dc_if_resisted is not None  # the save card: full or half
 
 
 # -- the GM's window ---------------------------------------------------------------------
@@ -251,8 +252,9 @@ def test_the_gm_window_ticks_a_dropped_card_and_reads_the_attack(qapp, data) -> 
     use = power_area_use(burst(), source.character, data)
     attempt = AreaAttempt("act", use, primary="s1", source_name="Ana")
     window = AreaWindow(data, attempt=attempt, source=source, targets=targets)
-    # The attacker is no target, the primary starts out included.
-    assert [r.party.name for r in window._rows] == ["Mook", "Nova"]
+    # The attacker cannot be put in their own area; the primary starts out included.
+    assert [r.party.name for r in window._rows] == ["Ana", "Mook", "Nova"]
+    assert not window._row("s0").include.isEnabled()
     assert [r.party.name for r in window.included()] == ["Mook"]
     # A roster card's own ref names the creature too.
     assert window.include_ref("player:p2")
@@ -660,8 +662,9 @@ def test_namesakes_on_the_board_are_numbered_and_found_by_file(
 
     sheet = library.load_character(second)
     area = window._area.start_for_npc(sheet, sheet.powers[0], second.name, name="Thug")
-    # The second Thug attacks: the first is a target, and the attacker is not.
-    assert [r.party.source for r in area._rows] == [first.name]
+    # The second Thug attacks: the first is a target, and the attacker cannot be.
+    open_rows = [r.party.source for r in area._rows if r.include.isEnabled()]
+    assert open_rows == [first.name]
     assert area._source.name in ("Thug (1)", "Thug (2)")
     area.close()
 
@@ -842,3 +845,286 @@ def test_the_sheet_sends_an_area_bare_unless_the_player_chooses(qapp, data, monk
     # ...unless the GM keeps the choosing.
     bridge.rules = {action_ui.TABLE_ACTIONS_KEY: {"players_choose": False}}
     assert dice.start_area(char.powers[0].id) is None
+
+
+# -- the GM starting one for anybody, adjusting it, requesting it, healing with it --------
+
+
+def test_the_gm_starts_an_area_for_a_player_and_may_switch_the_attacker(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    source, targets = _parties(data)
+    source.character.powers.append(burst())
+    mook = targets[1]
+    mook.character.powers.append(
+        Power(name="Club", effects=[PowerEffectInstance("damage", rank=4)])
+    )
+    monkeypatch.setattr(window, "impress_parties", lambda: ([source, mook], targets))
+    area = window._area.start_for(source)
+    assert area is not None and area.source.name == "Ana"
+    assert area._attacker is not None and area._attacker.count() == 2
+    assert area.use.power_name == "Fire Burst"
+    assert not area._row("s0").include.isEnabled()  # not into their own area
+    asked = Asked(window, monkeypatch)
+    area.set_primary("s1")
+    assert area._roll_attack.text().startswith("🎲 Ask")  # a player: asked, not rolled
+    area._roll_attack.click()
+    (attack,) = asked.specs()
+    assert attack.targets == ("Mook",)
+    # Switching the attacker reads the other creature's attacks — and frees Ana's row.
+    area.set_attacker("s1")
+    assert area.source.name == "Mook" and area.use.power_name == "Club"
+    assert area._row("s0").include.isEnabled() and not area._row("s1").include.isEnabled()
+    assert area._roll_attack.text() == "🎲 Roll attack"
+    area.close()
+
+
+def test_a_player_with_no_sheet_yet_cannot_be_started(qapp, window: GMWindow, data) -> None:
+    ghost = ImpressParty("s9", "Ghost", PARTY_PLAYER, "p9", None)
+    assert window._area.start_for(ghost) is None
+
+
+def test_the_gms_rank_and_attack_adjustments_reach_the_roll(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    thug, _mook, thug_sheet = _cast(window, data)
+    seen: list[list] = []
+    fake = stages([-1], [-1])
+
+    def spy(lines, **kwargs):
+        seen.append(lines)
+        return fake(lines, **kwargs)
+
+    monkeypatch.setattr(action_run, "resolve_group", spy)
+    area = window._area.start_for_npc(thug_sheet, thug_sheet.powers[0], thug)
+    area._rows[0].include.setChecked(True)
+    area.set_rank_adjust(2)
+    assert "DC <b>20</b>" in area._use_note.text()
+    area._resolve.click()
+    dodge, save = seen
+    assert dodge[0][1] == 20 and save[0][1] == 20  # rank 8 + 2, Dodge and save alike
+
+
+def test_the_attack_adjustment_counts_when_hit_is_judged(qapp, data) -> None:
+    from mm_companion.core.rules import defense_class
+
+    source, targets = _parties(data)
+    use = power_area_use(burst(), source.character, data)
+    window = AreaWindow(
+        data, attempt=AreaAttempt("act", use, primary="s1"), source=source, targets=targets
+    )
+    dc = defense_class(targets[1].character, data)
+    window.set_attack(dc - 1, 9)
+    assert not window.hit()
+    window.set_attack_adjust(2)
+    assert window.hit() and f"{dc - 1} +2 = {dc + 1}" in window._attack_note.text()
+    # The attack is asked for as it stands; the adjustment is the GM's, added on judging.
+    assert window.attack_spec().modifier == use.attack
+    window.close()
+
+
+def test_a_reroll_before_resolving_replaces_the_attack_and_after_changes_nothing(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    source, targets = _parties(data)
+    monkeypatch.setattr(window, "impress_parties", lambda: ([source], targets))
+    use = power_area_use(burst(), source.character, data)
+    window._area.declare("p1", AreaAttempt("act", use, primary="s1").to_dict())
+    area = window._area.open("act")
+    spec = RollSpec(label="Fire Burst: area attack", action_id="act", kind="power-check")
+    attack = {"seq": 9, "die": 2, "bonus": 0, "penalty": 0, "spec": spec.to_dict()}
+    window._area.take_roll(attack)
+    assert area._attack == (2, 2) and not area.hit()
+    window._area.take_roll({**attack, "seq": 10, "die": 19, "reroll": True})
+    assert area._attack == (19, 19) and "(rerolled)" in area._attack_note.text()
+    monkeypatch.setattr(window, "impress_apply", lambda party, changes: True)
+    monkeypatch.setattr(action_run, "resolve_group", stages([-1], [-1]))
+    area._resolve.click()
+    window._area.take_roll({**attack, "seq": 11, "die": 1, "reroll": True})
+    assert area._attack == (19, 19)  # resolved: the reroll does not follow
+    area.close()
+
+
+def test_request_only_leaves_a_dodge_card_and_a_save_card(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    thug, mook, thug_sheet = _cast(window, data)
+    rolled: list = []
+    monkeypatch.setattr(action_run, "resolve_group", lambda lines, **kw: rolled.append(lines))
+    requested: list[RollSpec] = []
+    monkeypatch.setattr(window, "action_request", requested.append)
+    area = window._area.start_for_npc(thug_sheet, thug_sheet.powers[0], thug)
+    area._rows[0].include.setChecked(True)
+    area.set_mode("request")
+    assert area._resolve.text() == "Request"
+    area._resolve.click()
+    assert rolled == []  # nothing is rolled: each creature rolls from the cards
+    dodge, save = requested
+    assert dodge.kind == KIND_AREA_DODGE and dodge.targets == ("Mook",)
+    assert save.dc == 18 and save.dc_if_resisted == 14 and save.action_id == area.action_id
+    assert window._npc_state[mook].character.conditions == []
+    assert area.phase == "done"
+    area.close()
+
+
+def test_a_players_request_only_declaration_opens_in_request_mode(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    source, targets = _parties(data)
+    monkeypatch.setattr(window, "impress_parties", lambda: ([source], targets))
+    use = power_area_use(burst(), source.character, data)
+    attempt = AreaAttempt("act", use, targets=("s2",), mode="request")
+    window._area.declare("p1", attempt.to_dict())
+    area = window._area.open("act")
+    assert area.mode() == "request"
+    area.close()
+
+
+def _mend() -> Power:
+    return Power(
+        name="Mend",
+        effects=[PowerEffectInstance("healing", rank=6, extras=[ModifierSelection("area_effect")])],
+    )
+
+
+def test_an_npcs_area_healing_takes_conditions_off_everyone_in_it(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    from mm_companion.core.rules import apply_condition
+
+    doc = write_npc(data, "Doc", power=_mend())
+    mook = write_npc(data, "Mook")
+    window._register_npc(doc)
+    window._register_npc(mook)
+    window._set_in_scene(SCENE_NPC, mook.name, True)
+    hurt = window._npc_state[mook.name].character
+    apply_condition(hurt, "hit", data)
+    apply_condition(hurt, "dazed", data)
+    sheet = library.load_character(doc)
+    seen: list[list] = []
+
+    def made_by_two(lines, **kwargs):
+        seen.append(lines)
+        return stages([2])(lines, **kwargs)
+
+    monkeypatch.setattr(action_run, "resolve_group", made_by_two)
+    area = window._area.start_for_npc(sheet, sheet.powers[0], doc.name)
+    assert area.heals() and area._primary_box.isHidden() and area._mode_host.isHidden()
+    area._rows[0].include.setChecked(True)
+    assert area._resolve.text() == "🎲 Heal"
+    area._resolve.click()
+    ((check,),) = seen
+    assert check == (6, 10)  # the effect's rank against DC 10
+    assert hurt.conditions == []
+    assert "removed Hit, Dazed" in area.result_text(area._rows[0].party.ref)
+    area.close()
+
+
+def test_a_heavy_weapons_hit_primary_resists_the_whole_rank(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    from mm_companion.core.rules.equipment import build_item_from_entry
+
+    entry = next(e for e in data.equipment if e.id == "rocket_launcher")
+    item = build_item_from_entry(entry, data)
+    thug_path = write_npc(data, "Thug")
+    thug_sheet = library.load_character(thug_path)
+    thug_sheet.equipment.append(item)
+    mook = write_npc(data, "Mook")
+    nobody = write_npc(data, "Nobody")
+    window._register_npc(thug_path)
+    for path in (mook, nobody):
+        window._register_npc(path)
+        window._set_in_scene(SCENE_NPC, path.name, True)
+    seen: list[list] = []
+    fake = stages([-1], [-1, -1])
+
+    def spy(lines, **kwargs):
+        seen.append(lines)
+        return fake(lines, **kwargs)
+
+    monkeypatch.setattr(action_run, "resolve_group", spy)
+    monkeypatch.setattr(window, "impress_apply", lambda party, changes: True)
+    area = window._area.start_for_npc(thug_sheet, item.build, thug_path.name)
+    mook_ref = next(r.party.ref for r in area._rows if r.party.source == mook.name)
+    for row in area._rows:
+        if row.include.isEnabled():
+            row.include.setChecked(True)
+    area.set_primary(mook_ref)
+    area.set_hit(True)
+    area._resolve.click()
+    dodges, saves = seen
+    assert [dc for _m, dc in dodges] == [17]  # only the one not hit dodges, vs 10 + 7
+    assert sorted(dc for _m, dc in saves) == [17, 20]  # the hit one resists all 10 ranks
+    area.close()
+
+
+def test_a_save_request_offers_full_and_half(qapp) -> None:
+    from mm_companion.ui.roll_history import request_widgets
+
+    save = RollSpec(label="Toughness", dc=18, dc_if_resisted=14, note_if_resisted="no effect")
+    clicked: list[RollSpec] = []
+    full, half = request_widgets(save, on_roll=clicked.append)
+    assert "DC 18" in full.text() and "DC 14" in half.text() and "no effect" in half.text()
+    half.click()
+    assert clicked[0].dc == 14 and clicked[0].dc_if_resisted is None
+    (plain,) = request_widgets(RollSpec(label="Dodge", dc=18), on_roll=clicked.append)
+    assert "DC 18" in plain.text()
+
+
+def test_the_gm_answers_a_request_as_one_of_their_npcs(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    _thug, mook, _sheet = _cast(window, data)
+    window._npc_state[mook].character.resistances["TOUGHNESS"] = 6
+    rolled: list[RollSpec] = []
+    monkeypatch.setattr(window._roller, "roll_spec", lambda spec: rolled.append(spec) or True)
+    save = RollSpec(
+        label="Toughness vs. Burst",
+        dc=18,
+        kind="power-save",
+        trait_key="TOUGHNESS",
+        targets=("Mook",),
+        action_id="a1",
+    )
+    _sources, targets = window.impress_parties()
+    party = next(p for p in targets if p.source == mook)
+    window._roll_as(save, party)
+    (spec,) = rolled
+    assert spec.label.startswith("Mook: ") and spec.targets == ("Mook",)
+    assert spec.modifier >= 6 and spec.action_id == "a1"
+
+
+def test_a_linked_area_is_offered_once_per_effect_on_the_npc_card(
+    qapp, window: GMWindow, data
+) -> None:
+    haze = Power(
+        name="Haze",
+        effects=[
+            PowerEffectInstance("damage", rank=6, extras=[ModifierSelection("area_effect")]),
+            PowerEffectInstance(
+                "affliction",
+                rank=6,
+                extras=[ModifierSelection("area_effect")],
+                config={"resistance": "Will", "degree1": "dazed"},
+            ),
+        ],
+    )
+    thug = write_npc(data, "Thug", power=haze)
+    window._register_npc(thug)
+    card = window._npc_state[thug.name].card
+    keys = [key for key, _caption in card.area_choices()]
+    assert len(keys) == 2 and keys[1].endswith("#1")
+    assert len(card.area_menu().actions()) == 2
+    window._start_card_area(thug.name, keys[1])
+    (area,) = window._area.windows.values()
+    assert area.use.effect_index == 1 and area.use.effects[0].effect_id == "affliction"
+    area.close()
+
+
+def test_a_creature_on_the_board_offers_end_turn_impress_and_area(qapp, data) -> None:
+    from mm_companion.ui.scene_card import SceneCard
+
+    card = SceneCard({"ref": "s1", "name": "Nova", "kind": "player"}, data, gm=True)
+    texts = [a.text() for a in card.build_context_menu().actions() if a.text()]
+    assert texts[:3] == ["End turn", "Impress…", "Area attack…"]

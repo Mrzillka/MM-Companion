@@ -17,7 +17,10 @@ out, and it is the only part of the action that touches the session:
   NPC's model, or as condition commands to a player's app — and the window's Result
   column and the history's table fill in as it goes;
 * **request only** rolls just the check, whose card then offers every target a button
-  to resist with.
+  to resist with;
+* **end of turn** (a creature's card on the board, right-clicked): every impression this
+  table put on that creature is resisted again against its original DC — the server
+  rolls an NPC's, a player is asked — and one that is made comes off.
 
 It reaches the GM window only through the small :class:`ImpressHost` surface, and the
 rolling and the asking are :mod:`mm_companion.ui.action_run`'s.
@@ -33,16 +36,19 @@ from PySide6.QtCore import QObject
 from PySide6.QtWidgets import QWidget
 
 from mm_companion.core.character import Character
-from mm_companion.core.data_loader import GameData
+from mm_companion.core.data_loader import GameData, Impression
 from mm_companion.core.rules import (
     MODE_REQUEST,
     ImpressAttempt,
     RollSpec,
+    TraitChoice,
+    best_choice,
     impress_ask_resist_spec,
     impress_label,
     impress_rung,
     impress_spec,
     impression_outcomes,
+    resist_choices,
     resolve_rung,
     rung_caption,
 )
@@ -61,6 +67,7 @@ from mm_companion.ui.impress import (
     new_action_id,
 )
 from mm_companion.ui.roll_history import ActionCard
+from mm_companion.ui.sections.conditions import matching_condition
 from mm_companion.ui.session_bridge import SessionBridge
 
 #: What the GM's history button says.
@@ -84,6 +91,9 @@ class ImpressHost(Protocol):
 
     def action_add_card(self, card: ActionCard) -> None:
         """Put the GM's reminder card in their history."""
+
+    def action_remove(self, party: ImpressParty, changes: list[tuple[str, str | None]]) -> bool:
+        """Take conditions off one party; ``False`` if that could not be delivered."""
 
 
 @dataclass
@@ -111,6 +121,23 @@ class _Action:
     preferred: str = ""
 
 
+@dataclass
+class _Lingering:
+    """An impression's conditions on one creature, and what shaking them off takes.
+
+    Remembered when the table applies them, so the creature's end of turn can resist
+    again: against the *original* DC, with what it resisted with then (``resist`` is
+    the GM's pick, or ``None`` for its highest option).
+    """
+
+    impression: Impression
+    skill_row: str
+    dc: int
+    resist: TraitChoice | None
+    changes: list[tuple[str, str | None]]
+    source_name: str
+
+
 class ImpressController(QObject):
     """Runs every Impress the GM window resolves (see the module docstring)."""
 
@@ -127,6 +154,10 @@ class ImpressController(QObject):
         self._host = host
         self._parent_window = parent_window
         self._actions: dict[str, _Action] = {}
+        #: The impressions on each creature (by scene ref) that its turn may shake off.
+        self._lingering: dict[str, list[_Lingering]] = {}
+        #: End-of-turn rolls still coming back.
+        self._turn_runs: list[ActionRun] = []
         bridge.actionRequested.connect(self._on_action_request)
         bridge.rollAdded.connect(self.take_roll)
 
@@ -165,19 +196,21 @@ class ImpressController(QObject):
     # -- being told --------------------------------------------------------------------
 
     def open_new(self, source_key: str = "") -> ImpressWindow | None:
-        """The GM pressed Impress: one of their creatures impresses somebody.
+        """The GM pressed Impress: somebody — an NPC of theirs, or a player — impresses.
 
-        *source_key* is the NPC's cast key when it was its card's button, which picks it.
+        *source_key* picks the impresser: an NPC's cast key when it was its card's
+        button, or a player's id when it was their card on the board. A player picked
+        here is asked for their check like one who declared it themselves.
         """
         sources, _targets = self._host.impress_parties()
-        npcs = [party for party in sources if party.kind == PARTY_NPC]
-        if not npcs:
+        if not sources:
             self._host.impress_notice(
-                "Add an NPC to the cast first — an impression needs someone to make it.",
+                "Add an NPC to the cast or a player to the scene first — an impression "
+                "needs someone to make it.",
                 theme.color("tint.warning"),
             )
             return None
-        action = self._make(new_action_id(), npcs, None, from_card=False)
+        action = self._make(new_action_id(), sources, None, from_card=False)
         action.preferred = source_key
         return self.open(action.action_id)
 
@@ -349,6 +382,11 @@ class ImpressController(QObject):
         for action in list(self._actions.values()):
             if action.run.take_roll(roll):
                 return
+        for run in list(self._turn_runs):
+            if run.closed:
+                self._turn_runs.remove(run)
+            elif run.take_roll(roll):
+                return
 
     # -- rolling ---------------------------------------------------------------------
 
@@ -487,9 +525,158 @@ class ImpressController(QObject):
         caption = rung_caption(rung, self._data)
         if changes and not self._host.impress_apply(target.party, changes):
             caption = f"{caption} (not delivered)"
-        elif target.party.kind == PARTY_PLAYER:
-            action.run.tell(target.party, f"{plan.impression.name}: {caption}")
+        else:
+            if changes and record.get("dc") is not None:
+                self._remember(target, plan, int(record["dc"]), changes)
+            if target.party.kind == PARTY_PLAYER:
+                action.run.tell(target.party, f"{plan.impression.name}: {caption}")
         self._land(action, target, caption, "tint.worse")
+
+    def _remember(
+        self,
+        target: PlannedTarget,
+        plan: ImpressPlan,
+        dc: int,
+        changes: list[tuple[str, str | None]],
+    ) -> None:
+        """Note what an impression put on *target*, for its end of turn to shake off."""
+        self._lingering.setdefault(target.party.ref, []).append(
+            _Lingering(
+                impression=plan.impression,
+                skill_row=plan.skill.key,
+                dc=dc,
+                resist=None if target.highest else target.resist,
+                changes=list(changes),
+                source_name=plan.source.name,
+            )
+        )
+
+    def lingering(self, ref: str) -> list[_Lingering]:
+        """The impressions on the creature *ref* names that its turn may shake off."""
+        return list(self._lingering.get(ref, []))
+
+    # -- the end of a turn -------------------------------------------------------------
+
+    def end_turn(self, party: ImpressParty) -> ActionRun | None:
+        """*party*'s turn is over: resist each impression on it again, at its original DC.
+
+        One the creature makes comes off; one it fails stays another turn. An NPC's are
+        rolled by the server, a player is asked for each in turn. An impression whose
+        conditions are already gone (taken off by hand, healed) is forgotten unrolled.
+        """
+        character = party.character
+        held = [
+            linger
+            for linger in self._lingering.get(party.ref, [])
+            if character is None
+            or any(matching_condition(character, cid, p) for cid, p in linger.changes)
+        ]
+        self._lingering[party.ref] = held
+        if not held:
+            self._host.impress_notice(
+                f"{party.name}'s turn ends — no impression to shake off.", theme.color("accent")
+            )
+            return None
+        run = ActionRun(
+            self._data,
+            self._bridge,
+            self._host,
+            new_action_id(),
+            title=f"{party.name}: end of turn",
+            asker="The GM",
+            parent=self,
+        )
+        self._turn_runs = [r for r in self._turn_runs if not r.closed]
+        self._turn_runs.append(run)
+        if party.kind == PARTY_PLAYER:
+            self._ask_shake_off(run, party, list(held))
+            return run
+        lines = []
+        for linger in held:
+            resist = linger.resist
+            if resist is None and character is not None:
+                resist = best_choice(resist_choices(character, self._data, linger.skill_row))
+            spec = RollSpec(
+                label=f"{resist.label if resist else 'Resist'} — shaking off "
+                f"{linger.impression.name}",
+                modifier=resist.modifier if resist is not None else 0,
+                kind=resist.kind if resist is not None else "",
+            )
+            lines.append(group_line(party.name, spec, title=run.title, dc=linger.dc))
+        run.roll_group(
+            lines,
+            list(held),
+            lambda pairs, r=run: self._shaken(r, party, pairs),
+        )
+        return run
+
+    def _ask_shake_off(self, run: ActionRun, party: ImpressParty, queue: list[_Lingering]) -> None:
+        """Ask a player to resist the next impression on them; the rest wait their turn."""
+        if not queue:
+            run.close()
+            return
+        linger = queue.pop(0)
+        spec = impress_ask_resist_spec(
+            self._data,
+            linger.impression,
+            linger.skill_row,
+            linger.dc,
+            target=party.name,
+            action_id=run.action_id,
+            source=linger.source_name,
+            choice=linger.resist,
+            title=run.title,
+        )
+        spec = replace(
+            spec,
+            label=f"Shake off {linger.impression.name}",
+            outcomes=(),
+            hint="Make it and the impression comes off; fail it and it lasts another turn.",
+        )
+
+        def finish(about, record) -> None:
+            self._shaken(run, party, [(about, record)], close=False)
+            self._ask_shake_off(run, party, queue)
+
+        if not run.ask(party, spec, linger, finish):
+            self._host.impress_notice(
+                f"Could not ask {party.name} to shake off {linger.impression.name}.",
+                theme.color("tint.worse"),
+            )
+            run.close()
+
+    def _shaken(
+        self,
+        run: ActionRun,
+        party: ImpressParty,
+        pairs: list[tuple[object, dict]],
+        *,
+        close: bool = True,
+    ) -> None:
+        """Each end-of-turn resistance is in: a made one takes its impression off."""
+        said: list[str] = []
+        for about, record in pairs:
+            if not isinstance(about, _Lingering):
+                continue
+            degree = record.get("degree")
+            if degree is not None and int(degree) > 0:
+                held = self._lingering.get(party.ref, [])
+                if about in held:
+                    held.remove(about)
+                if not self._host.action_remove(party, about.changes):
+                    said.append(f"shakes off {about.impression.name} (not delivered)")
+                    continue
+                said.append(f"shakes off {about.impression.name}")
+                if party.kind == PARTY_PLAYER:
+                    run.tell(party, f"You shake off {about.impression.name}.")
+            else:
+                said.append(f"is still {about.impression.name}")
+        if said:
+            self._host.impress_notice(
+                f"{party.name} " + "; ".join(said) + ".", theme.color("accent")
+            )
+        if close:
+            run.close()
 
     def _land(self, action: _Action, target: PlannedTarget, text: str, token: str) -> None:
         resolving = action.resolving

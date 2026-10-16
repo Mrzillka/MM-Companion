@@ -40,6 +40,7 @@ from mm_companion.core.rules import (
     AreaAttempt,
     ImpressAttempt,
     RollSpec,
+    area_key_index,
     find_area_power,
     localize_spec,
     power_area_use,
@@ -276,9 +277,10 @@ class DiceSection(QGroupBox):
         power = find_area_power(self._character, self._data, power_id)
         if power is None:
             return None
+        index = area_key_index(power_id)
         bridge = live_session()
         if bridge is not None and not sets_up_own_actions(bridge):
-            self._send_bare_area(bridge, power)
+            self._send_bare_area(bridge, power, index)
             return None
         if self._area_dialog is not None:
             self._area_dialog.close()
@@ -288,6 +290,7 @@ class DiceSection(QGroupBox):
             self._data,
             self._character,
             power,
+            effect_index=index,
             scene=scene,
             own_player_id=own,
             parent=self.window(),
@@ -303,9 +306,9 @@ class DiceSection(QGroupBox):
         if self._area_dialog is dialog:
             self._area_dialog = None
 
-    def _send_bare_area(self, bridge: SessionBridge, power) -> None:
+    def _send_bare_area(self, bridge: SessionBridge, power, effect_index: int = 0) -> None:
         """Tell the GM this character uses *power* on an area, and leave the rest to them."""
-        use = power_area_use(power, self._character, self._data)
+        use = power_area_use(power, self._character, self._data, effect_index=effect_index)
         if use is None:
             return
         name = library.display_name(self._character)
@@ -341,6 +344,10 @@ class DiceSection(QGroupBox):
         action_id = new_action_id()
         attack = dialog.attack_spec(action_id, source_name=name)
         if bridge is None:
+            heal = dialog.heal_spec(source_name=name)
+            if heal is not None:
+                self.view.panel.roll_spec(heal)
+                return
             if attack is not None:
                 self.view.panel.roll_spec(attack)
             for request in dialog.offline_requests(source_name=name):

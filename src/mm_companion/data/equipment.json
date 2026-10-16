@@ -2944,6 +2944,7 @@
           "modifier": "modifiers:area_effect",
           "rank": 7,
           "note": "Sphere Area 7 secondary",
+          "appliesTo": 7,
           "config": {"shape": "sphere"}
         }
       ],

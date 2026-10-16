@@ -35,11 +35,11 @@ from __future__ import annotations
 import json
 import re
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, QEvent, Qt, QTimer
-from PySide6.QtGui import QCloseEvent, QShowEvent
+from PySide6.QtGui import QCloseEvent, QCursor, QShowEvent
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -48,6 +48,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -67,12 +68,15 @@ from mm_companion.core.rules import (
     apply_condition,
     apply_damage_step,
     area_capable_builds,
+    area_key_index,
+    area_key_power_id,
     damage_step_summary,
     damage_steps,
     decrement_condition,
     default_pins,
     find_area_power,
     initiative_modifier,
+    localize_spec,
     parse_pins,
     requested_roll_choices,
 )
@@ -97,6 +101,7 @@ from mm_companion.core.session.protocol import (
 )
 from mm_companion.ui import npc_icons, theme
 from mm_companion.ui.action_ui import publish_table_rules
+from mm_companion.ui.area import AREA_ACTION, KIND_AREA_ATTACK
 from mm_companion.ui.area_gm import AreaController
 from mm_companion.ui.block_canvas import BlockCanvas
 from mm_companion.ui.block_sizes import RecommendedSize, load_block_sizes
@@ -135,6 +140,7 @@ from mm_companion.ui.pinned_panel import PinnedBoard
 from mm_companion.ui.player_card import PlayerCard
 from mm_companion.ui.roll_history import RollHistoryPanel
 from mm_companion.ui.scene_board import NO_SCENE_GM, SceneBoard
+from mm_companion.ui.scene_card import CARD_AREA, CARD_END_TURN, CARD_IMPRESS
 from mm_companion.ui.sections.conditions import condition_display_name, matching_condition
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.session_bridge import SessionBridge, last_session, set_active_session
@@ -680,6 +686,7 @@ class GMWindow(QMainWindow):
         self._scene_board.initiativeCleared.connect(self._clear_scene_initiative)
         self._scene_board.initiativeRollRequested.connect(self._roll_entry_initiative)
         self._scene_board.dispositionChanged.connect(self._set_disposition)
+        self._scene_board.actionRequested.connect(self._on_scene_action)
         # Every pixel of the box below the buttons, and no trailing stretch: the
         # board's drop target fills what it is given, so what a GM aims a dragged
         # card at is the whole block rather than the band its cards sit in.
@@ -798,6 +805,10 @@ class GMWindow(QMainWindow):
         # Still the panel, so every card that loads or throws a spec into it (a
         # player's, an NPC's) reaches it by the same name it always did.
         self._roller = self._view.panel
+        # A save or a request clicked in this history is answered for a creature the GM
+        # plays — whose number goes in is asked first (see _on_history_roll).
+        self._history.rollFollowUp.disconnect(self._roller.roll_spec)
+        self._history.rollFollowUp.connect(self._on_history_roll)
         # While hosting, a roll made here goes through the server like everyone
         # else's and comes back on the shared feed. Before that there is no
         # session to record it in, so it is shown as a card and nothing more.
@@ -807,17 +818,70 @@ class GMWindow(QMainWindow):
         # they are character-free) and this window decides where the ask goes.
         self._roller.set_roll_choices(requested_roll_choices(self._data))
         self._roller.rollRequested.connect(self._request_roll)
-        # The Action row: the GM impresses on an NPC's behalf from here, exactly
-        # where a player's Impress button is on their sheet.
+        # The Action row: the GM impresses, or spreads an attack over an area, for
+        # anybody — an NPC of theirs or a player — exactly where a player's Impress
+        # button is on their sheet.
+        actions = []
         if self._data.impress.available:
-            self._roller.set_actions([IMPRESS_ACTION])
+            actions.append(IMPRESS_ACTION)
+        if self._data.area.available:
+            actions.append(AREA_ACTION)
+        if actions:
+            self._roller.set_actions(actions)
         self._roller.actionRequested.connect(self._on_roller_action)
         layout.addWidget(self._view)
         return box
 
+    def _on_history_roll(self, spec: object) -> None:
+        """A save chip or a request card clicked in the GM's history.
+
+        A spec that names a trait is answered with *someone's* number, and here that is
+        an NPC's: a menu of the creatures nobody plays on the board (those it names
+        first) rolls it with that one's own number, under its name. "As written" rolls
+        it with nobody's, as before.
+        """
+        if not isinstance(spec, RollSpec):
+            return
+        _sources, targets = self.impress_parties()
+        npcs = [p for p in targets if p.kind == PARTY_NPC and p.character is not None]
+        if not spec.trait_key or not npcs:
+            self._roller.roll_spec(spec)
+            return
+        named = set(spec.targets)
+        npcs.sort(key=lambda p: p.name not in named)
+        menu = QMenu(self)
+        menu.setToolTipsVisible(True)
+        for party in npcs:
+            menu.addAction(party.name, lambda p=party: self._roll_as(spec, p))
+        menu.addSeparator()
+        menu.addAction("As written (nobody's number)", lambda: self._roller.roll_spec(spec))
+        menu.exec(QCursor.pos())
+
+    def _roll_as(self, spec: RollSpec, party: ImpressParty) -> None:
+        """Roll *spec* as *party* rolls it: their own number in, their name on it."""
+        own = localize_spec(spec, party.character, self._data)
+        self._roller.roll_spec(
+            replace(own, label=f"{party.name}: {own.label}", targets=(party.name,), trait_key="")
+        )
+
     def _on_roller_action(self, kind: str) -> None:
         if kind == KIND_IMPRESS:
             self._impress.open_new()
+        elif kind == KIND_AREA_ATTACK:
+            self._area.open_new()
+
+    def _on_scene_action(self, ref: str, action: str) -> None:
+        """A creature's card on the board, right-clicked: end its turn, or have it act."""
+        _sources, targets = self.impress_parties()
+        party = next((p for p in targets if p.ref == ref), None)
+        if party is None:
+            return
+        if action == CARD_END_TURN:
+            self._impress.end_turn(party)
+        elif action == CARD_IMPRESS:
+            self._impress.open_new(source_key=party.source)
+        elif action == CARD_AREA:
+            self._area.start_for(party)
 
     # -- the Impress action's host surface (see ImpressHost) ------------------
 
@@ -884,6 +948,34 @@ class GMWindow(QMainWindow):
                 and delivered
             )
         return delivered
+
+    def action_remove(self, party: ImpressParty, changes: list[tuple[str, str | None]]) -> bool:
+        """Take conditions off one creature — the twin of :meth:`impress_apply`.
+
+        An NPC's come off its model through the path every NPC condition change takes;
+        a player's go to their app as remove commands, as the GM's own "−" sends one.
+        """
+        if party.kind == PARTY_NPC:
+            entry = self._npc_state.get(party.source)
+            if entry is None:
+                return False
+            for condition_id, parameter in changes:
+                applied = matching_condition(entry.character, condition_id, parameter)
+                if applied is not None:
+                    decrement_condition(entry.character, applied)
+            self._after_npc_condition_change(entry, list(changes), applying=False)
+            return True
+        delivered = True
+        for condition_id, parameter in changes:
+            delivered = (
+                bool(self._bridge.remove_condition(party.source, condition_id, parameter))
+                and delivered
+            )
+        return delivered
+
+    def action_request(self, spec: RollSpec) -> None:
+        """Leave a request card for *spec* — the table's history, or this window's."""
+        self._request_roll(spec)
 
     def impress_show_offline(self, record: dict) -> None:
         """One roll of an Impress made off the air, as an offline card."""
@@ -2788,7 +2880,7 @@ class GMWindow(QMainWindow):
         elif topic == NOTE_REQUESTED and isinstance(payload, str) and payload:
             self._post_note(payload)
 
-    def _start_npc_area(self, window: NPCWindow, power_id: str) -> None:
+    def _start_npc_area(self, window: NPCWindow, area_key: str) -> None:
         """Open the area window for the build *power_id* names on an NPC sheet.
 
         The NPC is the cast entry the sheet's file is, never one found by its display
@@ -2796,26 +2888,37 @@ class GMWindow(QMainWindow):
         while the attacker could be ticked into its own area.
         """
         character = window.sheet.character
-        power = find_area_power(character, self._data, power_id)
+        power = find_area_power(character, self._data, area_key)
         if power is None:
             return
         path = Path(window.path) if window.path is not None else None
         key = next((n for n, entry in self._npc_state.items() if entry.path == path), "")
-        self._area.start_for_npc(character, power, key, name=library.display_name(character))
+        self._area.start_for_npc(
+            character,
+            power,
+            key,
+            name=library.display_name(character),
+            effect_index=area_key_index(area_key),
+        )
 
-    def _start_card_area(self, key: str, power_id: str) -> None:
-        """An NPC card's Area button: that creature uses the power *power_id* on an area."""
+    def _start_card_area(self, key: str, area_key: str) -> None:
+        """An NPC card's Area button: that creature uses the area *area_key* names."""
         entry = self._npc_state.get(key)
         if entry is None:
             return
+        wanted = area_key_power_id(area_key)
         power = next(
-            (b for b in area_capable_builds(entry.character, self._data) if b.id == power_id),
+            (b for b in area_capable_builds(entry.character, self._data) if b.id == wanted),
             None,
         )
         if power is None:
             return
         self._area.start_for_npc(
-            entry.character, power, key, name=library.display_name(entry.character)
+            entry.character,
+            power,
+            key,
+            name=library.display_name(entry.character),
+            effect_index=area_key_index(area_key),
         )
 
     def _start_card_impress(self, key: str) -> None:

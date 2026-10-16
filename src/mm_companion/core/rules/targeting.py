@@ -21,12 +21,13 @@ Nothing here names an action, a condition or a degree: the ladders are data.
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Mapping
 from dataclasses import dataclass
 
 from ..character import Character
 from ..data_loader import GameData, ResistanceOutcome
-from .conditions import apply_condition
+from .conditions import apply_condition, decrement_condition
 from .damage import resolve_condition_ids
 
 __all__ = [
@@ -40,6 +41,7 @@ __all__ = [
     "ladder_captions",
     "resolve_rung",
     "apply_rung",
+    "success_removals",
 ]
 
 #: What a rung's ``parameters`` template writes for whoever imposed it.
@@ -133,7 +135,11 @@ def rung_caption(
     catalog = game_data.condition_catalog()
     ids = rung_condition_ids(rung, config)
     if ids:
-        names = [catalog[cid].name if cid in catalog else cid for cid in ids]
+        names = []
+        for cid in ids:
+            name = catalog[cid].name if cid in catalog else cid
+            scope = _scope(rung, cid, game_data, config)
+            names.append(f"{scope} {name}" if scope else name)
     else:
         names = [rung.text] if rung.text else []
     text = " + ".join(n for n in names if n)
@@ -153,10 +159,37 @@ def ladder_captions(
     return rungs if any(rungs) else ()
 
 
-def _parameter(rung: ResistanceOutcome, condition_id: str, source: str) -> str | None:
+def _scope(
+    rung: ResistanceOutcome,
+    condition_id: str,
+    game_data: GameData,
+    config: Mapping[str, object] | None,
+) -> str:
+    """The trait *rung* scopes *condition_id* to (Weaken's), or ``""`` for none.
+
+    Only a condition whose parameter *is* a trait takes one: Weaken's Impaired becomes
+    "Strength Impaired", while a Dazed beside it on the same rung stays Dazed.
+    """
+    if not rung.scope_key:
+        return ""
+    scope = str((config or {}).get(rung.scope_key, "") or "").strip()
+    if not scope:
+        return ""
+    record = game_data.condition_catalog().get(condition_id)
+    parameter = record.parameter if record is not None else None
+    return scope if parameter is not None and parameter.type == "trait_select" else ""
+
+
+def _parameter(
+    rung: ResistanceOutcome,
+    condition_id: str,
+    source: str,
+    game_data: GameData,
+    config: Mapping[str, object] | None = None,
+) -> str | None:
     template = dict(rung.parameters).get(condition_id)
     if template is None:
-        return None
+        return _scope(rung, condition_id, game_data, config) or None
     value = template.replace(SOURCE_PLACEHOLDER, source).strip()
     return value or None
 
@@ -182,7 +215,7 @@ def resolve_rung(
     if not ids:
         return ()
     resolved = resolve_condition_ids(character, ids, rung.escalates, game_data)
-    return tuple((cid, _parameter(rung, cid, source)) for cid in resolved)
+    return tuple((cid, _parameter(rung, cid, source, game_data, config)) for cid in resolved)
 
 
 def apply_rung(
@@ -205,3 +238,33 @@ def apply_rung(
     for condition_id, parameter in applied:
         apply_condition(character, condition_id, game_data, parameter=parameter)
     return applied
+
+
+def success_removals(
+    character: Character, removes: tuple[str, ...], degrees: int
+) -> tuple[tuple[str, str | None], ...]:
+    """What *degrees* of success take off *character*, as ``(condition id, parameter)``.
+
+    One condition per degree, the first of *removes* the character carries each time —
+    Healing's order, least severe first. A stacking condition loses one instance per
+    degree (three Hits take three degrees), and an umbrella takes its members with it.
+    Worked on a copy, so the caller can say what will happen and apply it where the
+    character really lives (an NPC's model, a player's app).
+    """
+
+    scratch = Character()
+    scratch.conditions = copy.deepcopy(list(character.conditions))
+    removed: list[tuple[str, str | None]] = []
+    for _ in range(max(0, degrees)):
+        found = None
+        for condition_id in removes:
+            matches = [c for c in scratch.conditions if c.condition_id == condition_id]
+            if matches:
+                direct = [c for c in matches if c.provenance is None]
+                found = direct[0] if direct else matches[0]
+                break
+        if found is None:
+            break
+        removed.append((found.condition_id, found.parameter))
+        decrement_condition(scratch, found)
+    return tuple(removed)

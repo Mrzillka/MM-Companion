@@ -398,8 +398,15 @@ class StartWindow(QMainWindow):
 
         The launcher stays visible behind it (unlike a character sheet): a GM
         hosting a session still opens character sheets, and the session has to
-        survive that. Only one GM window ever exists — it owns the hosted
-        session — so a second click just raises the first, skipping the pre-stage.
+        survive that. Only one GM window is ever open — it owns the hosted
+        session — so a click while it is up just raises it, skipping the pre-stage.
+
+        **Closing the window ends that GM Mode.** It leaves the session as it
+        closes, so a click after that goes back through the pre-stage: the GM picks
+        a session (the same one, another, or a new one) and connects afresh. It
+        used to re-show the closed window instead, already disconnected and with
+        nothing in it to connect again — the only way to run a second session was
+        to quit the app.
         """
         from mm_companion.core.session.model import new_session
         from mm_companion.core.session.store import SessionStoreError, load_session
@@ -407,10 +414,13 @@ class StartWindow(QMainWindow):
         from mm_companion.ui.session_dialogs import GMSessionLaunchDialog
 
         if self._gm_window is not None:
-            self._gm_window.show()
-            self._gm_window.raise_()
-            self._gm_window.activateWindow()
-            return
+            if self._gm_window.isVisible():
+                self._gm_window.raise_()
+                self._gm_window.activateWindow()
+                return
+            # Closed, and so already out of its session: let it go and start over.
+            closed, self._gm_window = self._gm_window, None
+            closed.deleteLater()
 
         dialog = GMSessionLaunchDialog(self)
         if dialog.exec() != QDialog.DialogCode.Accepted:

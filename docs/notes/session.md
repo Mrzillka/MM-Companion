@@ -709,6 +709,41 @@ The shape:
   so a player who made the Stamina check the GM asked for would stay Dazed, and a turn
   order arranged by hand would reach the players re-sorted by initiative. The **hub
   must be redeployed** with the release.
+- **A join code is version 2, and a public-server session's is 24 characters.**
+  Version 1 spelled the relay URL out byte by byte and came to 130 characters for
+  a session on the hub. `discovery.encode_join_code` now packs every field as
+  tightly as it will go *and still reads back to exactly the string it was*: the
+  public server's relay is three bits of the header (`_V2_KNOWN_RELAY`, **pinned
+  forever** to `DEFAULT_SERVER:47332` — moving the default takes a new kind, never a
+  repointed one, because codes sit in chat for weeks), an app-minted session id is
+  six bytes, and a `token_urlsafe` token is its raw bytes. Anything that does not
+  fit a short form (a relay URL spelled some other way, a typed token) travels as
+  text — longer, never wrong. Version 1 is still *read*. The other half is the
+  secret itself: `host_token` is `new_join_token()`, seven bytes (56 bits, plus the
+  session id's 48 to find a session at all) instead of sixteen; slot and gm tokens
+  are unchanged, and a session made before keeps its long token (39 characters).
+  The hub mints the codes, so its *new* sessions get short tokens only once it is
+  redeployed — but `GMWindow.connect_to_server` re-encodes whatever the server sent
+  (`canonical_join_code`), so the GM copies a short code either way.
+- **A code is compared by what it decodes to, never by its text** (`_code_key` in
+  `session_dialogs.py`): the player's history, reclaimed seats and recent codes all
+  key on the canonical form, or a seat saved under a long code would be lost the
+  first time the GM sent the short one.
+- **Closing the GM window ends that GM Mode.** It used to survive the close (the
+  launcher kept it and re-showed it), already out of its session and with nothing
+  in it to connect again, so running a second session meant quitting the app. Now
+  the launcher drops a closed window and goes back through the pre-stage. The one
+  thing that keeps it open is an NPC sheet whose unsaved-changes prompt the GM
+  cancelled: the GM window is what holds those sheets alive.
+- **The pre-stage shows a connection *state*** (`SERVER_*` in `session_dialogs.py`):
+  a `StatusDot`, a word, and a button that offers what a press would do (Connect /
+  Disconnect / Reconnect). The connect blocks, so "Connecting…" is painted before
+  it, and the auto-connect is queued until the dialog is on screen. **The relay
+  reaps an idle control channel after two minutes** and the hub answers no ping on
+  it, so a GM who read the list for a while and then pressed New session used to
+  get "the server stopped answering" under a label still saying connected.
+  `_request` redials once when a request finds the channel dead (it never reached
+  the hub, so a resend is safe) and only then reports the server lost.
 - Deployment lives in `deploy/` (systemd units, `deploy.sh`, runbook) — tracked
   and secret-free. The operator's addresses and key paths are in a gitignored
   `SERVER.md`.

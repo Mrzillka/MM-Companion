@@ -827,6 +827,172 @@ def test_reopening_gm_mode_reuses_the_same_window(
         first.bridge.stop()
 
 
+def test_reopening_gm_mode_after_closing_it_asks_for_a_session_again(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reported bug: a closed GM window came back disconnected with no way to reconnect."""
+    from mm_companion.ui import session_dialogs
+
+    _accept_launch(monkeypatch)
+    asked: list[int] = []
+    accepted = session_dialogs.GMSessionLaunchDialog.exec
+
+    def counting_exec(self):
+        asked.append(1)
+        return accepted(self)
+
+    monkeypatch.setattr(session_dialogs.GMSessionLaunchDialog, "exec", counting_exec)
+    launcher = StartWindow()
+    launcher._open_gm_mode()
+    first = launcher._gm_window
+    first.close()
+
+    launcher._open_gm_mode()
+    try:
+        assert len(asked) == 2
+        assert launcher._gm_window is not first
+        assert launcher._gm_window.isVisible()
+    finally:
+        launcher._gm_window.bridge.stop()
+        launcher._gm_window.close()
+
+
+def test_the_gm_window_stays_open_while_an_npc_sheet_will_not_close(
+    qapp: QApplication, window: GMWindow
+) -> None:
+    """Its NPC sheets live through it; closing anyway would throw kept edits away."""
+
+    class StubbornSheet:
+        def close(self) -> bool:
+            return False
+
+        def isVisible(self) -> bool:  # noqa: N802 - Qt's name
+            return True
+
+    window.show()
+    window._npc_windows[0] = StubbornSheet()
+    try:
+        window.close()
+        assert window.isVisible()
+    finally:
+        del window._npc_windows[0]
+    window.close()
+    assert not window.isVisible()
+
+
+class _FakeHubClient:
+    """A control channel that connects (or not) on cue and can be made to drop."""
+
+    reachable = True
+    instances: list = []
+
+    def __init__(self, server: str, secret: str = "") -> None:
+        self.server = server
+        self.secret = secret
+        self.operator = False
+        self.sessions: list[dict] = []
+        self.connected = False
+        self.created: list[str] = []
+        _FakeHubClient.instances.append(self)
+
+    def connect(self) -> bool:
+        from mm_companion.core.session.hub_client import HubClientError
+
+        if not _FakeHubClient.reachable:
+            raise HubClientError(f"could not reach {self.server}: refused")
+        self.connected = True
+        return False
+
+    def create(self, name: str) -> dict:
+        from mm_companion.core.session.hub_client import HubClientError
+
+        if not self.connected:
+            raise HubClientError("not connected to a server")
+        self.created.append(name)
+        return {"id": f"s{len(self.created)}", "name": name, "gm_token": "g", "join_code": ""}
+
+    def close(self) -> None:
+        self.connected = False
+
+
+@pytest.fixture
+def fake_hub(monkeypatch: pytest.MonkeyPatch):
+    from mm_companion.ui import session_dialogs
+
+    _FakeHubClient.reachable = True
+    _FakeHubClient.instances = []
+    monkeypatch.setattr(session_dialogs, "HubClient", _FakeHubClient)
+    return _FakeHubClient
+
+
+def test_the_launch_dialog_says_whether_it_is_connected(qapp: QApplication, fake_hub) -> None:
+    from mm_companion.ui import session_dialogs as sd
+
+    dialog = GMSessionLaunchDialog()
+    dialog._server_field.setText("hub.example")
+    assert dialog.server_state() == sd.SERVER_OFFLINE
+    assert dialog._server_state_label.text() == "Not connected"
+    assert dialog._connect_button.text() == "Connect"
+
+    dialog._connect_button.click()
+    assert dialog.server_state() == sd.SERVER_ONLINE
+    assert dialog._server_state_label.text() == "Connected"
+    assert dialog._server_dot.token == "tint.better"
+    assert dialog._connect_button.text() == "Disconnect"
+
+    # Typing another address makes the button offer to connect there instead.
+    dialog._server_field.setText("other.example")
+    dialog._sync_connect_button()
+    assert dialog._connect_button.text() == "Connect"
+    dialog._server_field.setText("hub.example")
+    dialog._sync_connect_button()
+
+    dialog._connect_button.click()
+    assert dialog.server_state() == sd.SERVER_OFFLINE
+    assert dialog._catalog is None
+    assert dialog._connect_button.text() == "Connect"
+
+
+def test_the_launch_dialog_shows_a_failed_connect(qapp: QApplication, fake_hub) -> None:
+    from mm_companion.ui import session_dialogs as sd
+
+    fake_hub.reachable = False
+    dialog = GMSessionLaunchDialog()
+    dialog._server_field.setText("hub.example")
+    dialog._connect_button.click()
+
+    assert dialog.server_state() == sd.SERVER_FAILED
+    assert dialog._server_dot.token == "tint.worse"
+    assert "could not reach" in dialog._server_status.text()
+    assert dialog._catalog is None
+
+
+def test_the_launch_dialog_redials_a_channel_the_relay_dropped(
+    qapp: QApplication, fake_hub
+) -> None:
+    """The relay reaps an idle control stream; the next request must not just fail."""
+    from mm_companion.ui import session_dialogs as sd
+
+    dialog = GMSessionLaunchDialog()
+    dialog._server_field.setText("hub.example")
+    dialog._connect_to_server()
+    fake_hub.instances[-1].connected = False  # reaped while the GM was reading
+
+    dialog._create_on_server("Friday")
+
+    assert dialog.server_state() == sd.SERVER_ONLINE
+    assert len(fake_hub.instances) == 2
+    assert fake_hub.instances[-1].created == ["Friday"]
+    assert dialog._table.rowCount() == 1
+
+    # A server that has gone for good says so, and offers to reconnect.
+    fake_hub.instances[-1].connected = False
+    fake_hub.reachable = False
+    dialog._create_on_server("Saturday")
+    assert dialog.server_state() == sd.SERVER_FAILED
+    assert dialog._connect_button.text() == "Reconnect"
+
+
 def test_a_label_exists_for_every_piece_of_advice_the_window_is_given(
     qapp: QApplication, window: GMWindow
 ) -> None:

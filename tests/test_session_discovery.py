@@ -12,7 +12,7 @@ import urllib.error
 
 import pytest
 
-from mm_companion.core.session import discovery
+from mm_companion.core.session import discovery, hub_client, relay
 from mm_companion.core.session.discovery import (
     ADVICE_CGNAT,
     ADVICE_DOUBLE_NAT,
@@ -33,6 +33,7 @@ from mm_companion.core.session.discovery import (
     UnknownTransportError,
     UpnpError,
     add_port_mapping,
+    canonical_join_code,
     decode_join_code,
     delete_port_mapping,
     discover_igd,
@@ -46,7 +47,12 @@ from mm_companion.core.session.discovery import (
     transport_for,
     transport_scheme,
 )
-from mm_companion.core.session.model import new_token
+from mm_companion.core.session.model import (
+    JOIN_TOKEN_BYTES,
+    new_join_token,
+    new_session,
+    new_token,
+)
 from mm_companion.core.session.net import DEFAULT_PORT, TcpTransport, Transport
 
 # --------------------------------------------------------------------------
@@ -156,6 +162,79 @@ def test_a_relay_url_survives_the_code_and_is_recognised():
     decoded = decode_join_code(encode_join_code(url, 9000, "secret"))
     assert decoded.host == url
     assert decoded.is_relay
+
+
+def _public_url(session_id: str = "0123456789ab") -> str:
+    return f"{RELAY_SCHEME}://{discovery.DEFAULT_SERVER}:{relay.DEFAULT_RELAY_PORT}/{session_id}"
+
+
+def test_a_session_on_the_public_server_has_a_short_code():
+    """The reported complaint: a server-hosted session's code ran to 130 characters."""
+    token = new_join_token()
+    code = encode_join_code(_public_url(), relay.DEFAULT_RELAY_PORT, token)
+    assert len(code.replace("-", "")) == 24
+    decoded = decode_join_code(code)
+    assert decoded == JoinCode(_public_url(), relay.DEFAULT_RELAY_PORT, token)
+
+
+def test_a_session_with_an_old_long_token_still_shrinks_and_round_trips():
+    token = new_token()
+    code = encode_join_code(_public_url(), relay.DEFAULT_RELAY_PORT, token)
+    assert len(code.replace("-", "")) < 40
+    assert decode_join_code(code).token == token
+
+
+@pytest.mark.parametrize(
+    ("host", "port", "token"),
+    [
+        # Another relay, with TLS and without, and an IPv6 one.
+        (f"{RELAY_SCHEME}://relay.example:9000/abcdef123456", 9000, "secret"),
+        (f"{RELAY_SCHEME}+tcp://relay.example:9000/abcdef123456", 9000, new_token()),
+        (f"{RELAY_SCHEME}://[2001:db8::1]:47332/abcdef123456", 47332, new_token()),
+        # Session ids and tokens that are not the app's own shapes travel as text.
+        (_public_url("Not-Hex-At-All"), 47332, "a typed token, with spaces"),
+        (_public_url("ABCDEF123456"), 47332, "=padded="),
+        # A relay URL in a spelling that cannot be rebuilt from its parts, and a
+        # port that does not match it: both are carried verbatim.
+        (f"{RELAY_SCHEME}://relay.example/abcdef123456", 47332, "secret"),
+        (_public_url(), 47331, "secret"),
+        ("2001:db8::1", DEFAULT_PORT, "секрет"),
+    ],
+)
+def test_every_shape_of_address_reads_back_exactly(host: str, port: int, token: str):
+    assert decode_join_code(encode_join_code(host, port, token)) == JoinCode(host, port, token)
+
+
+def test_a_version_one_code_is_still_read():
+    """A player may be holding a code minted before version 2."""
+    import struct
+    from base64 import b32encode
+
+    url = _public_url()
+    token = new_token()
+    payload = bytearray([1, 1, len(url)]) + url.encode() + struct.pack(">H", 47332)
+    payload += bytes([len(token)]) + token.encode()
+    payload.append(sum(payload) & 0xFF)
+    legacy = b32encode(bytes(payload)).decode("ascii").rstrip("=")
+    assert len(legacy) > 100
+
+    assert decode_join_code(legacy) == JoinCode(url, 47332, token)
+    # Canonical form is today's short code for the same table.
+    assert canonical_join_code(legacy) == encode_join_code(url, 47332, token)
+    assert canonical_join_code("  not a code ") == "not a code"
+
+
+def test_the_pinned_public_relay_matches_the_relay_module():
+    """Kind 0 names this address forever; the two copies must agree."""
+    assert discovery._DEFAULT_RELAY_PORT == relay.DEFAULT_RELAY_PORT
+    assert hub_client.DEFAULT_SERVER == discovery.DEFAULT_SERVER
+
+
+def test_a_new_session_mints_a_short_join_token():
+    from base64 import urlsafe_b64decode
+
+    token = new_session().host_token
+    assert len(urlsafe_b64decode(token + "=" * (-len(token) % 4))) == JOIN_TOKEN_BYTES
 
 
 # --------------------------------------------------------------------------

@@ -1322,7 +1322,9 @@ class GMWindow(QMainWindow):
         self._server_label = server_label
         # The catalog handed us the code; the GM should not have to go back and
         # ask the server for the one thing they need to invite anyone.
-        self._join_code = str(entry.get("join_code", ""))
+        # Rewritten in this app's own form, so a server still minting the long
+        # version-1 codes hands the GM the short one to send all the same.
+        self._join_code = discovery.canonical_join_code(str(entry.get("join_code", "")))
         try:
             self._bridge.join(
                 code,
@@ -3743,7 +3745,7 @@ class GMWindow(QMainWindow):
         )
 
     def showEvent(self, event: QShowEvent) -> None:  # noqa: N802 (Qt override)
-        """Re-arm as the process-wide session — the window is reusable after a close."""
+        """Arm this window as the process-wide session."""
         set_active_session(self._bridge)
         super().showEvent(event)
         self._schedule_spare_npc()
@@ -3751,19 +3753,24 @@ class GMWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 (Qt override)
         """Leave the session and give the router its port back before going away.
 
-        The window itself survives (the launcher keeps it, and reopening GM Mode
-        shows this one again) so the session it was working on — its name, its
-        roster, its rolls — is still here rather than replaced by a blank one. A
-        session hosted on a server survives rather more thoroughly: closing this
-        window disconnects the GM and leaves the table playing.
+        Closing ends this GM Mode: the launcher lets the window go, and opening GM
+        Mode again goes back through the pre-stage to pick and connect to a session
+        afresh. A session on this machine is stored as it goes, so nothing is lost
+        by that; one hosted on a server survives rather more thoroughly — closing
+        this window disconnects the GM and leaves the table playing.
+
+        An NPC sheet with unsaved edits asks first, and if the GM cancels there,
+        this window stays open too: it is what keeps those sheets alive, and going
+        away without them would throw the edits the GM just chose to keep.
         """
         for window in self._player_windows.values():
             window.close()
         self._player_windows.clear()
-        # An NPC sheet with unsaved edits prompts, and may refuse to close; it
-        # stays open and tracked, which is fine — this window is reusable.
         for npc_window in list(self._npc_windows.values()):
             npc_window.close()
+        if any(window.isVisible() for window in self._npc_windows.values()):
+            event.ignore()
+            return
         self._discard_spare_npc()
         self._persist_layout()
         self.stop_hosting()

@@ -373,6 +373,35 @@ def test_the_dialog_lists_and_reclaims_a_previous_session(qapp: QApplication) ->
     assert dialog.reclaim_ids() == ("p1", "t1")
 
 
+def _legacy_code(host: str, port: int, token: str) -> str:
+    """The same table's code as a version-1 build wrote it (the long form)."""
+    import struct
+    from base64 import b32encode
+
+    payload = bytearray([1, 1, len(host)]) + host.encode() + struct.pack(">H", port)
+    payload += bytes([len(token)]) + token.encode()
+    payload.append(sum(payload) & 0xFF)
+    return b32encode(bytes(payload)).decode("ascii").rstrip("=")
+
+
+def test_a_seat_saved_under_a_long_code_is_reclaimed_with_the_short_one(
+    qapp: QApplication,
+) -> None:
+    """A table's code shrank in version 2; the seat it was saved under must not be lost."""
+    host, port, token = "mmrelay://relay.example:47332/0123456789ab", 47332, "s3cret-token"
+    record_session_history(code=_legacy_code(host, port, token), player_id="p1", player_token="t1")
+    short = discovery.encode_join_code(host, port, token)
+
+    dialog = JoinSessionDialog()
+    dialog._code_edit.setText(short)
+    assert dialog.reclaim_ids() == ("p1", "t1")
+
+    # And joining with the short one updates that row rather than adding a second.
+    record_session_history(code=short, player_id="p1", player_token="t2")
+    (entry,) = load_session_history()
+    assert entry["code"] == short and entry["player_token"] == "t2"
+
+
 def test_typing_a_different_code_drops_the_reclaimed_seat(qapp: QApplication) -> None:
     record_session_history(code="CODE1", player_id="p1", player_token="t1")
     dialog = JoinSessionDialog()

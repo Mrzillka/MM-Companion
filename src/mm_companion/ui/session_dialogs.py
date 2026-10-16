@@ -56,7 +56,19 @@ from mm_companion.core.session import discovery, store
 from mm_companion.core.session.hub_client import HubClient, HubClientError
 from mm_companion.core.session.net import DEFAULT_PORT
 from mm_companion.ui import theme
-from mm_companion.ui.widgets import hline_separator, make_spin_box, muted_style, tinted_style
+from mm_companion.ui.widgets import (
+    hline_separator,
+    make_spin_box,
+    muted_style,
+    tinted_style,
+    with_help,
+)
+
+CONNECT_HELP = (
+    "Automatic tries your router, then falls back to a relay if this machine cannot "
+    "be reached — most tables need nothing more. Either way you get a join code to "
+    "send your players."
+)
 
 #: How many codes the dialog offers back; the newest is pre-filled.
 RECENT_CODES = 5
@@ -186,7 +198,7 @@ class HostOptionsForm(QWidget):
         form.addRow("Name", self._name_edit)
         layout.addLayout(form)
 
-        layout.addWidget(QLabel("How do players connect?"))
+        layout.addWidget(with_help(QLabel("How do players connect?"), CONNECT_HELP))
         self._method = QButtonGroup(self)
         self._automatic = QRadioButton("Automatically (recommended)")
         self._automatic.setChecked(True)
@@ -195,15 +207,6 @@ class HostOptionsForm(QWidget):
         for index, button in enumerate((self._automatic, self._via_relay, self._via_tunnel)):
             self._method.addButton(button, index)
             layout.addWidget(button)
-
-        hint = QLabel(
-            "Automatic tries your router, then falls back to a relay if this machine "
-            "cannot be reached — most tables need nothing more. Either way you get a "
-            "join code to send your players."
-        )
-        hint.setWordWrap(True)
-        hint.setEnabled(False)
-        layout.addWidget(hint)
 
         method_form = QFormLayout()
         self._tunnel_edit = QLineEdit()

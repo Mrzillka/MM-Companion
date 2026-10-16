@@ -54,7 +54,7 @@ from .powers_terms import (
     effect_stat_rows,
     required_checks,
 )
-from .targeting import opposed_dc, rung_caption
+from .targeting import concrete_rung, opposed_dc, rung_caption
 
 #: The slowest action an effect may take and still be readied to counter in action time:
 #: "You must be able to use the readied effect as a standard action or less" (p107).
@@ -89,6 +89,15 @@ KIND_AREA = "area"
 #: area's Dodge bonus (Evasion).
 KIND_AREA_DODGE = "area-dodge"
 
+#: What kind of ladder a save's :attr:`~RollSpec.ladder` is — which of the GM's
+#: switches governs applying it (see :mod:`.answering`). Damage is the ruleset's
+#: damage effect; any other effect is ``effect``; an area's save is ``area`` whatever
+#: its effect.
+LADDER_DAMAGE = "damage"
+LADDER_EFFECT = "effect"
+LADDER_IMPRESS = "impress"
+LADDER_AREA = "area"
+
 #: Separates the candidates in a :data:`KIND_BEST_OF` trait key, and a candidate's
 #: kind from its key.
 BEST_OF_SEPARATOR = "|"
@@ -108,6 +117,74 @@ def _as_int(value: object) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _rung_to_dict(rung: ResistanceOutcome) -> dict:
+    raw: dict = {"ids": list(rung.conditions)}
+    if rung.escalates:
+        raw["escalates"] = [list(pair) for pair in rung.escalates]
+    if rung.parameters:
+        raw["params"] = [list(pair) for pair in rung.parameters]
+    return raw
+
+
+def _pairs(raw: object) -> tuple[tuple[str, str], ...]:
+    if not isinstance(raw, list):
+        return ()
+    return tuple(
+        (str(pair[0]), str(pair[1])) for pair in raw if isinstance(pair, list) and len(pair) == 2
+    )
+
+
+def _rung_from_dict(raw: object) -> ResistanceOutcome:
+    if not isinstance(raw, dict):
+        return ResistanceOutcome()
+    ids = raw.get("ids")
+    return ResistanceOutcome(
+        conditions=(
+            tuple(str(i) for i in ids if isinstance(i, str)) if isinstance(ids, list) else ()
+        ),
+        escalates=_pairs(raw.get("escalates")),
+        parameters=_pairs(raw.get("params")),
+    )
+
+
+@dataclass(frozen=True)
+class SpecLadder:
+    """What failing a save does, as data a GM's table can apply — not only words.
+
+    :attr:`RollSpec.outcomes` is the ladder rendered for reading; this is the same
+    ladder made *concrete*: each rung's condition ids (an Affliction's read off the
+    wielder's config, a Weaken's scope folded into its parameters), its escalation,
+    and its parameter templates (``{source}`` left for whoever applies it). It travels
+    on the spec so the GM can put a save an NPC failed straight onto it, whoever
+    built the spec (see :mod:`.answering`). ``kind`` is one of the ``LADDER_*`` values.
+    """
+
+    kind: str
+    rungs: tuple[ResistanceOutcome, ...] = ()
+    success: ResistanceOutcome | None = None
+
+    def to_dict(self) -> dict:
+        raw: dict = {"kind": self.kind, "rungs": [_rung_to_dict(r) for r in self.rungs]}
+        if self.success is not None:
+            raw["success"] = _rung_to_dict(self.success)
+        return raw
+
+    @classmethod
+    def from_dict(cls, raw: object) -> SpecLadder | None:
+        """Rebuild a ladder from :meth:`to_dict`, or ``None`` for anything unusable."""
+        if not isinstance(raw, dict):
+            return None
+        rungs = raw.get("rungs")
+        if not isinstance(rungs, list):
+            return None
+        success = raw.get("success")
+        return cls(
+            kind=str(raw.get("kind", "")),
+            rungs=tuple(_rung_from_dict(r) for r in rungs),
+            success=_rung_from_dict(success) if isinstance(success, dict) else None,
+        )
 
 
 @dataclass(frozen=True)
@@ -170,6 +247,12 @@ class RollSpec:
     action_id: str = ""
     #: What a group of rolls is called, as one table card heads it.
     title: str = ""
+    #: The creature a seat rolled this *as* — an NPC the GM answered a request with.
+    #: The history heads the card with it ("Thug (GM)") rather than with the seat.
+    actor: str = ""
+    #: The ladder :attr:`outcomes` renders, as data — what the GM's table applies when
+    #: an NPC fails this save. ``None`` for a roll that is no save.
+    ladder: SpecLadder | None = None
 
     def with_follow_up(self, follow_up: RollSpec | None) -> RollSpec:
         """A copy of this spec that provokes *follow_up* when it succeeds."""
@@ -214,6 +297,10 @@ class RollSpec:
             raw["action_id"] = self.action_id
         if self.title:
             raw["title"] = self.title
+        if self.actor:
+            raw["actor"] = self.actor
+        if self.ladder is not None:
+            raw["ladder"] = self.ladder.to_dict()
         if self.follow_up is not None:
             raw["follow_up"] = self.follow_up.to_dict()
         return raw
@@ -258,6 +345,8 @@ class RollSpec:
             ),
             action_id=str(raw.get("action_id", "")),
             title=str(raw.get("title", "")),
+            actor=str(raw.get("actor", "")),
+            ladder=SpecLadder.from_dict(raw.get("ladder")),
         )
 
 
@@ -360,6 +449,31 @@ def effect_outcome_ladder(
         return ()
     rungs = tuple(_rung_text(rung, effect, game_data) for rung in base_effect.resistance_outcomes)
     return rungs if any(rungs) else ()
+
+
+def effect_spec_ladder(
+    effect: PowerEffectInstance, game_data: GameData, base_effect: Effect | None = None
+) -> SpecLadder | None:
+    """This effect's ladder as data for its save's spec — ``None`` if it has none.
+
+    Damage's is :data:`LADDER_DAMAGE` (the ruleset's damage effect), every other
+    effect's :data:`LADDER_EFFECT`.
+    """
+
+    if base_effect is None:
+        base_effect = next((e for e in game_data.effects if e.id == effect.effect_id), None)
+    if base_effect is None or not base_effect.resistance_outcomes:
+        return None
+    kind = LADDER_DAMAGE if base_effect.id == game_data.system.damage_effect else LADDER_EFFECT
+    success = base_effect.resistance_success
+    return SpecLadder(
+        kind,
+        tuple(
+            concrete_rung(rung, game_data, effect.config)
+            for rung in base_effect.resistance_outcomes
+        ),
+        None if success is None else concrete_rung(success, game_data, effect.config),
+    )
 
 
 def effect_success_outcome(
@@ -631,6 +745,29 @@ def localize_spec(spec: RollSpec, char: Character | None, game_data: GameData) -
     return replace(spec, modifier=spec.modifier + own.modifier)
 
 
+def trait_roll_for(spec: RollSpec, char: Character, game_data: GameData) -> RollSpec | None:
+    """The trait *char* would roll for *spec*, as their own sheet rolls it — or ``None``.
+
+    What :func:`localize_spec` adds, unmixed: for a best-of (or worst-of) spec the one
+    candidate it picks, carrying its own ``kind`` and ``trait_key``, so a caller can say
+    "Will +8" rather than "Resist Demoralized (Will)", and ask whether that trait can be
+    used at all.
+    """
+
+    if not spec.trait_key:
+        return None
+    if spec.kind in (KIND_BEST_OF, KIND_WORST_OF):
+        rolls = best_own_rolls(spec.trait_key, char, game_data)
+        if not rolls:
+            return None
+        pick = min if spec.kind == KIND_WORST_OF else max
+        return pick(rolls, key=lambda r: r.modifier)
+    own = _own_trait_roll(spec, char, game_data)
+    if own is None:
+        return None
+    return replace(own, kind=own.kind or spec.kind, trait_key=spec.trait_key)
+
+
 def _resistance_key(phrase: str, game_data: GameData) -> str:
     """The resistance key a rendered save phrase names, or ``""``.
 
@@ -684,6 +821,7 @@ def _effect_rolls(
             success_outcome=effect_success_outcome(effect, game_data, base_effect),
             rolled_by_target=True,
             trait_key=_resistance_key(resistance_row.value, game_data),
+            ladder=effect_spec_ladder(effect, game_data, base_effect),
         )
 
     specs: list[RollSpec] = []

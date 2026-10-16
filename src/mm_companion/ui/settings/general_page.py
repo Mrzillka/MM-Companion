@@ -1,11 +1,13 @@
 """The General settings page: preferences that are not about the look or the GM.
 
-Four settings. Whether a roll landing in the history also pops up in a corner of
+Five settings. Whether a roll landing in the history also pops up in a corner of
 the screen, and which corner (see :mod:`mm_companion.ui.toasts`). Whether a saved
 character opens in the simple sheet (the play view,
 see :mod:`mm_companion.ui.simple`). Whether the launcher looks for a newer release
 when the app starts (see :mod:`mm_companion.core.updates`) — on by default, and here
-for whoever would rather the app made no request of its own. And how the dice roller arranges
+for whoever would rather the app made no request of its own. Whether, at a table, this
+player sets up their own Impress and area attacks or sends them to the GM to set up
+(see :mod:`mm_companion.ui.action_ui`). And how the dice roller arranges
 itself, as a sheet block and as the GM window's Rolls block alike. Normally it
 reflows to whatever room it is given, but two of the shapes it can be in turned
 out to be worth choosing outright:
@@ -38,7 +40,7 @@ from PySide6.QtWidgets import (
 from mm_companion.core import storage
 from mm_companion.ui.settings.page import SettingsPage
 from mm_companion.ui.toasts import roll_toaster
-from mm_companion.ui.widgets import BOLD_STYLE, muted_style
+from mm_companion.ui.widgets import BOLD_STYLE, help_tooltip, muted_style, with_help
 
 NOTIFICATIONS_NOTE = (
     "Every roll, note and request that lands in the history also pops up for a few "
@@ -57,6 +59,12 @@ CORNERS: tuple[tuple[str, str], ...] = (
 UPDATES_NOTE = (
     "Ask GitHub, once each time MM-Companion starts, whether a newer version is out. "
     "Nothing is downloaded until you click Update."
+)
+
+ACTIONS_NOTE = (
+    "At a table, Impress and an area line open a window where you pick the impression, "
+    "the shape and who is targeted — when the GM allows it. Off, they go straight to "
+    "the GM, who sets them up. The GM resolves them either way."
 )
 
 SIMPLE_NOTE = (
@@ -108,6 +116,7 @@ class GeneralPage(SettingsPage):
         column.addWidget(self._build_notifications())
         column.addWidget(self._build_updates())
         column.addWidget(self._build_simple_sheet())
+        column.addWidget(self._build_action_setup())
         column.addWidget(self._build_heading())
         column.addWidget(self._build_dice_layout())
         column.addStretch()
@@ -129,7 +138,7 @@ class GeneralPage(SettingsPage):
 
         self._notifications = QCheckBox("Pop up new rolls in a corner of the screen")
         self._notifications.toggled.connect(lambda *_: self._set_status(""))
-        stack.addWidget(self._notifications)
+        stack.addWidget(with_help(self._notifications, NOTIFICATIONS_NOTE))
 
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
@@ -142,11 +151,6 @@ class GeneralPage(SettingsPage):
         row.addWidget(self._corner)
         row.addStretch()
         stack.addLayout(row)
-
-        note = QLabel(NOTIFICATIONS_NOTE)
-        note.setWordWrap(True)
-        note.setStyleSheet(muted_style(italic=True))
-        stack.addWidget(note)
         return panel
 
     def _build_updates(self) -> QWidget:
@@ -160,12 +164,7 @@ class GeneralPage(SettingsPage):
 
         self._check_updates = QCheckBox("Check for updates when MM-Companion starts")
         self._check_updates.toggled.connect(lambda *_: self._set_status(""))
-        stack.addWidget(self._check_updates)
-
-        note = QLabel(UPDATES_NOTE)
-        note.setWordWrap(True)
-        note.setStyleSheet(muted_style(italic=True))
-        stack.addWidget(note)
+        stack.addWidget(with_help(self._check_updates, UPDATES_NOTE))
         return panel
 
     def _build_simple_sheet(self) -> QWidget:
@@ -179,12 +178,21 @@ class GeneralPage(SettingsPage):
 
         self._simple_on_open = QCheckBox("Open saved characters in the simple sheet")
         self._simple_on_open.toggled.connect(lambda *_: self._set_status(""))
-        stack.addWidget(self._simple_on_open)
+        stack.addWidget(with_help(self._simple_on_open, SIMPLE_NOTE))
+        return panel
 
-        note = QLabel(SIMPLE_NOTE)
-        note.setWordWrap(True)
-        note.setStyleSheet(muted_style(italic=True))
-        stack.addWidget(note)
+    def _build_action_setup(self) -> QWidget:
+        panel = QWidget()
+        stack = QVBoxLayout(panel)
+        stack.setContentsMargins(0, 0, 0, 0)
+
+        title = QLabel("Impress and area attacks")
+        title.setStyleSheet(BOLD_STYLE)
+        stack.addWidget(title)
+
+        self._actions_myself = QCheckBox("Set up my own Impress and area attacks")
+        self._actions_myself.toggled.connect(lambda *_: self._set_status(""))
+        stack.addWidget(with_help(self._actions_myself, ACTIONS_NOTE))
         return panel
 
     def _build_heading(self) -> QWidget:
@@ -194,16 +202,11 @@ class GeneralPage(SettingsPage):
 
         title = QLabel("Dice roller layout")
         title.setStyleSheet(BOLD_STYLE)
-        stack.addWidget(title)
-
-        note = QLabel(NOTE_TEXT)
-        note.setWordWrap(True)
-        note.setStyleSheet(muted_style(italic=True))
-        stack.addWidget(note)
+        stack.addWidget(with_help(title, NOTE_TEXT))
         return panel
 
     def _build_dice_layout(self) -> QWidget:
-        """One radio per shape, each over the line that says what it looks like.
+        """One radio per shape, each with a "?" that says what it looks like.
 
         Three mutually exclusive arrangements that each need a sentence of
         explanation, which is what radio buttons are for — a combo would hide two
@@ -219,25 +222,13 @@ class GeneralPage(SettingsPage):
             button = QRadioButton(label)
             self._buttons.addButton(button)
             self._choices[layout] = button
-            stack.addWidget(button)
-
-            note = QLabel(description)
-            note.setWordWrap(True)
-            note.setStyleSheet(muted_style(italic=True))
-            note.setIndent(self._description_indent())
-            stack.addWidget(note)
+            button.setToolTip(help_tooltip(description))
+            stack.addWidget(with_help(button, description))
         # A "Saved." line left standing over a choice that has since moved is a lie
         # about the state of the settings file, so the line goes the moment the
         # answer changes.
         self._buttons.buttonToggled.connect(lambda *_: self._set_status(""))
         return panel
-
-    def _description_indent(self) -> int:
-        """Line each description up under its radio's label rather than its dot."""
-        probe = QRadioButton()
-        indent = probe.sizeHint().width()
-        probe.deleteLater()
-        return indent
 
     def _build_actions(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -259,6 +250,7 @@ class GeneralPage(SettingsPage):
             self._chosen() != self._saved
             or self._check_updates.isChecked() != self._saved_check_updates
             or self._simple_on_open.isChecked() != self._saved_simple_on_open
+            or self._actions_myself.isChecked() != self._saved_actions_myself
             or self._notifications.isChecked() != self._saved_notifications
             or self._corner.currentData() != self._saved_corner
         )
@@ -275,6 +267,8 @@ class GeneralPage(SettingsPage):
         self._saved_check_updates = self._check_updates.isChecked()
         storage.set_simple_sheet_on_open(self._simple_on_open.isChecked())
         self._saved_simple_on_open = self._simple_on_open.isChecked()
+        storage.set_resolve_actions_myself(self._actions_myself.isChecked())
+        self._saved_actions_myself = self._actions_myself.isChecked()
         storage.set_dice_layout(self._chosen())
         self._saved = self._chosen()
         for window in _open_windows():
@@ -302,6 +296,8 @@ class GeneralPage(SettingsPage):
         self._check_updates.setChecked(self._saved_check_updates)
         self._saved_simple_on_open = storage.simple_sheet_on_open()
         self._simple_on_open.setChecked(self._saved_simple_on_open)
+        self._saved_actions_myself = storage.resolve_actions_myself()
+        self._actions_myself.setChecked(self._saved_actions_myself)
         self._saved = storage.dice_layout()
         self._choices[self._saved].setChecked(True)
         self._set_status("")

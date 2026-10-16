@@ -16,7 +16,12 @@ from a single command:
     python .claude/skills/run-mm-companion/driver.py compact-gm   # the same, from the GM window
     python .claude/skills/run-mm-companion/driver.py gm           # GM Mode, with a cast of NPCs
     python .claude/skills/run-mm-companion/driver.py npc          # the simplified NPC sheet
+    python .claude/skills/run-mm-companion/driver.py impress-gm   # the GM's Impress window
+    python .claude/skills/run-mm-companion/driver.py area-gm      # the GM's area-attack window
     python .claude/skills/run-mm-companion/driver.py all           # start + sheet + constructor
+
+The other action surfaces are impress-dialog, impress-dialog-offline,
+impress-gm-running, area-dialog, area-dialog-offline and roll-prompt.
 
 Screenshots land in ./_driver_shots/<target>.png by default (override with
 --out). The workspace is redirected to a throwaway temp dir so the driver never
@@ -1348,10 +1353,175 @@ def build(target: str):
         win = QLabel()
         win.setPixmap(QPixmap.fromImage(image))
         win.resize(image.size())
+    elif target in ACTION_TARGETS:
+        win = _action_window(target)
     else:  # pragma: no cover - guarded by argparse choices
         raise ValueError(target)
 
     win.show()
+    return win
+
+
+#: The Impress and area-attack windows, each with a small scene: the player's dialogs
+#: (at a table and off the air), the GM's windows, and the prompt a player is asked in.
+ACTION_TARGETS = (
+    "impress-dialog",
+    "impress-dialog-offline",
+    "impress-gm",
+    "impress-gm-running",
+    "area-dialog",
+    "area-dialog-offline",
+    "area-gm",
+    "area-gm-own",
+    "area-gm-heal",
+    "roll-prompt",
+)
+
+
+def _action_window(target: str):
+    from mm_companion.core.character import Character
+    from mm_companion.core.data_loader import load_game_data
+    from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
+    from mm_companion.core.rules import (
+        KIND_BEST_OF,
+        AreaAttempt,
+        RollSpec,
+        best_of_key,
+        power_area_use,
+    )
+    from mm_companion.ui.action_ui import RollPromptDialog
+    from mm_companion.ui.area import AreaDialog, AreaWindow
+    from mm_companion.ui.impress import (
+        PARTY_NPC,
+        PARTY_PLAYER,
+        ImpressDialog,
+        ImpressParty,
+        ImpressWindow,
+    )
+
+    data = load_game_data()
+
+    def who(name: str) -> Character:
+        character = Character.new_default(data)
+        character.profile["hero_name"] = name
+        character.power_level = 10
+        character.abilities["PRE"] = 2
+        character.abilities["AWE"] = 3
+        character.skill_ranks["Intimidation"] = 6
+        character.skill_ranks["Deception"] = 4
+        character.skill_ranks["Insight"] = 5
+        return character
+
+    scene = [
+        {"ref": "s1", "name": "Thug"},
+        {"ref": "s2", "name": "Mook"},
+        {"ref": "s3", "name": "Nova", "player_id": "me"},
+        {"ref": "s4", "name": "Blaze"},
+    ]
+    burst = Power(
+        name="Fire Burst",
+        effects=[
+            PowerEffectInstance(
+                "damage",
+                rank=8,
+                extras=[ModifierSelection("area_effect", config={"shape": "cone"})],
+            )
+        ],
+    )
+    nova = who("Nova")
+    if target in ("impress-dialog", "impress-dialog-offline"):
+        online = target == "impress-dialog"
+        win = ImpressDialog(data, nova, scene=scene if online else None, own_player_id="me")
+        if online:
+            win.set_targets(["s1", "s2"])
+    elif target in ("area-dialog", "area-dialog-offline"):
+        online = target == "area-dialog"
+        win = AreaDialog(data, nova, burst, scene=scene if online else None, own_player_id="me")
+        if online:
+            win.primary.add_ref("s1")
+            win.area.add_ref("s2")
+    elif target in ("impress-gm", "impress-gm-running"):
+        thug = who("Thug")
+        win = ImpressWindow(
+            data,
+            action_id="w1",
+            sources=[ImpressParty("s1", "Thug", PARTY_NPC, "thug.json", thug)],
+            targets=[
+                ImpressParty("s3", "Nova", PARTY_PLAYER, "me", nova),
+                ImpressParty("s2", "Mook", PARTY_NPC, "mook.json", who("Mook")),
+                ImpressParty("s4", "Blaze", PARTY_PLAYER, "p4", who("Blaze")),
+            ],
+        )
+        win.set_included(["s3", "s2"])
+        if target == "impress-gm-running":
+            win.start_running()
+            win.set_check("Impress check: <b>23</b> (rolled 15)")
+            win.set_result("s2", "Rolled 14 vs. DC 23 — <b>Demoralized</b>", "tint.worse")
+            win.set_waiting(["Nova"])
+    elif target == "area-gm":
+        source = ImpressParty("s3", "Nova", PARTY_PLAYER, "me", nova)
+        use = power_area_use(burst, nova, data)
+        attempt = AreaAttempt("act", use, primary="s1", targets=("s2", "s4"), source_name="Nova")
+        win = AreaWindow(
+            data,
+            attempt=attempt,
+            source=source,
+            targets=[
+                source,
+                ImpressParty("s1", "Thug", PARTY_NPC, "thug.json", who("Thug")),
+                ImpressParty("s2", "Mook", PARTY_NPC, "mook.json", who("Mook")),
+                ImpressParty("s4", "Blaze", PARTY_PLAYER, "p4", who("Blaze")),
+            ],
+            from_card=True,
+        )
+    elif target in ("area-gm-own", "area-gm-heal"):
+        # The GM started it: an Attacker combo, the Rank / Attack adjusts, the mode row —
+        # or, for an area Healing, one check and no Dodge.
+        thug = who("Thug")
+        if target == "area-gm-heal":
+            thug.powers.append(
+                Power(
+                    name="Mending Wave",
+                    effects=[
+                        PowerEffectInstance(
+                            "healing", rank=6, extras=[ModifierSelection("area_effect")]
+                        )
+                    ],
+                )
+            )
+        else:
+            thug.powers.append(burst)
+        source = ImpressParty("s1", "Thug", PARTY_NPC, "thug.json", thug)
+        use = power_area_use(thug.powers[0], thug, data, npc=True, free_use=True)
+        attempt = AreaAttempt("act", use, primary="s3", targets=("s2",), source_name="Thug")
+        targets = [
+            source,
+            ImpressParty("s3", "Nova", PARTY_PLAYER, "me", nova),
+            ImpressParty("s2", "Mook", PARTY_NPC, "mook.json", who("Mook")),
+        ]
+        win = AreaWindow(
+            data, attempt=attempt, source=source, targets=targets, sources=[source, targets[1]]
+        )
+        if target == "area-gm-own":
+            win.set_rank_adjust(2)
+            win.set_attack_adjust(-1)
+    else:  # roll-prompt
+        spec = RollSpec(
+            label="Resist Demoralized",
+            dc=21,
+            kind=KIND_BEST_OF,
+            trait_key=best_of_key(
+                [("skill", "Intimidation"), ("skill", "Insight"), ("resistance", "WILL")]
+            ),
+            targets=("Nova",),
+            action_id="a1",
+            title="Thug: Demoralized",
+            outcomes=("Demoralized", "Frightened"),
+        )
+        win = RollPromptDialog(
+            data, nova, action_id="a1", spec=spec, asker="The GM", roll=lambda _s: False
+        )
+    _KEEP.append(win)
     return win
 
 
@@ -1478,6 +1648,7 @@ def main(argv: list[str] | None = None) -> int:
             "simple-sheet-custom",
             "simple-sheet-narrow",
             "simple-print",
+            *ACTION_TARGETS,
             "all",
         ],
         help="which UI surface to launch and screenshot",

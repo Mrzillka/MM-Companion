@@ -35,11 +35,11 @@ from __future__ import annotations
 import json
 import re
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, QEvent, Qt, QTimer
-from PySide6.QtGui import QCloseEvent, QShowEvent
+from PySide6.QtGui import QCloseEvent, QCursor, QIcon, QShowEvent
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -48,6 +48,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -64,16 +65,24 @@ from mm_companion.core.rules import (
     KIND_INITIATIVE,
     PinRef,
     RollSpec,
+    answer_reading,
+    answer_rung,
     apply_condition,
     apply_damage_step,
+    area_capable_builds,
+    area_key_index,
+    area_key_power_id,
+    condition_changes,
     damage_step_summary,
     damage_steps,
     decrement_condition,
     default_pins,
     find_area_power,
     initiative_modifier,
+    localize_spec,
     parse_pins,
     requested_roll_choices,
+    resolve_rung,
 )
 from mm_companion.core.session import client as session_client
 from mm_companion.core.session import discovery, store
@@ -95,6 +104,8 @@ from mm_companion.core.session.protocol import (
     SCENE_DISPOSITIONS,
 )
 from mm_companion.ui import npc_icons, theme
+from mm_companion.ui.action_ui import publish_table_rules
+from mm_companion.ui.area import AREA_ACTION, KIND_AREA_ATTACK
 from mm_companion.ui.area_gm import AreaController
 from mm_companion.ui.block_canvas import BlockCanvas
 from mm_companion.ui.block_sizes import RecommendedSize, load_block_sizes
@@ -131,8 +142,9 @@ from mm_companion.ui.npc_window import NPCWindow
 from mm_companion.ui.pin_picker import PinPickerDialog
 from mm_companion.ui.pinned_panel import PinnedBoard
 from mm_companion.ui.player_card import PlayerCard
-from mm_companion.ui.roll_history import RollHistoryPanel
+from mm_companion.ui.roll_history import AnswerContext, RollHistoryPanel
 from mm_companion.ui.scene_board import NO_SCENE_GM, SceneBoard
+from mm_companion.ui.scene_card import CARD_AREA, CARD_END_TURN, CARD_IMPRESS
 from mm_companion.ui.sections.conditions import condition_display_name, matching_condition
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.session_bridge import SessionBridge, last_session, set_active_session
@@ -166,6 +178,25 @@ EXPAND_ALL = "Expand all"
 #: looking at them.
 SCENE_NPC = "npc"
 SCENE_PLAYER = "player"
+
+#: The history's answer menu, when there is nobody on the board to answer with.
+NO_NPCS_TO_ANSWER = "No NPCs on the board"
+#: Its last entry — the roll with nobody's number, which a right-click also gives.
+AS_WRITTEN_CAPTION = "As written (nobody's number) — or right-click the button"
+#: Marks a creature that already answered this card.
+ANSWERED_MARK = "✓"
+#: Marks a trained-only skill the creature has no training in. It still rolls.
+UNTRAINED_MARK = "⚠"
+
+
+@dataclass
+class _Answering:
+    """A roll an NPC is answering off the history, until it comes back."""
+
+    #: The spec as the card offered it — the ladder it carries is what is applied.
+    spec: RollSpec
+    party: ImpressParty
+    where: AnswerContext
 
 
 @dataclass
@@ -414,6 +445,10 @@ class GMWindow(QMainWindow):
         # Ids for rolls made before hosting: negative so they never collide with a
         # session's positive seqs, and still removable from the local view.
         self._offline_seq = 0
+        # The history roll an NPC is answering right now (see _roll_as), and which
+        # creatures have answered each card, by its seq — so the menu can tick them.
+        self._answering: _Answering | None = None
+        self._answered: dict[int, set[str]] = {}
         # The connection choices this window hosts with, picked in the launch dialog
         # before the window opened. A sane default lets the relay fallback and the
         # port read something even when a caller passes none (e.g. the test fixture).
@@ -678,6 +713,7 @@ class GMWindow(QMainWindow):
         self._scene_board.initiativeCleared.connect(self._clear_scene_initiative)
         self._scene_board.initiativeRollRequested.connect(self._roll_entry_initiative)
         self._scene_board.dispositionChanged.connect(self._set_disposition)
+        self._scene_board.actionRequested.connect(self._on_scene_action)
         # Every pixel of the box below the buttons, and no trailing stretch: the
         # board's drop target fills what it is given, so what a GM aims a dragged
         # card at is the whole block rather than the band its cards sit in.
@@ -796,6 +832,14 @@ class GMWindow(QMainWindow):
         # Still the panel, so every card that loads or throws a spec into it (a
         # player's, an NPC's) reaches it by the same name it always did.
         self._roller = self._view.panel
+        # A save or a request clicked in this history is answered for a creature the GM
+        # plays — whose number goes in is asked first (see _on_history_roll). A
+        # right-click rolls it as written, for nobody.
+        self._history.rollFollowUp.disconnect(self._roller.roll_spec)
+        self._history.rollAnswer.connect(self._on_history_roll)
+        self._history.rollPlain.connect(self._roller.roll_spec)
+        # The roll an NPC answered with, once it is back: what failing did goes on it.
+        self._roller.sessionRollRevealed.connect(self._on_answer_back)
         # While hosting, a roll made here goes through the server like everyone
         # else's and comes back on the shared feed. Before that there is no
         # session to record it in, so it is shown as a card and nothing more.
@@ -805,17 +849,187 @@ class GMWindow(QMainWindow):
         # they are character-free) and this window decides where the ask goes.
         self._roller.set_roll_choices(requested_roll_choices(self._data))
         self._roller.rollRequested.connect(self._request_roll)
-        # The Action row: the GM impresses on an NPC's behalf from here, exactly
-        # where a player's Impress button is on their sheet.
+        # The Action row: the GM impresses, or spreads an attack over an area, for
+        # anybody — an NPC of theirs or a player — exactly where a player's Impress
+        # button is on their sheet.
+        actions = []
         if self._data.impress.available:
-            self._roller.set_actions([IMPRESS_ACTION])
+            actions.append(IMPRESS_ACTION)
+        if self._data.area.available:
+            actions.append(AREA_ACTION)
+        if actions:
+            self._roller.set_actions(actions)
         self._roller.actionRequested.connect(self._on_roller_action)
         layout.addWidget(self._view)
         return box
 
+    def _on_history_roll(self, spec: object, context: object = None) -> None:
+        """A save chip or a request card clicked in the GM's history.
+
+        A spec that names a trait is answered with *someone's* number, and here that is
+        an NPC's: a menu of the creatures nobody plays on the board (those it names
+        first, then the board's order), each with its picture and the number it would
+        roll, rolls it with that one's own number under its name. A creature that
+        already answered this card is ticked, and a trained-only skill it lacks is
+        flagged — both still roll. "As written" (or a right-click on the button) rolls
+        it with nobody's.
+        """
+        if not isinstance(spec, RollSpec):
+            return
+        where = context if isinstance(context, AnswerContext) else AnswerContext()
+        if not spec.trait_key:
+            self._roller.roll_spec(spec)
+            return
+        _sources, targets = self.impress_parties()
+        npcs = [p for p in targets if p.kind == PARTY_NPC and p.character is not None]
+        named = set(spec.targets)
+        npcs.sort(key=lambda p: p.name not in named)
+        answered = self._answered.get(where.seq, set()) if where.seq is not None else set()
+        menu = QMenu(self)
+        menu.setToolTipsVisible(True)
+        if not npcs:
+            menu.addAction(NO_NPCS_TO_ANSWER).setEnabled(False)
+        for party in npcs:
+            reading = answer_reading(spec, party.character, self._data)
+            text = party.name
+            tips = []
+            if reading is not None:
+                text = f"{text} — {reading.label} {reading.modifier:+d}"
+                if not reading.usable:
+                    text = f"{text} {UNTRAINED_MARK}"
+                    tips.append(f"{reading.label} can't be used untrained; it rolls anyway.")
+            if party.name in answered:
+                text = f"{ANSWERED_MARK} {text}"
+                tips.append("Already rolled for this one.")
+            action = menu.addAction(text, lambda p=party: self._roll_as(spec, p, where))
+            if tips:
+                action.setToolTip(" ".join(tips))
+            portrait = self._scene_board.portrait(party.ref)
+            if portrait is not None:
+                action.setIcon(QIcon(portrait))
+        menu.addSeparator()
+        menu.addAction(AS_WRITTEN_CAPTION, lambda: self._roller.roll_spec(spec))
+        menu.exec(QCursor.pos())
+
+    def _roll_as(
+        self, spec: RollSpec, party: ImpressParty, where: AnswerContext | None = None
+    ) -> None:
+        """Roll *spec* as *party* rolls it: their own number in, their name on it.
+
+        The roller's own adjustment and Hidden still apply. Once the roll is back,
+        :meth:`_on_answer_back` puts what a failed save did on the creature.
+        """
+        where = where or AnswerContext()
+        own = localize_spec(spec, party.character, self._data)
+        rolled = replace(
+            own,
+            label=f"{party.name}: {own.label}",
+            targets=(party.name,),
+            trait_key="",
+            actor=party.name,
+        )
+        # Set first: the roll can come back before roll_spec returns (a hosted
+        # server answers in-process, and a test's die does not tumble).
+        self._answering = _Answering(spec, party, where)
+        if not self._roller.roll_spec(rolled):
+            self._answering = None
+            return
+        if where.seq is not None:
+            self._answered.setdefault(where.seq, set()).add(party.name)
+
+    def _on_answer_back(self, roll: object) -> None:
+        """A roll of the GM's own is back: if an NPC answered with it, apply its rung."""
+        answering = self._answering
+        if answering is None or not isinstance(roll, dict):
+            return
+        spec = RollSpec.from_dict(roll.get("spec"))
+        name = answering.party.name
+        actor = spec.actor if spec is not None else ""
+        if actor != name and not str(roll.get("label", "")).startswith(f"{name}: "):
+            return
+        self._answering = None
+        self._apply_answer(answering, roll)
+
+    def _apply_answer(self, answering: _Answering, roll: dict) -> None:
+        """Put what the NPC's roll did on it — if the GM's setting says to.
+
+        The ladder is the one the spec carries (:class:`SpecLadder`), the rung resolved
+        against the creature as it stands, and what actually changed is kept so the
+        card's ↶ can take it back off.
+        """
+        degree = roll.get("degree")
+        ladder = answering.spec.ladder
+        if degree is None or ladder is None:
+            return
+        if not storage.gm_auto_apply().get(ladder.kind, True):
+            return
+        rung = answer_rung(ladder, int(degree))
+        party = answering.party
+        entry = self._npc_state.get(party.source)
+        if rung is None or entry is None:
+            return
+        before = deepcopy(entry.character.conditions)
+        changes = resolve_rung(entry.character, rung, self._data, source=answering.where.source)
+        if not changes:
+            return
+        self.impress_apply(party, list(changes))
+        added, removed = condition_changes(before, entry.character.conditions)
+        if not added and not removed:
+            return
+        names = self._change_names(changes)
+        self._show_notice(f"{party.name}: {names}", theme.color("tint.worse"))
+        seq = roll.get("seq")
+        if isinstance(seq, int):
+            self._history.set_undo(
+                seq,
+                f"Take {names} back off {party.name}",
+                lambda: self._undo_answer(seq, party, added, removed, names),
+            )
+
+    def _undo_answer(
+        self,
+        seq: int,
+        party: ImpressParty,
+        added: list[tuple[str, str | None]],
+        removed: list[tuple[str, str | None]],
+        names: str,
+    ) -> None:
+        """Take back what an NPC's roll applied: off what it added, on what it replaced."""
+        self._history.set_undo(seq, "", None)
+        if party.source not in self._npc_state:
+            return
+        if added:
+            self.action_remove(party, added)
+        if removed:
+            self.impress_apply(party, removed)
+        self._show_notice(f"{party.name}: took back {names}", theme.color("text.muted.rich"))
+
+    def _change_names(self, changes) -> str:
+        """``(id, parameter)`` pairs as the chips would name them."""
+        catalog = self._data.condition_catalog()
+        return ", ".join(
+            condition_display_name(AppliedCondition(cid, parameter), catalog.get(cid))
+            for cid, parameter in changes
+        )
+
     def _on_roller_action(self, kind: str) -> None:
         if kind == KIND_IMPRESS:
             self._impress.open_new()
+        elif kind == KIND_AREA_ATTACK:
+            self._area.open_new()
+
+    def _on_scene_action(self, ref: str, action: str) -> None:
+        """A creature's card on the board, right-clicked: end its turn, or have it act."""
+        _sources, targets = self.impress_parties()
+        party = next((p for p in targets if p.ref == ref), None)
+        if party is None:
+            return
+        if action == CARD_END_TURN:
+            self._impress.end_turn(party)
+        elif action == CARD_IMPRESS:
+            self._impress.open_new(source_key=party.source)
+        elif action == CARD_AREA:
+            self._area.start_for(party)
 
     # -- the Impress action's host surface (see ImpressHost) ------------------
 
@@ -883,6 +1097,34 @@ class GMWindow(QMainWindow):
             )
         return delivered
 
+    def action_remove(self, party: ImpressParty, changes: list[tuple[str, str | None]]) -> bool:
+        """Take conditions off one creature — the twin of :meth:`impress_apply`.
+
+        An NPC's come off its model through the path every NPC condition change takes;
+        a player's go to their app as remove commands, as the GM's own "−" sends one.
+        """
+        if party.kind == PARTY_NPC:
+            entry = self._npc_state.get(party.source)
+            if entry is None:
+                return False
+            for condition_id, parameter in changes:
+                applied = matching_condition(entry.character, condition_id, parameter)
+                if applied is not None:
+                    decrement_condition(entry.character, applied)
+            self._after_npc_condition_change(entry, list(changes), applying=False)
+            return True
+        delivered = True
+        for condition_id, parameter in changes:
+            delivered = (
+                bool(self._bridge.remove_condition(party.source, condition_id, parameter))
+                and delivered
+            )
+        return delivered
+
+    def action_request(self, spec: RollSpec) -> None:
+        """Leave a request card for *spec* — the table's history, or this window's."""
+        self._request_roll(spec)
+
     def impress_show_offline(self, record: dict) -> None:
         """One roll of an Impress made off the air, as an offline card."""
         self._offline_seq -= 1
@@ -893,11 +1135,21 @@ class GMWindow(QMainWindow):
     def impress_notice(self, text: str, colour: str) -> None:
         self._show_notice(text, colour)
 
-    # -- the area attack's two extra host methods (see AreaHost) ------------------
+    # -- the actions' two extra host methods (see AreaHost, ImpressHost) ----------
 
-    def area_add_card(self, card) -> None:
-        """Put an area attack's reminder — its Resolve button — in the GM's history."""
+    def action_add_card(self, card) -> None:
+        """Put an action's reminder — its Resolve button — in the GM's history."""
         self._history.add_card(card)
+
+    def publish_table_rules(self) -> None:
+        """Tell the table whether its players set up their own actions (a GM setting).
+
+        Published on the session's shared state rather than asked for, so a player
+        reads it the moment they click Impress — and a later joiner gets it in their
+        Welcome. Off the air there is nobody to tell.
+        """
+        if self._bridge.in_session and self._bridge.is_gm:
+            publish_table_rules(self._bridge)
 
     def area_roll_attack(self, spec: RollSpec) -> None:
         """Roll an NPC's attack against the primary on this window's roller."""
@@ -1088,6 +1340,7 @@ class GMWindow(QMainWindow):
         self._refresh_rolls()
         self._refresh_npcs()
         self._refresh_idle_status()
+        self.publish_table_rules()
 
     def _on_left(self, reason: str) -> None:
         self._set_status(f"Disconnected ({reason})", theme.color("tint.worse"))
@@ -1327,6 +1580,8 @@ class GMWindow(QMainWindow):
             "spec": roll.get("spec"),
         }
         self._history.add_roll(record)
+        # A save an NPC answered off the history: what failing did goes on it.
+        self._on_answer_back(record)
         # An NPC's attack against an area's primary, rolled from the area window: off
         # the air there is no rollAdded to bring its total back, so it is handed over.
         if getattr(self, "_area", None) is not None:
@@ -1378,6 +1633,7 @@ class GMWindow(QMainWindow):
     def _on_started(self, host: str, port: int) -> None:
         self._rename_session()
         self._notice.dismiss()
+        self.publish_table_rules()
 
     def _on_stopped(self) -> None:
         self._copy_code_action.setEnabled(False)
@@ -2481,6 +2737,8 @@ class GMWindow(QMainWindow):
             card.pinPickerRequested.connect(self._open_npc_pin_picker)
             card.collapsedChanged.connect(self._set_npc_collapsed)
             card.damageRequested.connect(self._apply_npc_damage)
+            card.areaRequested.connect(self._start_card_area)
+            card.impressRequested.connect(self._start_card_impress)
             card.pins.set_pins(self._pins_for(_npc_key(name), "npc"))
             # Connected after the initial load, so seeding the strip does not ask
             # the window to re-measure a grid it is halfway through building.
@@ -2772,7 +3030,7 @@ class GMWindow(QMainWindow):
         elif topic == NOTE_REQUESTED and isinstance(payload, str) and payload:
             self._post_note(payload)
 
-    def _start_npc_area(self, window: NPCWindow, power_id: str) -> None:
+    def _start_npc_area(self, window: NPCWindow, area_key: str) -> None:
         """Open the area window for the build *power_id* names on an NPC sheet.
 
         The NPC is the cast entry the sheet's file is, never one found by its display
@@ -2780,12 +3038,42 @@ class GMWindow(QMainWindow):
         while the attacker could be ticked into its own area.
         """
         character = window.sheet.character
-        power = find_area_power(character, self._data, power_id)
+        power = find_area_power(character, self._data, area_key)
         if power is None:
             return
         path = Path(window.path) if window.path is not None else None
         key = next((n for n, entry in self._npc_state.items() if entry.path == path), "")
-        self._area.start_for_npc(character, power, key, name=library.display_name(character))
+        self._area.start_for_npc(
+            character,
+            power,
+            key,
+            name=library.display_name(character),
+            effect_index=area_key_index(area_key),
+        )
+
+    def _start_card_area(self, key: str, area_key: str) -> None:
+        """An NPC card's Area button: that creature uses the area *area_key* names."""
+        entry = self._npc_state.get(key)
+        if entry is None:
+            return
+        wanted = area_key_power_id(area_key)
+        power = next(
+            (b for b in area_capable_builds(entry.character, self._data) if b.id == wanted),
+            None,
+        )
+        if power is None:
+            return
+        self._area.start_for_npc(
+            entry.character,
+            power,
+            key,
+            name=library.display_name(entry.character),
+            effect_index=area_key_index(area_key),
+        )
+
+    def _start_card_impress(self, key: str) -> None:
+        """An NPC card's Impress button: that creature impresses somebody."""
+        self._impress.open_new(source_key=key)
 
     def _post_note(self, text: str) -> None:
         """A line in the history: the table's while hosting, this window's off the air.

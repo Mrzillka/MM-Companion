@@ -20,6 +20,7 @@ from ..registry import Registry
 from .appliers import trait_category
 from .area import (
     area_applications,
+    area_band_ranks,
     area_dodge_dc,
     area_selection,
     area_shape,
@@ -2026,6 +2027,20 @@ def effect_area_rank(
     The effect's rank as its save DC reads it — Strength folded in, and whatever a hard
     Power Level cap shaved off — so the Area row and the save beside it can never
     disagree about which rank the area is.
+    """
+
+    rank = effect_full_area_rank(effect, game_data, char)
+    band = area_band_ranks(area_selection(effect, game_data))
+    return min(rank, band) if band is not None else rank
+
+
+def effect_full_area_rank(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+) -> int:
+    """The rank a creature the area's attack hits directly resists — the whole effect.
+
+    The same as :func:`effect_area_rank` unless the area covers only part of the effect
+    (:func:`~.area.area_band_ranks`), when the primary target takes every rank.
     """
 
     rank_cut, _attack_cut = effect_pl_cap_shift(effect, game_data, char)

@@ -100,6 +100,9 @@ that used to be spelled in Python:
 | `area` | `actions.json` | area attacks: which modifiers make an effect an area, the Dodge key and DC base, how a made Dodge halves the rank, each shape's size phrase, the Evasion advantage, the GM's cover options, whether a free area use is capped at the Power Level, and which modifier choice makes a choice of two resistances the worse one (`worstOf`) |
 | `config` | an `equipment.json` modifier ref | the modifier's config choices on a catalog item, as a power's selection stores them (a grenade's Area `shape`) |
 | `parameters` | any `resistanceOutcomes` rung | the parameter a rung applies a condition with; `{source}` is whoever imposed it |
+| `scopeKey` | any `resistanceOutcomes` rung | the instance config field naming the trait the rung's trait-taking conditions are scoped to (Weaken's "Strength Impaired") |
+| `checkOutcomes` | `effects.json` | for an effect that is *checked* rather than resisted (Healing): its DC, and the conditions each degree of success removes, in order — what an area of it does to everyone in it |
+| `appliesTo` | an `equipment.json` modifier ref | the top of the rank band the modifier covers; an Area on part of a Damage is an area of that many ranks, and the creature hit directly takes the whole effect |
 
 ## How content merges
 

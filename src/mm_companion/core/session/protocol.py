@@ -103,7 +103,14 @@ from typing import ClassVar
 #: :func:`sanitize_spec` strips keys it does not know without a word. A caught player
 #: would be offered the full-rank save after a made Dodge, or no save at all after a
 #: failed one, and nobody would know the card was wrong.
-PROTOCOL_VERSION = 13
+#:
+#: v14 carries a save's **ladder as data** on the spec (``ladder``: the rungs' condition
+#: ids, escalation and parameters, and the ladder's kind) and the creature a roll was
+#: made *as* (``actor``). The GM's table applies what an NPC's failed save did off the
+#: ladder, and heads the card "Mook (GM)". Bumped for the v13 reason: a v13 server's
+#: :func:`sanitize_spec` strips both keys without a word, and every save the GM rolled
+#: for an NPC would quietly apply nothing.
+PROTOCOL_VERSION = 14
 
 #: Hard cap on one encoded message, including its trailing newline. A character
 #: snapshot is the largest thing that legitimately travels (tens of KB); anything
@@ -947,10 +954,13 @@ _SPEC_TEXT_KEYS = (
     "note_if_resisted",
     "action_id",
     "title",
+    "actor",
 )
 _SPEC_INT_KEYS = ("modifier", "dc", "dc_if_resisted")
 #: How many names a spec's ``targets`` may carry — a scene's worth.
 MAX_SPEC_TARGETS = 24
+#: How many condition ids, escalations or parameters one ladder rung may carry.
+MAX_RUNG_ITEMS = 12
 
 
 def sanitize_spec(raw: object, _depth: int = 0) -> dict | None:
@@ -996,10 +1006,61 @@ def sanitize_spec(raw: object, _depth: int = 0) -> dict | None:
         rungs = [o[:MAX_SPEC_TEXT] for o in outcomes[:MAX_SPEC_OUTCOMES] if isinstance(o, str)]
         if rungs:
             spec["outcomes"] = rungs
+    ladder = _sanitize_ladder(raw.get("ladder"))
+    if ladder is not None:
+        spec["ladder"] = ladder
     follow_up = sanitize_spec(raw.get("follow_up"), _depth + 1)
     if follow_up is not None:
         spec["follow_up"] = follow_up
     return spec
+
+
+def _text_list(raw: object) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    return [t[:MAX_SPEC_TEXT] for t in raw[:MAX_RUNG_ITEMS] if isinstance(t, str) and t]
+
+
+def _text_pairs(raw: object) -> list[list[str]]:
+    if not isinstance(raw, list):
+        return []
+    return [
+        [pair[0][:MAX_SPEC_TEXT], pair[1][:MAX_SPEC_TEXT]]
+        for pair in raw[:MAX_RUNG_ITEMS]
+        if isinstance(pair, list) and len(pair) == 2 and all(isinstance(part, str) for part in pair)
+    ]
+
+
+def _sanitize_rung(raw: object) -> dict:
+    """One ladder rung: its condition ids, escalations and parameter templates."""
+    if not isinstance(raw, dict):
+        return {"ids": []}
+    rung: dict = {"ids": _text_list(raw.get("ids"))}
+    escalates = _text_pairs(raw.get("escalates"))
+    if escalates:
+        rung["escalates"] = escalates
+    params = _text_pairs(raw.get("params"))
+    if params:
+        rung["params"] = params
+    return rung
+
+
+def _sanitize_ladder(raw: object) -> dict | None:
+    """A spec's ``ladder``, checked into shape — or ``None`` to drop it.
+
+    Structural like the rest: ids, pairs and a kind, all text, all capped. What any
+    of it means is the GM's client's business (``SpecLadder`` in the rules).
+    """
+    if not isinstance(raw, dict) or not isinstance(raw.get("rungs"), list):
+        return None
+    kind = raw.get("kind")
+    ladder: dict = {
+        "kind": kind[:MAX_SPEC_TEXT] if isinstance(kind, str) else "",
+        "rungs": [_sanitize_rung(r) for r in raw["rungs"][:MAX_SPEC_OUTCOMES]],
+    }
+    if isinstance(raw.get("success"), dict):
+        ladder["success"] = _sanitize_rung(raw["success"])
+    return ladder
 
 
 #: Bounds on a group roll and on an action's identifiers. A group is aimed at the

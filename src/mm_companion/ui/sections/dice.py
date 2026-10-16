@@ -31,19 +31,24 @@ Two things about it are deliberately unlike its neighbours:
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialog, QGroupBox, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QGroupBox, QVBoxLayout, QWidget
 
 from mm_companion.core import library
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.rules import (
+    AreaAttempt,
+    ImpressAttempt,
     RollSpec,
+    area_key_index,
     find_area_power,
     localize_spec,
+    power_area_use,
     requested_roll_choices,
 )
 from mm_companion.core.session.protocol import sanitize_mod_payload
 from mm_companion.ui import theme
+from mm_companion.ui.action_ui import sets_up_own_actions
 from mm_companion.ui.area import KIND_AREA_ATTACK, AreaDialog
 from mm_companion.ui.dice_roller import DiceRollerView
 from mm_companion.ui.impress import IMPRESS_ACTION, KIND_IMPRESS, ImpressDialog, new_action_id
@@ -71,6 +76,8 @@ class DiceSection(QGroupBox):
         #: The area window open on this sheet, if any — kept so it is not collected,
         #: and so a second area line raises a fresh one rather than stacking them.
         self._area_dialog: AreaDialog | None = None
+        #: The same for the Impress dialog, which is modeless for the same reason.
+        self._impress_dialog: ImpressDialog | None = None
 
         self.view = DiceRollerView()
         # Every spec that reaches the roller — from the bus, or from a follow-up chip
@@ -176,42 +183,77 @@ class DiceSection(QGroupBox):
         if bridge is None or not bridge.prompt_roll(spec.to_dict()):
             self.view.add_local_request(spec)
 
-    def start_action(self, kind: str) -> None:
+    def start_action(self, kind: str) -> ImpressDialog | None:
         """Run one of the Action row's actions — the Impress button's handler.
 
         At a table the dialog only *declares* the impression: it goes to the GM, who
-        sets the modifiers and rolls (see :mod:`mm_companion.ui.impress_gm`). Off the
-        air there is nobody to send it to, so the check is rolled here with the
-        modifiers the dialog grew for it, and its card offers the resistance as a
-        button — the "request only" way of running it.
+        sets the modifiers and rolls (see :mod:`mm_companion.ui.impress_gm`). A player
+        only gets the dialog when both they and the GM want them to choose
+        (:func:`~mm_companion.ui.action_ui.sets_up_own_actions`); otherwise the Impress
+        goes to the GM **bare**, and the GM chooses. Off the air there is nobody to send
+        it to, so the check is rolled here with the modifiers the dialog grew for it, and
+        its card offers the resistance as a button — the "request only" way of running it.
+
+        **Not modal**, for the reason the area dialog is not: targets are dragged in off
+        the Scene block on this very window.
         """
         if kind != KIND_IMPRESS:
-            return
+            return None
         bridge = live_session()
+        if bridge is not None and not sets_up_own_actions(bridge):
+            self._send_bare_impress(bridge)
+            return None
+        if self._impress_dialog is not None:
+            self._impress_dialog.close()
         scene = bridge.scene() if bridge is not None else None
         own = bridge.own_player_id() if bridge is not None else ""
         dialog = ImpressDialog(
             self._data, self._character, scene=scene, own_player_id=own, parent=self.window()
         )
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.accepted.connect(lambda d=dialog, b=bridge: self._send_impress(d, b))
+        dialog.finished.connect(lambda _result, d=dialog: self._forget_impress(d))
+        self._impress_dialog = dialog
+        dialog.show()
+        return dialog
+
+    def _forget_impress(self, dialog: ImpressDialog) -> None:
+        if self._impress_dialog is dialog:
+            self._impress_dialog = None
+
+    def _send_impress(self, dialog: ImpressDialog, bridge: SessionBridge | None) -> None:
+        """The Impress dialog was accepted: declare it to the GM, or roll it here."""
         name = library.display_name(self._character)
         if bridge is not None:
             attempt = dialog.attempt(new_action_id(), source_name=name)
-            if attempt is None:
-                return
-            if bridge.send_action_request(KIND_IMPRESS, attempt.action_id, attempt.to_dict()):
-                notify_window(self.window(), "Impress sent to the GM.", theme.color("tint.better"))
-            else:
-                notify_window(
-                    self.window(),
-                    "Could not reach the GM — the impression was not sent.",
-                    theme.color("tint.worse"),
-                )
+            if attempt is not None:
+                self._declare_impress(bridge, attempt.action_id, attempt.to_dict())
             return
         spec = dialog.offline_spec(source_name=name)
         if spec is not None:
             self.view.panel.roll_spec(spec)
+
+    def _send_bare_impress(self, bridge: SessionBridge) -> None:
+        """Tell the GM this character impresses, and leave every choice to them."""
+        attempt = ImpressAttempt(
+            action_id=new_action_id(),
+            impression="",
+            skill_row="",
+            skill_label="",
+            skill_modifier=0,
+            source_name=library.display_name(self._character),
+        )
+        self._declare_impress(bridge, attempt.action_id, attempt.to_dict())
+
+    def _declare_impress(self, bridge: SessionBridge, action_id: str, payload: dict) -> None:
+        if not bridge.send_action_request(KIND_IMPRESS, action_id, payload):
+            notify_window(
+                self.window(),
+                "Could not reach the GM — the impression was not sent.",
+                theme.color("tint.worse"),
+            )
+        elif not bridge.is_gm:
+            notify_window(self.window(), "Impress sent to the GM.", theme.color("tint.better"))
 
     def start_area(self, power_id: object) -> AreaDialog | None:
         """Use a power on an area — the ``area-requested`` topic's handler.
@@ -219,8 +261,12 @@ class DiceSection(QGroupBox):
         At a table the dialog declares it: the attempt goes to the GM, the history gets a
         line saying who is caught, and the attack against the primary (if any) is rolled
         here like any attack, carrying the attempt's id so the GM's window picks its
-        total up. Off the air there is nobody to resolve it, so the attack is rolled and
-        the history is left a request to dodge (see :mod:`mm_companion.ui.area`).
+        total up. A player only gets the dialog when both they and the GM want them to
+        choose; otherwise the area goes to the GM **bare** — the power, and nothing else
+        — and the GM picks the shape, the primary and who is caught, asking for the
+        attack when there is one. Off the air there is nobody to resolve it, so the
+        attack is rolled and the history is left a request to dodge (see
+        :mod:`mm_companion.ui.area`).
 
         **Not modal.** The dialog asks for scene cards to be dragged into it, off the
         Scene block on this very window, and a modal dialog swallows the press that
@@ -231,15 +277,20 @@ class DiceSection(QGroupBox):
         power = find_area_power(self._character, self._data, power_id)
         if power is None:
             return None
+        index = area_key_index(power_id)
+        bridge = live_session()
+        if bridge is not None and not sets_up_own_actions(bridge):
+            self._send_bare_area(bridge, power, index)
+            return None
         if self._area_dialog is not None:
             self._area_dialog.close()
-        bridge = live_session()
         scene = bridge.scene() if bridge is not None else None
         own = bridge.own_player_id() if bridge is not None else ""
         dialog = AreaDialog(
             self._data,
             self._character,
             power,
+            effect_index=index,
             scene=scene,
             own_player_id=own,
             parent=self.window(),
@@ -255,20 +306,19 @@ class DiceSection(QGroupBox):
         if self._area_dialog is dialog:
             self._area_dialog = None
 
-    def _send_area(self, dialog: AreaDialog, bridge: SessionBridge | None) -> None:
-        """The area dialog was accepted: roll it here, or declare it to the GM."""
+    def _send_bare_area(self, bridge: SessionBridge, power, effect_index: int = 0) -> None:
+        """Tell the GM this character uses *power* on an area, and leave the rest to them."""
+        use = power_area_use(power, self._character, self._data, effect_index=effect_index)
+        if use is None:
+            return
         name = library.display_name(self._character)
-        action_id = new_action_id()
-        attack = dialog.attack_spec(action_id, source_name=name)
-        if bridge is None:
-            if attack is not None:
-                self.view.panel.roll_spec(attack)
-            for request in dialog.offline_requests(source_name=name):
-                self.view.add_local_request(request)
+        attempt = AreaAttempt(new_action_id(), use, source_name=name)
+        if not self._declare_area(bridge, attempt):
             return
-        attempt = dialog.attempt(action_id, source_name=name)
-        if attempt is None:
-            return
+        bridge.post_note(f"{name} uses {use.power_name} on an area. The GM sets it up.")
+        notify_window(self.window(), "Area attack sent to the GM.", theme.color("tint.better"))
+
+    def _declare_area(self, bridge: SessionBridge, attempt: AreaAttempt) -> bool:
         payload = attempt.to_dict()
         if sanitize_mod_payload(payload) != payload:
             # The server would clip it on the way, and the GM would resolve a different
@@ -278,13 +328,33 @@ class DiceSection(QGroupBox):
                 "This area attack is too large to send — it was not sent.",
                 theme.color("tint.worse"),
             )
-            return
-        if not bridge.send_action_request(KIND_AREA_ATTACK, action_id, payload):
+            return False
+        if not bridge.send_action_request(KIND_AREA_ATTACK, attempt.action_id, payload):
             notify_window(
                 self.window(),
                 "Could not reach the GM — the area attack was not sent.",
                 theme.color("tint.worse"),
             )
+            return False
+        return True
+
+    def _send_area(self, dialog: AreaDialog, bridge: SessionBridge | None) -> None:
+        """The area dialog was accepted: roll it here, or declare it to the GM."""
+        name = library.display_name(self._character)
+        action_id = new_action_id()
+        attack = dialog.attack_spec(action_id, source_name=name)
+        if bridge is None:
+            heal = dialog.heal_spec(source_name=name)
+            if heal is not None:
+                self.view.panel.roll_spec(heal)
+                return
+            if attack is not None:
+                self.view.panel.roll_spec(attack)
+            for request in dialog.offline_requests(source_name=name):
+                self.view.add_local_request(request)
+            return
+        attempt = dialog.attempt(action_id, source_name=name)
+        if attempt is None or not self._declare_area(bridge, attempt):
             return
         bridge.post_note(dialog.note_text(source_name=name))
         if attack is not None:

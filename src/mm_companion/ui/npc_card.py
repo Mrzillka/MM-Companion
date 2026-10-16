@@ -59,6 +59,12 @@ the collapse still takes its room out of the height.
 condition chip it sheds the condition, and on the card itself it offers to remove
 or delete the NPC. The chip consumes the event, so the general answer never fires
 over the specific one.
+
+The two **actions against other characters** sit in the header, beside the caret, so a
+collapsed card still has them: **Impress** opens the GM's Impress window with this
+creature impressing, and **Area** — shown only for a creature with something to spread
+— uses one of its attacks on an area (a menu, when it has more than one). Both are on
+the right-click menu too.
 """
 
 from __future__ import annotations
@@ -79,6 +85,7 @@ from mm_companion.core import library
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import Condition, GameData
 from mm_companion.core.library import CharacterSummary
+from mm_companion.core.rules import area_capable_builds, power_area_uses
 from mm_companion.ui import theme
 from mm_companion.ui.card_chips import _ConditionChip, start_card_drag
 from mm_companion.ui.card_summary import PORTRAIT_SIZE, PortraitButton, character_summary_html
@@ -163,6 +170,10 @@ class NPCCard(QFrame):
     #: index, not the conditions: what a degree of failure *means* is the rules
     #: layer's answer, and it depends on what the creature already carries.
     damageRequested = Signal(str, int)
+    #: ``(file_name, area key)`` — use that power (that area effect of it) on an area.
+    areaRequested = Signal(str, str)
+    #: The NPC's file name — this creature impresses somebody.
+    impressRequested = Signal(str)
 
     def __init__(
         self,
@@ -231,6 +242,22 @@ class NPCCard(QFrame):
         # is read and set on that card. Two eyes on two cards for one fact, and
         # two boards sorting by one number, were both a GM holding the same thing
         # in two places.
+        # The actions against other characters. The expanded card has them as labelled
+        # buttons beside Copy; a collapsed one keeps these two small ones in its header,
+        # since it is mid-fight that a GM reaches for them. Only ever hidden here: the
+        # card's layout is not installed yet, so showing a button now would show it as
+        # a window of its own — set_collapsed settles them once they are parented.
+        self._impress_icon = _small_button("🗣")
+        self._impress_icon.setToolTip("Impress — this creature uses an interaction skill")
+        self._impress_icon.clicked.connect(lambda: self.impressRequested.emit(self.name_key))
+        self._impress_icon.hide()
+        header.addWidget(self._impress_icon)
+        self._area_icon = _small_button("💥")
+        self._area_icon.setToolTip("Area — use one of this creature's attacks on an area")
+        self._area_icon.clicked.connect(lambda: self._show_area_menu(self._area_icon))
+        self._area_icon.hide()
+        header.addWidget(self._area_icon)
+
         self._collapse_button = _small_button()
         self._collapse_button.clicked.connect(self._toggle_collapsed)
         header.addWidget(self._collapse_button)
@@ -254,15 +281,28 @@ class NPCCard(QFrame):
         # No "Initiative" button here any more: the badge above rolls, in both
         # states, so this was a second way to do one thing — and the one that cost
         # a row of the expanded card and did not exist on the collapsed one.
-        buttons_host = QWidget()
-        buttons_row = QHBoxLayout(buttons_host)
-        buttons_row.setContentsMargins(0, 0, 0, 0)
+        # A flow, not a row: Copy and the two actions wrap onto a second line on a
+        # narrow card rather than widen it, so the damage ladder stays what sets the
+        # board's width and collapsing a card never reflows its neighbours.
+        buttons_host = FlowContainer()
+        buttons_row = FlowLayout(buttons_host, spacing=int(theme.metric("space.xs")))
         self._copy_button = QToolButton()
         self._copy_button.setText("Copy")
         self._copy_button.setToolTip("Duplicate this NPC (Goon → Goon-2)")
         self._copy_button.clicked.connect(lambda: self.copyRequested.emit(self.name_key))
         buttons_row.addWidget(self._copy_button)
-        buttons_row.addStretch()
+        self._impress_button = QToolButton()
+        self._impress_button.setText("Impress…")
+        self._impress_button.setToolTip("This creature uses an interaction skill on someone")
+        self._impress_button.clicked.connect(lambda: self.impressRequested.emit(self.name_key))
+        self._impress_button.hide()
+        buttons_row.addWidget(self._impress_button)
+        self._area_button = QToolButton()
+        self._area_button.setText("Area…")
+        self._area_button.setToolTip("Use one of this creature's attacks on an area")
+        self._area_button.clicked.connect(lambda: self._show_area_menu(self._area_button))
+        self._area_button.hide()
+        buttons_row.addWidget(self._area_button)
         layout.addWidget(buttons_host)
 
         # The two ways to put something on this creature, side by side and on both
@@ -452,6 +492,7 @@ class NPCCard(QFrame):
         # What a damage button will do depends on what is already on the creature,
         # so the row's tooltips are re-derived whenever the conditions move.
         self._damage.refresh()
+        self._sync_area_button()
         # Re-derived whenever the card redraws, not kept from construction. The
         # summary reads the *build* numbers, which no condition currently moves —
         # so this changes nothing today. It is here because "computed once in
@@ -485,6 +526,59 @@ class NPCCard(QFrame):
         )
         if go_ahead:
             self.applyConditionRequested.emit(self.name_key, condition.id, parameter)
+
+    # -- actions -----------------------------------------------------------
+
+    def area_builds(self) -> list:
+        """This creature's builds that could be used on an area."""
+        if not self._data.area.available:
+            return []
+        return area_capable_builds(self._character, self._data)
+
+    def _sync_area_button(self) -> None:
+        """Show the actions this creature has, in the form its state shows them."""
+        impress = self._data.impress.available
+        area = bool(self.area_builds())
+        collapsed = self._collapsed
+        self._impress_button.setVisible(impress and not collapsed)
+        self._area_button.setVisible(area and not collapsed)
+        self._impress_icon.setVisible(impress and collapsed)
+        self._area_icon.setVisible(area and collapsed)
+
+    def area_choices(self) -> list[tuple[str, str]]:
+        """``(area key, caption)`` for each area this creature could make.
+
+        One per area effect of each build: a build of several areas (Linked) is used as
+        one area per effect, each its own entry.
+        """
+        choices: list[tuple[str, str]] = []
+        for build in self.area_builds():
+            uses = power_area_uses(build, self._character, self._data, npc=True, free_use=True)
+            for use in uses:
+                caption = build.name or use.power_name or "Power"
+                if len(uses) > 1:
+                    caption = f"{caption} — {use.effects[0].name}"
+                choices.append((use.key, caption))
+        return choices
+
+    def _show_area_menu(self, button: QToolButton | None = None) -> None:
+        """One area goes straight to the area window; several are offered first."""
+        choices = self.area_choices()
+        if len(choices) == 1:
+            self.areaRequested.emit(self.name_key, choices[0][0])
+            return
+        if not choices:
+            return
+        menu = self.area_menu(choices)
+        button = button or self._area_button
+        menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
+
+    def area_menu(self, choices: list[tuple[str, str]] | None = None) -> QMenu:
+        """The menu of this creature's areas to use, built but not shown."""
+        menu = QMenu(self)
+        for key, caption in choices if choices is not None else self.area_choices():
+            menu.addAction(caption, lambda k=key: self.areaRequested.emit(self.name_key, k))
+        return menu
 
     # -- interaction -------------------------------------------------------
 
@@ -530,6 +624,18 @@ class NPCCard(QFrame):
             lambda: self.sceneToggled.emit(self.name_key, not self._in_scene),
         )
         menu.addSeparator()
+        if self._data.impress.available:
+            menu.addAction("Impress…", lambda: self.impressRequested.emit(self.name_key))
+        builds = self.area_builds()
+        if builds:
+            area = menu.addMenu("Area attack")
+            for build in builds:
+                area.addAction(
+                    build.name or "Power",
+                    lambda b=build.id: self.areaRequested.emit(self.name_key, b),
+                )
+        if self._data.impress.available or builds:
+            menu.addSeparator()
         menu.addAction(
             "Remove from this session",
             lambda: self.removeRequested.emit(self.name_key),

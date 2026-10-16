@@ -740,6 +740,10 @@ class ResistanceOutcome:
     #: :func:`mm_companion.core.rules.targeting.resolve_rung`). Pairs for the same
     #: reason :attr:`escalates` is.
     parameters: tuple[tuple[str, str], ...] = ()
+    #: The instance config field naming the trait this rung's conditions are scoped
+    #: to — Weaken's chosen trait, so its Impaired lands as "Strength Impaired". Read
+    #: only for a condition whose parameter is a trait; blank in the config, unscoped.
+    scope_key: str = ""
 
 
 @dataclass(frozen=True)
@@ -978,6 +982,12 @@ class Effect:
     #: What *making* the check still costs the target, for the effects where that is
     #: not nothing (Damage's Hit). ``None`` where a made save really is a clean escape.
     resistance_success: ResistanceOutcome | None = None
+    #: The DC of the effect's own check, for an effect that is *checked* rather than
+    #: resisted (Healing's DC 10). ``None`` for every other effect.
+    check_dc: int | None = None
+    #: The conditions each degree of success on that check takes off its subject, one
+    #: per degree, in this order (Healing's least severe first). Empty for most effects.
+    success_removes: tuple[str, ...] = ()
     implicit_modifiers: tuple[str, ...] = ()
     #: How far this effect reaches once its range resolves to Ranged. Seeded from the
     #: system-wide default and overridden by the effect's own ``rangeDistance`` block.
@@ -1662,6 +1672,10 @@ class EquipmentModifierRef:
     #: The modifier's config choices, as a power's selection would store them (an Area
     #: Effect's ``shape``). Empty for the commonest case, a modifier with no choices.
     config: dict = field(default_factory=dict, compare=False)
+    #: The top of the rank band the modifier covers (``appliesTo``), 0 for every rank —
+    #: a Rocket Launcher's Area on 7 of its 10 Damage ranks, so the creature it hits
+    #: directly takes 10 and everyone else in the blast 7.
+    applies_to: int = 0
     #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
     extra: dict = field(default_factory=dict, compare=False)
 
@@ -2149,7 +2163,8 @@ class ActionModifier:
     A ``toggle`` is a checkbox worth :attr:`value`; toggles sharing an
     :attr:`exclusive` group cannot both be on. A ``slider`` runs from
     :attr:`minimum` to :attr:`maximum` in steps of :attr:`step` and is worth its
-    position.
+    position. :attr:`label` is the short caption the control wears and :attr:`hint`
+    the longer explanation behind it.
     """
 
     id: str
@@ -2160,6 +2175,7 @@ class ActionModifier:
     maximum: int = 0
     step: int = 1
     exclusive: str = ""
+    hint: str = ""
 
 
 @dataclass(frozen=True)
@@ -2840,6 +2856,7 @@ def _parse_outcome_rung(entry: object) -> ResistanceOutcome | None:
     return ResistanceOutcome(
         conditions=tuple(entry.get("conditions", ())),
         config_key=entry.get("configKey", ""),
+        scope_key=str(entry.get("scopeKey", "")),
         text=entry.get("text", ""),
         note=entry.get("note", ""),
         escalates=tuple(escalates.items()) if isinstance(escalates, dict) else (),
@@ -2886,6 +2903,7 @@ def _parse_action_modifier(raw: dict) -> ActionModifier:
         maximum=int(raw.get("max", 0)),
         step=max(1, int(raw.get("step", 1))),
         exclusive=str(raw.get("exclusive", "")),
+        hint=str(raw.get("hint", "")),
     )
 
 
@@ -3027,11 +3045,28 @@ def _parse_effect(e: dict, ranged_distance: RangeDistance | None = None) -> Effe
         resistance_dc_base=e.get("resistanceDcBase"),
         resistance_outcomes=_parse_resistance_outcomes(e.get("resistanceOutcomes")),
         resistance_success=_parse_resistance_success(e.get("resistanceOutcomes")),
+        check_dc=_check_dc(e.get("checkOutcomes")),
+        success_removes=_success_removes(e.get("checkOutcomes")),
         implicit_modifiers=tuple(e.get("implicitModifiers", ())),
         range_distance=_parse_range_distance(e.get("rangeDistance"), default_distance)
         or default_distance,
         reach=_parse_effect_reach(e.get("reach")),
     )
+
+
+def _check_dc(raw: object) -> int | None:
+    """An effect's ``checkOutcomes.dc`` — the DC its own check is made against."""
+    if not isinstance(raw, dict):
+        return None
+    dc = raw.get("dc")
+    return dc if isinstance(dc, int) and not isinstance(dc, bool) else None
+
+
+def _success_removes(raw: object) -> tuple[str, ...]:
+    """An effect's ``checkOutcomes.removes`` — condition ids, one per degree of success."""
+    if not isinstance(raw, dict):
+        return ()
+    return tuple(str(c) for c in raw.get("removes", ()) or () if str(c).strip())
 
 
 def _parse_effect_reach(raw: dict | None) -> EffectReach | None:
@@ -3297,7 +3332,8 @@ def _parse_equipment_modifier_ref(raw: dict) -> EquipmentModifierRef:
         rank=None if rank is None else int(rank),
         note=str(raw.get("note", "")),
         config=dict(raw["config"]) if isinstance(raw.get("config"), dict) else {},
-        extra=_extras(raw, "modifier", "rank", "note", "config"),
+        applies_to=max(0, int(raw.get("appliesTo", 0) or 0)),
+        extra=_extras(raw, "modifier", "rank", "note", "config", "appliesTo"),
     )
 
 

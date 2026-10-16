@@ -140,6 +140,12 @@ def order_scene(entries: list[dict], manual: list[str]) -> list[dict]:
     return rolled + [e for e in base if entry_initiative(e) is None]
 
 
+#: What the GM's right-click asks of a creature on the board (:attr:`SceneCard.actionRequested`).
+CARD_END_TURN = "end-turn"
+CARD_IMPRESS = "impress"
+CARD_AREA = "area"
+
+
 class SceneCard(QFrame):
     """One scene entry. Read-only for a player; draggable and removable for a GM."""
 
@@ -153,6 +159,10 @@ class SceneCard(QFrame):
     initiativeRollRequested = Signal(str)
     #: ``(ref, disposition)`` — the GM said what this creature is to the table.
     dispositionChanged = Signal(str, str)
+    #: ``(ref, action)`` — the GM asked this creature to act (GM only): end its turn
+    #: (:data:`CARD_END_TURN`), impress somebody (:data:`CARD_IMPRESS`), or use an
+    #: attack on an area (:data:`CARD_AREA`).
+    actionRequested = Signal(str, str)
 
     def __init__(
         self,
@@ -406,6 +416,13 @@ class SceneCard(QFrame):
         anything, and what this one *offers* is the interesting half.
         """
         menu = QMenu(self)
+        # What the creature does comes first, then what it is, then taking it away.
+        menu.addAction("End turn", lambda: self.actionRequested.emit(self.ref, CARD_END_TURN))
+        if self._data.impress.available:
+            menu.addAction("Impress…", lambda: self.actionRequested.emit(self.ref, CARD_IMPRESS))
+        if self._data.area.available:
+            menu.addAction("Area attack…", lambda: self.actionRequested.emit(self.ref, CARD_AREA))
+        menu.addSeparator()
         if self._disposition != DISPOSITION_PLAYER:
             # A submenu rather than three flat items: it is a *state* with one
             # answer at a time, so the tick beside the current one is half of what

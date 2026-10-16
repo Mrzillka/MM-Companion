@@ -60,6 +60,9 @@ class SceneBoard(QWidget):
     initiativeRollRequested = Signal(str)
     #: ``(ref, disposition)`` — what this creature is to the table. GM only.
     dispositionChanged = Signal(str, str)
+    #: ``(ref, action)`` — the GM asked a creature to act (see
+    #: :attr:`~mm_companion.ui.scene_card.SceneCard.actionRequested`). GM only.
+    actionRequested = Signal(str, str)
 
     def __init__(
         self,
@@ -185,6 +188,10 @@ class SceneBoard(QWidget):
         if card is not None:
             card.set_portrait(pixmap)
 
+    def portrait(self, ref: str):
+        """One entry's decoded thumbnail (a ``QPixmap``), or ``None`` for none."""
+        return self._portraits.get(ref)
+
     def set_placeholder(self, text: str) -> None:
         """What an empty board says. Shown only while there is nothing on it."""
         self._placeholder_text = text
@@ -253,6 +260,7 @@ class SceneBoard(QWidget):
             card.initiativeCleared.connect(self.initiativeCleared)
             card.initiativeRollRequested.connect(self.initiativeRollRequested)
             card.dispositionChanged.connect(self.dispositionChanged)
+            card.actionRequested.connect(self.actionRequested)
         return card
 
     def set_locked(self, locked: bool) -> None:  # noqa: ARG002 - part of the Block protocol

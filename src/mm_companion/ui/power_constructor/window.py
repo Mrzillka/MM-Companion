@@ -76,6 +76,28 @@ from mm_companion.ui.widgets import (
     make_spin_box,
     muted_style,
     tinted_style,
+    with_help,
+)
+
+#: What the Extended section's switches do, behind the "?" beside each.
+SIZE_DAMAGE_HELP = (
+    "A larger wielder hits harder: the Size Table's Damage column raises the rank of "
+    "every effect here that forces a resistance, and shifts its Power Level cap by the "
+    "same amount."
+)
+PL_CAP_HELP = (
+    "Never let this power resolve above the PL cap: attack bonus plus effect rank never "
+    "exceeds twice the wielder's Power Level, and the side you did not keep gives way.\n\n"
+    "Where the warning marker merely warns (and lets a large wielder past it, since the "
+    "book raises the limit along with the size), a hard cap holds to a flat 2 x PL."
+)
+IMPROVISE_HELP = (
+    "What it would take to rig this power up with a skill check instead of buying it, "
+    "for a character with the Improvised Effect advantage taken for the skill they "
+    "improvise with.\n\n"
+    "It is reckoned from the power's cost; a Removable discount does not apply. The "
+    "preparation check is made in secret by the GM, using it the first time is a check "
+    "of its own, and it lasts one scene."
 )
 
 
@@ -583,7 +605,7 @@ class PowerConstructorWindow(QMainWindow):
             "buying it, for a character with the Improvised Effect advantage."
         )
         self._improvised_toggle.toggled.connect(self._on_improvised_toggled)
-        outer.addWidget(self._improvised_toggle, alignment=Qt.AlignmentFlag.AlignLeft)
+        outer.addWidget(with_help(self._improvised_toggle, IMPROVISE_HELP))
 
         self._improvised_body = QWidget()
         body = QVBoxLayout(self._improvised_body)
@@ -658,13 +680,11 @@ class PowerConstructorWindow(QMainWindow):
         # was actually applied.
         asked = self._improvised_saved.value()
         capped = " (as far as it goes)" if asked > plan.ranks_saved else ""
-        bonus = f", +{plan.check_bonus} on the check" if plan.check_bonus else ""
+        bonus = f" (+{plan.check_bonus})" if plan.check_bonus else ""
+        # The numbers only; how improvising works is IMPROVISE_HELP, behind the "?".
         self._improvised_note.setText(
-            f"Reckoned from {plan.cost} PP (a Removable discount does not apply). "
-            f"Preparing it takes <b>{plan.time_text}</b>{capped} and a "
-            f"<b>DC {plan.prep_dc}</b> check{bonus}, made in secret by the GM. "
-            f"Using it the first time is a <b>DC {plan.use_dc}</b> check, "
-            "and it lasts one scene."
+            f"From {plan.cost} PP: prepare in <b>{plan.time_text}</b>{capped}, "
+            f"<b>DC {plan.prep_dc}</b>{bonus} · first use <b>DC {plan.use_dc}</b>"
         )
         self._rebuild_improvised_rolls(plan)
 
@@ -686,10 +706,7 @@ class PowerConstructorWindow(QMainWindow):
                 discard_widget(widget)
         skills = improvised_skills(self._character, self._data) if self._character else ()
         if not skills:
-            note = QLabel(
-                "Improvising needs the Improvised Effect advantage, taken for the skill "
-                "the character improvises with."
-            )
+            note = QLabel("Needs the Improvised Effect advantage.")
             note.setStyleSheet(muted_style())
             note.setWordWrap(True)
             layout.addWidget(note)
@@ -714,7 +731,7 @@ class PowerConstructorWindow(QMainWindow):
         # panel has not built yet at this point in the constructor.
         self._size_damage.setChecked(True)
         self._size_damage.toggled.connect(self._on_size_damage_toggled)
-        layout.addWidget(self._size_damage)
+        layout.addWidget(with_help(self._size_damage, SIZE_DAMAGE_HELP))
         self._size_damage_note = QLabel()
         self._size_damage_note.setStyleSheet(muted_style())
         self._size_damage_note.setWordWrap(True)
@@ -734,14 +751,8 @@ class PowerConstructorWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
         self._pl_cap = QCheckBox("Hold this power to the wielder's Power Level")
-        self._pl_cap.setToolTip(
-            "Never let this power resolve above the PL cap. Where the warning marker "
-            "merely warns — and lets a large wielder past it, since the book raises the "
-            "limit along with the size — a hard cap holds to a flat 2 x PL and lowers "
-            "whichever side you choose to give up."
-        )
         self._pl_cap.toggled.connect(self._on_pl_cap_toggled)
-        layout.addWidget(self._pl_cap)
+        layout.addWidget(with_help(self._pl_cap, PL_CAP_HELP))
 
         self._pl_cap_priority = QWidget()
         priority = QHBoxLayout(self._pl_cap_priority)
@@ -1145,24 +1156,18 @@ class PowerConstructorWindow(QMainWindow):
         """Say what the switch is worth *to this character*, right now."""
 
         if self._character is None:
-            self._size_damage_note.setText(
-                "A larger wielder hits harder: the Size Table's Damage column raises "
-                "the rank of every effect here that forces a resistance."
-            )
+            self._size_damage_note.setText("")
+            self._size_damage_note.hide()
             return
+        self._size_damage_note.show()
         column = self._data.measurements.size_rank_column
         row = self._data.measurements.size_row(effective_size_rank(self._character, self._data))
         amount = row.modifier(column) if row is not None and column else 0
         size = effective_size(self._character, self._data)
         if not amount:
-            self._size_damage_note.setText(
-                f"{size} size adds nothing — this matters once the wielder grows or shrinks."
-            )
+            self._size_damage_note.setText(f"{size} size adds nothing.")
             return
-        self._size_damage_note.setText(
-            f"{size} size is worth {amount:+d} rank to every effect here that forces a "
-            "resistance, and shifts its Power Level cap by the same amount."
-        )
+        self._size_damage_note.setText(f"{size} size: {amount:+d} rank.")
 
     def _refresh_pl_cap_note(self) -> None:
         """Name what the cap is *actually* shaving right now, effect by effect.
@@ -1176,10 +1181,7 @@ class PowerConstructorWindow(QMainWindow):
             self._pl_cap_note.setText("")
             return
         if self._character is None:
-            self._pl_cap_note.setText(
-                "Attack bonus plus effect rank will never exceed twice the wielder's "
-                "Power Level; the side you did not keep gives way."
-            )
+            self._pl_cap_note.setText("")
             return
         by_id = {e.id: e for e in self._data.effects}
         notes = [

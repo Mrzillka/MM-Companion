@@ -31,7 +31,9 @@ from .rolls import (
     KIND_IMPRESS,
     KIND_RESISTANCE,
     KIND_SKILL,
+    LADDER_IMPRESS,
     RollSpec,
+    SpecLadder,
     best_of_key,
     best_own_rolls,
     skill_roll,
@@ -56,6 +58,7 @@ __all__ = [
     "impress_label",
     "impression_outcomes",
     "impress_resist_spec",
+    "impress_ask_resist_spec",
     "impress_spec",
     "impress_rung",
 ]
@@ -268,7 +271,48 @@ def impress_resist_spec(
         outcomes=impression_outcomes(game_data, impression),
         rolled_by_target=True,
         dc_from_total=True,
+        ladder=SpecLadder(LADDER_IMPRESS, impression.outcomes),
     )
+
+
+def impress_ask_resist_spec(
+    game_data: GameData,
+    impression: Impression,
+    skill_row: str,
+    dc: int,
+    *,
+    target: str,
+    action_id: str,
+    source: str = "",
+    choice: TraitChoice | None = None,
+    title: str = "",
+) -> RollSpec:
+    """The resistance the GM asks one **player** for, once the impress check is in.
+
+    :func:`impress_resist_spec` with the check's total already in as its *dc* (the
+    per-target adjustment included), naming the player in ``targets`` and carrying the
+    action's id, so the roll goes back to the GM's table. With *choice* — the GM picked
+    how this target resists — it asks for that trait alone; otherwise the player's best
+    is filled in on their own sheet, and they may pick another.
+    """
+
+    spec = replace(
+        impress_resist_spec(game_data, impression, skill_row, source=source),
+        dc=dc,
+        dc_from_total=False,
+        targets=(target,),
+        action_id=action_id,
+        title=title,
+        hint="The GM's table applies what failing does.",
+    )
+    if choice is not None:
+        spec = replace(
+            spec,
+            kind=choice.kind,
+            trait_key=choice.key,
+            label=f"{spec.label} ({choice.label})",
+        )
+    return spec
 
 
 def impress_spec(
@@ -328,6 +372,10 @@ class ImpressAttempt:
     so a player can name a creature without learning anything the board does not
     show. ``skill_modifier`` is the impresser's own number off their own sheet, which
     is the one copy guaranteed current.
+
+    An attempt with no ``impression`` is a **bare** declaration: the player only said
+    they are impressing (they chose to leave the choices to the GM, or the GM keeps
+    them), so the GM picks the impression, the skill and the targets.
     """
 
     action_id: str
@@ -339,6 +387,11 @@ class ImpressAttempt:
     mode: str = MODE_RESOLVE
     source_name: str = ""
     source_ref: str = ""
+
+    @property
+    def bare(self) -> bool:
+        """Whether the GM is to choose the impression and the skill."""
+        return not self.impression
 
     def to_dict(self) -> dict:
         return {
@@ -361,7 +414,7 @@ class ImpressAttempt:
             return None
         action_id = _text(raw, "action_id")
         impression = _text(raw, "impression")
-        if not action_id or not impression:
+        if not action_id:
             return None
         targets = raw.get("targets", [])
         mode = _text(raw, "mode")

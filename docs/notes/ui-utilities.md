@@ -68,11 +68,29 @@ through rather than reinvent. When building new sheet widgets, use it:
   Senses' twenty check boxes, a `widgetResizable` `QScrollArea` showing the first
   row of the launcher's character library with no scroll bar to reach the rest.
   Neither container asks a second time, which is why the host has to answer right.
+- **`WrappingButton`** (`ui/widgets.py`) is a push button whose caption word-wraps, for
+  any button whose caption is data rather than a word (a roll's "🎲 Toughness vs. … vs.
+  DC 15"). A `QPushButton` reports its one-line caption as its minimum width, so one
+  long caption held a history card, and the history, open at that width. Its caption
+  is a label inside it (`text()`/`setText()` redirect there), it is height-for-width
+  like a wrapped label, and it is vertically `Minimum`. A push button is vertically
+  `Fixed` by default, which clipped every wrapped line past the first.
 - A word-wrapped `QLabel` inside a composite widget will be sized for one line
   and clipped: `heightForWidth` only reaches it if every layout in between agrees
   to ask, and `QFormLayout` does not reliably ask. Pin the column to a width token
   and set the label's minimum height from `label.heightForWidth(width)` — see
   `ui/settings/token_editor.py::_field_label`.
+- **An explanation goes behind a "?", not under the control.** `HelpButton(text)` is
+  a small round button whose tooltip is *text* (wrapped: `help_tooltip` sets it as
+  HTML, since Qt wraps only a rich tooltip, and a blank line starts a paragraph), and a
+  click shows it at once for whoever does not think to hover. `with_help(widget, text)`
+  puts one after a checkbox, a title or a filter box on a row; `dialog_buttons(box,
+  text)` puts one at the far left of a dialog's buttons (not the box's `HelpRole`,
+  which Windows places beside Cancel). The rule it serves: what a control *currently
+  says* — a total, a DC, a status — stays on screen; the standing description of how a
+  mechanic works, read once and scrolled past every time after, does not. Settings,
+  the pickers, the action windows and the constructor's Extended section all moved
+  their paragraphs there.
 - **`discard_widget(w)` is how a rebuilt block sheds a child** — never a bare
   `setParent(None)` + `deleteLater()`, which is what all thirty-five sites used to
   be. It hides first, and that order is the whole point. `setParent(None)` makes a

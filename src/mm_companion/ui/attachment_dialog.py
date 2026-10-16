@@ -18,7 +18,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QHBoxLayout,
-    QLabel,
     QLineEdit,
     QTreeWidget,
     QTreeWidgetItem,
@@ -28,7 +27,12 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core.data_loader import GameData, Modifier
 from mm_companion.core.powers import ModifierSelection
-from mm_companion.ui.widgets import make_spin_box
+from mm_companion.ui.widgets import make_spin_box, with_help
+
+HELP_TEXT = (
+    "These modifiers are added to every effect of whatever this is fitted to. They are "
+    "priced on this accessory, not on its host."
+)
 
 #: The column the rank spin lives in. Column 0 is the checkable name.
 RANK_COLUMN = 1
@@ -57,18 +61,11 @@ class AttachmentDialog(QDialog):
         self._rows: dict[str, tuple[QTreeWidgetItem, QWidget | None]] = {}
 
         layout = QVBoxLayout(self)
-        blurb = QLabel(
-            "These modifiers are added to every effect of whatever this is fitted to. "
-            "They are priced on this accessory, not on its host."
-        )
-        blurb.setWordWrap(True)
-        layout.addWidget(blurb)
-
         self._filter = QLineEdit()
         self._filter.setPlaceholderText("Filter…")
         self._filter.setClearButtonEnabled(True)
         self._filter.textChanged.connect(self._apply_filter)
-        layout.addWidget(self._filter)
+        layout.addWidget(with_help(self._filter, HELP_TEXT, stretch=False))
 
         self._tree = QTreeWidget()
         self._tree.setColumnCount(2)

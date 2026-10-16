@@ -30,7 +30,7 @@ import uuid
 from dataclasses import dataclass, field
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QStandardItemModel
+from PySide6.QtGui import QStandardItemModel, QValidator
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -39,12 +39,12 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFormLayout,
     QGridLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QRadioButton,
-    QSlider,
+    QSpinBox,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -70,6 +70,8 @@ from mm_companion.core.rules import (
 )
 from mm_companion.ui import theme
 from mm_companion.ui.action_ui import (
+    ADJUST_LIMIT,
+    DIALOG_CHARS,
     PHASE_SETUP,
     ActionRow,
     ActionWindow,
@@ -78,7 +80,13 @@ from mm_companion.ui.action_ui import (
     fit_to_screen,
 )
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import make_spin_box, muted_style, tinted_style
+from mm_companion.ui.widgets import (
+    HelpButton,
+    dialog_buttons,
+    make_signed_spin_box,
+    muted_style,
+    tinted_style,
+)
 
 #: What the history and the windows call the action.
 ACTION_NAME = "Impress"
@@ -102,11 +110,18 @@ def new_action_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
-#: The two modes, as the impresser and the GM are offered them.
+#: The two modes, as the impresser and the GM are offered them: a short caption on the
+#: radio, and what it means behind the "?" beside them.
 MODE_CAPTIONS = {
-    MODE_RESOLVE: "The GM rolls every resistance and applies the result",
-    MODE_REQUEST: "Request only — each target rolls their own resistance",
+    MODE_RESOLVE: "GM resolves",
+    MODE_REQUEST: "Request only",
 }
+MODE_HELP = (
+    "GM resolves: the GM rolls every NPC's resistance, each player targeted is asked to "
+    "roll theirs, and the conditions land on their own.\n\n"
+    "Request only: only the impress check is rolled. Its card in the history offers each "
+    "target a button to resist with, and they apply what it does themselves."
+)
 
 
 def _signed(value: int) -> str:
@@ -184,64 +199,207 @@ def _preselect_skill(combo: QComboBox, impression: Impression | None, data: Game
         combo.setCurrentIndex(index)
 
 
+# -- what the windows say, and what they keep behind a "?" ------------------------
+
+DIALOG_HELP = (
+    "You declare the impression, the skill you roll and who you are impressing. The GM "
+    "sets the situational modifiers and rolls.\n\n"
+    "The impression decides what success does and the skill decides what is rolled, so "
+    "any pairing is allowed. An impression that needs an advantage you lack is greyed "
+    "out — hover it to see which."
+)
+DIALOG_HELP_OFFLINE = (
+    "Not in a session: the check is rolled here with the modifiers you set, and its card "
+    "in the history offers each target a button to resist with."
+)
+GM_HELP = (
+    "Set who impresses whom, the situational modifiers, and an adjustment (a bonus or a "
+    "penalty) to the impresser's check. Roll, and the window stays open: each roll comes "
+    "back into its row as it is made.\n\n"
+    "Each target resists with its highest option unless you pick one. A player targeted "
+    "is asked to roll once the check is in, and picks how to resist then.\n\n"
+    "A target's own Adjust moves the check against that target alone."
+)
+
+
+def targets_help(data: GameData) -> str:
+    """What the Targets box explains: picking them, and the group penalty."""
+    return (
+        "Drag the card of everyone you are impressing off the Scene, or pick them from "
+        "Add.\n\n"
+        "More than one target is a group impression: one check, at "
+        f"{_signed(data.impress.group_penalty)} once, each target resisting it separately."
+    )
+
+
+def mode_row(owner: QWidget) -> tuple[QWidget, dict[str, QRadioButton], QButtonGroup]:
+    """The two ways to run the resistances, as a row of radios with the "?" beside them."""
+    host = QWidget()
+    row = QHBoxLayout(host)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.addWidget(QLabel("Resistances:"))
+    buttons: dict[str, QRadioButton] = {}
+    group = QButtonGroup(owner)
+    for mode, caption in MODE_CAPTIONS.items():
+        button = QRadioButton(caption)
+        group.addButton(button)
+        row.addWidget(button)
+        buttons[mode] = button
+    row.addWidget(HelpButton(MODE_HELP))
+    row.addStretch(1)
+    return host, buttons, group
+
+
+def outcome_text(data: GameData, impression: Impression | None) -> str:
+    """The impression's ladder in a line: "Success: Vulnerable → Defenseless"."""
+    outcomes = impression_outcomes(data, impression) if impression else ()
+    return ("Success: " + " → ".join(outcomes)) if outcomes else ""
+
+
+def check_line(total: int, skill: TraitChoice, parts: list[tuple[str, int]]) -> str:
+    """The impress check and what it is made of — only the parts that count."""
+    said = [f"{html.escape(skill.label)} {_signed(skill.modifier)}"]
+    said += [f"{name} {_signed(value)}" for name, value in parts if value]
+    return f"Impress check: <b>{_signed(total)}</b> ({', '.join(said)})"
+
+
 # -- the GM's modifiers ---------------------------------------------------------
 
 
-class ModifiersPanel(QGroupBox):
+class StepSpin(QSpinBox):
+    """A spin box over one range modifier, which stops only on the values it may take.
+
+    It counts *positions* up from the minimum, as the slider it replaced did — an
+    earlier attempt is −5 each, not −1, whatever the range — and shows each position as
+    the signed value it stands for. A typed value snaps onto the scale, the same
+    snapping :func:`~mm_companion.core.rules.modifier_value` does.
+    """
+
+    def __init__(self, modifier: ActionModifier, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._modifier = modifier
+        low, high = sorted((modifier.minimum, modifier.maximum))
+        self._low = low
+        self.setRange(0, (high - low) // modifier.step)
+        self.setValue(self.position_of(0))
+        guard_wheel(self)
+
+    def position_of(self, raw: object) -> int:
+        """The position standing for *raw*, snapped onto the scale."""
+        return (modifier_value(self._modifier, raw) - self._low) // self._modifier.step
+
+    def worth(self) -> int:
+        """What the current position is worth."""
+        return self._low + self.value() * self._modifier.step
+
+    def textFromValue(self, value: int) -> str:  # noqa: N802 (Qt override)
+        worth = self._low + value * self._modifier.step
+        return _signed(worth) if worth else "0"
+
+    def valueFromText(self, text: str) -> int:  # noqa: N802 (Qt override)
+        try:
+            return self.position_of(int(text.strip()))
+        except ValueError:
+            return self.value()
+
+    def validate(self, text: str, pos: int):  # noqa: ANN201 (Qt override)
+        """Any whole number, signed or not — :meth:`valueFromText` snaps it."""
+        stripped = text.strip()
+        if stripped in ("", "+", "-"):
+            return (QValidator.State.Intermediate, text, pos)
+        try:
+            int(stripped)
+        except ValueError:
+            return (QValidator.State.Invalid, text, pos)
+        return (QValidator.State.Acceptable, text, pos)
+
+
+class ModifiersPanel(QWidget):
     """The situational modifiers on an impress check, one control each — from data.
 
-    A toggle is a checkbox, a range is a slider with its value beside it; toggles
-    sharing an ``exclusive`` group switch each other off. :meth:`values` is what
+    Folded by default behind a header that says what they add up to, since most checks
+    take none of them. A toggle is a checkbox, a range a :class:`StepSpin`, laid two to
+    a row, each with the modifier's ``hint`` as its tooltip; toggles sharing an
+    ``exclusive`` group switch each other off. :meth:`values` is what
     :func:`~mm_companion.core.rules.modifier_total` reads.
     """
 
     changed = Signal()
 
     def __init__(self, data: GameData, parent: QWidget | None = None) -> None:
-        super().__init__("Situational modifiers", parent)
+        super().__init__(parent)
         self._data = data
         self._toggles: dict[str, QCheckBox] = {}
-        self._sliders: dict[str, tuple[QSlider, QLabel, ActionModifier]] = {}
-        grid = QGridLayout(self)
-        grid.setColumnStretch(1, 1)
+        self._ranges: dict[str, StepSpin] = {}
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        header = QHBoxLayout()
+        self._fold = QToolButton()
+        self._fold.setCheckable(True)
+        self._fold.setAutoRaise(True)
+        self._fold.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._fold.setArrowType(Qt.ArrowType.RightArrow)
+        self._fold.setText("Situational modifiers")
+        self._fold.setToolTip("Show or hide the situational modifiers")
+        self._fold.toggled.connect(self._on_fold)
+        self._sum = QLabel()
+        header.addWidget(self._fold)
+        header.addWidget(self._sum)
+        header.addStretch(1)
+        outer.addLayout(header)
+
+        self._body = QWidget()
+        grid = QGridLayout(self._body)
+        grid.setContentsMargins(int(theme.metric("space.indent")), 0, 0, 0)
+        grid.setHorizontalSpacing(int(theme.metric("space.md")))
         grid.setVerticalSpacing(int(theme.metric("space.xs")))
-        for row, modifier in enumerate(data.impress.modifiers):
+        for index, modifier in enumerate(data.impress.modifiers):
+            row, column = divmod(index, 2)
+            column *= 2
+            tip = modifier.hint or modifier.label
             if modifier.kind == "toggle":
                 box = QCheckBox(f"{modifier.label} ({_signed(modifier.value)})")
+                box.setToolTip(tip)
                 box.toggled.connect(lambda on, m=modifier: self._on_toggle(m, on))
-                grid.addWidget(box, row, 0, 1, 3)
+                grid.addWidget(box, row, column, 1, 2)
                 self._toggles[modifier.id] = box
                 continue
             label = QLabel(modifier.label)
-            label.setWordWrap(True)
-            slider = QSlider(Qt.Orientation.Horizontal)
-            # Counted in steps up from the minimum, so every position the slider can
-            # stop at is a value the modifier may take (an earlier attempt is −5 each,
-            # not −1), whatever the range — the same snapping modifier_value does.
-            low, high = sorted((modifier.minimum, modifier.maximum))
-            slider.setRange(0, (high - low) // modifier.step)
-            slider.setValue(self._position(modifier, 0))
-            slider.setPageStep(1)
-            slider.setTickPosition(QSlider.TickPosition.TicksBelow)
-            guard_wheel(slider)
-            readout = QLabel("0")
-            readout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            readout.setMinimumWidth(readout.fontMetrics().horizontalAdvance("+20 "))
-            slider.valueChanged.connect(lambda _v, m=modifier: self._on_slide(m))
-            grid.addWidget(label, row, 0)
-            grid.addWidget(slider, row, 1)
-            grid.addWidget(readout, row, 2)
-            self._sliders[modifier.id] = (slider, readout, modifier)
+            label.setToolTip(tip)
+            spin = StepSpin(modifier)
+            spin.setToolTip(tip)
+            spin.valueChanged.connect(lambda _v: self._on_change())
+            grid.addWidget(label, row, column)
+            grid.addWidget(spin, row, column + 1)
+            self._ranges[modifier.id] = spin
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(2, 1)
+        outer.addWidget(self._body)
+        self._body.hide()
+        self._show_sum()
 
-    @staticmethod
-    def _position(modifier: ActionModifier, raw: object) -> int:
-        """The slider position standing for *raw*, snapped onto the scale."""
-        low = min(modifier.minimum, modifier.maximum)
-        return (modifier_value(modifier, raw) - low) // modifier.step
+    # -- folding -------------------------------------------------------------
 
-    @staticmethod
-    def _value(modifier: ActionModifier, position: int) -> int:
-        return min(modifier.minimum, modifier.maximum) + position * modifier.step
+    def is_expanded(self) -> bool:
+        return self._fold.isChecked()
+
+    def set_expanded(self, expanded: bool) -> None:
+        self._fold.setChecked(expanded)
+
+    def _on_fold(self, expanded: bool) -> None:
+        self._fold.setArrowType(Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
+        self._body.setVisible(expanded)
+        # The window was sized to what it held; it holds more (or less) now.
+        window = self.window()
+        if window is not self and window.isVisible():
+            fit_to_screen(window)
+
+    def set_editable(self, editable: bool) -> None:
+        """Lock the modifiers once rolled — the header still folds, to read them back."""
+        self._body.setEnabled(editable)
+
+    # -- the values ------------------------------------------------------------
 
     def _on_toggle(self, modifier: ActionModifier, on: bool) -> None:
         if on and modifier.exclusive:
@@ -252,29 +410,39 @@ class ModifiersPanel(QGroupBox):
                         box.blockSignals(True)
                         box.setChecked(False)
                         box.blockSignals(False)
+        self._on_change()
+
+    def _on_change(self) -> None:
+        self._show_sum()
         self.changed.emit()
 
-    def _on_slide(self, modifier: ActionModifier) -> None:
-        slider, readout, _ = self._sliders[modifier.id]
-        value = self._value(modifier, slider.value())
-        readout.setText(_signed(value) if value else "0")
-        readout.setStyleSheet(
-            "" if not value else tinted_style("tint.better" if value > 0 else "tint.worse")
+    def _show_sum(self) -> None:
+        """The header's verdict: "none", or the total, tinted, the lines in its tooltip."""
+        lines = self.lines()
+        total = self.total()
+        self._sum.setText(_signed(total) if lines else "none")
+        self._sum.setToolTip("\n".join(lines))
+        self._sum.setStyleSheet(
+            tinted_style("tint.better" if total >= 0 else "tint.worse")
+            if lines
+            else muted_style(italic=True)
         )
-        self.changed.emit()
 
     def values(self) -> dict[str, object]:
-        """Each modifier's position: a toggle's state, a slider's value."""
+        """Each modifier's position: a toggle's state, a range's value."""
         values: dict[str, object] = {mid: box.isChecked() for mid, box in self._toggles.items()}
-        for mid, (slider, _readout, modifier) in self._sliders.items():
-            values[mid] = self._value(modifier, slider.value())
+        for mid, spin in self._ranges.items():
+            values[mid] = spin.worth()
         return values
 
     def set_values(self, values: dict[str, object]) -> None:
+        """Set every modifier — and unfold, if any of them now counts."""
         for mid, box in self._toggles.items():
             box.setChecked(bool(values.get(mid)))
-        for mid, (slider, _readout, modifier) in self._sliders.items():
-            slider.setValue(self._position(modifier, values.get(mid, 0)))
+        for mid, spin in self._ranges.items():
+            spin.setValue(spin.position_of(values.get(mid, 0)))
+        if self.lines():
+            self.set_expanded(True)
 
     def total(self) -> int:
         return modifier_total(self._data, self.values())
@@ -343,15 +511,13 @@ class ImpressDialog(QDialog):
         _fill_choices(self._skill, self._skills)
         self._skill.currentIndexChanged.connect(self._sync)
         form.addRow("Skill:", self._skill)
-        layout.addLayout(form)
 
         self._outcome = QLabel()
         self._outcome.setWordWrap(True)
         self._outcome.setStyleSheet(muted_style())
-        layout.addWidget(self._outcome)
+        form.addRow("", self._outcome)
+        layout.addLayout(form)
 
-        self._group_note = QLabel()
-        self._group_note.setStyleSheet(tinted_style("tint.warning"))
         self._mode_buttons: dict[str, QRadioButton] = {}
         self._modifiers: ModifiersPanel | None = None
         self.targets: TargetsBox | None = None
@@ -362,38 +528,21 @@ class ImpressDialog(QDialog):
                 resolve=self._resolve,
                 choices=lambda: list(self._names.items()),
                 placeholder="Drop the cards of everyone you are impressing here",
+                help_text=targets_help(data),
             )
             self.targets.field.changed.connect(self._sync)
             layout.addWidget(self.targets, stretch=1)
-            layout.addWidget(self._group_note)
-
-            mode_box = QGroupBox("Resolve")
-            mode_layout = QVBoxLayout(mode_box)
-            group = QButtonGroup(self)
-            for mode, caption in MODE_CAPTIONS.items():
-                button = QRadioButton(caption)
-                group.addButton(button)
-                mode_layout.addWidget(button)
-                self._mode_buttons[mode] = button
+            mode_host, self._mode_buttons, group = mode_row(self)
             self._mode_buttons[MODE_RESOLVE].setChecked(True)
             group.buttonToggled.connect(lambda *_: self._sync())
-            layout.addWidget(mode_box)
-            hint = QLabel("The GM sets the situational modifiers and rolls.")
-            hint.setStyleSheet(muted_style(italic=True))
-            layout.addWidget(hint)
+            layout.addWidget(mode_host)
         else:
             self._modifiers = ModifiersPanel(data)
             self._modifiers.changed.connect(self._sync)
             layout.addWidget(self._modifiers)
-            hint = QLabel(
-                "Not in a session: the check is rolled here, and its card offers the "
-                "resistance as a button."
-            )
-            hint.setWordWrap(True)
-            hint.setStyleSheet(muted_style(italic=True))
-            layout.addWidget(hint)
 
         self._total = QLabel()
+        self._total.setWordWrap(True)
         outer.addWidget(self._total)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
@@ -402,7 +551,9 @@ class ImpressDialog(QDialog):
         buttons.addButton(self._ok, QDialogButtonBox.ButtonRole.AcceptRole)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
-        outer.addWidget(buttons)
+        outer.addLayout(
+            dialog_buttons(buttons, DIALOG_HELP if self._online else DIALOG_HELP_OFFLINE)
+        )
 
         _preselect_skill(self._skill, self.impression(), data)
         self._sync()
@@ -486,21 +637,9 @@ class ImpressDialog(QDialog):
 
     def _sync(self) -> None:
         impression, skill = self.impression(), self.skill()
-        outcomes = impression_outcomes(self._data, impression) if impression else ()
-        self._outcome.setText(
-            "Success: "
-            + " → ".join(
-                f"{n} degree{'s' if n > 1 else ''}: {o}" for n, o in enumerate(outcomes, start=1)
-            )
-            if outcomes
-            else ""
-        )
+        self._outcome.setText(outcome_text(self._data, impression))
         count = len(self.target_refs())
         penalty = group_penalty(self._data, count) if self._online else 0
-        self._group_note.setText(
-            f"Group impression: {_signed(penalty)} to the check." if penalty else ""
-        )
-        self._group_note.setVisible(bool(penalty))
         ready = impression is not None and skill is not None
         if self._online and self.mode() == MODE_RESOLVE and count == 0:
             ready = False
@@ -509,15 +648,19 @@ class ImpressDialog(QDialog):
             self._total.setText("No interaction skill to impress with.")
             return
         modifiers = self._modifiers.total() if self._modifiers is not None else 0
-        total = skill.modifier + modifiers + penalty
-        extra = " before the GM's modifiers" if self._online else ""
-        self._total.setText(f"Impress check: <b>{_signed(total)}</b>{extra}")
+        self._total.setText(
+            check_line(
+                skill.modifier + modifiers + penalty,
+                skill,
+                [("modifiers", modifiers), ("group", penalty)],
+            )
+        )
 
     def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
         super().showEvent(event)
         if not self._fitted:
             self._fitted = True
-            fit_to_screen(self)
+            fit_to_screen(self, min_chars=DIALOG_CHARS)
 
 
 # -- the GM's window --------------------------------------------------------------
@@ -548,7 +691,7 @@ class PlannedTarget:
     party: ImpressParty
     resist: TraitChoice | None
     dc_offset: int
-    #: The GM left it at "Use highest": a player then picks when asked to roll.
+    #: The GM left it at "Highest": a player then picks when asked to roll.
     highest: bool = True
 
 
@@ -572,23 +715,44 @@ class ImpressPlan:
 
 
 class ImpressRow(ActionRow):
-    """A target's row: how it resists ("Use highest", or a pick), and its numbers."""
+    """A target's row: how it resists, and its numbers.
+
+    One combo: its first entry is "Highest", the target's best option on its own sheet
+    (for a player, whatever they pick when asked), and the rest are each option by name,
+    for the GM who wants one in particular.
+    """
 
     def __init__(self, party: ImpressParty) -> None:
-        self.highest = QCheckBox("Use highest")
-        self.highest.setChecked(True)
         self.choice = QComboBox()
         guard_wheel(self.choice)
-        cell = QWidget()
-        cell_layout = QHBoxLayout(cell)
-        cell_layout.setContentsMargins(0, 0, 0, 0)
-        cell_layout.addWidget(self.highest)
-        cell_layout.addWidget(self.choice, stretch=1)
-        super().__init__(party, [cell])
+        super().__init__(party, [self.choice])
         self.choices: list[TraitChoice] = []
 
     def inputs(self) -> list[QWidget]:
-        return [self.include, self.highest, self.choice, self.bonus, self.penalty]
+        return [self.include, self.choice, self.modifier]
+
+    def uses_highest(self) -> bool:
+        return not self.choice.currentData()
+
+    def fill(self, choices: list[TraitChoice]) -> None:
+        """List *choices* after "Highest", keeping the pick the GM had made, if it stands."""
+        self.choices = choices
+        current = str(self.choice.currentData() or "")
+        best = best_choice(choices)
+        self.choice.blockSignals(True)
+        self.choice.clear()
+        self.choice.addItem(f"Highest ({choice_caption(best)})" if best else "Highest", "")
+        if self.party.kind == PARTY_PLAYER:
+            self.choice.setItemData(
+                0,
+                f"{self.party.name} picks how to resist when asked to roll",
+                Qt.ItemDataRole.ToolTipRole,
+            )
+        for choice in choices:
+            self.choice.addItem(choice_caption(choice), choice.ref)
+        index = self.choice.findData(current) if current else 0
+        self.choice.setCurrentIndex(max(0, index))
+        self.choice.blockSignals(False)
 
 
 class ImpressWindow(ActionWindow):
@@ -597,7 +761,7 @@ class ImpressWindow(ActionWindow):
     The GM's controls are the impresser (an NPC of theirs), the impression and the skill
     (a player's own when they chose them, the GM's when they sent it bare), a bonus and a
     penalty on the impresser's check, the situational modifiers, each target's resistance
-    ("Use highest" by default, or a pick), and a bonus and penalty on the check against
+    ("Highest" by default, or a pick), and a bonus and penalty on the check against
     each target alone. :attr:`rollRequested` hands the finished :class:`ImpressPlan` to
     whoever rolls it; the window then shows each roll as it comes back.
     """
@@ -624,6 +788,7 @@ class ImpressWindow(ActionWindow):
             box_title="Targets",
             columns=(("Resists with", "What each target rolls against the impress check"),),
             from_card=from_card,
+            help_text=GM_HELP,
             parent=parent,
         )
         self._attempt = attempt
@@ -638,19 +803,16 @@ class ImpressWindow(ActionWindow):
         guard_wheel(self._source)
         for party in sources:
             self._source.addItem(party.name, party.ref)
-        spin = int(theme.metric("column.stat.spin"))
-        self._check_bonus = make_spin_box(0, 20, value=0, buttons=False, max_width=spin)
-        self._check_bonus.setToolTip("A bonus to the impresser's check")
-        self._check_penalty = make_spin_box(0, 20, value=0, buttons=False, max_width=spin)
-        self._check_penalty.setToolTip("A penalty to the impresser's check")
+        self._check_adjust = make_signed_spin_box(
+            ADJUST_LIMIT, max_width=int(theme.metric("column.stat.spin"))
+        )
+        self._check_adjust.setToolTip("A bonus (+) or penalty (-) to the impresser's check")
         source_row = QWidget()
         source_layout = QHBoxLayout(source_row)
         source_layout.setContentsMargins(0, 0, 0, 0)
         source_layout.addWidget(self._source, stretch=1)
-        source_layout.addWidget(QLabel("Bonus"))
-        source_layout.addWidget(self._check_bonus)
-        source_layout.addWidget(QLabel("Penalty"))
-        source_layout.addWidget(self._check_penalty)
+        source_layout.addWidget(QLabel("Adjust"))
+        source_layout.addWidget(self._check_adjust)
         source_layout.addStretch(1)
         self._impression = QComboBox()
         guard_wheel(self._impression)
@@ -669,7 +831,7 @@ class ImpressWindow(ActionWindow):
         self._outcome = QLabel()
         self._outcome.setWordWrap(True)
         self._outcome.setStyleSheet(muted_style())
-        form.addRow(self._outcome)
+        form.addRow("", self._outcome)
         self.add_section(setup)
         self._check_note = QLabel()
         self._check_note.setTextFormat(Qt.TextFormat.RichText)
@@ -677,38 +839,25 @@ class ImpressWindow(ActionWindow):
         self._check_note.hide()
         self.add_section(self._check_note)
 
-        self._group_note = QLabel()
-        self._group_note.setStyleSheet(tinted_style("tint.warning"))
-        self.add_section(self._group_note, after_targets=True)
-        self._modifiers = ModifiersPanel(data)
-        self.add_section(self._modifiers, after_targets=True)
-
-        mode_host = QWidget()
-        mode_row = QHBoxLayout(mode_host)
-        mode_row.setContentsMargins(0, 0, 0, 0)
-        self._mode_buttons: dict[str, QRadioButton] = {}
-        group = QButtonGroup(self)
-        for mode, caption in MODE_CAPTIONS.items():
-            button = QRadioButton(caption)
-            group.addButton(button)
-            mode_row.addWidget(button)
-            self._mode_buttons[mode] = button
+        mode_host, self._mode_buttons, group = mode_row(self)
         mode = attempt.mode if attempt is not None else MODE_RESOLVE
         self._mode_buttons.get(mode, self._mode_buttons[MODE_RESOLVE]).setChecked(True)
         self.add_section(mode_host, after_targets=True)
+        self._modifiers = ModifiersPanel(data)
+        self.add_section(self._modifiers, after_targets=True)
 
+        # The total is what the GM is rolling, so it stays in sight under the scroll.
         self._total = QLabel()
         self._total.setWordWrap(True)
-        self.add_section(self._total, after_targets=True)
+        self.add_footer(self._total)
 
         wanted = set(attempt.targets) if attempt is not None else set()
         self.build_rows(lambda _party: [], wanted)
-        self.heading.setText(self._heading_text())
+        self.set_heading(self._heading_text())
 
         # Wired once everything they reach exists.
         self._source.currentIndexChanged.connect(self._on_source)
-        self._check_bonus.valueChanged.connect(lambda _v: self.sync())
-        self._check_penalty.valueChanged.connect(lambda _v: self.sync())
+        self._check_adjust.valueChanged.connect(lambda _v: self.sync())
         self._impression.currentIndexChanged.connect(self._on_impression)
         self._skill.currentIndexChanged.connect(self._on_skill)
         self._modifiers.changed.connect(self.sync)
@@ -717,20 +866,25 @@ class ImpressWindow(ActionWindow):
 
     def make_row(self, party, cells: list[QWidget]) -> ActionRow:
         row = ImpressRow(party)
-        row.bonus.setToolTip(f"A bonus to the impress check against {party.name} alone")
-        row.penalty.setToolTip(f"A penalty to the impress check against {party.name} alone")
-        row.highest.toggled.connect(lambda _on, r=row: self._sync_row(r))
+        row.modifier.setToolTip(
+            f"A bonus (+) or penalty (-) to the impress check against {party.name} alone"
+        )
         row.choice.currentIndexChanged.connect(lambda _i: self.sync())
+        if party.kind == PARTY_PLAYER:
+            row.include.setToolTip(
+                f"{party.name} is a player: asked to roll their resistance once the check is in"
+            )
         return row
 
     def _heading_text(self) -> str:
+        """Whose declaration this is — nothing to say when it is the GM's own."""
         attempt = self._attempt
         if attempt is None:
-            return "One of your NPCs impresses somebody."
+            return ""
         who = html.escape(attempt.source_name or "A player")
         if attempt.bare:
-            return f"<b>{who}</b> is impressing — you choose how, and whom."
-        return f"<b>{who}</b> declared an impression — set the modifiers and roll."
+            return f"<b>{who}</b> is impressing — choose how, and whom."
+        return f"<b>{who}</b> declared an impression."
 
     # -- the impresser -------------------------------------------------------
 
@@ -793,12 +947,11 @@ class ImpressWindow(ActionWindow):
 
     def _refresh_choices(self, row: ImpressRow, skill: TraitChoice | None) -> None:
         character = row.party.character
-        row.choices = (
+        row.fill(
             resist_choices(character, self._data, skill.key)
             if character is not None and skill is not None
             else []
         )
-        _fill_choices(row.choice, row.choices, str(row.choice.currentData() or ""))
         self._sync_row(row)
 
     def on_include(self, row: ActionRow, on: bool) -> None:
@@ -811,20 +964,8 @@ class ImpressWindow(ActionWindow):
         # Request mode rolls the check alone: nobody's resistance or per-target
         # adjustment is rolled here, so there is nothing for these to set.
         rolled = on and self.mode() == MODE_RESOLVE
-        for widget in (row.highest, row.bonus, row.penalty):
+        for widget in (row.choice, row.modifier):
             widget.setEnabled(rolled)
-        row.choice.setEnabled(rolled and not row.highest.isChecked())
-        best = best_choice(row.choices)
-        row.highest.setText(
-            f"Use highest ({choice_caption(best)})" if best is not None else "Use highest"
-        )
-        if on and rolled and row.party.kind == PARTY_PLAYER:
-            row.show_result(
-                "Picks how to resist when asked" if row.highest.isChecked() else "Asked to roll",
-                muted_style(italic=True),
-            )
-        else:
-            row.show_result("")
         self.sync()
 
     def set_party_character(self, ref: str, character: Character | None) -> None:
@@ -852,23 +993,22 @@ class ImpressWindow(ActionWindow):
         if button is not None:
             button.setChecked(True)
 
-    def set_check_bonus(self, bonus: int, penalty: int = 0) -> None:
+    def set_check_adjust(self, adjust: int) -> None:
         """The GM's own bonus and penalty on the impresser's check."""
-        self._check_bonus.setValue(bonus)
-        self._check_penalty.setValue(penalty)
+        self._check_adjust.setValue(adjust)
 
     # -- the total ----------------------------------------------------------------
 
     def check_modifier(self) -> int:
         skill = self.skill()
         base = skill.modifier if skill is not None else 0
-        own = self._check_bonus.value() - self._check_penalty.value()
+        own = self._check_adjust.value()
         return (
             base + own + self._modifiers.total() + group_penalty(self._data, len(self.included()))
         )
 
     def _resist_for(self, row: ImpressRow) -> TraitChoice | None:
-        if row.highest.isChecked():
+        if row.uses_highest():
             return best_choice(row.choices)
         return next((c for c in row.choices if c.ref == row.choice.currentData()), None)
 
@@ -876,30 +1016,22 @@ class ImpressWindow(ActionWindow):
         if not hasattr(self, "_total"):
             return  # still being built
         impression, skill = self.impression(), self.skill()
-        outcomes = impression_outcomes(self._data, impression) if impression else ()
-        self._outcome.setText(("Success: " + " → ".join(outcomes)) if outcomes else "")
+        self._outcome.setText(outcome_text(self._data, impression))
         count = len(self.included())
         penalty = group_penalty(self._data, count)
-        self._group_note.setText(
-            f"Group impression: {_signed(penalty)} to the check." if penalty else ""
-        )
-        self._group_note.setVisible(bool(penalty))
         if self.phase != PHASE_SETUP:
             return
         if skill is None:
             self._total.setText("No interaction skill to impress with.")
             self.go.setEnabled(False)
             return
-        parts = [f"{html.escape(skill.label)} {_signed(skill.modifier)}"]
-        own = self._check_bonus.value() - self._check_penalty.value()
-        if own:
-            parts.append(f"GM {_signed(own)}")
-        if self._modifiers.total():
-            parts.append(f"modifiers {_signed(self._modifiers.total())}")
-        if penalty:
-            parts.append(f"group {_signed(penalty)}")
+        own = self._check_adjust.value()
         self._total.setText(
-            f"Impress check: <b>{_signed(self.check_modifier())}</b> ({', '.join(parts)})"
+            check_line(
+                self.check_modifier(),
+                skill,
+                [("GM", own), ("modifiers", self._modifiers.total()), ("group", penalty)],
+            )
         )
         needs_targets = self.mode() == MODE_RESOLVE
         self.go.setEnabled(impression is not None and (count > 0 or not needs_targets))
@@ -922,12 +1054,13 @@ class ImpressWindow(ActionWindow):
             self._source,
             self._impression,
             self._skill,
-            self._check_bonus,
-            self._check_penalty,
-            self._modifiers,
+            self._check_adjust,
             *self._mode_buttons.values(),
         ):
             widget.setEnabled(False)
+        self._modifiers.set_editable(False)
+        # The check is rolled: what it came to is said above the table from here on.
+        self._total.hide()
 
     def set_check(self, text: str, token: str = "") -> None:
         """What the impress check came to, shown above the table."""
@@ -947,7 +1080,7 @@ class ImpressWindow(ActionWindow):
                 party=row.party,
                 resist=self._resist_for(row),
                 dc_offset=row.adjust,
-                highest=row.highest.isChecked(),
+                highest=row.uses_highest(),
             )
             for row in self.included()
         )

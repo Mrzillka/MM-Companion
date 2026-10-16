@@ -2149,7 +2149,8 @@ class ActionModifier:
     A ``toggle`` is a checkbox worth :attr:`value`; toggles sharing an
     :attr:`exclusive` group cannot both be on. A ``slider`` runs from
     :attr:`minimum` to :attr:`maximum` in steps of :attr:`step` and is worth its
-    position.
+    position. :attr:`label` is the short caption the control wears and :attr:`hint`
+    the longer explanation behind it.
     """
 
     id: str
@@ -2160,6 +2161,7 @@ class ActionModifier:
     maximum: int = 0
     step: int = 1
     exclusive: str = ""
+    hint: str = ""
 
 
 @dataclass(frozen=True)
@@ -2886,6 +2888,7 @@ def _parse_action_modifier(raw: dict) -> ActionModifier:
         maximum=int(raw.get("max", 0)),
         step=max(1, int(raw.get("step", 1))),
         exclusive=str(raw.get("exclusive", "")),
+        hint=str(raw.get("hint", "")),
     )
 
 

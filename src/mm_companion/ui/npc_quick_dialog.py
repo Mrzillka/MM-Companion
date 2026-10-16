@@ -45,7 +45,7 @@ from mm_companion.core.data_loader import GameData, load_game_data
 from mm_companion.core.npc import find_preset, pair_total, preset_stats
 from mm_companion.ui import npc_icons, theme
 from mm_companion.ui.npc_names import random_npc_name
-from mm_companion.ui.widgets import make_spin_box, tinted_style
+from mm_companion.ui.widgets import dialog_buttons, make_spin_box, tinted_style
 
 #: The range the six stat boxes accept. Wide enough for anything from a rat to a
 #: cosmic horror; a hand edit is not held to the power level, so nothing narrower is
@@ -158,11 +158,6 @@ class QuickNPCDialog(QDialog):
         self._edited = False
 
         layout = QVBoxLayout(self)
-        help_label = QLabel(HELP_TEXT)
-        help_label.setWordWrap(True)
-        help_label.setEnabled(False)
-        layout.addWidget(help_label)
-
         top = QHBoxLayout()
         top.addWidget(self._build_portrait())
         form = QFormLayout()
@@ -191,7 +186,7 @@ class QuickNPCDialog(QDialog):
         self._ok_button.setText("Create NPC")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        layout.addLayout(dialog_buttons(buttons, HELP_TEXT))
 
         self._name.textChanged.connect(self._sync_ok)
         self._power_level.valueChanged.connect(self._apply_preset)

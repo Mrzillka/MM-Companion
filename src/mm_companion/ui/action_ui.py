@@ -57,7 +57,12 @@ from mm_companion.ui.card_chips import SCENE_MIME
 from mm_companion.ui.card_drop import CardDropFlow
 from mm_companion.ui.drop_feedback import DropFeedback
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import make_spin_box, muted_style, tinted_style
+from mm_companion.ui.widgets import (
+    HelpButton,
+    make_signed_spin_box,
+    muted_style,
+    tinted_style,
+)
 
 #: The ``ActionPrompt`` kinds the GM sends one player while an action runs: roll this
 #: (their check, their Dodge, their save), that roll is no longer wanted, and what the
@@ -144,11 +149,18 @@ class BodyScroll(QScrollArea):
         return QSize(hint.width() + bar, hint.height())
 
 
-def fit_to_screen(window: QWidget, *, share: float = 0.85) -> None:
+#: How wide an action's dialog opens, at least, in average characters of its font —
+#: so a line of numbers is not wrapped into three in a dialog sized to its widest combo.
+DIALOG_CHARS = 52
+
+
+def fit_to_screen(window: QWidget, *, share: float = 0.85, min_chars: int = 0) -> None:
     """Size *window* to what it asks for, but never past *share* of its screen.
 
     Width and height alike, and moved back onto the screen if that left it hanging off
     an edge. Everything inside is in a :class:`BodyScroll`, so what does not fit scrolls.
+    *min_chars* opens it at least that many average characters wide — the size it
+    opens at, which the user may still drag narrower.
     """
     screen = window.screen() or QGuiApplication.primaryScreen()
     if screen is None:
@@ -165,7 +177,8 @@ def fit_to_screen(window: QWidget, *, share: float = 0.85) -> None:
         window.layout().invalidate()
         window.layout().activate()
     hint = window.sizeHint()
-    width = min(max(hint.width(), window.width()), int(room.width() * share))
+    floor = window.fontMetrics().averageCharWidth() * min_chars
+    width = min(max(hint.width(), window.width(), floor), int(room.width() * share))
     height = min(hint.height(), int(room.height() * share))
     window.resize(width, max(height, window.minimumSizeHint().height()))
     frame = window.frameGeometry()
@@ -290,6 +303,7 @@ class TargetsBox(QGroupBox):
         choices: Callable[[], list[tuple[str, str]]],
         single: bool = False,
         placeholder: str = "",
+        help_text: str = "",
     ) -> None:
         super().__init__(title)
         layout = QHBoxLayout(self)
@@ -299,6 +313,8 @@ class TargetsBox(QGroupBox):
             add_button(choices, self.field.add_ref, everyone=not single),
             alignment=Qt.AlignmentFlag.AlignTop,
         )
+        if help_text:
+            layout.addWidget(HelpButton(help_text), alignment=Qt.AlignmentFlag.AlignTop)
 
 
 class ActionDropBox(QGroupBox):
@@ -345,26 +361,31 @@ class ActionDropBox(QGroupBox):
 # -- the GM's window ------------------------------------------------------------------------
 
 
+#: How far the GM may move one creature's part in an action, either way.
+ADJUST_LIMIT = 20
+
+
 class ActionRow:
     """One creature's row in an :class:`ActionWindow`: in or out, its numbers, its result.
 
-    *cells* are the action's own columns between the name and the bonus (what it rolls
-    with, its cover); the window lays them out and locks them with the rest.
+    *cells* are the action's own columns between the name and the adjustment (what it
+    rolls with, its cover); the window lays them out and locks them with the rest. The
+    adjustment is one signed box — a bonus is "+2", a penalty "-2".
     """
 
     def __init__(self, party, cells: list[QWidget]) -> None:
         self.party = party
         self.include = QCheckBox(party.name)
         self.cells = cells
-        spin = int(theme.metric("column.stat.spin"))
-        self.bonus = make_spin_box(0, 20, value=0, buttons=False, max_width=spin)
-        self.penalty = make_spin_box(0, 20, value=0, buttons=False, max_width=spin)
+        self.modifier = make_signed_spin_box(
+            ADJUST_LIMIT, max_width=int(theme.metric("column.stat.spin"))
+        )
         self.result = QLabel()
         self.result.setTextFormat(Qt.TextFormat.RichText)
         self.result.setWordWrap(True)
 
     def inputs(self) -> list[QWidget]:
-        return [self.include, *self.cells, self.bonus, self.penalty]
+        return [self.include, *self.cells, self.modifier]
 
     def show_result(self, text: str, style: str = "") -> None:
         """Say what this row came to, on its own line — gone again when there is nothing."""
@@ -374,8 +395,14 @@ class ActionRow:
 
     @property
     def adjust(self) -> int:
-        return self.bonus.value() - self.penalty.value()
+        return self.modifier.value()
 
+
+#: How a creature is put in an action's table, behind the "?" on it.
+BOX_HELP = (
+    "Tick a creature to put it in, or drop its card here from the Scene. Adjust is a "
+    "bonus (+) or penalty (-) to that creature's own part in the action."
+)
 
 #: The phases a GM's window goes through.
 PHASE_SETUP = "setup"
@@ -400,6 +427,10 @@ class ActionWindow(QDialog):
     *from_card* is a player's declaration, waiting in the GM's history: it can be closed
     and come back to (**Close**) or thrown away (**Dismiss**). The GM's own is simply
     **Cancel**led.
+
+    How the action works is *help_text*, behind the "?" by the buttons, and how to put a
+    creature in is *box_help*, behind the one on the table — not written out in the
+    window, where it would be read once and scrolled past every time after.
     """
 
     #: Closed during setup without rolling.
@@ -422,6 +453,8 @@ class ActionWindow(QDialog):
         box_title: str,
         columns: tuple[tuple[str, str], ...],
         from_card: bool = False,
+        help_text: str = "",
+        box_help: str = BOX_HELP,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -440,6 +473,7 @@ class ActionWindow(QDialog):
         self.heading.setTextFormat(Qt.TextFormat.RichText)
         self.heading.setWordWrap(True)
         outer.addWidget(self.heading)
+        self.heading.hide()
 
         body = QWidget()
         self._body = QVBoxLayout(body)
@@ -456,29 +490,35 @@ class ActionWindow(QDialog):
         headers = (
             ("", ""),
             *columns,
-            ("Bonus", "A bonus to this creature's part in the action"),
-            ("Penalty", "A penalty to this creature's part in the action"),
+            ("Adjust", "A bonus (+) or penalty (-) to this creature's part in the action"),
         )
         for column, (caption, tip) in enumerate(headers):
             header = QLabel(caption)
             header.setStyleSheet(muted_style())
             header.setToolTip(tip)
             self._grid.addWidget(header, 0, column)
+        self._grid.addWidget(
+            HelpButton(box_help), 0, len(headers), alignment=Qt.AlignmentFlag.AlignRight
+        )
         # The action's own columns take the spare width; each row's result has a line of
         # its own under it, spanning the table, so a long outcome never squeezes a column.
         self._grid.setColumnStretch(1, 1)
         box_layout.addLayout(self._grid)
-        self._drop_hint = QLabel("Drop a creature's card here to put it in.")
-        self._drop_hint.setStyleSheet(muted_style(italic=True))
-        box_layout.addWidget(self._drop_hint)
+        self.box.setToolTip(box_help)
         self._body.addWidget(self.box)
         self._after_box = self._body.count()
 
+        self._footer = QVBoxLayout()
+        outer.addLayout(self._footer)
         self.summary = QLabel()
         self.summary.setWordWrap(True)
+        self.summary.setStyleSheet(muted_style())
         outer.addWidget(self.summary)
 
         buttons = QHBoxLayout()
+        self.help = HelpButton(help_text)
+        self.help.setVisible(bool(help_text))
+        buttons.addWidget(self.help, alignment=Qt.AlignmentFlag.AlignVCenter)
         self._dismiss = QPushButton("Dismiss")
         self._dismiss.setToolTip("Throw this action away without rolling it")
         self._dismiss.clicked.connect(self._on_dismiss)
@@ -515,6 +555,15 @@ class ActionWindow(QDialog):
         else:
             self._body.insertWidget(self._body.indexOf(self.box), widget)
 
+    def set_heading(self, text: str) -> None:
+        """Say whose action this is, as rich text — or nothing, and take the line away."""
+        self.heading.setText(text)
+        self.heading.setVisible(bool(text))
+
+    def add_footer(self, widget: QWidget) -> None:
+        """Put a line under the scrolled body, above the summary — always in sight."""
+        self._footer.addWidget(widget)
+
     def build_rows(self, make_cells: Callable[[object], list[QWidget]], wanted: set[str]) -> None:
         """A row per creature on the scene, its own cells from *make_cells*."""
         for number, party in enumerate(self._targets):
@@ -525,24 +574,21 @@ class ActionWindow(QDialog):
             for column, cell in enumerate(row.cells, start=1):
                 self._grid.addWidget(cell, index, column)
             tail = 1 + len(row.cells)
-            self._grid.addWidget(row.bonus, index, tail)
-            self._grid.addWidget(row.penalty, index, tail + 1)
-            self._grid.addWidget(row.result, index + 1, 1, 1, tail + 1)
+            self._grid.addWidget(row.modifier, index, tail)
+            self._grid.addWidget(row.result, index + 1, 1, 1, tail)
             row.result.hide()
             row.include.setChecked(party.ref in wanted)
             row.include.toggled.connect(lambda on, r=row: self.on_include(r, on))
-            row.bonus.valueChanged.connect(lambda _v: self.sync())
-            row.penalty.valueChanged.connect(lambda _v: self.sync())
+            row.modifier.valueChanged.connect(lambda _v: self.sync())
         if not self._rows:
             empty = QLabel("Nobody is on the scene.")
             empty.setStyleSheet(muted_style(italic=True))
-            self._grid.addWidget(empty, 1, 0, 1, 3 + len(self._columns))
+            self._grid.addWidget(empty, 1, 0, 1, 2 + len(self._columns))
 
     def make_row(self, party, cells: list[QWidget]) -> ActionRow:
         """The row object for *party* — an action may keep more on it."""
         row = ActionRow(party, cells)
-        row.bonus.setToolTip(f"A bonus to {party.name}'s part in the action")
-        row.penalty.setToolTip(f"A penalty to {party.name}'s part in the action")
+        row.modifier.setToolTip(f"A bonus (+) or penalty (-) to {party.name}'s part in the action")
         return row
 
     # -- the rows ------------------------------------------------------------------
@@ -613,7 +659,6 @@ class ActionWindow(QDialog):
         self.lock_setup()
         self.go.hide()
         self._dismiss.hide()
-        self._drop_hint.hide()
         self._close.setText("Close")
         self._call_off.show()
 
@@ -624,7 +669,6 @@ class ActionWindow(QDialog):
         self._roll_waiting.setVisible(bool(names))
         if names:
             self.summary.setText("Waiting for " + ", ".join(names) + "…")
-            self.summary.setStyleSheet(muted_style(italic=True))
 
     def finish(self, text: str) -> None:
         """Everything is in (or it was called off): say so, and stop offering to wait."""
@@ -675,7 +719,7 @@ class RollPromptDialog(QDialog):
     Non-modal, so the game goes on around it, and answered with one click: the roll is
     made on the player's own roller, their number filled in, and lands in the action's
     table in everyone's history. Where the spec is a choice of traits (resisting an
-    impression), "Use highest" is on and turning it off lets the player pick. **Later**
+    impression), a combo offers "Highest" first and each trait after it. **Later**
     closes it; the same request still waits in the history.
     """
 
@@ -708,11 +752,8 @@ class RollPromptDialog(QDialog):
         self._caption.setWordWrap(True)
         self._caption.setStyleSheet(tinted_style("accent.dice"))
         layout.addWidget(self._caption)
-        self._highest = QCheckBox()
-        self._highest.setChecked(True)
-        self._highest.toggled.connect(self._sync)
-        layout.addWidget(self._highest)
         self._choice = QComboBox()
+        self._choice.setToolTip("Roll your highest option, or pick the trait to roll")
         guard_wheel(self._choice)
         self._choice.currentIndexChanged.connect(self._sync)
         layout.addWidget(self._choice)
@@ -745,16 +786,15 @@ class RollPromptDialog(QDialog):
             if spec.kind == KIND_BEST_OF and spec.trait_key
             else []
         )
+        best = max(self._choices, key=lambda c: c.modifier) if self._choices else None
         self._choice.blockSignals(True)
         self._choice.clear()
+        self._choice.addItem(
+            f"Highest ({best.label} {signed(best.modifier)})" if best else "Highest", ""
+        )
         for choice in self._choices:
             self._choice.addItem(f"{choice.label} {signed(choice.modifier)}", choice.trait_key)
         self._choice.blockSignals(False)
-        best = max(self._choices, key=lambda c: c.modifier) if self._choices else None
-        self._highest.setText(
-            f"Use highest ({best.label} {signed(best.modifier)})" if best else "Use highest"
-        )
-        self._highest.setVisible(bool(self._choices))
         self._choice.setVisible(bool(self._choices))
         ladder = " → ".join(spec.outcomes)
         self._outcomes.setText(f"Failing: {ladder}" if ladder else (spec.hint or ""))
@@ -763,7 +803,7 @@ class RollPromptDialog(QDialog):
     def spec(self) -> RollSpec:
         """What will be rolled: the request, or the trait the player picked instead."""
         spec = self._spec
-        if self._choices and not self._highest.isChecked():
+        if self._choices and self._choice.currentData():
             chosen = next(
                 (c for c in self._choices if c.trait_key == self._choice.currentData()), None
             )
@@ -777,7 +817,6 @@ class RollPromptDialog(QDialog):
         return spec
 
     def _sync(self) -> None:
-        self._choice.setEnabled(not self._highest.isChecked())
         shown = localize_spec(self.spec(), self._character, self._data)
         against = f" vs. DC {shown.dc}" if shown.dc is not None else ""
         self._caption.setText(f"🎲 {shown.label} {signed(shown.modifier)}{against}")

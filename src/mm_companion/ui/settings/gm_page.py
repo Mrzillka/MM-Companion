@@ -47,7 +47,14 @@ from mm_companion.core.data_loader import GameData, load_game_data
 from mm_companion.core.rules import PinRef, default_pins, pin_label
 from mm_companion.ui.pin_picker import PinPickerDialog
 from mm_companion.ui.settings.page import SettingsPage
-from mm_companion.ui.widgets import BOLD_STYLE, muted_style, resurface, tinted_style
+from mm_companion.ui.widgets import (
+    BOLD_STYLE,
+    help_tooltip,
+    muted_style,
+    resurface,
+    tinted_style,
+    with_help,
+)
 
 #: Where a row keeps the :class:`PinRef` it stands for.
 PIN_ROLE = Qt.ItemDataRole.UserRole
@@ -110,13 +117,9 @@ class GMPage(SettingsPage):
         box = QGroupBox("Scene")
         column = QVBoxLayout(box)
         self._auto_players = QCheckBox(AUTO_PLAYERS_LABEL)
-        self._auto_players.setToolTip(AUTO_PLAYERS_HINT)
+        self._auto_players.setToolTip(help_tooltip(AUTO_PLAYERS_HINT))
         self._auto_players.toggled.connect(self._on_edited)
-        column.addWidget(self._auto_players)
-        hint = QLabel(AUTO_PLAYERS_HINT)
-        hint.setWordWrap(True)
-        hint.setStyleSheet(muted_style(italic=True))
-        column.addWidget(hint)
+        column.addWidget(with_help(self._auto_players, AUTO_PLAYERS_HINT))
         return box
 
     def _build_actions_box(self) -> QWidget:
@@ -124,13 +127,9 @@ class GMPage(SettingsPage):
         box = QGroupBox("Impress and area attacks")
         column = QVBoxLayout(box)
         self._players_choose = QCheckBox(PLAYERS_CHOOSE_LABEL)
-        self._players_choose.setToolTip(PLAYERS_CHOOSE_HINT)
+        self._players_choose.setToolTip(help_tooltip(PLAYERS_CHOOSE_HINT))
         self._players_choose.toggled.connect(self._on_edited)
-        column.addWidget(self._players_choose)
-        hint = QLabel(PLAYERS_CHOOSE_HINT)
-        hint.setWordWrap(True)
-        hint.setStyleSheet(muted_style(italic=True))
-        column.addWidget(hint)
+        column.addWidget(with_help(self._players_choose, PLAYERS_CHOOSE_HINT))
         return box
 
     def _build_heading(self) -> QWidget:
@@ -140,12 +139,7 @@ class GMPage(SettingsPage):
 
         title = QLabel("Default pinned parameters")
         title.setStyleSheet(BOLD_STYLE)
-        stack.addWidget(title)
-
-        note = QLabel(NOTE_TEXT)
-        note.setWordWrap(True)
-        note.setStyleSheet(muted_style(italic=True))
-        stack.addWidget(note)
+        stack.addWidget(with_help(title, NOTE_TEXT))
         return panel
 
     def _build_lists(self) -> QHBoxLayout:

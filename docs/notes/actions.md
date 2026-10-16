@@ -73,24 +73,30 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   picked. Advantage-gated impressions are *shown greyed* with the advantage in the
   tooltip rather than hidden — a player should be able to see Dazed exists.
 - **The GM always sets the situational modifiers**, whoever is impressing, and a
-  **bonus and a penalty on the impresser's check** of their own. A player's dialog in
+  **adjustment to the impresser's check** of their own (one signed box, a bonus "+2" or
+  a penalty "-2" — it was two boxes, which doubled every row). A player's dialog in
   a session therefore carries no modifiers at all; it declares (impression, skill,
   targets off the scene, mode) and the GM's window opens on it, the player's own
   choices read-only. Toggles sharing an `exclusive` group (simple vs. full action)
-  turn each other off; a slider stops only on its `step`, so "earlier attempts" moves
-  in fives.
+  turn each other off; a range's `StepSpin` stops only on its `step`, so "earlier
+  attempts" moves in fives. The panel is **folded by default** behind a header saying
+  what the modifiers add up to ("none", or the tinted total), and unfolds itself when
+  `set_values` sets one that counts. Each modifier's `label` is a short caption and its
+  `hint` the explanation, shown as the control's tooltip.
 - **Several targets is a group impression**: one check, the group penalty once, each
-  target resisting separately. Every target also gets a **bonus and a penalty on the
-  check against them alone** — applied as an offset to the DC that target resists,
+  target resisting separately. Every target also gets an **adjustment to the check
+  against them alone** (its row's **Adjust**) — applied as an offset to the DC that
+  target resists,
   which is the same arithmetic as adjusting the check and the only way one die can
   stand against several totals.
-- **Resisting is "Use highest" by default.** The candidates are the impresser's skill
+- **Resisting is "Highest" by default** — the first entry of each target's one
+  combo, followed by every option by name. The candidates are the impresser's skill
   (as the skill — a specialized pool resists as its base skill), then `resist.skills`
   and `resist.resistances`. An NPC resists with the GM window's pick. A targeted
   *player* is asked nothing before the roll: once the check is in, they are asked to
   roll their resistance (`impress_ask_resist_spec`, a `KIND_BEST_OF` spec with the DC
-  in), and pick another trait in the prompt if they want. If the GM unticked "Use
-  highest" for them, the ask names that one trait instead.
+  in), and pick another trait in the prompt's own "Highest"-first combo if they want.
+  If the GM picked one trait for them, the ask names that trait instead.
 - **Two stages, and the check is the impresser's.** *Resolve* rolls the check first:
   the server rolls an NPC's as a lead-only group; a **player** impressing is asked to
   roll it, with every GM adjustment already in its modifier. Its total, plus
@@ -146,7 +152,19 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   it is settled and its window closed.
 - **Fits the screen.** Every window and dialog body is a `BodyScroll` (which asks for
   all of its content) and `fit_to_screen` caps the window at 85% of the screen, so a
-  whole scene of targets scrolls rather than running off the bottom.
+  whole scene of targets scrolls rather than running off the bottom. The two dialogs
+  open at least `DIALOG_CHARS` wide, so the area's summary is not wrapped into three
+  lines in a dialog sized to its widest combo.
+- **The windows show numbers; the rules sit behind a "?".** How an Impress or an area
+  resolves, what the modes mean, how a creature is put in the table — each is a
+  `HelpButton` (the dialogs' and the GM window's by the buttons, the table's in its
+  header row, the primary target's beside its attack button), never a paragraph in
+  the window. What stays on screen is what changes: the ladder, the DC, the total and
+  what it is made of (the group penalty is a part of that line, not a warning of its
+  own), and who is still being waited for. The impress check's total sits under the
+  scroll (`add_footer`), and hides once rolled, since the check note above the table
+  then says what it came to. The heading says only whose declaration it is, and is
+  gone for the GM's own (`set_heading`).
 
 ## The wire (protocol v13, unchanged)
 
@@ -304,8 +322,8 @@ The second action on this layer, following the 4e rules (Area Effect extra, PDF 
     ref works too.
   - the primary, and whether it was hit. "Hit" is pre-ticked from the attack's total
     against the primary's Defense class.
-  - per creature, a cover combo (Dodge only) and a bonus and penalty (both of that
-    creature's checks).
+  - per creature, a cover combo (Dodge only) and an Adjust (both of that creature's
+    checks; `AreaTarget.adjust`).
 - An NPC attacker gets a 🎲 Roll attack button. A player's gets **🎲 Ask for the
   attack**, which asks them for it like any other roll — how a bare declaration's
   attack gets rolled once the GM has picked a primary. Resolving does not wait on it:

@@ -9,21 +9,25 @@ resolve their theme tokens in one place instead of a dozen f-strings.
 
 from __future__ import annotations
 
+import html
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from functools import wraps
 
-from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QAbstractScrollArea,
     QDoubleSpinBox,
     QFormLayout,
     QFrame,
+    QHBoxLayout,
     QLabel,
     QPushButton,
     QSpinBox,
     QTableWidgetItem,
+    QToolButton,
+    QToolTip,
     QWidget,
 )
 
@@ -61,6 +65,31 @@ def make_spin_box(
         spin.setMaximumWidth(max_width)
     if guarded:
         guard_wheel(spin)
+    return spin
+
+
+class SignedSpinBox(QSpinBox):
+    """A spin box that reads as a modifier: "+2", "0", "-3".
+
+    One box where a bonus and a penalty used to be two — a plain ``QSpinBox`` writes a
+    bonus as a bare "2", which next to a "-3" reads as a value rather than a change.
+    Typing "+5" or "5" both mean five.
+    """
+
+    def textFromValue(self, value: int) -> str:  # noqa: N802 (Qt override)
+        return f"{value:+d}" if value else "0"
+
+
+def make_signed_spin_box(limit: int, *, max_width: int | None = None) -> SignedSpinBox:
+    """A wheel-guarded, arrowless :class:`SignedSpinBox` from -*limit* to +*limit*."""
+    spin = SignedSpinBox()
+    spin.setRange(-limit, limit)
+    spin.setValue(0)
+    spin.setButtonSymbols(QSpinBox.NoButtons)
+    spin.setProperty(theme.ARROWLESS_PROPERTY, True)
+    if max_width is not None:
+        spin.setMaximumWidth(max_width)
+    guard_wheel(spin)
     return spin
 
 
@@ -305,6 +334,107 @@ def hline_separator() -> QFrame:
     line.setFrameShape(QFrame.Shape.HLine)
     line.setFrameShadow(QFrame.Shadow.Sunken)
     return line
+
+
+# -- explanations behind a "?" ----------------------------------------------------
+
+
+#: How long a clicked :class:`HelpButton` keeps its explanation up, in ms — long
+#: enough to read a paragraph; moving the pointer away still closes it sooner.
+HELP_SHOW_MS = 30000
+
+
+def help_tooltip(text: str) -> str:
+    """*text* as a tooltip that wraps: a blank line starts a paragraph.
+
+    Qt wraps a tooltip only when it is rich text, and a plain paragraph shown as one
+    long line runs off the screen — so the text is escaped and set as HTML.
+    """
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    return "".join("<p>" + html.escape(p).replace("\n", "<br>") + "</p>" for p in paragraphs)
+
+
+class HelpButton(QToolButton):
+    """A small round "?" holding the explanation of the control beside it.
+
+    How a mechanic works is worth saying once and not worth a paragraph on screen
+    every time the window opens, so the paragraph lives here: hovering shows it, and
+    a click shows it at once, for whoever does not think to hover. What a control
+    *currently says* — a total, a DC, who is still being waited for — stays on
+    screen; only the standing description moves behind the "?".
+    """
+
+    def __init__(self, text: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._text = ""
+        self.setText("?")
+        self.setAutoRaise(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        # A pointer affordance: tabbing through a form should not stop on every "?".
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        side = self.fontMetrics().height() + 2 * int(theme.metric("space.xxs"))
+        self.setFixedSize(side, side)
+        # A circle: the radius is half the side, a fact of the shape rather than a
+        # styling choice, so it is not a token.
+        self.setStyleSheet(
+            f"QToolButton {{ color: {theme.color('text.muted')}; font-weight: bold;"
+            f" border: {int(theme.metric('border.width'))}px solid {theme.color('text.muted')};"
+            f" border-radius: {side // 2}px; padding: 0px; }}"
+            f" QToolButton:hover {{ color: {theme.color('accent')};"
+            f" border-color: {theme.color('accent')}; }}"
+        )
+        self.set_help(text)
+        self.clicked.connect(self.show_help)
+
+    def set_help(self, text: str) -> None:
+        self._text = text
+        self.setToolTip(help_tooltip(text))
+
+    def help_text(self) -> str:
+        """The explanation, as it was given (not the tooltip's HTML)."""
+        return self._text
+
+    def show_help(self) -> None:
+        """Show the explanation now, under the button."""
+        if self._text:
+            QToolTip.showText(
+                self.mapToGlobal(QPoint(0, self.height())),
+                self.toolTip(),
+                self,
+                QRect(),
+                HELP_SHOW_MS,
+            )
+
+
+def dialog_buttons(buttons: QWidget, help_text: str) -> QHBoxLayout:
+    """A dialog's button box with its "?" at the far left, away from OK and Cancel.
+
+    Not the box's own ``HelpRole``: where that lands is the platform's call, and on
+    Windows it is beside Cancel.
+    """
+    row = QHBoxLayout()
+    row.addWidget(HelpButton(help_text), alignment=Qt.AlignmentFlag.AlignVCenter)
+    row.addStretch(1)
+    row.addWidget(buttons)
+    return row
+
+
+def with_help(widget: QWidget, text: str, *, stretch: bool = True) -> QWidget:
+    """*widget* with a :class:`HelpButton` after it, on one row.
+
+    With *stretch* (the default) the pair keeps to the left and the row's spare width
+    goes after it, so the "?" sits by its control rather than at the far edge; without,
+    *widget* takes the width (a filter box, a combo).
+    """
+    host = QWidget()
+    row = QHBoxLayout(host)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(int(theme.metric("space.xs")))
+    row.addWidget(widget, stretch=0 if stretch else 1)
+    row.addWidget(HelpButton(text), alignment=Qt.AlignmentFlag.AlignVCenter)
+    if stretch:
+        row.addStretch(1)
+    return host
 
 
 # -- gestures on a loose widget --------------------------------------------------

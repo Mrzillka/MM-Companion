@@ -40,7 +40,7 @@ from PySide6.QtWidgets import (
 from mm_companion.core import storage
 from mm_companion.ui.settings.page import SettingsPage
 from mm_companion.ui.toasts import roll_toaster
-from mm_companion.ui.widgets import BOLD_STYLE, muted_style
+from mm_companion.ui.widgets import BOLD_STYLE, help_tooltip, muted_style, with_help
 
 NOTIFICATIONS_NOTE = (
     "Every roll, note and request that lands in the history also pops up for a few "
@@ -138,7 +138,7 @@ class GeneralPage(SettingsPage):
 
         self._notifications = QCheckBox("Pop up new rolls in a corner of the screen")
         self._notifications.toggled.connect(lambda *_: self._set_status(""))
-        stack.addWidget(self._notifications)
+        stack.addWidget(with_help(self._notifications, NOTIFICATIONS_NOTE))
 
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
@@ -151,11 +151,6 @@ class GeneralPage(SettingsPage):
         row.addWidget(self._corner)
         row.addStretch()
         stack.addLayout(row)
-
-        note = QLabel(NOTIFICATIONS_NOTE)
-        note.setWordWrap(True)
-        note.setStyleSheet(muted_style(italic=True))
-        stack.addWidget(note)
         return panel
 
     def _build_updates(self) -> QWidget:
@@ -169,12 +164,7 @@ class GeneralPage(SettingsPage):
 
         self._check_updates = QCheckBox("Check for updates when MM-Companion starts")
         self._check_updates.toggled.connect(lambda *_: self._set_status(""))
-        stack.addWidget(self._check_updates)
-
-        note = QLabel(UPDATES_NOTE)
-        note.setWordWrap(True)
-        note.setStyleSheet(muted_style(italic=True))
-        stack.addWidget(note)
+        stack.addWidget(with_help(self._check_updates, UPDATES_NOTE))
         return panel
 
     def _build_simple_sheet(self) -> QWidget:
@@ -188,12 +178,7 @@ class GeneralPage(SettingsPage):
 
         self._simple_on_open = QCheckBox("Open saved characters in the simple sheet")
         self._simple_on_open.toggled.connect(lambda *_: self._set_status(""))
-        stack.addWidget(self._simple_on_open)
-
-        note = QLabel(SIMPLE_NOTE)
-        note.setWordWrap(True)
-        note.setStyleSheet(muted_style(italic=True))
-        stack.addWidget(note)
+        stack.addWidget(with_help(self._simple_on_open, SIMPLE_NOTE))
         return panel
 
     def _build_action_setup(self) -> QWidget:
@@ -207,12 +192,7 @@ class GeneralPage(SettingsPage):
 
         self._actions_myself = QCheckBox("Set up my own Impress and area attacks")
         self._actions_myself.toggled.connect(lambda *_: self._set_status(""))
-        stack.addWidget(self._actions_myself)
-
-        note = QLabel(ACTIONS_NOTE)
-        note.setWordWrap(True)
-        note.setStyleSheet(muted_style(italic=True))
-        stack.addWidget(note)
+        stack.addWidget(with_help(self._actions_myself, ACTIONS_NOTE))
         return panel
 
     def _build_heading(self) -> QWidget:
@@ -222,16 +202,11 @@ class GeneralPage(SettingsPage):
 
         title = QLabel("Dice roller layout")
         title.setStyleSheet(BOLD_STYLE)
-        stack.addWidget(title)
-
-        note = QLabel(NOTE_TEXT)
-        note.setWordWrap(True)
-        note.setStyleSheet(muted_style(italic=True))
-        stack.addWidget(note)
+        stack.addWidget(with_help(title, NOTE_TEXT))
         return panel
 
     def _build_dice_layout(self) -> QWidget:
-        """One radio per shape, each over the line that says what it looks like.
+        """One radio per shape, each with a "?" that says what it looks like.
 
         Three mutually exclusive arrangements that each need a sentence of
         explanation, which is what radio buttons are for — a combo would hide two
@@ -247,25 +222,13 @@ class GeneralPage(SettingsPage):
             button = QRadioButton(label)
             self._buttons.addButton(button)
             self._choices[layout] = button
-            stack.addWidget(button)
-
-            note = QLabel(description)
-            note.setWordWrap(True)
-            note.setStyleSheet(muted_style(italic=True))
-            note.setIndent(self._description_indent())
-            stack.addWidget(note)
+            button.setToolTip(help_tooltip(description))
+            stack.addWidget(with_help(button, description))
         # A "Saved." line left standing over a choice that has since moved is a lie
         # about the state of the settings file, so the line goes the moment the
         # answer changes.
         self._buttons.buttonToggled.connect(lambda *_: self._set_status(""))
         return panel
-
-    def _description_indent(self) -> int:
-        """Line each description up under its radio's label rather than its dot."""
-        probe = QRadioButton()
-        indent = probe.sizeHint().width()
-        probe.deleteLater()
-        return indent
 
     def _build_actions(self) -> QHBoxLayout:
         row = QHBoxLayout()

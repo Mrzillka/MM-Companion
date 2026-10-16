@@ -57,6 +57,7 @@ from mm_companion.core.rules import (
     power_area_use,
 )
 from mm_companion.ui.action_ui import (
+    DIALOG_CHARS,
     PHASE_SETUP,
     ActionRow,
     ActionWindow,
@@ -68,7 +69,7 @@ from mm_companion.ui.action_ui import (
 )
 from mm_companion.ui.impress import PARTY_PLAYER, ImpressParty
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import muted_style, tinted_style
+from mm_companion.ui.widgets import HelpButton, dialog_buttons, muted_style, tinted_style
 
 __all__ = [
     "ACTION_NAME",
@@ -94,22 +95,54 @@ def _signed(value: int) -> str:
 
 
 def use_summary(use: AreaUse, data: GameData) -> str:
-    """The area in one rich-text paragraph: its size, its Dodge DC, what it does."""
+    """The area in two rich-text lines: its size, then its Dodge DC, effects and attack.
+
+    Only the numbers: how an area works is :data:`AREA_HELP`, behind the window's "?".
+    """
     effects = ", ".join(
         f"{html.escape(e.name)} {e.rank}"
         + (f" ({html.escape(e.resistance_label)})" if e.resistance_label else "")
         for e in use.effects
     )
-    attack = (
-        f"Attack {_signed(use.attack)} against a primary target's Defense."
-        if use.attack is not None
-        else "No attack check: a primary target is hit without one."
-    )
-    free = " (free use, rank capped at the Power Level)" if use.free else ""
-    return (
-        f"<b>{html.escape(use.size_text(data))}</b>{free}<br>"
-        f"Dodge DC <b>{use.dodge_dc(data)}</b> for half · {effects}<br>{attack}"
-    )
+    parts = [f"Dodge DC <b>{use.dodge_dc(data)}</b>", effects]
+    parts.append(f"Attack {_signed(use.attack)}" if use.attack is not None else "No attack check")
+    free = " (free use)" if use.free else ""
+    return f"<b>{html.escape(use.size_text(data))}</b>{free}<br>" + " · ".join(parts)
+
+
+#: How an area attack works, behind the "?" of both windows.
+AREA_HELP = (
+    "Everyone in the area makes a Dodge check against the Dodge DC. Making it halves "
+    "the rank they resist the effect at, rounded up; Evasion adds to that Dodge.\n\n"
+    "The area may be aimed at one creature, the primary target, with an attack check "
+    "against its Defense. A hit means no Dodge for it: it resists at full rank. An area "
+    "with no attack check hits its primary target without one.\n\n"
+    "A free use (any attack used as an area) has its rank capped at the Power Level."
+)
+DIALOG_HELP = (
+    "Drop cards off the Scene into the two boxes, or pick them from Add. The GM checks "
+    "the attack, sets each creature's cover, and resolves it.\n\n" + AREA_HELP
+)
+DIALOG_HELP_OFFLINE = (
+    "Not in a session: the attack is rolled here, and the history is left a request to "
+    "dodge for whoever is caught.\n\n" + AREA_HELP
+)
+PRIMARY_HELP = (
+    "The creature the area is aimed at, if any. Roll the attack against its Defense, "
+    "and Hit is ticked from the result, or tick Hit to call it yourself. A primary "
+    "target that is hit makes no Dodge check and resists at full rank.\n\n"
+    "With no primary target the area is aimed at a point, and everyone in it dodges."
+)
+CAUGHT_HELP = (
+    "Everyone else the area catches. Each makes a Dodge check against the Dodge DC, and "
+    "resists the effect at half rank if they make it."
+)
+GM_BOX_HELP = (
+    "Tick a creature to put it in the area, or drop its card here from the Scene. Cover "
+    "adds to its Dodge check; Adjust (a bonus or a penalty) counts on both its Dodge "
+    "and its save.\n\n"
+    "NPCs are rolled for. A player in the area is asked to roll from their own sheet."
+)
 
 
 # -- the attacker's dialog -------------------------------------------------------------
@@ -184,6 +217,7 @@ class AreaDialog(QDialog):
                 choices=self._choices,
                 single=True,
                 placeholder="Drop a card here to aim the area at someone (optional)",
+                help_text=PRIMARY_HELP,
             )
             self.primary = primary_box.field
             layout.addWidget(primary_box)
@@ -193,20 +227,12 @@ class AreaDialog(QDialog):
                 resolve=self._resolve,
                 choices=self._choices,
                 placeholder="Drop the cards of everyone else in the area here",
+                help_text=CAUGHT_HELP,
             )
             self.area = area_box.field
             layout.addWidget(area_box, stretch=1)
             self.primary.changed.connect(lambda: self._dedupe(self.primary, self.area))
             self.area.changed.connect(lambda: self._dedupe(self.area, self.primary))
-            hint = QLabel("The GM checks the attack, sets each creature's cover, and resolves it.")
-        else:
-            hint = QLabel(
-                "Not in a session: the attack is rolled here, and the history is left a "
-                "request to dodge for whoever is caught."
-            )
-        hint.setWordWrap(True)
-        hint.setStyleSheet(muted_style(italic=True))
-        layout.addWidget(hint)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
         self._ok = QPushButton("Send to GM" if self._online else "Roll")
@@ -214,7 +240,9 @@ class AreaDialog(QDialog):
         buttons.addButton(self._ok, QDialogButtonBox.ButtonRole.AcceptRole)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
-        outer.addWidget(buttons)
+        outer.addLayout(
+            dialog_buttons(buttons, DIALOG_HELP if self._online else DIALOG_HELP_OFFLINE)
+        )
         self._sync()
 
     # -- reading -------------------------------------------------------------
@@ -312,7 +340,7 @@ class AreaDialog(QDialog):
         super().showEvent(event)
         if not self._fitted:
             self._fitted = True
-            fit_to_screen(self)
+            fit_to_screen(self, min_chars=DIALOG_CHARS)
 
 
 # -- the GM's window ---------------------------------------------------------------
@@ -326,13 +354,8 @@ class AreaTarget:
     #: Hit directly by the attack check: no Dodge, full rank.
     primary: bool = False
     cover: int = 0
-    bonus: int = 0
-    penalty: int = 0
-
-    @property
-    def adjust(self) -> int:
-        """The GM's own adjustment to this creature's checks."""
-        return self.bonus - self.penalty
+    #: The GM's own adjustment to this creature's checks: a bonus, or a penalty.
+    adjust: int = 0
 
 
 @dataclass(frozen=True)
@@ -364,7 +387,7 @@ class AreaRow(ActionRow):
         super().__init__(party, [self.role, self.cover])
 
     def inputs(self) -> list[QWidget]:
-        return [self.include, self.cover, self.bonus, self.penalty]
+        return [self.include, self.cover, self.modifier]
 
 
 class AreaWindow(ActionWindow):
@@ -409,6 +432,8 @@ class AreaWindow(ActionWindow):
                 ("Cover", "Cover from the area's origin: a bonus to the Dodge check"),
             ),
             from_card=from_card,
+            help_text=AREA_HELP,
+            box_help=GM_BOX_HELP,
             parent=parent,
         )
         self.attempt = attempt
@@ -435,6 +460,7 @@ class AreaWindow(ActionWindow):
             self._shape.addItem(label, value)
         self._shape.setCurrentIndex(max(0, self._shape.findData(attempt.use.shape)))
         form.addRow("Shape:", self._shape)
+        self._form = form
         self._use_note = QLabel()
         self._use_note.setTextFormat(Qt.TextFormat.RichText)
         self._use_note.setWordWrap(True)
@@ -468,11 +494,15 @@ class AreaWindow(ActionWindow):
         primary_layout.addWidget(self._primary, 0, 0)
         primary_layout.addWidget(self._hit, 0, 1)
         primary_layout.addWidget(self._roll_attack, 0, 2)
-        primary_layout.addWidget(self._attack_note, 1, 0, 1, 3)
+        primary_layout.addWidget(
+            HelpButton(PRIMARY_HELP), 0, 3, alignment=Qt.AlignmentFlag.AlignRight
+        )
+        primary_layout.addWidget(self._attack_note, 1, 0, 1, 4)
+        primary_layout.setColumnStretch(0, 1)
         self.add_section(primary_box)
 
         self.build_rows(lambda _party: [], set(attempt.targets) | ({attempt.primary} - {""}))
-        self.heading.setText(self._heading_text())
+        self.set_heading(self._heading_text())
 
         self._shape.currentIndexChanged.connect(self._on_build)
         if self._power is not None:
@@ -484,8 +514,9 @@ class AreaWindow(ActionWindow):
 
     def make_row(self, party, cells: list[QWidget]) -> ActionRow:
         row = AreaRow(party, self._data)
-        row.bonus.setToolTip(f"A bonus to {party.name}'s checks against the area")
-        row.penalty.setToolTip(f"A penalty to {party.name}'s checks against the area")
+        row.modifier.setToolTip(
+            f"A bonus (+) or penalty (-) to {party.name}'s checks against the area"
+        )
         row.cover.currentIndexChanged.connect(lambda _i: self.sync())
         return row
 
@@ -531,7 +562,7 @@ class AreaWindow(ActionWindow):
             self._attack = None
         self.attempt = replace(self.attempt, use=use)
         self.setWindowTitle(f"{ACTION_NAME}: {use.power_name}")
-        self.heading.setText(self._heading_text())
+        self.set_heading(self._heading_text())
         self.sync()
 
     def _shape_free(self) -> bool:
@@ -635,8 +666,7 @@ class AreaWindow(ActionWindow):
                     party=row.party,
                     primary=hit and row.party.ref == primary,
                     cover=int(row.cover.currentData() or 0),
-                    bonus=row.bonus.value(),
-                    penalty=row.penalty.value(),
+                    adjust=row.adjust,
                 )
                 for row in self.included()
             ),
@@ -648,6 +678,8 @@ class AreaWindow(ActionWindow):
         use = self.attempt.use
         self._use_note.setText(use_summary(use, self._data))
         self._shape.setEnabled(self.phase == PHASE_SETUP and self._shape_free())
+        # A shape nobody can change is already named in the summary under it.
+        self._form.setRowVisible(self._shape, self._shape_free())
         primary = self.primary_ref()
         can_roll = (
             self.phase == PHASE_SETUP
@@ -658,17 +690,12 @@ class AreaWindow(ActionWindow):
         )
         self._roll_attack.setVisible(can_roll)
         self._hit.setEnabled(bool(primary) and self.phase == PHASE_SETUP)
-        if not primary:
-            self._attack_note.setText("Aimed at a point: everyone in the area dodges.")
-            self._attack_note.setStyleSheet(muted_style(italic=True))
-        elif use.attack is None:
-            self._attack_note.setText("No attack check — the primary target is hit.")
-            self._attack_note.setStyleSheet(muted_style(italic=True))
+        if not primary or use.attack is None:
+            # Nothing to add: the combo reads "aimed at a point", or Hit is already ticked.
+            self._attack_note.setText("")
         elif self._attack is None:
             waiting = f" — waiting for {self._source.name}'s roll" if self._asked_attack else ""
-            self._attack_note.setText(
-                f"Attack {_signed(use.attack)} — not rolled yet{waiting}. Tick Hit to call it."
-            )
+            self._attack_note.setText(f"Attack {_signed(use.attack)}, not rolled yet{waiting}.")
             self._attack_note.setStyleSheet(muted_style(italic=True))
         else:
             total, die = self._attack
@@ -683,7 +710,7 @@ class AreaWindow(ActionWindow):
             return
         for row in self._rows:
             on = row.include.isChecked()
-            for widget in (row.cover, row.bonus, row.penalty):
+            for widget in (row.cover, row.modifier):
                 widget.setEnabled(on)
             # Said for every row, muted when it is out: what ticking it in would mean.
             is_primary = on and self.hit() and row.party.ref == primary

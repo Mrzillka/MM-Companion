@@ -73,6 +73,17 @@ through rather than reinvent. When building new sheet widgets, use it:
   to ask, and `QFormLayout` does not reliably ask. Pin the column to a width token
   and set the label's minimum height from `label.heightForWidth(width)` — see
   `ui/settings/token_editor.py::_field_label`.
+- **An explanation goes behind a "?", not under the control.** `HelpButton(text)` is
+  a small round button whose tooltip is *text* (wrapped: `help_tooltip` sets it as
+  HTML, since Qt wraps only a rich tooltip, and a blank line starts a paragraph), and a
+  click shows it at once for whoever does not think to hover. `with_help(widget, text)`
+  puts one after a checkbox, a title or a filter box on a row; `dialog_buttons(box,
+  text)` puts one at the far left of a dialog's buttons (not the box's `HelpRole`,
+  which Windows places beside Cancel). The rule it serves: what a control *currently
+  says* — a total, a DC, a status — stays on screen; the standing description of how a
+  mechanic works, read once and scrolled past every time after, does not. Settings,
+  the pickers, the action windows and the constructor's Extended section all moved
+  their paragraphs there.
 - **`discard_widget(w)` is how a rebuilt block sheds a child** — never a bare
   `setParent(None)` + `deleteLater()`, which is what all thirty-five sites used to
   be. It hides first, and that order is the whole point. `setParent(None)` makes a

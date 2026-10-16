@@ -678,7 +678,7 @@ def test_a_players_cover_and_adjustment_reach_their_request(
     area = window._area.open("act")
     (row,) = area.included()
     row.cover.setCurrentIndex(row.cover.findData(5))
-    row.bonus.setValue(2)
+    row.modifier.setValue(2)
     area._resolve.click()
     (dodge,) = asked.specs()
     assert dodge.modifier == 7  # cover and the GM's bonus, on the Dodge

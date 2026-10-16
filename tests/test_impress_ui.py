@@ -142,14 +142,26 @@ def test_the_modifiers_panel_is_built_from_data_and_sums_like_the_rules(qapp, da
     panel._toggles["full_action"].setChecked(True)
     assert panel.values()["simple_action"] is False
     assert panel.total() == 5 + 3
-    # A slider only stops on its own steps, counted up from its minimum (-20).
-    slider, readout, _ = panel._sliders["previous_attempts"]
+    # A range only stops on its own steps, counted up from its minimum (-20).
+    spin = panel._ranges["previous_attempts"]
     assert panel.values()["previous_attempts"] == 0
-    slider.setValue(2)
+    spin.setValue(2)
     assert panel.values()["previous_attempts"] == -10
-    assert readout.text() == "-10"
+    assert spin.text() == "-10"
     panel.set_values({"previous_attempts": -15})
-    assert slider.value() == 1
+    assert spin.value() == 1
+    # A typed value snaps onto the scale.
+    spin.lineEdit().setText("-12")
+    spin.interpretText()
+    assert panel.values()["previous_attempts"] == -15
+
+
+def test_the_modifiers_fold_away_and_say_what_they_add_up_to(qapp, data) -> None:
+    panel = ModifiersPanel(data)
+    assert not panel.is_expanded() and panel._sum.text() == "none"
+    panel.set_values({"mood": 3})
+    # Setting one that counts unfolds the panel, so the GM sees what is in the check.
+    assert panel.is_expanded() and panel._sum.text() == "+3"
 
 
 def test_a_slider_whose_range_is_off_its_step_still_lands_on_values_it_may_take(qapp, data) -> None:
@@ -159,10 +171,10 @@ def test_a_slider_whose_range_is_off_its_step_still_lands_on_values_it_may_take(
     )
     data = replace(data, impress=replace(data.impress, modifiers=(odd,)))
     panel = ModifiersPanel(data)
-    slider, _readout, _ = panel._sliders["odd"]
-    assert (slider.minimum(), slider.maximum()) == (0, 3)
+    spin = panel._ranges["odd"]
+    assert (spin.minimum(), spin.maximum()) == (0, 3)
     assert panel.values()["odd"] == -1
-    slider.setValue(slider.maximum())
+    spin.setValue(spin.maximum())
     assert panel.values()["odd"] == 3
     assert panel.total() == 3
 
@@ -180,7 +192,7 @@ def test_offline_the_dialog_rolls_a_check_that_carries_the_resistance(qapp, data
     assert spec.kind == KIND_IMPRESS
     assert spec.modifier == 8 + 5
     assert spec.follow_up is not None and spec.follow_up.dc_from_total
-    assert "full action" in spec.hint
+    assert "Full action" in spec.hint
 
 
 def test_an_advantage_gated_impression_is_shown_but_cannot_be_picked(qapp, data) -> None:
@@ -204,7 +216,7 @@ def test_online_the_dialog_takes_targets_the_way_an_area_does(qapp, data) -> Non
     assert dialog.targets.field.add_ref("s2")
     assert dialog.targets.field.add_ref("s3")
     assert dialog._ok.isEnabled()
-    assert "-5" in dialog._group_note.text()
+    assert "group -5" in dialog._total.text()
     attempt = dialog.attempt("a1", source_name="Me")
     assert attempt.targets == ("s2", "s3")
     assert attempt.skill_modifier == dialog.skill().modifier
@@ -340,7 +352,7 @@ def test_a_natural_twenty_raises_the_dc_by_the_critical_bonus(
     monkeypatch.setattr(action_run, "resolve_group", spy)
     impress = window._impress.open_new()
     impress._rows[0].include.setChecked(True)
-    impress._rows[0].bonus.setValue(2)
+    impress._rows[0].modifier.setValue(2)
     modifier = impress.check_modifier()
     impress._roll.click()
     _check, resist = seen
@@ -351,9 +363,9 @@ def test_the_gm_sets_a_bonus_or_penalty_on_the_impressers_check(qapp, window, da
     _cast(window, data)
     impress = window._impress.open_new()
     base = impress.check_modifier()
-    impress.set_check_bonus(3)
+    impress.set_check_adjust(3)
     assert impress.check_modifier() == base + 3
-    impress.set_check_bonus(0, 4)
+    impress.set_check_adjust(-4)
     assert impress.check_modifier() == base - 4
     assert impress.plan().check_modifier == base - 4
     impress.close()
@@ -429,22 +441,26 @@ def test_closing_a_rolling_window_only_hides_it(qapp, data) -> None:
     assert said == []  # nothing called off: the rolls are still on their way
 
 
-def test_a_player_target_is_told_they_pick_when_asked(qapp, data) -> None:
+def test_a_target_resists_with_its_highest_unless_the_gm_picks(qapp, data) -> None:
     window, _said = _gm_window(data)
     nova = window._row("s-nova")
     nova.include.setChecked(True)
-    assert "when asked" in nova.result.text()
-    nova.highest.setChecked(False)
-    assert nova.choice.isEnabled() and "Asked" in nova.result.text()
+    assert nova.uses_highest() and nova.choice.currentText().startswith("Highest")
+    # A player's "Highest" is theirs to pick when asked.
+    tip = nova.choice.itemData(0, Qt.ItemDataRole.ToolTipRole)
+    assert "when asked" in tip
+    nova.choice.setCurrentIndex(nova.choice.findData("resistance:WILL"))
+    (target,) = window.plan().targets
+    assert not target.highest and target.resist.key == "WILL"
 
 
 def test_request_mode_locks_the_per_target_controls(qapp, data) -> None:
     window, _said = _gm_window(data, mode=MODE_REQUEST)
     nova = window._row("s-nova")
     nova.include.setChecked(True)
-    assert not nova.bonus.isEnabled() and not nova.highest.isEnabled()
+    assert not nova.modifier.isEnabled() and not nova.choice.isEnabled()
     window.set_mode(MODE_RESOLVE)
-    assert nova.bonus.isEnabled() and nova.highest.isEnabled()
+    assert nova.modifier.isEnabled() and nova.choice.isEnabled()
 
 
 def test_an_impression_the_impresser_cannot_make_is_not_kept_selected(qapp, data) -> None:
@@ -535,8 +551,7 @@ def test_a_roll_prompt_offers_the_highest_and_lets_the_player_pick(qapp, data) -
         asker="The GM",
         roll=lambda s: rolled.append(s) or True,
     )
-    assert "Insight" in dialog._highest.text() and "+10" in dialog._caption.text()
-    dialog._highest.setChecked(False)
+    assert "Insight" in dialog._choice.itemText(0) and "+10" in dialog._caption.text()
     dialog._choice.setCurrentIndex(dialog._choice.findData("WILL"))
     assert "Will" in dialog._caption.text()
     dialog._roll.click()
@@ -667,7 +682,7 @@ def test_a_players_impression_waits_in_the_history_and_they_roll_the_check(
         # An impresser is never offered as their own target.
         assert all(r.party.ref != nova_ref for r in impress._rows)
 
-        impress.set_check_bonus(2)
+        impress.set_check_adjust(2)
         impress._roll.click()
         # The check is the player's to roll: they are asked, and nothing is rolled yet.
         wait_until(qapp, lambda: _prompts(events, KIND_ROLL_ASK))

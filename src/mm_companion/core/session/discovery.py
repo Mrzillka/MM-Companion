@@ -45,7 +45,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ElementTree
-from base64 import b32decode, b32encode
+from base64 import b32decode, b32encode, urlsafe_b64decode, urlsafe_b64encode
 from collections.abc import Callable
 from dataclasses import dataclass
 from xml.sax.saxutils import escape as xml_escape
@@ -59,8 +59,15 @@ from .net import DEFAULT_PORT, TcpTransport, Transport
 # --------------------------------------------------------------------------
 
 #: Bumped only if the packed layout below changes; a code from another version
-#: is refused by name rather than misread.
-JOIN_CODE_VERSION = 1
+#: is refused by name rather than misread. Version 1 codes are still *read* —
+#: a player may be holding one from before — but only version 2 is written.
+JOIN_CODE_VERSION = 2
+
+#: The first layout, kept for decoding: a version byte, the host as four bytes or
+#: as text, the port, the token as text, a checksum. It spelled a relay URL out
+#: character by character, which made a server-hosted session's code 130
+#: characters long.
+_LEGACY_VERSION = 1
 
 #: Characters per dash-separated group in a rendered code. Purely cosmetic —
 #: decoding ignores every separator.
@@ -76,6 +83,41 @@ _HOST_TEXT = 1
 #: The URL scheme that marks a join code as pointing at a relay rather than
 #: straight at the GM's machine. See the module docstring for the protocol.
 RELAY_SCHEME = "mmrelay"
+_RELAY_SCHEME_PLAIN = f"{RELAY_SCHEME}+tcp"
+
+#: The public session server a fresh install points at. Lives here rather than in
+#: :mod:`.hub_client` (which re-exports it) because a join code names it in three
+#: bits: see :data:`_V2_KNOWN_RELAY`.
+DEFAULT_SERVER = "mmcompanion.duckdns.org"
+
+#: The relay port a ``mmrelay://`` address means when it names none. Duplicated
+#: from :mod:`.relay`, which imports this module and so cannot be imported here.
+_DEFAULT_RELAY_PORT = 47332
+
+# Version 2's header byte: the version in the top three bits, then three bits of
+# host kind, then two flags saying whether the session id and the token were
+# packed as raw bytes or carried as text.
+_V2_VERSION_SHIFT = 5
+_V2_KIND_SHIFT = 2
+_V2_KIND_MASK = 0b111
+_V2_HEX_SESSION = 0b10
+_V2_PACKED_TOKEN = 0b01
+
+#: The public server's relay — the whole address in the three kind bits. **Pinned
+#: forever to the address it names today**: a code is pasted into chat and read
+#: back weeks later, so moving the default server must take a *new* kind rather
+#: than repoint this one under every code already sent.
+_V2_KNOWN_RELAY = 0
+_V2_RELAY_TLS = 1
+_V2_RELAY_PLAIN = 2
+_V2_IPV4 = 3
+_V2_TEXT = 4
+
+#: A session id the app minted (:func:`.model.new_id`): twelve hex digits, which
+#: pack into six bytes.
+_HEX_SESSION_RE = re.compile(r"[0-9a-f]{12}")
+_TOKEN_RE = re.compile(r"[A-Za-z0-9_-]+")
+_RELAY_URL_RE = re.compile(r"^(mmrelay|mmrelay\+tcp)://(\[[^\]/]+\]|[^:/\[\]]+):(\d{1,5})/([^/]+)$")
 
 _SCHEME_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*)://")
 
@@ -126,41 +168,83 @@ class JoinCode:
 def encode_join_code(host: str, port: int, token: str) -> str:
     """Pack ``host``/``port``/``token`` into one grouped, uppercase code.
 
-    An IPv4 literal is packed as four bytes; anything else (a hostname, an IPv6
-    literal, a relay URL) is carried as UTF-8 text.
+    The code is what a GM pastes into chat, so every field is packed as tightly as
+    it will go **and still reads back to exactly the string it was**: the public
+    server's relay is three bits, a relay URL is taken apart into host, port and
+    session id, an app-minted session id is six bytes rather than twelve
+    characters, and a ``token_urlsafe`` token is its raw bytes. Anything that does
+    not fit a short form (a hand-written relay URL, a token typed by a person) is
+    carried as text instead — longer, never wrong. A session on the public server
+    comes to 24 characters.
     """
     host = (host or "").strip()
     if not host:
         raise JoinCodeError("a join code needs a host")
     if not 1 <= int(port) <= 65535:
         raise JoinCodeError(f"port {port} is out of range")
-    token_bytes = (token or "").encode("utf-8")
-    if not token_bytes:
+    port = int(port)
+    token = token or ""
+    if not token:
         raise JoinCodeError("a join code needs a token")
-    if len(token_bytes) > MAX_TOKEN_BYTES:
+    if len(token.encode("utf-8")) > MAX_TOKEN_BYTES:
         raise JoinCodeError(f"token is longer than {MAX_TOKEN_BYTES} bytes")
 
-    payload = bytearray([JOIN_CODE_VERSION])
-    try:
-        packed_ip = ipaddress.IPv4Address(host).packed
-    except ValueError:
-        host_bytes = host.encode("utf-8")
-        if len(host_bytes) > MAX_HOST_BYTES:
-            raise JoinCodeError(f"host is longer than {MAX_HOST_BYTES} bytes") from None
-        payload.append(_HOST_TEXT)
-        payload.append(len(host_bytes))
-        payload.extend(host_bytes)
+    flags = 0
+    body = bytearray()
+    relay = _split_relay_url(host)
+    if relay is not None and relay[2] == port:
+        scheme, relay_host, relay_port, session_id = relay
+        if scheme == RELAY_SCHEME and (relay_host, port) == (DEFAULT_SERVER, _DEFAULT_RELAY_PORT):
+            kind = _V2_KNOWN_RELAY
+        else:
+            kind = _V2_RELAY_TLS if scheme == RELAY_SCHEME else _V2_RELAY_PLAIN
+            body.extend(_short_text(relay_host, "host"))
+            body.extend(struct.pack(">H", relay_port))
+        if _HEX_SESSION_RE.fullmatch(session_id):
+            flags |= _V2_HEX_SESSION
+            body.extend(bytes.fromhex(session_id))
+        else:
+            body.extend(_short_text(session_id, "session id"))
     else:
-        payload.append(_HOST_IPV4)
-        payload.extend(packed_ip)
+        try:
+            packed_ip = ipaddress.IPv4Address(host).packed
+        except ValueError:
+            kind = _V2_TEXT
+            body.extend(_short_text(host, "host"))
+        else:
+            kind = _V2_IPV4
+            body.extend(packed_ip)
+        body.extend(struct.pack(">H", port))
 
-    payload.extend(struct.pack(">H", int(port)))
-    payload.append(len(token_bytes))
-    payload.extend(token_bytes)
+    # The token goes last, so its length is whatever is left before the checksum.
+    raw_token = _token_bytes(token)
+    if raw_token is not None:
+        flags |= _V2_PACKED_TOKEN
+        body.extend(raw_token)
+    else:
+        body.extend(token.encode("utf-8"))
+
+    header = (JOIN_CODE_VERSION << _V2_VERSION_SHIFT) | (kind << _V2_KIND_SHIFT) | flags
+    payload = bytearray([header])
+    payload.extend(body)
     payload.append(_checksum(payload))
 
     raw = b32encode(bytes(payload)).decode("ascii").rstrip("=")
     return "-".join(raw[index : index + CODE_GROUP] for index in range(0, len(raw), CODE_GROUP))
+
+
+def canonical_join_code(text: str) -> str:
+    """*text* rewritten as this app writes a code, or as typed if it does not read.
+
+    Two codes for one table can differ — an old, long one and today's short one;
+    one with dashes and one pasted without — and anything that remembers a session
+    *by its code* has to see them as the same. A code that does not decode is
+    returned stripped, so a caller can still key on it.
+    """
+    try:
+        return decode_join_code(text).encode()
+    except JoinCodeError:
+        return (text or "").strip()
 
 
 def decode_join_code(text: str) -> JoinCode:
@@ -174,25 +258,24 @@ def decode_join_code(text: str) -> JoinCode:
     except (binascii.Error, ValueError) as exc:
         raise JoinCodeError("that join code is not readable") from exc
 
-    if len(payload) < 6:
+    if len(payload) < 4:
         raise JoinCodeError("that join code is too short to be complete")
-    if payload[0] != JOIN_CODE_VERSION:
+    header = payload[0]
+    version = header if header == _LEGACY_VERSION else header >> _V2_VERSION_SHIFT
+    if version not in (_LEGACY_VERSION, JOIN_CODE_VERSION):
         raise JoinCodeError(
-            f"that join code is version {payload[0]}, and this app speaks "
+            f"that join code is version {version or header}, and this app speaks "
             f"version {JOIN_CODE_VERSION}"
         )
     if _checksum(payload[:-1]) != payload[-1]:
         raise JoinCodeError("that join code has a typo in it")
 
-    body = payload[1:-1]
+    body = bytes(payload[1:-1])
     try:
-        host, rest = _unpack_host(body)
-        port = struct.unpack(">H", rest[:2])[0]
-        token_length = rest[2]
-        token_bytes = rest[3 : 3 + token_length]
-        if len(token_bytes) != token_length or len(rest) != 3 + token_length:
-            raise ValueError("trailing or missing bytes")
-        token = token_bytes.decode("utf-8")
+        if version == _LEGACY_VERSION:
+            host, port, token = _decode_legacy(body)
+        else:
+            host, port, token = _decode_v2(header, body)
     except (IndexError, struct.error, UnicodeDecodeError, ValueError) as exc:
         raise JoinCodeError("that join code is not readable") from exc
     if not 1 <= port <= 65535:
@@ -202,8 +285,105 @@ def decode_join_code(text: str) -> JoinCode:
     return JoinCode(host=host, port=port, token=token)
 
 
+def _decode_v2(header: int, body: bytes) -> tuple[str, int, str]:
+    """Unpack a version-2 body; the inverse of :func:`encode_join_code`."""
+    kind = (header >> _V2_KIND_SHIFT) & _V2_KIND_MASK
+    rest = body
+    if kind in (_V2_KNOWN_RELAY, _V2_RELAY_TLS, _V2_RELAY_PLAIN):
+        if kind == _V2_KNOWN_RELAY:
+            scheme, relay_host, port = RELAY_SCHEME, DEFAULT_SERVER, _DEFAULT_RELAY_PORT
+        else:
+            scheme = RELAY_SCHEME if kind == _V2_RELAY_TLS else _RELAY_SCHEME_PLAIN
+            relay_host, rest = _read_short_text(rest)
+            port = struct.unpack(">H", rest[:2])[0]
+            rest = rest[2:]
+        if header & _V2_HEX_SESSION:
+            if len(rest) < 6:
+                raise ValueError("the session id is cut short")
+            session_id, rest = rest[:6].hex(), rest[6:]
+        else:
+            session_id, rest = _read_short_text(rest)
+        shown = f"[{relay_host}]" if ":" in relay_host else relay_host
+        host = f"{scheme}://{shown}:{port}/{session_id}"
+    elif kind == _V2_IPV4:
+        host = str(ipaddress.IPv4Address(rest[:4]))
+        port = struct.unpack(">H", rest[4:6])[0]
+        rest = rest[6:]
+    elif kind == _V2_TEXT:
+        host, rest = _read_short_text(rest)
+        port = struct.unpack(">H", rest[:2])[0]
+        rest = rest[2:]
+    else:
+        raise ValueError(f"unknown host kind {kind}")
+    if header & _V2_PACKED_TOKEN:
+        token = urlsafe_b64encode(rest).decode("ascii").rstrip("=")
+    else:
+        token = rest.decode("utf-8")
+    return host, port, token
+
+
+def _decode_legacy(body: bytes) -> tuple[str, int, str]:
+    """Unpack a version-1 body: host, port, length-prefixed token."""
+    host, rest = _unpack_host(body)
+    port = struct.unpack(">H", rest[:2])[0]
+    token_length = rest[2]
+    token_bytes = rest[3 : 3 + token_length]
+    if len(token_bytes) != token_length or len(rest) != 3 + token_length:
+        raise ValueError("trailing or missing bytes")
+    return host, port, token_bytes.decode("utf-8")
+
+
+def _split_relay_url(host: str) -> tuple[str, str, int, str] | None:
+    """``(scheme, host, port, session id)`` of a relay URL in its canonical form.
+
+    ``None`` for anything else — including a relay URL written some other way (no
+    port, a trailing slash), since the code must decode to the very string it was
+    given and only the canonical spelling can be rebuilt from its parts.
+    """
+    match = _RELAY_URL_RE.match(host)
+    if match is None:
+        return None
+    scheme, relay_host, port_text, session_id = match.groups()
+    port = int(port_text)
+    if not 1 <= port <= 65535 or str(port) != port_text:
+        return None
+    if relay_host.startswith("["):
+        relay_host = relay_host[1:-1]
+    return scheme, relay_host, port, session_id
+
+
+def _token_bytes(token: str) -> bytes | None:
+    """The raw bytes behind a ``token_urlsafe`` token, or ``None`` if it is not one."""
+    if not _TOKEN_RE.fullmatch(token):
+        return None
+    try:
+        raw = urlsafe_b64decode(token + "=" * (-len(token) % 4))
+    except (binascii.Error, ValueError):
+        return None
+    if urlsafe_b64encode(raw).decode("ascii").rstrip("=") != token:
+        return None
+    return raw
+
+
+def _short_text(text: str, what: str) -> bytes:
+    """*text* as a length byte and its UTF-8."""
+    data = text.encode("utf-8")
+    if len(data) > MAX_HOST_BYTES:
+        raise JoinCodeError(f"{what} is longer than {MAX_HOST_BYTES} bytes")
+    return bytes([len(data)]) + data
+
+
+def _read_short_text(data: bytes) -> tuple[str, bytes]:
+    """Split a :func:`_short_text` field off the front of *data*."""
+    length = data[0]
+    text = data[1 : 1 + length]
+    if len(text) != length:
+        raise ValueError("a text field is shorter than its length byte")
+    return text.decode("utf-8"), data[1 + length :]
+
+
 def _unpack_host(body: bytes) -> tuple[str, bytes]:
-    """Split the host off the front of a decoded body; returns ``(host, rest)``."""
+    """Split the host off the front of a version-1 body; returns ``(host, rest)``."""
     kind = body[0]
     if kind == _HOST_IPV4:
         return str(ipaddress.IPv4Address(bytes(body[1:5]))), body[5:]
@@ -1018,6 +1198,7 @@ __all__ = [
     "UnknownTransportError",
     "UpnpError",
     "add_port_mapping",
+    "canonical_join_code",
     "decode_join_code",
     "delete_port_mapping",
     "discover_igd",

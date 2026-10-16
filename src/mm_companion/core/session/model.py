@@ -41,8 +41,21 @@ def new_id(length: int = 12) -> str:
 
 
 def new_token() -> str:
-    """A secret bearer token: the session's join secret, or a player's slot claim."""
+    """A secret bearer token: a player's slot claim, or a session's gm token."""
     return secrets.token_urlsafe(16)
+
+
+#: Bytes of entropy in a session's join secret. Fewer than :func:`new_token`'s
+#: sixteen because this one is *read out*: it is most of a join code, which a GM
+#: pastes into chat and a player may type. Seven bytes is 56 bits — far past
+#: guessing over a network, and it is not the only lock, since a guess also needs
+#: the session id (another 48 bits) to reach a session at all.
+JOIN_TOKEN_BYTES = 7
+
+
+def new_join_token() -> str:
+    """A session's ``host_token``: the secret every join code carries."""
+    return secrets.token_urlsafe(JOIN_TOKEN_BYTES)
 
 
 def tokens_match(presented: str, expected: str) -> bool:
@@ -329,7 +342,7 @@ class SessionState:
 
     id: str = field(default_factory=new_id)
     name: str = "Session"
-    host_token: str = field(default_factory=new_token)
+    host_token: str = field(default_factory=new_join_token)
     gm_token: str = field(default_factory=new_token)
     created_at: str = field(default_factory=utc_now)
     updated_at: str = field(default_factory=utc_now)
@@ -690,7 +703,7 @@ class SessionState:
         return cls(
             id=str(raw.get("id", "")) or new_id(),
             name=str(raw.get("name", "Session")),
-            host_token=str(raw.get("host_token", "")) or new_token(),
+            host_token=str(raw.get("host_token", "")) or new_join_token(),
             # A session written before gm tokens existed simply gets one now. It
             # cannot be recovered from anywhere, so minting is the only option;
             # the GM reads the new one off the server the next time they connect.

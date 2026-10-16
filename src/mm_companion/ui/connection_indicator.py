@@ -69,7 +69,7 @@ ALL_TEXTS = (
 )
 
 
-class _StatusDot(QWidget):
+class StatusDot(QWidget):
     """A filled circle in one theme colour. Its own widget so the label beside it
     keeps ordinary text metrics and the dot can be sized from a metric token."""
 
@@ -128,7 +128,7 @@ class ConnectionIndicator(QWidget):
         # listener is going. Cleared by ``started``, which a successful one emits.
         self._relisten_detail: dict = {}
 
-        self._dot = _StatusDot(self)
+        self._dot = StatusDot(self)
         self._label = QLabel(TEXT_OFFLINE, self)
 
         layout = QHBoxLayout(self)

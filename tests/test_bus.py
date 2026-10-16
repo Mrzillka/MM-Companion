@@ -18,6 +18,7 @@ from PySide6.QtWidgets import QApplication
 from mm_companion.ui.blocks import block_descriptors
 from mm_companion.ui.blocks.bus import (
     ABILITY_CHANGED,
+    AREA_REQUESTED,
     BONUS_REQUESTED,
     BUILD_CHANGED,
     CAPS_CHANGED,
@@ -31,6 +32,7 @@ from mm_companion.ui.blocks.bus import (
     LOAD_REQUESTED,
     NOTE_REQUESTED,
     PIN_REQUESTED,
+    RECOVERY_REQUESTED,
     ROLL_REQUESTED,
     UNPIN_REQUESTED,
     SignalBus,
@@ -56,6 +58,8 @@ REQUEST_TOPICS = {
     UNPIN_REQUESTED,
     HERO_POINT_REQUESTED,
     BONUS_REQUESTED,
+    AREA_REQUESTED,
+    RECOVERY_REQUESTED,
 }
 
 

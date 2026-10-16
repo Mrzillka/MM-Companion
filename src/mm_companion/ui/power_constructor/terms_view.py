@@ -157,7 +157,7 @@ class PowerTermsView(QWidget):
             self._layout.addWidget(placeholder)
             return
 
-        header = self._structure_header(power)
+        header = self._structure_header(power, game_data)
         if header:
             label = QLabel(header)
             label.setStyleSheet(BOLD_STYLE)
@@ -535,7 +535,7 @@ class PowerTermsView(QWidget):
         remove.clicked.connect(do_remove)
 
     @staticmethod
-    def _structure_header(power: Power) -> str:
+    def _structure_header(power: Power, game_data: GameData | None = None) -> str:
         """The shared sentence, with the colon this view has always drawn.
 
         The constructor edits a **deep copy** of the sheet's power, shares and all, so a
@@ -545,7 +545,7 @@ class PowerTermsView(QWidget):
         — this used to be a third copy of them.
         """
 
-        header = structure_header(power)
+        header = structure_header(power, game_data)
         return f"{header}:" if header else ""
 
     @staticmethod

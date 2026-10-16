@@ -297,6 +297,60 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   the rules build on it, and it had been in the resistance slot: that produced a spec
   marked `rolled_by_target` carrying `modifier=0`, so the roll was attributed to the wrong
   side of the table and had no bonus at all.
+- **An attack is something to hit *and* something to resist, whatever it is built on.**
+  The Attack extra on any effect gives it the attack roll, and — through a "Resisted by"
+  picker on its chip — a save against the effect DC (10 + rank): a Teleport attack that
+  sends whoever it hits away on a failed Will check. The **Resistible** flaw does the same
+  for an effect that allows no save (p160), and so do the effect-specific Resistibles on
+  Concealment, Fortune Control (DC 10 + the wielder's **Will**, not the rank — `dcTrait`),
+  Morph and Summon. One mechanism, all data: a modifier's `grantsResistance` block plus a
+  config field with `grants: true` (see the architecture doc). Two things follow. Whether
+  an effect is resisted at all is now **one question**, `effect_resistance_dc_base` —
+  asked by the save DC, both Power Level caps, the size shift, the area Dodge and the
+  counter menu — so a Teleport attack is capped and sized as the attack it has become.
+  And the grant **waits** unless it has a `placeholder`: Resistible exists to add a save,
+  so it shows `Resistance (not chosen yet) vs. DC 18` at once and warns; the Attack extra
+  adds nothing until a resistance is picked, because an attack need not be resisted.
+  Illusion's Resistible is deliberately **not** wired: Illusion already has a save, and
+  its flaw adds a *second*, earlier one, which a grant (a save for an effect that has
+  none) does not describe.
+- **A Linked power makes one attack roll** (p155: "they use a single attack check, if one
+  is required"). `linked_attacks` groups a Linked power's attacking effects by what they
+  are rolled *against* — an Alternate Defense aimed at Will cannot share a roll with one
+  aimed at Defense — and the footer carries one `Damage + Affliction: Attack +8 vs.
+  Defense` line where the first of them used to be, provoking every member's save through
+  `RollSpec.also` (protocol v16). The book does not say which bonus that roll uses when
+  the effects' differ, so the ruleset does: `system.linkedAttackBonus`, **`"highest"`**
+  — the user's call, made provisionally ("it can be changed later"), and the reason it
+  is a data dial rather than a `max()`. The PL check caps each linked effect at the bonus
+  it actually rolls at, and `power_linked_bonus_violations` states the pick whenever the
+  bonuses differ. Saves stay one line per effect: the book's "resistance check, if both
+  effects use the same type of check" would merge two same-resistance saves into one
+  roll against two DCs, which one spec cannot carry. The header names the bundle's one
+  action, the slowest of its effects' (`linked_action`). The same effect Linked to itself
+  warns and never refuses — the rule says "generally".
+- **Roll lines name their roll.** The terms table's `8 vs. Defense` sits beside a row
+  labelled Check; a footer line has no such label, so `_check_label` writes `Attack +8
+  vs. Defense`, `Effect check +8 vs. DC 10`, `Deflect +8 vs. Attack`, from the actor word
+  of the phrase before its numbers were filled in. An effect check that states its DC now
+  **carries** it (`EffectRollNumbers.check_dc`, from the phrase or the record's
+  `checkOutcomes.dc`) — Healing rolled ungraded before, its "DC 10" only in the words.
+- **Perception Range drops the attack roll, never an effect's own check.** `dropsCheck`
+  is honoured only alongside `grantsAttack`, so a Perception Healing still rolls Effect
+  vs. DC 10 and a Deflect still rolls against the attack. It used to delete both rows.
+- **Mind Reading's first save is opposed.** "Will vs. Effect Check Result" (p133):
+  `resistanceVsCheck` makes the save its check provokes a `dc_from_total` follow-up, so
+  the target's Will is rolled against the reader's total. The listed save keeps DC 10 +
+  rank — that is the end-of-turn check that shuts the reader out. **Nullify**'s hit
+  provokes its opposed check the same way. A power save may name an **ability or a
+  skill** and still be filled in on the target's sheet (`_save_key`): Move Object is
+  resisted by Strength, and its DC is now 10 + rank (`resistanceDcBase` was 0, so a rank
+  8 Move Object was resisted at DC 8). The area layer keeps the narrower
+  `_resistance_key`, since it rolls an ability or a skill as a best-of candidate.
+- **Every roll uses the rank the effect resolves at.** An "Effect vs." check, the counter
+  menu and the terms table's base column read the dialled, hard-capped rank
+  (`effect_live_rank`) — they had each read a different one, so a capped Mind Reading
+  rolled its check at full rank beside a lowered DC.
 - **Countering is a tactic, so it lives on the card's context menu, not its dice footer.**
   Ready an effect, spend your reaction when an opponent uses one with an opposing
   descriptor, and make opposed effect checks; winning cancels both (p107). `counter_rolls`
@@ -610,6 +664,8 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   box is the exception, and only until it is touched: while `_dial_touched` is false it is
   a *readout* of what the ruleset has decided for the effects on the canvas, since
   inheriting there would take a dropped Growth's ladder away.
+  The section opens **folded**, like the Improvise panel: most builds never touch it, and
+  expanded it pushed the canvas the window is opened for down the screen.
   The panel's fourth row is the odd one: the **rank bands** are per *modifier selection*
   rather than per effect, so they are a rebuilt list rather than a checkbox — see the
   band bullet below.

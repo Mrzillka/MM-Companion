@@ -59,6 +59,11 @@ python .claude/skills/run-mm-companion/driver.py simple-sheet # the simple sheet
 python .claude/skills/run-mm-companion/driver.py simple-sheet-custom  # ...in the Custom preset
 python .claude/skills/run-mm-companion/driver.py simple-sheet-narrow  # ...rows stacked on a narrow window
 python .claude/skills/run-mm-companion/driver.py simple-print --theme slate-dark  # page 1 of its PDF
+python .claude/skills/run-mm-companion/driver.py impress-gm   # the GM's Impress window (also: impress-gm-running)
+python .claude/skills/run-mm-companion/driver.py area-gm      # the GM's area-attack window
+python .claude/skills/run-mm-companion/driver.py impress-dialog  # a player's Impress (also: impress-dialog-offline)
+python .claude/skills/run-mm-companion/driver.py area-dialog  # a player's area attack (also: area-dialog-offline)
+python .claude/skills/run-mm-companion/driver.py roll-prompt  # the roll the GM asks a player for
 ```
 
 `settings-demo` goes further: it duplicates the active preset, borrows Slate

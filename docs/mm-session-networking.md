@@ -19,7 +19,9 @@ each one.
    a display name and (optionally) one of their saved characters, and connects.
 
 The join code encodes the address, port, and the session's join secret, so it is
-the only thing a player needs. It is per-session and ephemeral.
+the only thing a player needs. It is per-session and ephemeral. A session on the
+public server has a 24-character code; one hosted elsewhere is longer, since it
+has to carry that address. Older, longer codes still work.
 
 ## Why "just forward a port" often is not enough
 

@@ -765,10 +765,12 @@ class ConditionsView(_View):
     def _facts(self, applied: AppliedCondition, catalog: dict) -> tuple:
         """Everything a chip shows, as values: what :meth:`refresh` compares and draws.
 
-        ``(name, inherited, tooltip, random, rolled)`` — *inherited* when another
-        condition put it on (drawn in italics), *random* for a Confused-style condition
-        that offers a roll, *rolled* this turn's random action if one was rolled.
+        ``(name, inherited, tooltip, random, rolled, recover)`` — *inherited* when
+        another condition put it on (drawn in italics), *random* for a Confused-style
+        condition that offers a roll, *rolled* this turn's random action if one was
+        rolled, *recover* for one that is rolled off with a recovery check.
         """
+        from mm_companion.core.rules import can_recover
         from mm_companion.ui.sections.conditions import condition_display_name, condition_tooltip
 
         record = catalog.get(applied.condition_id)
@@ -784,10 +786,12 @@ class ConditionsView(_View):
             condition_tooltip(applied, record, catalog),
             random,
             (roll(applied) or None) if random and roll is not None else None,
+            self._funnel("roll_recovery") is not None
+            and can_recover(self._character, self._data, applied),
         )
 
     def _chip(self, applied: AppliedCondition, facts: tuple) -> QWidget:
-        name, inherited, tooltip, random, rolled = facts
+        name, inherited, tooltip, random, rolled, recover = facts
         chip = QWidget()
         chip.setObjectName("simpleCondition")
         chip.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -817,6 +821,18 @@ class ConditionsView(_View):
             die.setToolTip("Roll this turn's random action")
             die.clicked.connect(lambda _c=False, a=applied: self._roll_confused(a))
             row.addWidget(die)
+        if recover:
+            # The recovery check, as the full sheet's chip offers it: the roll goes
+            # through the live section, and a made one comes back as a condition shed.
+            recovery = QToolButton()
+            recovery.setText("🎲")
+            recovery.setAutoRaise(True)
+            recovery.setToolTip("Roll the recovery check — a success takes this off.")
+            roll_recovery = self._funnel("roll_recovery")
+            recovery.clicked.connect(
+                lambda _c=False, a=applied, go=roll_recovery: go(a) if go else None
+            )
+            row.addWidget(recovery)
         shed = self._funnel("shed_condition")
         if shed is not None:
             attach_context_removal(chip, lambda a=applied: shed(a), what=name)

@@ -40,35 +40,42 @@ frame during ordinary editing.
 Pieces of the two actions on the targeting layer were left for later; see [the actions
 notes](actions.md) for the shape they would plug into.
 
-- **Shaking an impression off.** A condition an impression imposed should get a new
-  resistance check against the original DC at the end of each of the target's turns.
-  The conditions land, but nothing remembers the DC or prompts the save — there is no
-  turn-economy layer to hang it on yet (the conditions notes put recovery out of scope
-  for the same reason). The likely home is a per-condition "save to end" record on
-  `AppliedCondition`, written by `targeting.apply_rung`.
 - **A Hero Point inside an area's table.** Every NPC line is rolled once by the server
   and applied; a re-roll would have to re-resolve that row and take back the conditions
   it already applied. Players are not affected — they roll from a request, and the
-  Reroll button works on their own card as on any roll.
-- **Areas that do not resolve to conditions.** Area Weaken, Nullify (an opposed check),
-  Healing (beneficial, no Dodge) and Move Object are not offered on the area line's
+  Reroll button works on their own card as on any roll. (A reroll of the attack against
+  the primary *is* followed, but only until the GM resolves.)
+- **Areas that resolve to neither conditions nor a heal.** Area Nullify (an opposed
+  check against a power's rank) and Move Object are not offered on the area line's
   resolve path beyond what their ladder says; the table shows the degree and the GM
-  applies the rest. Each wants its own stage-two rule.
-- **A heavy weapon's two ranks.** The Rocket Launcher's catalog entry prints a primary
-  rank of 10 and an area rank of 7 (`primaryTargetDamageRank` / `areaDamageRank` under
-  `implementation`); the area line uses the build's one rank for both. A data hook for
-  "the primary takes a different rank" belongs on the area modifier's config.
+  applies the rest. Each wants its own stage-two rule, the way Healing got
+  `checkOutcomes`. (Weaken is an Affliction preset here, so it already lands its
+  conditions — scoped to its trait by the Affliction's `scope` field.)
 - **Selective, cover from the origin, the size rule.** Who the area catches is the
   attacker's declaration and the GM's edit — Selective is honoured by people, not code;
   cover is a per-creature combo the GM sets rather than geometry; and "three size ranks
   larger makes every attack an area" (PDF p58) is the free area switch the player
   flips, not a gate the app checks.
-- **Linked areas dodge against the lead's DC.** A power whose several effects are all
-  areas makes one Dodge check against the first effect's rank, and a player is asked
-  for the further saves as separate requests whose label gives both DCs.
-- **Counting earlier attempts.** "Each previous attempt to Impress this scene" is a
-  slider the GM sets. The window could count attempts per target since the last New
-  scene and preset it.
+
+## End of turn does one thing so far
+
+A creature's card on the GM's board has an **End turn** item. All it does today is
+give every impression the GM's table put on that creature a new resistance check
+against its original DC (the book's "overcoming impressions"), and take off the ones
+that are made. It is the seam the rest of the turn economy should hang off:
+
+- **Other end-of-turn checks.** A creature Stunned by Damage makes a DC 10 Stamina
+  check to shake it; an Affliction is overcome with its `overcomeBy` resistance;
+  Suffocation forces a Fortitude check each turn. Each wants its rule as data (a
+  per-condition "check to end" record) and the button to roll them all.
+- **What it remembers lives in the GM's app.** The impressions to shake off are kept in
+  memory by `ImpressController` (`_lingering`), keyed by scene ref, from impressions the
+  table *resolved* — a request-only one, or a condition put on by hand, is not
+  remembered. Restarting the GM's app forgets them. The debt's earlier note suggested a
+  per-condition record on `AppliedCondition`, written by `targeting.apply_rung`, which
+  would survive a restart and travel with a player's sheet.
+- **There is no turn tracker.** The GM ends each creature's turn by hand; initiative
+  order is on the board, but nothing walks it.
 
 ## PySide6 is capped below 6.12
 

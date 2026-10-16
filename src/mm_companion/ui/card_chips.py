@@ -12,9 +12,17 @@ either, which is what keeps the two directions apart.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QMimeData, QPoint, Qt, Signal
-from PySide6.QtGui import QDrag
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QToolButton, QWidget
+from PySide6.QtCore import QMimeData, QObject, QPoint, Qt, QTimer, Signal
+from PySide6.QtGui import QCursor, QDrag
+from PySide6.QtWidgets import (
+    QAbstractScrollArea,
+    QApplication,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QToolButton,
+    QWidget,
+)
 
 from mm_companion.ui import theme
 from mm_companion.ui.widgets import attach_context_removal
@@ -31,6 +39,10 @@ def start_card_drag(widget, ref: str) -> None:
     Shared by the two roster cards and the scene card, because the gesture has to
     be the same object to cross between their boards: a pseudo-drag that tracks
     the pointer itself works inside one container and cannot leave it.
+
+    The page **scrolls under the drag** (:class:`DragAutoScroll`). A
+    ``QScrollArea`` does nothing of the sort on its own, so a Scene block scrolled
+    out of view above the cast was a target no drag could reach.
     """
     drag = QDrag(widget)
     mime = QMimeData()
@@ -39,8 +51,104 @@ def start_card_drag(widget, ref: str) -> None:
     pixmap = widget.grab()
     drag.setPixmap(pixmap)
     drag.setHotSpot(QPoint(pixmap.width() // 2, 12))
-    drag.exec(Qt.DropAction.MoveAction)
+    scroller = DragAutoScroll(widget)
+    try:
+        drag.exec(Qt.DropAction.MoveAction)
+    finally:
+        scroller.stop()
 
+
+#: How close to a scroll area's top or bottom edge, in pixels, a dragged card has
+#: to come before the area starts scrolling — and how often it steps while it does.
+AUTOSCROLL_MARGIN = 48
+AUTOSCROLL_INTERVAL_MS = 25
+#: The fastest a step goes, in pixels, at the very edge (or past it).
+AUTOSCROLL_MAX_STEP = 28
+
+
+class DragAutoScroll(QObject):
+    """Scroll whatever the pointer is near the edge of, for as long as a drag lasts.
+
+    Polled on a timer rather than driven by drag events, for two reasons. The drag
+    events go to whichever widget is *under* the pointer — a card, a flow, a block —
+    and none of those is the scroll area that has to move; and a pointer held still
+    at the edge sends no events at all, where a GM expects the page to keep going.
+    ``QDrag.exec`` runs its own loop, but it still services timers.
+
+    Which area scrolls is the **innermost one that can**: under the pointer first
+    (a block's own scroll before the page around it), then — when the pointer has
+    gone *past* an edge, over the menu bar or off the window — the scroll areas
+    around the card being dragged, so pulling a card above the top of the page
+    scrolls the page up rather than doing nothing.
+    """
+
+    def __init__(self, source: QWidget) -> None:
+        super().__init__(source)
+        self._source = source
+        self._timer = QTimer(self)
+        self._timer.setInterval(AUTOSCROLL_INTERVAL_MS)
+        self._timer.timeout.connect(self.tick)
+        self._timer.start()
+
+    def stop(self) -> None:
+        self._timer.stop()
+        self.deleteLater()
+
+    def tick(self) -> bool:
+        """One step: scroll one area if the pointer is at its edge. Returns whether it did."""
+        pos = QCursor.pos()
+        under = QApplication.widgetAt(pos)
+        if under is not None and self._scroll_chain(_scroll_areas(under), pos, inside=True):
+            return True
+        return self._scroll_chain(_scroll_areas(self._source), pos, inside=False)
+
+    @staticmethod
+    def _scroll_chain(areas: list[QAbstractScrollArea], pos: QPoint, *, inside: bool) -> bool:
+        for area in areas:
+            bar = area.verticalScrollBar()
+            if bar is None or bar.maximum() <= bar.minimum():
+                continue
+            viewport = area.viewport()
+            local = viewport.mapFromGlobal(pos)
+            if not 0 <= local.x() < viewport.width():
+                continue
+            if not inside and 0 <= local.y() < viewport.height():
+                continue
+            step = _edge_step(local.y(), viewport.height())
+            if step < 0 and bar.value() > bar.minimum():
+                bar.setValue(bar.value() + step)
+                return True
+            if step > 0 and bar.value() < bar.maximum():
+                bar.setValue(bar.value() + step)
+                return True
+        return False
+
+
+def _scroll_areas(widget: QWidget | None) -> list[QAbstractScrollArea]:
+    """Every scroll area *widget* sits in, innermost first."""
+    areas: list[QAbstractScrollArea] = []
+    while widget is not None:
+        if isinstance(widget, QAbstractScrollArea):
+            areas.append(widget)
+        widget = widget.parentWidget()
+    return areas
+
+
+def _edge_step(y: int, height: int) -> int:
+    """How far to scroll for a pointer at *y* in a viewport *height* tall: negative
+    up, positive down, nought away from both edges. Faster the nearer the edge."""
+    margin = min(AUTOSCROLL_MARGIN, max(1, height // 3))
+    if y < margin:
+        depth = min(margin, margin - y)
+        return -max(2, AUTOSCROLL_MAX_STEP * depth // margin)
+    if y > height - margin:
+        depth = min(margin, y - (height - margin))
+        return max(2, AUTOSCROLL_MAX_STEP * depth // margin)
+    return 0
+
+
+#: What a condition chip's recovery button wears — the die that rolls it off.
+RECOVERY_GLYPH = "🎲"
 
 #: What the Scene toggle wears. An eye, because what it controls is who can *see*
 #: this creature — the players' side of the board, not the GM's.
@@ -235,6 +343,7 @@ class _ConditionChip(QFrame):
         layout.addWidget(self._label)
         self._compact = compact
         self._removable = False
+        self._recover_button: QToolButton | None = None
 
     def text(self) -> str:
         """The chip's caption — what :meth:`PlayerCard.condition_names` reads."""
@@ -253,6 +362,42 @@ class _ConditionChip(QFrame):
         """Let a right-click ask for this condition to come off."""
         attach_context_removal(self, on_remove, what=self.text())
         self._removable = True
+
+    @property
+    def recoverable(self) -> bool:
+        """Whether this chip carries the 🎲 that rolls its condition off."""
+        return self._recover_button is not None
+
+    def arm_recovery(self, on_roll, tooltip: str = "") -> None:
+        """Give the chip a 🎲 that rolls the condition's recovery check.
+
+        A button inside the chip rather than a gesture on it, because a left-click on
+        a chip already means something on a card (it starts the card's drag) and a
+        recovery is the one thing on a chip worth a visible affordance: it is how a
+        condition *ends*. Being a button it swallows its own press, so rolling never
+        starts a drag. What a made check does is the owner's business — the chip only
+        asks.
+        """
+        if self._recover_button is not None:
+            return
+        button = QToolButton(self)
+        button.setText(RECOVERY_GLYPH)
+        button.setAutoRaise(True)
+        button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setStyleSheet("QToolButton { border: none; background: transparent; padding: 0; }")
+        font = button.font()
+        font.setPointSizeF(theme.font_size("size.terms"))
+        button.setFont(font)
+        button.setToolTip(tooltip or "Roll the recovery check — a success takes this off.")
+        button.clicked.connect(lambda: on_roll())
+        self.layout().addWidget(button)
+        self._recover_button = button
+
+    def roll_recovery(self) -> None:
+        """Press the chip's 🎲, as a click would."""
+        if self._recover_button is not None:
+            self._recover_button.click()
 
     def contextMenuEvent(self, event) -> None:  # noqa: N802 (Qt override)
         """Swallow a right-click that removal did not claim.

@@ -229,16 +229,21 @@ def test_the_first_weapon_default_reads_what_is_fitted_to_the_weapon(data: GameD
     assert resolve_pin(char, data, ref).value != bare
 
 
-def test_the_npc_defaults_are_the_three_a_gm_asked_for(goon: Character, data: GameData) -> None:
+def test_the_npc_defaults_are_the_six_a_gm_asked_for(goon: Character, data: GameData) -> None:
+    """Its defences, then the rank of its Damage (read) and that Damage's attack."""
     refs = default_pins("npc", DEFAULT_SETTINGS["gm_default_pins"])
     values = resolve_pins(goon, data, refs)
 
     assert [(v.label, v.value) for v in values] == [
         ("DEF", "6"),
         ("Toughness", "6"),
-        ("ATK", "+6"),
+        ("Will", "0"),
+        ("Fortitude", "0"),
+        ("Damage rank", "6"),
         ("Damage", "+6"),
     ]
+    # Defence and the effect rank are read, never rolled; the saves and the attack are.
+    assert [v.spec is not None for v in values] == [False, True, True, True, False, True]
 
 
 def test_the_player_defaults_are_the_three_a_gm_asked_for(data: GameData) -> None:
@@ -396,9 +401,14 @@ def test_available_pins_covers_every_trait_and_every_power_roll(
     assert set(groups) == {"Abilities", "Resistances", "Derived", "Skills", "Powers"}
     assert len(groups["Abilities"]) == len(data.abilities)
     assert len(groups["Resistances"]) == len(data.resistances)
-    # A quick NPC has a Damage and an Affliction, each an attack and a save.
-    assert len(groups["Powers"]) == 4
-    assert {v.label for v in groups["Powers"]} == {"Damage", "Affliction"}
+    # A quick NPC has a Damage and an Affliction: each its rank, an attack and a save.
+    assert len(groups["Powers"]) == 6
+    assert {v.label for v in groups["Powers"]} == {
+        "Damage",
+        "Damage rank",
+        "Affliction",
+        "Affliction rank",
+    }
     assert [v.label for v in groups["Derived"]] == ["Initiative", "DEF DC"]
 
 
@@ -468,3 +478,44 @@ def test_available_pins_can_be_asked_for_base_numbers(goon: Character, data: Gam
 
     assert dodge(with_conditions=False) == "6"
     assert dodge() == "3"
+
+
+# -- every power, and what is only read --------------------------------------------
+
+
+def test_every_power_offers_its_rank_even_one_with_nothing_to_roll(
+    goon: Character, data: GameData
+) -> None:
+    """A Flight or a Protection calls for no die, and is still a number a GM reads."""
+    from mm_companion.core.powers import Power, PowerEffectInstance
+
+    goon.powers.append(Power(name="Flight", effects=[PowerEffectInstance("flight", rank=5)]))
+
+    powers = {
+        v.label: v for v in dict((g.title, g.values) for g in available_pins(goon, data))["Powers"]
+    }
+
+    assert powers["Flight rank"].value == "5"
+    assert powers["Flight rank"].spec is None
+
+
+def test_an_effect_pin_resolves_to_the_effects_rank_and_never_rolls(
+    goon: Character, data: GameData
+) -> None:
+    from mm_companion.core.rules import PIN_EFFECT, SELECT_FIRST_DAMAGE
+
+    value = resolve_pin(goon, data, PinRef(PIN_EFFECT, select=SELECT_FIRST_DAMAGE))
+
+    assert (value.label, value.value, value.spec) == ("Damage rank", "6", None)
+    # Resolved to the power it found, so the chip keeps naming it after an edit.
+    assert value.ref.key == goon.powers[0].id and value.ref.select == ""
+
+
+def test_defence_is_read_and_never_rolled(goon: Character, data: GameData) -> None:
+    """It is what an attacker rolls *against*; a chip that threw it would throw a
+    check nobody makes. The other resistances still roll."""
+    defence = resolve_pin(goon, data, PinRef("resistance", "DEF"))
+    toughness = resolve_pin(goon, data, PinRef("resistance", "TOUGHNESS"))
+
+    assert defence.spec is None and defence.missing is False
+    assert toughness.spec is not None

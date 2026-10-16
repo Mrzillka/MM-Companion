@@ -20,6 +20,7 @@ from ..registry import Registry
 from .appliers import trait_category
 from .area import (
     area_applications,
+    area_band_ranks,
     area_dodge_dc,
     area_selection,
     area_shape,
@@ -28,11 +29,13 @@ from .area import (
     effect_is_area,
 )
 from .costs import power_points_spent
-from .derived import effective_ability, skill_total
+from .derived import effective_ability, resistance_total, skill_total
 from .powers_cost import (
     array_alternate_cost,
     array_base_index,
     effect_effective_rank,
+    effect_resistance_dc_base,
+    effect_resistance_grant,
     imposable_effects,
     modifier_is_banded,
     selection_band,
@@ -507,7 +510,32 @@ def modifier_field_claimed(field, base_effect) -> bool:
 
     if not field.overrides or base_effect is None:
         return False
+    if field.grants and _record_stat(base_effect, field.overrides):
+        # A field that *supplies* a stat stands down where the effect has its own:
+        # Resistible on a Damage, or the Attack extra's "Resisted by" on an Illusion.
+        return True
     return any(own.overrides == field.overrides for own in base_effect.config_fields)
+
+
+def _record_stat(base_effect, key: str) -> str:
+    """The game-term value the effect's own record writes for *key* (``""`` if none).
+
+    A config field of the effect's own that overrides the stat counts as having it —
+    Affliction is resisted by what its own picker says, even before anything is picked.
+    """
+
+    value = {
+        "effect_type": base_effect.effect_type,
+        "range": base_effect.range_,
+        "action": base_effect.action,
+        "duration": base_effect.duration,
+        "check": base_effect.check or "",
+        "resistance": base_effect.resistance or "",
+    }.get(key, "")
+    if value:
+        return value
+    owned = any(own.overrides == key for own in base_effect.config_fields)
+    return key if owned else ""
 
 
 def modifier_config_overrides(
@@ -520,10 +548,13 @@ def modifier_config_overrides(
     Damage's Toughness into Fortitude. Several fields overriding one stat read as
     alternatives (``"Fortitude or Will"``), which is how a best-of or worst-of two is
     written down. A field the effect claims itself (:func:`modifier_field_claimed`)
-    is skipped, and an unset one leaves the stat alone.
+    is skipped, and an unset one leaves the stat alone. A field's ``template`` wraps
+    the joined choice — Alternate Defense's ``"Attack vs. {value} + 10"`` — taken from
+    the first field naming one, so ``Fortitude or Will`` lands inside it once.
     """
 
     picked: dict[str, list[str]] = {}
+    templates: dict[str, str] = {}
     for field in modifier.config_fields:
         if not field.overrides or modifier_field_claimed(field, base_effect):
             continue
@@ -532,7 +563,18 @@ def modifier_config_overrides(
             shown = _config_display(field, value, game_data)
             if shown not in picked.get(field.overrides, []):
                 picked.setdefault(field.overrides, []).append(shown)
-    return {key: " or ".join(values) for key, values in picked.items()}
+            if field.template:
+                templates.setdefault(field.overrides, field.template)
+    return {
+        key: templates.get(key, "{value}").replace("{value}", " or ".join(values))
+        for key, values in picked.items()
+    }
+
+
+def modifier_grants_stat(modifier, key: str) -> bool:
+    """Whether one of *modifier*'s config fields may **supply** stat *key* outright."""
+
+    return any(field.grants and field.overrides == key for field in modifier.config_fields)
 
 
 def _effective_stats(
@@ -616,6 +658,13 @@ def _effective_stats(
                 stats[key] = value
                 change[key] = tint
                 touched = True
+        grant = modifier.grants_resistance
+        if grant is not None and grant.placeholder and not stats["resistance"]:
+            # Resistible gives an unresisted effect a save (p162): until the player picks
+            # which, the row says so rather than staying silent about the flaw.
+            stats["resistance"] = grant.placeholder
+            change["resistance"] = tint
+            touched = True
         for key, value in modifier_config_overrides(
             modifier, selection, base_effect, game_data
         ).items():
@@ -623,9 +672,12 @@ def _effective_stats(
             # nothing in, rather than inventing a save nobody makes. And untinted,
             # like an effect's own config choice — a best-of-two pick is a flaw, so
             # the extra's green would read it backwards; its cost says which it was.
-            if stats.get(key):
+            # The exception is a field that *grants* the stat (Resistible, the Attack
+            # extra), whose whole point is the save it invents — tinted as its modifier.
+            granting = grant is not None and modifier_grants_stat(modifier, key)
+            if stats.get(key) or granting:
                 stats[key] = value
-                change[key] = ""
+                change[key] = tint if granting else ""
                 touched = True
         if modifier.step_field == "action":
             action_step += steps
@@ -715,6 +767,10 @@ def _effective_stats(
         elif _override_value(effect, key, "before") is not None and not change[key]:
             change[key] = HOMERULE_TINT
 
+    # Perception Range drops the *attack* roll (nothing to aim at a target you can
+    # simply perceive). An effect's own check is not an attack and stays: a Perception
+    # Healing still rolls Effect vs. DC 10, and a Deflect still rolls against the attack.
+    drops_check = drops_check and grants_attack
     impact = EffectImpact(
         check_bonus=check_bonus,
         grants_attack=grants_attack,
@@ -816,11 +872,7 @@ def resolve_stat_display(
     # a dropdown never offers a DC the dice footer disagrees with.
     _rank_cut, attack_cut = effect_pl_cap_shift(effect, game_data, char)
     effective_rank = effect_live_rank(effect, game_data, char)
-    dc = (
-        None
-        if base_effect.resistance_dc_base is None
-        else base_effect.resistance_dc_base + effective_rank
-    )
+    dc = effect_save_dc(effect, game_data, char, effective_rank)
     if field_key == "check":
         if attack_bonus is not None:
             attack = attack_bonus
@@ -997,7 +1049,8 @@ def effect_pl_cap_shift(
     ``(0, 0)`` — the answer for every effect that has not opted in — unless
     :attr:`~mm_companion.core.powers.PowerEffectInstance.pl_cap` is set, there is a
     wielder to read a Power Level off, and the effect forces a resistance (the same
-    ``resistance_dc_base`` gate :func:`~.validation.power_pl_violations` uses).
+    :func:`~.powers_cost.effect_resistance_dc_base` gate
+    :func:`~.validation.power_pl_violations` uses).
 
     Where the soft warning raises its limit by :func:`~.powers_cost.effect_size_rank_shift`
     so being large is never paid for twice, the hard cap deliberately does **not**: it
@@ -1018,8 +1071,7 @@ def effect_pl_cap_shift(
 
     if effect.pl_cap not in PL_CAPS or char is None:
         return 0, 0
-    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
-    if base is None or base.resistance_dc_base is None:
+    if effect_resistance_dc_base(effect, game_data) is None:
         return 0, 0
     cap = game_data.costs.power_level.caps.get("attack_effect")
     if cap is None:
@@ -1108,6 +1160,40 @@ class EffectRollNumbers:
     check_actor: int = 0
     dc: int | None = None
     drops_check: bool = False
+    #: The DC the effect's *own* check is made against, when it states one — Healing's
+    #: "Effect vs. DC 10". ``None`` for an attack (the target's Defense) or an opposed
+    #: check, whose number the roller's DC box supplies.
+    check_dc: int | None = None
+
+
+#: An explicit DC written into a check phrase — ``"Effect vs. DC 10"``.
+_CHECK_DC = re.compile(r"\bvs\.\s*DC\s*(\d+)\b")
+
+
+def effect_save_dc(
+    effect: PowerEffectInstance,
+    game_data: GameData,
+    char: Character | None,
+    rank: int,
+) -> int | None:
+    """The DC of the resistance check *effect* forces, resolving at *rank*.
+
+    ``resistanceDcBase + rank`` for an effect resisted in its own right, the same for
+    one a modifier gives a save (:func:`~.powers_cost.effect_resistance_dc_base`) —
+    except a grant naming a ``dc_trait``, which adds the **wielder's** total in that
+    trait instead of the rank (Fortune Control's Resistible: DC 10 + your Will). With no
+    wielder that falls back to the rank, so a context-free summary still reads.
+    ``None`` for an effect nobody resists.
+    """
+
+    dc_base = effect_resistance_dc_base(effect, game_data)
+    if dc_base is None:
+        return None
+    granted = effect_resistance_grant(effect, game_data)
+    trait = granted[0].grants_resistance.dc_trait if granted is not None else ""
+    if trait and char is not None:
+        return dc_base + resistance_total(char, game_data, trait)
+    return dc_base + rank
 
 
 def effect_roll_numbers(
@@ -1145,17 +1231,15 @@ def _roll_numbers(
     # sides for every effect that did not, so nothing below changes for them.
     rank_cut, attack_cut = effect_pl_cap_shift(effect, game_data, char)
     effective_rank = effect_effective_rank(effect, game_data, char) - rank_cut
-    dc = (
-        None
-        if base_effect.resistance_dc_base is None
-        else base_effect.resistance_dc_base + effective_rank
-    )
+    dc = effect_save_dc(effect, game_data, char, effective_rank)
     # The attacker's own d20 bonus. An "Attack vs. Defense" roll uses the character's
     # Attack (plus this power's Accurate/Inaccurate); an "Effect vs. …" / "Deflect
     # vs. …" phrase instead uses the effect's own rank. A linked combat focus
     # overrides the Attack via ``attack_bonus``. Without either we fall back to the
     # effect rank so a context-free summary still reads.
-    own_rank = effect_current_rank(effect, game_data, char)
+    # The rank an "Effect vs. …" check rolls is the one the effect *resolves* at: dialled,
+    # and shaved by a biting hard cap the way the save DC beside it is.
+    own_rank = max(0, effect_current_rank(effect, game_data, char) - rank_cut)
     if attack_bonus is not None:
         attack = attack_bonus
     elif char is not None:
@@ -1181,11 +1265,18 @@ def _roll_numbers(
             bonus = 0
     else:
         actor = attack if phrase.startswith("Attack") else own_rank
+    stated = _CHECK_DC.search(phrase)
+    check_dc = int(stated.group(1)) if stated else None
+    if check_dc is None and _override_value(effect, "check", "after") is None:
+        check_dc = base_effect.check_dc
+    if phrase.startswith("Attack"):
+        check_dc = None  # an attack's DC is its target's Defense, never the record's
     return EffectRollNumbers(
         attack=attack,
         check_actor=actor + bonus,
         dc=dc,
         drops_check=impact.drops_check,
+        check_dc=check_dc,
     )
 
 
@@ -1260,8 +1351,12 @@ def effect_stat_rows(
     dc = numbers.dc
     attack = numbers.attack
 
+    # The base column's own rank is the one the effect resolves at too, so a dialled-down
+    # or hard-capped effect does not read as though a modifier had moved its check.
+    resolved_rank = effect_live_rank(effect, game_data, char)
+
     def _actor(phrase: str, *, with_mods: bool) -> int:
-        roll = attack if phrase.startswith("Attack") else effect.rank
+        roll = attack if phrase.startswith("Attack") else resolved_rank
         return roll + (impact.check_bonus if with_mods else 0)
 
     # An "after" override of the check stands in for whatever the modifiers made of it,
@@ -1274,14 +1369,14 @@ def effect_stat_rows(
     base["check"] = _numeric_roll(
         base["check"], _actor(base["check"], with_mods=False), dc, resistance=False
     )
-    base["resistance"] = _numeric_roll(base["resistance"], effect.rank, dc, resistance=True)
+    base["resistance"] = _numeric_roll(base["resistance"], resolved_rank, dc, resistance=True)
     stats["check"] = _numeric_roll(
         _LITERAL_ACTOR.sub("Effect vs.", stats["check"]),
         numbers.check_actor,
         dc,
         resistance=False,
     )
-    stats["resistance"] = _numeric_roll(stats["resistance"], effect.rank, dc, resistance=True)
+    stats["resistance"] = _numeric_roll(stats["resistance"], resolved_rank, dc, resistance=True)
 
     # Accurate/Inaccurate move the attack number — tint the check by the net sign.
     if not check_overridden and stats["check"] and impact.check_bonus:
@@ -2028,6 +2123,20 @@ def effect_area_rank(
     disagree about which rank the area is.
     """
 
+    rank = effect_full_area_rank(effect, game_data, char)
+    band = area_band_ranks(area_selection(effect, game_data))
+    return min(rank, band) if band is not None else rank
+
+
+def effect_full_area_rank(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+) -> int:
+    """The rank a creature the area's attack hits directly resists — the whole effect.
+
+    The same as :func:`effect_area_rank` unless the area covers only part of the effect
+    (:func:`~.area.area_band_ranks`), when the primary target takes every rank.
+    """
+
     rank_cut, _attack_cut = effect_pl_cap_shift(effect, game_data, char)
     return effect_effective_rank(effect, game_data, char) - rank_cut
 
@@ -2054,8 +2163,7 @@ def effect_area_text(
     spread = area_spread_label(selection, game_data)
     if spread:
         parts[0] = f"{parts[0]}, {spread}"
-    base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
-    if game_data.area.dodge and base is not None and base.resistance_dc_base is not None:
+    if game_data.area.dodge and effect_resistance_dc_base(effect, game_data) is not None:
         parts.append(f"Dodge DC {area_dodge_dc(rank, game_data)} for half")
     return "; ".join(parts)
 
@@ -2120,7 +2228,92 @@ def array_member_note(dynamic: bool, game_data: GameData) -> str:
     return f"{kind}, {cost} pt"
 
 
-def structure_header(power: Power) -> str:
+@dataclass(frozen=True)
+class LinkedAttack:
+    """The **one** attack check a group of a Linked power's effects shares (p155).
+
+    ``indices`` are the effects it covers, in card order; ``against`` is what they are
+    all rolled against (``"Defense"``, or an Alternate Defense's ``"Will + 10"``);
+    ``bonus`` is what the single roll is made at, picked from ``bonuses`` (each
+    effect's own) by the ruleset's ``linkedAttackBonus`` policy.
+    """
+
+    indices: tuple[int, ...]
+    against: str
+    bonus: int
+    bonuses: tuple[int, ...]
+
+
+def _pick_linked_bonus(bonuses: tuple[int, ...], game_data: GameData) -> int:
+    policy = game_data.system.linked_attack_bonus
+    if policy == "lowest":
+        return min(bonuses)
+    if policy == "first":
+        return bonuses[0]
+    return max(bonuses)
+
+
+def linked_attacks(
+    power: Power, game_data: GameData, char: Character | None = None
+) -> list[LinkedAttack]:
+    """The shared attack checks of a Linked power — one per thing its attacks aim at.
+
+    "They use a single attack check, if one is required" (p155): every effect of a
+    Linked power that makes an attack roll is rolled **once**, together. The book does
+    not say what that roll's bonus is when the effects' differ (one has Accurate, one
+    is tied to a combat focus), so the ruleset says — ``system.linkedAttackBonus``,
+    ``"highest"`` unless a mod retunes it. Effects aimed at *different* things (an
+    Alternate Defense against Will beside an ordinary attack against Defense) cannot
+    share a roll, so each target gets its own group. Only groups of two or more are
+    returned; a lone attacker rolls as it always did. Empty for anything not Linked.
+    """
+
+    if power.structure != STRUCTURE_LINKED or len(power.effects) < 2:
+        return []
+    groups: dict[str, list[tuple[int, int]]] = {}
+    for index, effect in enumerate(power.effects):
+        if not effect_makes_attack(effect, game_data):
+            continue
+        phrase = effective_effect_stats(effect, game_data).get("check", "")
+        against = phrase.partition(" vs. ")[2] or phrase
+        numbers = effect_roll_numbers(
+            effect, game_data, char, effect_attack_skill_bonus(effect, char, game_data)
+        )
+        groups.setdefault(against, []).append((index, numbers.check_actor))
+    attacks = []
+    for against, members in groups.items():
+        if len(members) < 2:
+            continue
+        bonuses = tuple(bonus for _index, bonus in members)
+        attacks.append(
+            LinkedAttack(
+                indices=tuple(index for index, _bonus in members),
+                against=against,
+                bonus=_pick_linked_bonus(bonuses, game_data),
+                bonuses=bonuses,
+            )
+        )
+    return attacks
+
+
+def linked_action(power: Power, game_data: GameData) -> str:
+    """The action a Linked power takes: the slowest of its effects' (p155).
+
+    "The Action parameter of the Linked effects is the longest of its components" —
+    read along the action ladder in ``modifiers.json``, each effect's *effective* action
+    (its extras and flaws applied). ``""`` for a power that is not Linked, or whose
+    effects name no action the ladder knows.
+    """
+
+    if power.structure != STRUCTURE_LINKED or len(power.effects) < 2:
+        return ""
+    ladder = game_data.game_term_ladders.get("action", ())
+    actions = [effective_effect_stats(e, game_data).get("action", "") for e in power.effects]
+    ranked = [a for a in actions if a in ladder]
+    return max(ranked, key=ladder.index) if ranked else ""
+
+
+def structure_header(power: Power, game_data: GameData | None = None) -> str:
     """What a composite power's structure means, as a lead-in line. ``""`` for a simple one.
 
     In :mod:`core` because it is a statement about the rules, and because there were
@@ -2142,12 +2335,16 @@ def structure_header(power: Power) -> str:
     Read from the power alone, so every surface showing it — including the Power
     Constructor, which edits a deep copy that carries the sheet's split with it — tells
     the same story about the same object. No trailing colon: a caller that wants one
-    (the game-term summary, the constructor) adds it.
+    (the game-term summary, the constructor) adds it. Given *game_data*, a Linked header
+    also names the one action the bundle takes (:func:`linked_action`).
     """
 
     if len(power.effects) < 2:
         return ""
     if power.structure == STRUCTURE_LINKED:
+        action = linked_action(power, game_data) if game_data is not None else ""
+        if action:
+            return f"Linked (all effects activate together, as a {action.lower()} action)"
         return "Linked (all effects activate together)"
     if power.structure != STRUCTURE_ARRAY:
         return ""
@@ -2176,7 +2373,7 @@ def power_game_terms(power: Power, game_data: GameData, char: Character | None =
     """
 
     lines = [effect_game_terms(e, game_data, char) for e in power.effects]
-    header = structure_header(power)
+    header = structure_header(power, game_data)
     if len(power.effects) > 1 and power.structure == STRUCTURE_LINKED:
         body = "\n".join(f"• {line}" for line in lines)
         return f"{header}:\n" + body

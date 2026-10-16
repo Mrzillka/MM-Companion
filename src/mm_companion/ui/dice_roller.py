@@ -88,6 +88,7 @@ from mm_companion.ui.roll_history import (
     chain_widgets,
     degree_label,
     escape_rich_text,
+    heading_row,
     quick_roll_key,
     reroll_label,
     roll_headline,
@@ -336,7 +337,9 @@ class RollCard(QFrame):
         title = QLabel(headline)
         title.setTextFormat(Qt.TextFormat.RichText)
         title.setWordWrap(True)
-        info.addWidget(title)
+        # The star and the − sit beside the first line, as on the shared history's
+        # card (see heading_row), so the chain's buttons below get the card's width.
+        buttons = heading_row(info, title)
 
         for widget in chain_widgets(
             spec,
@@ -355,13 +358,13 @@ class RollCard(QFrame):
 
         self.star = QuickRollStar()
         self.star.clicked.connect(lambda: self.saveToggled.emit(dict(self._params)))
-        layout.addWidget(self.star, alignment=Qt.AlignmentFlag.AlignVCenter)
+        buttons.addWidget(self.star, alignment=Qt.AlignmentFlag.AlignTop)
 
         remove_button = QPushButton("−")
         remove_button.setFixedWidth(24)
         remove_button.setToolTip("Remove this roll from history")
         remove_button.clicked.connect(self.removeRequested.emit)
-        layout.addWidget(remove_button, alignment=Qt.AlignmentFlag.AlignVCenter)
+        buttons.addWidget(remove_button, alignment=Qt.AlignmentFlag.AlignTop)
 
     def parameters(self) -> dict:
         """The quick-roll parameters this card would save."""

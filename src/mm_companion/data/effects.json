@@ -42,6 +42,7 @@
       "none": "No standing character-sheet stat; used as an action",
       "special": "Custom/narrative effect not mapped to a standard stat"
     },
+    "checkOutcomesNote": "For an effect that is checked rather than resisted (Healing): dc is the DC of the effect check (d20 + effect rank), and removes lists condition ids taken off the subject, one per degree of success, in that order (a stacking condition such as Hit loses one instance per degree). Area attacks use it to resolve an area of such an effect.",
     "applyNote": "statIntegration.apply names WHICH RULE reads a stat effect once its effect is active; core.rules.appliers holds one registered applier per kind and a mod's python_module can register another. Alongside it, amountPerRank (default 1) and amountFlat (default 0) say what the record is worth at a given rank: flat + rank * perRank. All three default to M&M's own rule -- a bonus worth exactly the effect's rank -- so an effect that states none of them behaves as it always has. A record only carries a stat effect at all when it is configurableTarget or names a statIntegration.target.",
     "applyKey": {
       "bonus": "Add the amount to the trait the record targets (Enhanced Trait, Protection) - or, for an advantage, grant it at that many ranks. A target the sheet does not track contributes nothing.",
@@ -61,7 +62,7 @@
       "duration": "Instant",
       "check": null,
       "implicitModifiers": ["attack"],
-      "resistance": "Chosen resistance vs. Effect DC",
+      "resistance": "Resistance (not chosen yet) vs. Effect DC",
       "baseCost": "1 per rank",
       "baseCostValue": 1,
       "configurableTarget": false,
@@ -75,6 +76,7 @@
           "label": "Resisted by",
           "type": "select",
           "overrides": "resistance",
+          "required": true,
           "widenWith": "alternate_resistance",
           "widenSource": "resistance_targets",
           "options": [
@@ -118,6 +120,7 @@
           "key": "degree1",
           "label": "1st degree",
           "type": "select",
+          "required": true,
           "multiselectWith": "extra_condition",
           "hiddenWith": "variable_conditions",
           "options": [
@@ -138,6 +141,7 @@
           "key": "degree2",
           "label": "2nd degree",
           "type": "select",
+          "required": true,
           "multiselectWith": "extra_condition",
           "hiddenWith": "variable_conditions",
           "options": [
@@ -161,6 +165,7 @@
           "key": "degree3",
           "label": "3rd degree",
           "type": "select",
+          "required": true,
           "multiselectWith": "extra_condition",
           "hiddenWith": "variable_conditions",
           "options": [
@@ -176,6 +181,12 @@
             { "value": "unaware", "label": "Unaware (all senses)" },
             { "value": "unconscious", "label": "Unconscious" }
           ]
+        },
+        {
+          "key": "scope",
+          "label": "Affects trait",
+          "type": "text",
+          "hint": "The trait the conditions affect, for those that name one: Weaken's chosen trait (Strength, Attack, Dodge...), so a failed save lands as Strength Impaired. Leave blank for all checks."
         },
         {
           "key": "imposedEffect",
@@ -202,9 +213,9 @@
       "resistanceOutcomes": {
         "note": "Affliction's rungs are the conditions the player picked when building the power, so each degree reads its own config field rather than a fixed list.",
         "degrees": [
-          { "configKey": "degree1" },
-          { "configKey": "degree2" },
-          { "configKey": "degree3" }
+          { "configKey": "degree1", "scopeKey": "scope" },
+          { "configKey": "degree2", "scopeKey": "scope" },
+          { "configKey": "degree3", "scopeKey": "scope" }
         ]
       }
     },
@@ -746,7 +757,12 @@
         "pattern": "instant_action",
         "affects": "none"
       },
-      "description": "Removes Damage conditions by touch: each degree on a DC 10 check removes one, least severe first."
+      "description": "Removes Damage conditions by touch: each degree on a DC 10 check removes one, least severe first.",
+      "checkOutcomes": {
+        "note": "Each degree of success removes one condition, in this order: a Dying subject is stabilized first, then the least severe Damage condition goes first.",
+        "dc": 10,
+        "removes": ["dying", "hit", "dazed", "stunned", "staggered", "incapacitated"]
+      }
     },
     {
       "id": "illusion",
@@ -886,6 +902,8 @@
       "duration": "Sustained",
       "check": "Effect vs. Will",
       "resistance": "Will vs. Effect",
+      "_resistanceVsCheck": "PDF p135 (printed p133): the target's first Will check is made against the Mind Reading check result, an opposed check; the end-of-turn checks that shut the reader out are against the effect DC.",
+      "resistanceVsCheck": true,
       "baseCost": "2 per rank",
       "baseCostValue": 2,
       "configurableTarget": false,
@@ -932,7 +950,8 @@
         "affects": "none"
       },
       "description": "Telekinetically lifts and moves objects or people at a distance.",
-      "resistanceDcBase": 0
+      "_resistanceDcBase": "PDF p136 (printed p134): RESISTANCE: Strength vs. Effect DC, and the effect DC is 10 + rank (PDF p107, printed p105).",
+      "resistanceDcBase": 10
     },
     {
       "id": "nullify",

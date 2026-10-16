@@ -60,6 +60,13 @@ class SceneBoard(QWidget):
     initiativeRollRequested = Signal(str)
     #: ``(ref, disposition)`` — what this creature is to the table. GM only.
     dispositionChanged = Signal(str, str)
+    #: ``(ref, action)`` — the GM asked a creature to act (see
+    #: :attr:`~mm_companion.ui.scene_card.SceneCard.actionRequested`). GM only.
+    actionRequested = Signal(str, str)
+    #: ``(ref, condition_id, parameter)`` — take a condition off this creature. GM only.
+    removeConditionRequested = Signal(str, str, object)
+    #: ``(ref, condition_id, parameter)`` — roll its recovery check. GM only.
+    recoveryRequested = Signal(str, str, object)
 
     def __init__(
         self,
@@ -84,6 +91,9 @@ class SceneBoard(QWidget):
         #: board, where it would never match anyway: a GM is not a player on their
         #: own roster, so no scene entry carries their id.
         self._own_id = ""
+        #: Which chips offer a recovery die — the GM window's answer, since only it
+        #: holds the creatures behind the refs (see :meth:`set_recovery_probe`).
+        self._recovery_probe = None
         self._placeholder_text = NO_SCENE_GM if gm else NOT_IN_SESSION
 
         layout = QVBoxLayout(self)
@@ -156,6 +166,16 @@ class SceneBoard(QWidget):
         self._flow_host.clear()
         self._rebuild()
 
+    def set_recovery_probe(self, probe) -> None:
+        """Say which condition chips get a 🎲: ``probe(ref, condition_id, parameter)``.
+
+        The GM's board only. A card is built from the wire, which says what a
+        condition *is* but not whether it was applied directly or came in a bundle,
+        nor whether something worse is holding its recovery back — the creature's own
+        model knows, and the GM window holds that.
+        """
+        self._recovery_probe = probe
+
     def set_manual_order(self, refs: list[str]) -> None:
         """Tell the board the GM's arrangement of the un-rolled entries.
 
@@ -184,6 +204,10 @@ class SceneBoard(QWidget):
         card = self._cards.get(ref)
         if card is not None:
             card.set_portrait(pixmap)
+
+    def portrait(self, ref: str):
+        """One entry's decoded thumbnail (a ``QPixmap``), or ``None`` for none."""
+        return self._portraits.get(ref)
 
     def set_placeholder(self, text: str) -> None:
         """What an empty board says. Shown only while there is nothing on it."""
@@ -247,12 +271,16 @@ class SceneBoard(QWidget):
             gm=self._gm,
             own=bool(self._own_id) and entry.get("player_id") == self._own_id,
             portrait=self._portraits.get(ref),  # type: ignore[arg-type]
+            recovery_probe=self._recovery_probe if self._gm else None,
         )
         if self._gm:
             card.removeRequested.connect(self.removeRequested)
             card.initiativeCleared.connect(self.initiativeCleared)
             card.initiativeRollRequested.connect(self.initiativeRollRequested)
             card.dispositionChanged.connect(self.dispositionChanged)
+            card.actionRequested.connect(self.actionRequested)
+            card.removeConditionRequested.connect(self.removeConditionRequested)
+            card.recoveryRequested.connect(self.recoveryRequested)
         return card
 
     def set_locked(self, locked: bool) -> None:  # noqa: ARG002 - part of the Block protocol

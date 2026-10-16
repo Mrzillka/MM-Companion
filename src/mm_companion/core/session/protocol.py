@@ -103,7 +103,27 @@ from typing import ClassVar
 #: :func:`sanitize_spec` strips keys it does not know without a word. A caught player
 #: would be offered the full-rank save after a made Dodge, or no save at all after a
 #: failed one, and nobody would know the card was wrong.
-PROTOCOL_VERSION = 13
+#:
+#: v14 carries a save's **ladder as data** on the spec (``ladder``: the rungs' condition
+#: ids, escalation and parameters, and the ladder's kind) and the creature a roll was
+#: made *as* (``actor``). The GM's table applies what an NPC's failed save did off the
+#: ladder, and heads the card "Mook (GM)". Bumped for the v13 reason: a v13 server's
+#: :func:`sanitize_spec` strips both keys without a word, and every save the GM rolled
+#: for an NPC would quietly apply nothing.
+#:
+#: v15 carries a **recovery check** on the spec (``recovers`` and
+#: ``recovers_parameter``: the condition a made check sheds) and a scene entry's place
+#: in the **turn order** (``turn``). Bumped for the v13 reason again: a v14 server
+#: strips the spec keys without a word, so a player who made their Stamina check
+#: against Dazed would stay Dazed — and a turn order the GM arranged by hand would
+#: reach every player re-sorted by initiative.
+#:
+#: v16 lets one roll provoke **several** follow-ups (``also``, a list of specs beside
+#: ``follow_up``): a Linked power's one attack check lands every save its effects force,
+#: and a Nullify's hit calls for its opposed check. Bumped for the v13 reason: a v15
+#: server strips the key without a word, and a Linked Damage + Affliction would hit and
+#: offer only the first save.
+PROTOCOL_VERSION = 16
 
 #: Hard cap on one encoded message, including its trailing newline. A character
 #: snapshot is the largest thing that legitimately travels (tens of KB); anything
@@ -934,6 +954,8 @@ def decode(line: bytes | str) -> Message:
 MAX_SPEC_TEXT = 200
 MAX_SPEC_OUTCOMES = 12
 MAX_SPEC_DEPTH = 4
+#: How many extra follow-ups (``also``) one spec may carry — a Linked power's saves.
+MAX_SPEC_ALSO = 6
 
 # Everything a spec may carry, and how each value is coerced. Anything else in the
 # dict is dropped: a whitelist, so a field added to RollSpec later does not silently
@@ -947,10 +969,15 @@ _SPEC_TEXT_KEYS = (
     "note_if_resisted",
     "action_id",
     "title",
+    "actor",
+    "recovers",
+    "recovers_parameter",
 )
 _SPEC_INT_KEYS = ("modifier", "dc", "dc_if_resisted")
 #: How many names a spec's ``targets`` may carry — a scene's worth.
 MAX_SPEC_TARGETS = 24
+#: How many condition ids, escalations or parameters one ladder rung may carry.
+MAX_RUNG_ITEMS = 12
 
 
 def sanitize_spec(raw: object, _depth: int = 0) -> dict | None:
@@ -996,10 +1023,67 @@ def sanitize_spec(raw: object, _depth: int = 0) -> dict | None:
         rungs = [o[:MAX_SPEC_TEXT] for o in outcomes[:MAX_SPEC_OUTCOMES] if isinstance(o, str)]
         if rungs:
             spec["outcomes"] = rungs
+    ladder = _sanitize_ladder(raw.get("ladder"))
+    if ladder is not None:
+        spec["ladder"] = ladder
     follow_up = sanitize_spec(raw.get("follow_up"), _depth + 1)
     if follow_up is not None:
         spec["follow_up"] = follow_up
+    also = raw.get("also")
+    if isinstance(also, list):
+        kept = [sanitize_spec(a, _depth + 1) for a in also[:MAX_SPEC_ALSO]]
+        kept = [a for a in kept if a is not None]
+        if kept:
+            spec["also"] = kept
     return spec
+
+
+def _text_list(raw: object) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    return [t[:MAX_SPEC_TEXT] for t in raw[:MAX_RUNG_ITEMS] if isinstance(t, str) and t]
+
+
+def _text_pairs(raw: object) -> list[list[str]]:
+    if not isinstance(raw, list):
+        return []
+    return [
+        [pair[0][:MAX_SPEC_TEXT], pair[1][:MAX_SPEC_TEXT]]
+        for pair in raw[:MAX_RUNG_ITEMS]
+        if isinstance(pair, list) and len(pair) == 2 and all(isinstance(part, str) for part in pair)
+    ]
+
+
+def _sanitize_rung(raw: object) -> dict:
+    """One ladder rung: its condition ids, escalations and parameter templates."""
+    if not isinstance(raw, dict):
+        return {"ids": []}
+    rung: dict = {"ids": _text_list(raw.get("ids"))}
+    escalates = _text_pairs(raw.get("escalates"))
+    if escalates:
+        rung["escalates"] = escalates
+    params = _text_pairs(raw.get("params"))
+    if params:
+        rung["params"] = params
+    return rung
+
+
+def _sanitize_ladder(raw: object) -> dict | None:
+    """A spec's ``ladder``, checked into shape — or ``None`` to drop it.
+
+    Structural like the rest: ids, pairs and a kind, all text, all capped. What any
+    of it means is the GM's client's business (``SpecLadder`` in the rules).
+    """
+    if not isinstance(raw, dict) or not isinstance(raw.get("rungs"), list):
+        return None
+    kind = raw.get("kind")
+    ladder: dict = {
+        "kind": kind[:MAX_SPEC_TEXT] if isinstance(kind, str) else "",
+        "rungs": [_sanitize_rung(r) for r in raw["rungs"][:MAX_SPEC_OUTCOMES]],
+    }
+    if isinstance(raw.get("success"), dict):
+        ladder["success"] = _sanitize_rung(raw["success"])
+    return ladder
 
 
 #: Bounds on a group roll and on an action's identifiers. A group is aimed at the
@@ -1090,6 +1174,10 @@ def sanitize_scene(raw: object) -> list[dict]:
       :class:`ScenePortrait`, so it is dropped whole rather than kept unusable.
     - ``initiative`` is an ``int`` or absent. Absent means *not rolled yet*, which
       is a different thing from nought and sorts differently.
+    - ``turn`` is the entry's place in the turn order, counting from 1, or absent
+      for an entry that is not in it yet. The GM decides it (protocol v15): a rolled
+      entry always has one, and so does an un-rolled one the GM dragged in among
+      them — which is exactly what sorting by ``initiative`` alone cannot say.
     - ``conditions`` are ``{"id", "parameter", "count"}`` dicts — the shape
       :meth:`~mm_companion.core.character.AppliedCondition.to_dict` writes, minus
       ``provenance``, which is a bookkeeping detail of the sender's own tracker.
@@ -1124,6 +1212,9 @@ def sanitize_scene(raw: object) -> list[dict]:
         initiative = item.get("initiative")
         if isinstance(initiative, int) and not isinstance(initiative, bool):
             entry["initiative"] = initiative
+        turn = item.get("turn")
+        if isinstance(turn, int) and not isinstance(turn, bool) and 0 < turn <= MAX_SCENE_ENTRIES:
+            entry["turn"] = turn
         disposition = item.get("disposition")
         if isinstance(disposition, str) and disposition in SCENE_DISPOSITIONS:
             entry["disposition"] = disposition

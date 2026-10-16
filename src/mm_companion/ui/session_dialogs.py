@@ -26,9 +26,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEventLoop, Qt, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QButtonGroup,
     QComboBox,
     QDialog,
@@ -56,7 +57,20 @@ from mm_companion.core.session import discovery, store
 from mm_companion.core.session.hub_client import HubClient, HubClientError
 from mm_companion.core.session.net import DEFAULT_PORT
 from mm_companion.ui import theme
-from mm_companion.ui.widgets import hline_separator, make_spin_box, muted_style, tinted_style
+from mm_companion.ui.connection_indicator import StatusDot
+from mm_companion.ui.widgets import (
+    hline_separator,
+    make_spin_box,
+    muted_style,
+    tinted_style,
+    with_help,
+)
+
+CONNECT_HELP = (
+    "Automatic tries your router, then falls back to a relay if this machine cannot "
+    "be reached — most tables need nothing more. Either way you get a join code to "
+    "send your players."
+)
 
 #: How many codes the dialog offers back; the newest is pre-filled.
 RECENT_CODES = 5
@@ -84,15 +98,27 @@ def load_session_history() -> list[dict]:
     history: list[dict] = []
     seen: set[str] = set()
     for entry in settings.get("session_history", []):
-        if isinstance(entry, dict) and entry.get("code") and entry["code"] not in seen:
-            history.append(dict(entry))
-            seen.add(entry["code"])
+        if isinstance(entry, dict) and entry.get("code"):
+            key = _code_key(entry["code"])
+            if key not in seen:
+                history.append(dict(entry))
+                seen.add(key)
     for code in settings.get("session_recent_codes", []):
         code = str(code)
-        if code and code not in seen:
+        if code and _code_key(code) not in seen:
             history.append({"code": code, "session_name": "", "display_name": ""})
-            seen.add(code)
+            seen.add(_code_key(code))
     return history
+
+
+def _code_key(code: object) -> str:
+    """What two codes for the same table have in common.
+
+    A code is compared by what it *decodes to*, not by its text: the long codes
+    written before version 2 and the short ones written now name the same seat,
+    as do a code with dashes and the same one pasted without them.
+    """
+    return discovery.canonical_join_code(str(code))
 
 
 def record_session_history(
@@ -114,11 +140,12 @@ def record_session_history(
 
     if not code:
         return
+    code = _code_key(code)
     settings = storage.load_settings()
     rest = [
         entry
         for entry in settings.get("session_history", [])
-        if isinstance(entry, dict) and entry.get("code") and entry["code"] != code
+        if isinstance(entry, dict) and entry.get("code") and _code_key(entry["code"]) != code
     ]
     entry = {
         "code": code,
@@ -137,14 +164,15 @@ def record_session_history(
 
 def remove_session_history(code: str) -> None:
     """Drop one joined session (by its code) from the player's history."""
+    code = _code_key(code)
     settings = storage.load_settings()
     rest = [
         entry
         for entry in settings.get("session_history", [])
-        if isinstance(entry, dict) and entry.get("code") and entry["code"] != code
+        if isinstance(entry, dict) and entry.get("code") and _code_key(entry["code"]) != code
     ]
     # Also strip the legacy convenience list, so a deleted code does not linger.
-    recent = [str(c) for c in settings.get("session_recent_codes", []) if str(c) != code]
+    recent = [str(c) for c in settings.get("session_recent_codes", []) if _code_key(c) != code]
     try:
         storage.update_settings(session_history=rest, session_recent_codes=recent)
     except OSError:
@@ -186,7 +214,7 @@ class HostOptionsForm(QWidget):
         form.addRow("Name", self._name_edit)
         layout.addLayout(form)
 
-        layout.addWidget(QLabel("How do players connect?"))
+        layout.addWidget(with_help(QLabel("How do players connect?"), CONNECT_HELP))
         self._method = QButtonGroup(self)
         self._automatic = QRadioButton("Automatically (recommended)")
         self._automatic.setChecked(True)
@@ -195,15 +223,6 @@ class HostOptionsForm(QWidget):
         for index, button in enumerate((self._automatic, self._via_relay, self._via_tunnel)):
             self._method.addButton(button, index)
             layout.addWidget(button)
-
-        hint = QLabel(
-            "Automatic tries your router, then falls back to a relay if this machine "
-            "cannot be reached — most tables need nothing more. Either way you get a "
-            "join code to send your players."
-        )
-        hint.setWordWrap(True)
-        hint.setEnabled(False)
-        layout.addWidget(hint)
 
         method_form = QFormLayout()
         self._tunnel_edit = QLineEdit()
@@ -348,7 +367,7 @@ class JoinSessionDialog(QDialog):
         # is the same return visit as clicking its row — and used to be treated
         # as a first join, which is how a reconnecting player grew a second card
         # on the GM's board while their first sat there greyed out.
-        self._history_by_code = {str(entry["code"]): entry for entry in history}
+        self._history_by_code = {_code_key(entry["code"]): entry for entry in history}
 
         layout = QVBoxLayout(self)
 
@@ -450,7 +469,7 @@ class JoinSessionDialog(QDialog):
         session and would be refused by any other, so a code we have never seen
         correctly yields nothing.
         """
-        entry = self._history_by_code.get(self.code_text())
+        entry = self._history_by_code.get(_code_key(self.code_text()))
         if entry is None:
             return ("", "")
         return (str(entry.get("player_id", "")), str(entry.get("player_token", "")))
@@ -502,7 +521,7 @@ class JoinSessionDialog(QDialog):
         remove_session_history(code)
         # Forgotten means forgotten: leaving it in the lookup would let the same
         # code silently reclaim a seat the player just asked us to drop.
-        self._history_by_code.pop(code, None)
+        self._history_by_code.pop(_code_key(code), None)
         self._history_table.removeRow(row)
 
     # -- validation --------------------------------------------------------
@@ -532,8 +551,11 @@ class JoinSessionDialog(QDialog):
     @staticmethod
     def _remember(name: str, code: str) -> None:
         """Keep the name and the code for next time; failing to is not worth raising."""
+        code = _code_key(code)
         settings = storage.load_settings()
-        recent = [str(c) for c in settings.get("session_recent_codes", []) if c and c != code]
+        recent = [
+            str(c) for c in settings.get("session_recent_codes", []) if c and _code_key(c) != code
+        ]
         try:
             storage.update_settings(
                 session_player_name=name,
@@ -541,6 +563,23 @@ class JoinSessionDialog(QDialog):
             )
         except OSError:
             pass
+
+
+#: The GM pre-stage's connection to its session server, as the dialog shows it.
+SERVER_OFFLINE = "offline"
+SERVER_CONNECTING = "connecting"
+SERVER_ONLINE = "online"
+SERVER_FAILED = "failed"
+
+_MUTED_TOKEN = "text.muted"
+
+#: Each state's word, and the colour token its dot and word are drawn in.
+_SERVER_STATES = {
+    SERVER_OFFLINE: ("Not connected", _MUTED_TOKEN),
+    SERVER_CONNECTING: ("Connecting…", "tint.warning"),
+    SERVER_ONLINE: ("Connected", "tint.better"),
+    SERVER_FAILED: ("Not connected", "tint.worse"),
+}
 
 
 class GMSessionLaunchDialog(QDialog):
@@ -571,6 +610,10 @@ class GMSessionLaunchDialog(QDialog):
         self._client: HubClient | None = None
         self._catalog: list[dict] | None = None
         self._chosen_entry: dict | None = None
+        # The address the list below came from, which the address field can stop
+        # matching the moment the GM edits it.
+        self._server_address = ""
+        self._server_state = SERVER_OFFLINE
 
         layout = QVBoxLayout(self)
         layout.addWidget(self._build_server_box())
@@ -622,12 +665,15 @@ class GMSessionLaunchDialog(QDialog):
         layout.addWidget(buttons)
 
         self._reload()
+        self._show_server_state(SERVER_OFFLINE)
         # Connect on open for a GM who already uses a server, so they are not
         # pressing a button every evening — but not on the strength of the bundled
         # default alone. A fresh install shows the address and waits to be told,
         # which also keeps this dialog from reaching for the network unbidden.
+        # Queued rather than done here, so the dialog is already on screen saying
+        # "Connecting…" rather than appearing only once the network has answered.
         if storage.session_server_chosen() and self._server_field.text().strip():
-            self._connect_to_server()
+            QTimer.singleShot(0, self, self._connect_to_server)
 
     # -- the session server ------------------------------------------------
 
@@ -650,17 +696,31 @@ class GMSessionLaunchDialog(QDialog):
 
         self._server_field = QLineEdit(server)
         self._server_field.setPlaceholderText("leave empty to host on this computer instead")
+        self._server_field.textEdited.connect(lambda _text: self._sync_connect_button())
         form.addRow("Address", self._server_field)
 
+        # Whether this dialog is connected is a *state*, said three ways at once —
+        # a dot, a word, and what the button now offers — with a sentence under it
+        # for the detail. It used to be one muted sentence that read much the same
+        # connected or not.
         row = QHBoxLayout()
         self._connect_button = QPushButton("Connect")
-        self._connect_button.clicked.connect(self._connect_to_server)
+        self._connect_button.setAutoDefault(False)
+        self._connect_button.clicked.connect(self._toggle_connection)
         row.addWidget(self._connect_button)
-        self._server_status = QLabel("Not connected — sessions below are on this computer.")
+        self._server_dot = StatusDot(box)
+        row.addWidget(self._server_dot)
+        self._server_state_label = QLabel()
+        font = self._server_state_label.font()
+        font.setBold(True)
+        self._server_state_label.setFont(font)
+        row.addWidget(self._server_state_label)
+        row.addStretch()
+        form.addRow("Status", row)
+        self._server_status = QLabel()
         self._server_status.setWordWrap(True)
         self._server_status.setStyleSheet(muted_style())
-        row.addWidget(self._server_status, stretch=1)
-        form.addRow("", row)
+        form.addRow("", self._server_status)
         outer.addLayout(form)
 
         self._operator_box = QGroupBox("Advanced — I run this server")
@@ -676,32 +736,117 @@ class GMSessionLaunchDialog(QDialog):
         outer.addWidget(self._operator_box)
         return box
 
+    def _toggle_connection(self) -> None:
+        """The one button: disconnect from the server this list came from, or connect.
+
+        Connected to the address in the field, it disconnects; anything else — not
+        connected, or the GM has typed a different address — connects.
+        """
+        connected_here = self._server_field.text().strip() == self._server_address
+        if self._server_state == SERVER_ONLINE and connected_here:
+            self._go_local()
+            return
+        self._connect_to_server()
+
     def _connect_to_server(self) -> None:
         """Open the control channel and swap the list over to the server's."""
         server = self._server_field.text().strip()
-        secret = self._secret_field.text().strip() if self._operator_box.isChecked() else ""
         if not server:
-            self._set_server_status(
+            self._show_server_state(
+                SERVER_FAILED,
                 "Enter a server address, or leave it empty to host on this computer.",
-                "tint.worse",
             )
             return
         self._disconnect_from_server()
+        client = self._dial(server)
+        if client is None:
+            # Nothing to fall back to but this computer's own sessions: the list
+            # that was showing belongs to a server this dialog is not talking to.
+            self._server_address = ""
+            self._sync_mode()
+            self._reload()
+            self._sync_connect_button()
+            return
+        self._server_address = server
+        self._catalog = self._my_sessions(client, server)
+        storage.update_settings(session_server_url=server, session_admin_secret=client.secret)
+        self._sync_mode()
+        self._reload()
+        self._sync_connect_button()
+
+    def _dial(self, server: str) -> HubClient | None:
+        """Connect to *server*, showing the attempt and how it went. ``None`` on failure.
+
+        The connect blocks for up to the network timeout, so the state is painted
+        *before* it starts — otherwise the dialog sits frozen, still saying whatever
+        it said last, and the GM cannot tell a slow server from a dead one.
+        """
+        secret = self._secret_field.text().strip() if self._operator_box.isChecked() else ""
+        self._show_server_state(SERVER_CONNECTING, f"Reaching {server}…")
+        QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
         client = HubClient(server, secret)
         try:
             client.connect()
         except HubClientError as exc:
-            self._set_server_status(str(exc), "tint.worse")
-            return
+            self._client = None
+            self._show_server_state(SERVER_FAILED, f"Could not connect: {exc}")
+            return None
         self._client = client
-        self._catalog = self._my_sessions(client, server)
-        storage.update_settings(session_server_url=server, session_admin_secret=secret)
-        self._set_server_status(
-            f"Connected to {server}" + (" as its operator." if client.operator else "."),
-            "accent",
-        )
+        if client.operator:
+            detail = f"Signed in to {server} as its operator."
+        else:
+            detail = f"Signed in to {server}. Your sessions there are listed below."
+        self._show_server_state(SERVER_ONLINE, detail)
+        return client
+
+    def _go_local(self) -> None:
+        """Disconnect on purpose, and show this computer's own sessions again."""
+        self._disconnect_from_server()
+        self._server_address = ""
         self._sync_mode()
         self._reload()
+        self._show_server_state(SERVER_OFFLINE)
+
+    def _live_client(self) -> HubClient | None:
+        """The control channel, dialled again first if it has gone.
+
+        The channel sits idle while the GM reads the list, and the relay reaps an
+        idle stream after a couple of minutes. Nothing says so — the next request is
+        the first to find out — so a dropped channel is redialled here rather than
+        reported as the server having gone away.
+        """
+        client = self._client
+        if client is not None and client.connected:
+            return client
+        if not self._server_address:
+            return None
+        return self._dial(self._server_address)
+
+    def _request(self, action) -> tuple[bool, object]:
+        """Run one control request, redialling once if the channel turns out dead.
+
+        Returns ``(ok, answer)``. A refusal from the server itself (it carries a
+        code) is reported and not retried. A channel that died under the request —
+        the idle reap above, found only by sending — is dialled again and the
+        request sent once more: it never reached the server, since the relay had
+        already closed the stream it would have travelled on.
+        """
+        for attempt in range(2):
+            client = self._live_client()
+            if client is None:
+                return (False, None)
+            try:
+                return (True, action(client))
+            except HubClientError as exc:
+                if attempt == 0 and not exc.code and not client.connected:
+                    continue
+                if client.connected:
+                    self._set_server_status(str(exc), "tint.worse")
+                else:
+                    self._client = None
+                    self._show_server_state(SERVER_FAILED, f"Lost the server: {exc}")
+                return (False, None)
+        return (False, None)
 
     def _my_sessions(self, client: HubClient, server: str) -> list[dict]:
         """The sessions this app knows it owns, refreshed against the server.
@@ -736,9 +881,42 @@ class GMSessionLaunchDialog(QDialog):
             client.close()
 
     def _set_server_status(self, text: str, token: str = "") -> None:
-        """Say how the server is doing. *token* is a theme token name, not a colour."""
+        """The sentence under the state. *token* is a theme token name, not a colour."""
         self._server_status.setText(text)
         self._server_status.setStyleSheet(tinted_style(token) if token else muted_style())
+
+    def _show_server_state(self, state: str, detail: str = "") -> None:
+        """Say whether this dialog is connected: the dot, the word, and the detail."""
+        word, token = _SERVER_STATES[state]
+        self._server_state = state
+        self._server_dot.set_token(token)
+        self._server_state_label.setText(word)
+        self._server_state_label.setStyleSheet(
+            muted_style() if token == _MUTED_TOKEN else tinted_style(token)
+        )
+        if state == SERVER_OFFLINE and not detail:
+            detail = "Sessions below are on this computer. Connect to run them on the server."
+        self._set_server_status(detail, "tint.worse" if state == SERVER_FAILED else "")
+        self._sync_connect_button()
+
+    def server_state(self) -> str:
+        """One of the ``SERVER_*`` states: whether this dialog is connected."""
+        return self._server_state
+
+    def _sync_connect_button(self) -> None:
+        """Offer what a press would do: disconnect from this server, or connect."""
+        state = self._server_state
+        self._connect_button.setEnabled(state != SERVER_CONNECTING)
+        here = bool(self._server_address) and (
+            self._server_field.text().strip() == self._server_address
+        )
+        if state == SERVER_ONLINE and here:
+            text = "Disconnect"
+        elif state == SERVER_FAILED and here:
+            text = "Reconnect"
+        else:
+            text = "Connect"
+        self._connect_button.setText(text)
 
     @property
     def _on_server(self) -> bool:
@@ -874,13 +1052,8 @@ class GMSessionLaunchDialog(QDialog):
         belongs to us — so it is written to settings before anything else can go
         wrong, not after.
         """
-        client = self._client
-        if client is None:
-            return
-        try:
-            created = client.create(name)
-        except HubClientError as exc:
-            self._set_server_status(str(exc), "tint.worse")
+        ok, created = self._request(lambda client: client.create(name))
+        if not ok:
             return
         storage.remember_my_session(self._server_field.text().strip(), created)
         self._catalog = [created, *(self._catalog or [])]
@@ -938,13 +1111,8 @@ class GMSessionLaunchDialog(QDialog):
         if self._on_server:
             entry = self._selected_entry() or {}
             token = self._token_for(entry)
-            client = self._client
-            if client is None:
-                return
-            try:
-                client.delete(session_id, token)
-            except HubClientError as exc:
-                self._set_server_status(str(exc), "tint.worse")
+            ok, _answer = self._request(lambda client: client.delete(session_id, token))
+            if not ok:
                 return
             storage.forget_my_session(session_id)
             self._catalog = [e for e in (self._catalog or []) if e.get("id") != session_id]
@@ -955,13 +1123,8 @@ class GMSessionLaunchDialog(QDialog):
 
     def _with_client(self, action) -> None:
         """Run one control request that answers with the changed session."""
-        client = self._client
-        if client is None:
-            return
-        try:
-            changed = action(client)
-        except HubClientError as exc:
-            self._set_server_status(str(exc), "tint.worse")
+        ok, changed = self._request(action)
+        if not ok:
             return
         if isinstance(changed, dict) and changed.get("id"):
             storage.remember_my_session(self._server_field.text().strip(), changed)

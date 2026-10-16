@@ -318,13 +318,25 @@ class StackingRule:
 
 @dataclass(frozen=True)
 class RecoveryCheck:
-    """Structured recovery check (§8). Loaded now; consumed by the future roll layer."""
+    """Structured recovery check (§8), rolled by :mod:`mm_companion.core.rules.recovery`.
+
+    ``trait`` and ``dc`` are the check; a record with either missing (Fatigued's rest)
+    is not a check at all and offers no die. ``success_degrees`` is how many degrees of
+    success clear it (Dying needs two to stabilise), ``becomes`` what the condition
+    turns into when it does (Dying stabilises to Incapacitated), and ``blocked_by`` the
+    conditions whose presence means no check may be made yet (Staggered recovers only
+    once nothing worse is on the creature). ``cadence``/``condition``/``outcome`` are
+    the prose the tooltip carries.
+    """
 
     trait: str | None = None
     dc: int | None = None
     cadence: str = ""
     condition: str = ""
     outcome: str = ""
+    success_degrees: int = 1
+    becomes: str = ""
+    blocked_by: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -637,12 +649,25 @@ class EffectConfigField:
     for: their labels read "Removable (only while Stunned and Defenseless)" / "Easily
     Removable (…)", which qualified a modifier already called Removable produced
     "Removable (removable (only while stunned and defenseless))".
+
+    ``grants``, on a *modifier's* field that ``overrides`` a stat, lets the choice
+    **supply** that stat on an effect that has none, rather than only replacing one it
+    already has: the Resistible flaw and the Attack extra pick what a Teleport or a
+    Concealment is resisted by. On an effect that already has the stat the field is
+    *claimed* (:func:`mm_companion.core.rules.modifier_field_claimed`) and the chip
+    does not show it. ``template`` wraps the chosen value before it replaces the stat —
+    Alternate Defense writes ``"Attack vs. {value} + 10"`` into the check — and
+    ``required`` marks a field whose being left empty leaves the build unfinished, which
+    the constructor warns about (Affliction's resistance, Resistible's).
     """
 
     key: str
     label: str
     type: str = "select"
     overrides: str | None = None
+    grants: bool = False
+    template: str = ""
+    required: bool = False
     multiselect_with: str | None = None
     hidden_with: str | None = None
     shown_with: str | None = None
@@ -740,6 +765,10 @@ class ResistanceOutcome:
     #: :func:`mm_companion.core.rules.targeting.resolve_rung`). Pairs for the same
     #: reason :attr:`escalates` is.
     parameters: tuple[tuple[str, str], ...] = ()
+    #: The instance config field naming the trait this rung's conditions are scoped
+    #: to — Weaken's chosen trait, so its Impaired lands as "Strength Impaired". Read
+    #: only for a condition whose parameter is a trait; blank in the config, unscoped.
+    scope_key: str = ""
 
 
 @dataclass(frozen=True)
@@ -971,6 +1000,11 @@ class Effect:
     config_fields: tuple[EffectConfigField, ...] = ()
     measure: Measure | None = None
     resistance_dc_base: int | None = None
+    #: Whether the *first* resistance check is made against the wielder's **check
+    #: result** rather than the effect DC — Mind Reading's "Will vs. Effect Check
+    #: Result" (p133). The save its check provokes is then an opposed one; the later,
+    #: recurring saves are still against the effect DC.
+    resistance_vs_check: bool = False
     #: What failing this effect's resistance check does to the target, one rung per
     #: degree of failure (see :class:`ResistanceOutcome`). Empty for an effect whose
     #: outcome is a GM call rather than a table.
@@ -978,6 +1012,12 @@ class Effect:
     #: What *making* the check still costs the target, for the effects where that is
     #: not nothing (Damage's Hit). ``None`` where a made save really is a clean escape.
     resistance_success: ResistanceOutcome | None = None
+    #: The DC of the effect's own check, for an effect that is *checked* rather than
+    #: resisted (Healing's DC 10). ``None`` for every other effect.
+    check_dc: int | None = None
+    #: The conditions each degree of success on that check takes off its subject, one
+    #: per degree, in this order (Healing's least severe first). Empty for most effects.
+    success_removes: tuple[str, ...] = ()
     implicit_modifiers: tuple[str, ...] = ()
     #: How far this effect reaches once its range resolves to Ranged. Seeded from the
     #: system-wide default and overridden by the effect's own ``rangeDistance`` block.
@@ -985,6 +1025,26 @@ class Effect:
     #: How much *close*-attack reach the effect grants its wielder while it is active
     #: (Elongation). ``None`` for every effect that grants none; see :class:`EffectReach`.
     reach: EffectReach | None = None
+
+
+@dataclass(frozen=True)
+class ResistanceGrant:
+    """A resistance check a modifier gives an effect that has none of its own.
+
+    The Resistible flaw (p162) "gives it one. Choose the resistance when the flaw is
+    configured", and the Attack extra turns a Teleport into something its target can
+    resist. The chosen resistance comes from the modifier's ``grants`` config field;
+    this record says what the DC is. ``dc_base`` is its fixed part, added to the
+    effect's rank — or, when ``dc_trait`` names a resistance key, to the **wielder's**
+    total in that trait instead (Fortune Control's Resistible is DC 10 + your Will).
+    ``placeholder`` is the resistance phrase shown before anything is chosen; empty
+    means the grant waits for a choice (the Attack extra adds no save until one is
+    picked, since an attack need not be resisted by anything).
+    """
+
+    dc_base: int = 10
+    dc_trait: str = ""
+    placeholder: str = ""
 
 
 @dataclass(frozen=True)
@@ -1110,6 +1170,9 @@ class Modifier:
     check_bonus: int = 0
     grants_attack: bool = False
     drops_check: bool = False
+    #: The resistance check this modifier gives an effect that has none; see
+    #: :class:`ResistanceGrant`. ``None`` for every modifier that grants none.
+    grants_resistance: ResistanceGrant | None = None
     check_note: str = ""
     step_field: str = ""
     step_by: int = 0
@@ -1457,6 +1520,10 @@ class SystemRules:
     unscoped_scope_values: tuple[str, ...] = ("All checks",)
     alternate_effect_modifier: str = "alternate_effect"
     linked_modifier: str = "linked"
+    #: Which bonus the **one** attack check of a Linked power rolls at when its effects'
+    #: bonuses differ (p155 gives a single check and no rule for that): ``"highest"``,
+    #: ``"lowest"`` or ``"first"`` (the first attacking effect on the card).
+    linked_attack_bonus: str = "highest"
     improvised_effect: ImprovisedEffectRules = field(default_factory=ImprovisedEffectRules)
     extra_effort: ExtraEffortRules = field(default_factory=ExtraEffortRules)
     ranged_distance: RangeDistance = field(default_factory=RangeDistance)
@@ -1662,6 +1729,10 @@ class EquipmentModifierRef:
     #: The modifier's config choices, as a power's selection would store them (an Area
     #: Effect's ``shape``). Empty for the commonest case, a modifier with no choices.
     config: dict = field(default_factory=dict, compare=False)
+    #: The top of the rank band the modifier covers (``appliesTo``), 0 for every rank —
+    #: a Rocket Launcher's Area on 7 of its 10 Damage ranks, so the creature it hits
+    #: directly takes 10 and everyone else in the blast 7.
+    applies_to: int = 0
     #: Unrecognised JSON keys (e.g. from a mod), retained rather than dropped.
     extra: dict = field(default_factory=dict, compare=False)
 
@@ -2149,7 +2220,8 @@ class ActionModifier:
     A ``toggle`` is a checkbox worth :attr:`value`; toggles sharing an
     :attr:`exclusive` group cannot both be on. A ``slider`` runs from
     :attr:`minimum` to :attr:`maximum` in steps of :attr:`step` and is worth its
-    position.
+    position. :attr:`label` is the short caption the control wears and :attr:`hint`
+    the longer explanation behind it.
     """
 
     id: str
@@ -2160,6 +2232,7 @@ class ActionModifier:
     maximum: int = 0
     step: int = 1
     exclusive: str = ""
+    hint: str = ""
 
 
 @dataclass(frozen=True)
@@ -2674,6 +2747,9 @@ def _parse_recovery_check(raw: dict | None) -> RecoveryCheck | None:
         cadence=raw.get("cadence", ""),
         condition=raw.get("condition", ""),
         outcome=raw.get("outcome", ""),
+        success_degrees=max(1, int(raw.get("successDegrees", 1) or 1)),
+        becomes=str(raw.get("becomes", "") or ""),
+        blocked_by=tuple(str(c) for c in raw.get("blockedBy", ()) or ()),
     )
 
 
@@ -2731,6 +2807,9 @@ def _parse_config_field(c: dict) -> EffectConfigField:
         label=c.get("label", c["key"]),
         type=c.get("type", "select"),
         overrides=c.get("overrides"),
+        grants=bool(c.get("grants", False)),
+        template=c.get("template", ""),
+        required=bool(c.get("required", False)),
         multiselect_with=c.get("multiselectWith"),
         hidden_with=c.get("hiddenWith"),
         shown_with=c.get("shownWith"),
@@ -2840,6 +2919,7 @@ def _parse_outcome_rung(entry: object) -> ResistanceOutcome | None:
     return ResistanceOutcome(
         conditions=tuple(entry.get("conditions", ())),
         config_key=entry.get("configKey", ""),
+        scope_key=str(entry.get("scopeKey", "")),
         text=entry.get("text", ""),
         note=entry.get("note", ""),
         escalates=tuple(escalates.items()) if isinstance(escalates, dict) else (),
@@ -2886,6 +2966,7 @@ def _parse_action_modifier(raw: dict) -> ActionModifier:
         maximum=int(raw.get("max", 0)),
         step=max(1, int(raw.get("step", 1))),
         exclusive=str(raw.get("exclusive", "")),
+        hint=str(raw.get("hint", "")),
     )
 
 
@@ -3025,13 +3106,31 @@ def _parse_effect(e: dict, ranged_distance: RangeDistance | None = None) -> Effe
         config_fields=tuple(_parse_config_field(c) for c in e.get("config", [])),
         measure=_parse_measure(e.get("measure"), e["id"]),
         resistance_dc_base=e.get("resistanceDcBase"),
+        resistance_vs_check=bool(e.get("resistanceVsCheck", False)),
         resistance_outcomes=_parse_resistance_outcomes(e.get("resistanceOutcomes")),
         resistance_success=_parse_resistance_success(e.get("resistanceOutcomes")),
+        check_dc=_check_dc(e.get("checkOutcomes")),
+        success_removes=_success_removes(e.get("checkOutcomes")),
         implicit_modifiers=tuple(e.get("implicitModifiers", ())),
         range_distance=_parse_range_distance(e.get("rangeDistance"), default_distance)
         or default_distance,
         reach=_parse_effect_reach(e.get("reach")),
     )
+
+
+def _check_dc(raw: object) -> int | None:
+    """An effect's ``checkOutcomes.dc`` — the DC its own check is made against."""
+    if not isinstance(raw, dict):
+        return None
+    dc = raw.get("dc")
+    return dc if isinstance(dc, int) and not isinstance(dc, bool) else None
+
+
+def _success_removes(raw: object) -> tuple[str, ...]:
+    """An effect's ``checkOutcomes.removes`` — condition ids, one per degree of success."""
+    if not isinstance(raw, dict):
+        return ()
+    return tuple(str(c) for c in raw.get("removes", ()) or () if str(c).strip())
 
 
 def _parse_effect_reach(raw: dict | None) -> EffectReach | None:
@@ -3043,6 +3142,17 @@ def _parse_effect_reach(raw: dict | None) -> EffectReach | None:
 # ``overrides`` keys are camelCase in the JSON like every other key there, but the
 # stat dicts :func:`mm_companion.core.rules.effect_stat_rows` builds are snake_case.
 _OVERRIDE_KEYS = {"effectType": "effect_type"}
+
+
+def _parse_resistance_grant(raw: object) -> ResistanceGrant | None:
+    """A modifier's ``grantsResistance`` block, or ``None`` when it has none."""
+    if not isinstance(raw, dict):
+        return None
+    return ResistanceGrant(
+        dc_base=int(raw.get("dcBase", 10)),
+        dc_trait=str(raw.get("dcTrait", "")),
+        placeholder=str(raw.get("placeholder", "")),
+    )
 
 
 def _parse_modifier(m: dict, category: str | None = None) -> Modifier:
@@ -3062,6 +3172,7 @@ def _parse_modifier(m: dict, category: str | None = None) -> Modifier:
         check_bonus=int(m.get("checkBonus", 0)),
         grants_attack=bool(m.get("grantsAttack", False)),
         drops_check=bool(m.get("dropsCheck", False)),
+        grants_resistance=_parse_resistance_grant(m.get("grantsResistance")),
         check_note=m.get("checkNote", ""),
         step_field=m.get("stepField", ""),
         step_by=int(m.get("stepBy", 0)),
@@ -3297,7 +3408,8 @@ def _parse_equipment_modifier_ref(raw: dict) -> EquipmentModifierRef:
         rank=None if rank is None else int(rank),
         note=str(raw.get("note", "")),
         config=dict(raw["config"]) if isinstance(raw.get("config"), dict) else {},
-        extra=_extras(raw, "modifier", "rank", "note", "config"),
+        applies_to=max(0, int(raw.get("appliesTo", 0) or 0)),
+        extra=_extras(raw, "modifier", "rank", "note", "config", "appliesTo"),
     )
 
 
@@ -3879,6 +3991,7 @@ def _parse_system(raw: dict) -> SystemRules:
             "alternate_effect_modifier", defaults.alternate_effect_modifier
         ),
         linked_modifier=sys.get("linked_modifier", defaults.linked_modifier),
+        linked_attack_bonus=str(sys.get("linkedAttackBonus", defaults.linked_attack_bonus)),
         improvised_effect=_parse_improvised_effect(
             sys.get("improvised_effect"), defaults.improvised_effect
         ),

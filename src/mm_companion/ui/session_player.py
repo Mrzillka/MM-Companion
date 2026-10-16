@@ -25,15 +25,17 @@ from __future__ import annotations
 from PySide6.QtCore import QObject, QTimer
 
 from mm_companion.core.character import Character
+from mm_companion.core.rules import RollSpec
 from mm_companion.core.session import client as session_client
 from mm_companion.core.session.protocol import CharacterSnapshot, encode, sanitize_snapshot
 from mm_companion.ui import theme
-from mm_companion.ui.blocks.bus import BUILD_CHANGED, CONDITION_CHANGED, EDITED
-from mm_companion.ui.impress import (
-    KIND_RESIST,
-    KIND_RESIST_CLOSED,
-    ResistPromptDialog,
+from mm_companion.ui.action_ui import (
+    KIND_OUTCOME,
+    KIND_ROLL_ASK,
+    KIND_ROLL_CLOSED,
+    RollPromptDialog,
 )
+from mm_companion.ui.blocks.bus import BUILD_CHANGED, CONDITION_CHANGED, EDITED, ROLL_REQUESTED
 from mm_companion.ui.session_bridge import SessionBridge, set_active_session
 from mm_companion.ui.session_portrait import encode_portrait
 from mm_companion.ui.toasts import notify_window
@@ -222,12 +224,19 @@ class ConditionReceiver(QObject):
         self._attached = False
 
 
-class ResistPromptReceiver(QObject):
-    """The GM asking this player how they resist an impression.
+class ActionPromptReceiver(QObject):
+    """The GM asking this player for a roll during an action, and telling them how it went.
 
-    Opens a :class:`~mm_companion.ui.impress.ResistPromptDialog` over the window —
-    one per attempt, updated in place if the GM changes the skill being resisted —
-    sends the answer back, and closes it when the GM says the attempt is settled.
+    Three ``ActionPrompt`` kinds come this way (see :mod:`mm_companion.ui.action_ui`):
+
+    * ``"roll"`` opens a :class:`~mm_companion.ui.action_ui.RollPromptDialog` over the
+      window — one per action, updated in place when the next roll of the same action
+      is asked for (the save after a Dodge). Its button rolls on this sheet's own
+      roller, so the player's numbers go in and the roll lands in the shared history,
+      where the GM's table picks it up;
+    * ``"roll-closed"`` closes it: answered (perhaps from the history card instead),
+      rolled for them, or called off;
+    * ``"outcome"`` is what the action did to them, as a notice over the sheet.
     """
 
     def __init__(self, window, bridge: SessionBridge, *, parent: QObject | None = None) -> None:
@@ -235,39 +244,63 @@ class ResistPromptReceiver(QObject):
         self._window = window
         self._bridge = bridge
         self._attached = True
-        self._dialogs: dict[str, ResistPromptDialog] = {}
+        self._dialogs: dict[str, RollPromptDialog] = {}
         bridge.actionPrompted.connect(self.handle)
 
     @property
-    def dialogs(self) -> dict[str, ResistPromptDialog]:
+    def dialogs(self) -> dict[str, RollPromptDialog]:
         return dict(self._dialogs)
 
     def handle(self, kind: str, action_id: str, payload: object) -> None:
         if not self._attached or not action_id:
             return
-        if kind == KIND_RESIST_CLOSED:
+        if kind == KIND_ROLL_CLOSED:
             dialog = self._dialogs.pop(action_id, None)
             if dialog is not None:
                 dialog.close()
             return
-        if kind != KIND_RESIST or not isinstance(payload, dict):
+        if not isinstance(payload, dict):
             return
+        if kind == KIND_OUTCOME:
+            text = str(payload.get("text", ""))
+            if text:
+                notify_window(self._window, text, theme.color("tint.worse"))
+            return
+        if kind != KIND_ROLL_ASK:
+            return
+        spec = RollSpec.from_dict(payload.get("spec"))
+        if spec is None:
+            return
+        asker = str(payload.get("asker", ""))
         dialog = self._dialogs.get(action_id)
         if dialog is not None:
-            dialog.update_prompt(payload)
+            dialog.update_spec(spec, asker=asker)
+            dialog.raise_()
             return
         sheet = self._window.sheet
-        dialog = ResistPromptDialog(
-            sheet.data, sheet.character, action_id=action_id, payload=payload, parent=self._window
-        )
-        dialog.answered.connect(
-            lambda answer, a=action_id: self._bridge.send_action_request(
-                KIND_RESIST, a, answer.to_dict()
-            )
+        dialog = RollPromptDialog(
+            sheet.data,
+            sheet.character,
+            action_id=action_id,
+            spec=spec,
+            asker=asker,
+            roll=self._roll,
+            parent=self._window,
         )
         dialog.destroyed.connect(lambda *_x, a=action_id: self._dialogs.pop(a, None))
         self._dialogs[action_id] = dialog
         dialog.show()
+
+    def _roll(self, spec: RollSpec) -> bool:
+        """Roll *spec* on this sheet — its own roller, its own numbers filled in."""
+        sheet = self._window.sheet
+        dice = sheet.section("dice") if hasattr(sheet, "section") else None
+        panel = getattr(getattr(dice, "view", None), "panel", None)
+        if panel is not None:
+            return bool(panel.roll_spec(spec))
+        # No Dice block on this sheet (a mod took it out): whoever serves the topic rolls.
+        sheet.bus.publish_request(ROLL_REQUESTED, spec)
+        return True
 
     def detach(self) -> None:
         """Stop answering — the sheet closed, or the session ended."""
@@ -295,7 +328,7 @@ def attach_player_session(window, bridge: SessionBridge) -> None:
     """
     pusher = SnapshotPusher(window.sheet, bridge, parent=window)
     receiver = ConditionReceiver(window.sheet, bridge, parent=window)
-    prompts = ResistPromptReceiver(window, bridge, parent=window)
+    prompts = ActionPromptReceiver(window, bridge, parent=window)
 
     indicator = getattr(window, "connection_indicator", None)
     if indicator is not None:

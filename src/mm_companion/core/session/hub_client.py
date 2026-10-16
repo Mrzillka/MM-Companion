@@ -43,7 +43,8 @@ DEFAULT_CONTROL_ID = "mm-control"
 #: The server the app points at out of the box, so someone who has just installed
 #: it can host a game without knowing anyone. It is only a default — the field is
 #: editable, and a group that would rather run their own puts that address here.
-DEFAULT_SERVER = "mmcompanion.duckdns.org"
+#: Defined in :mod:`.discovery`, whose join codes name it in three bits.
+DEFAULT_SERVER = discovery.DEFAULT_SERVER
 
 
 class HubClientError(Exception):

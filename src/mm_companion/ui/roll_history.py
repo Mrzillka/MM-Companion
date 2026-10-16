@@ -24,7 +24,7 @@ about, and grading is plain arithmetic over the roll dict.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
@@ -39,8 +39,9 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.rules import (
+    KIND_IMPRESS,
     RollSpec,
-    follow_up_for_result,
+    follow_ups_for_result,
     outcome_is_failure,
     resistance_outcome,
 )
@@ -48,7 +49,7 @@ from mm_companion.core.session.model import KIND_MOD, KIND_NOTE, KIND_REQUEST, K
 from mm_companion.ui import theme
 from mm_companion.ui.session_bridge import SessionBridge
 from mm_companion.ui.toasts import announce
-from mm_companion.ui.widgets import discard_widget, muted_style, tinted_style
+from mm_companion.ui.widgets import WrappingButton, discard_widget, muted_style, tinted_style
 
 #: Marks a roll only the GM can see. Shown on the GM's own history; a player's
 #: copy never receives a hidden roll at all.
@@ -56,6 +57,61 @@ HIDDEN_MARK = "👁"
 #: How a lucky re-roll (``reroll`` on the record) is named after its label, so a
 #: die that could not come up under 11 never passes for an ordinary one.
 REROLL_MARK = "(reroll)"
+
+#: The small button on a card whose roll put conditions on a creature by itself.
+UNDO_MARK = "↶"
+
+#: What a roll answered *as* a creature is attributed to after its name: "Thug (GM)".
+ACTOR_SEAT = "GM"
+
+
+@dataclass(frozen=True)
+class AnswerContext:
+    """Where a roll button on a history card was pressed, for whoever answers it.
+
+    ``seq`` is the card's own (a request's, or the roll a follow-up chip hangs off);
+    ``source`` is who provoked it — an impression's ``{source}``; ``provoking`` is the
+    spec of the roll the chip follows, ``None`` on a request card.
+    """
+
+    seq: int | None = None
+    source: str = ""
+    provoking: RollSpec | None = None
+
+
+def roll_button(
+    spec: RollSpec,
+    caption: str,
+    tooltip: str,
+    on_roll: Callable[[RollSpec], None],
+    on_plain: Callable[[RollSpec], None] | None = None,
+) -> QPushButton:
+    """A history card's roll button: *on_roll* on a click, *on_plain* on a right-click.
+
+    The right-click is the GM's "roll it as written, for nobody" beside a click that
+    asks whom to roll it for. Without *on_plain* a right-click does nothing.
+    """
+    # Wrapping: a roll's caption is the longest thing on a card, and a one-line
+    # button held the card — and the history — open at its width.
+    button = WrappingButton(caption)
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
+    button.setToolTip(tooltip)
+    button.clicked.connect(lambda _=False, s=spec: on_roll(s))
+    if on_plain is not None:
+        button.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        button.customContextMenuRequested.connect(lambda _pos, s=spec: on_plain(s))
+    return button
+
+
+def undo_button(tooltip: str, on_undo: Callable[[], None]) -> QPushButton:
+    """The small ↶ a card shows while what its roll applied can still be taken back."""
+    button = QPushButton(UNDO_MARK)
+    button.setToolTip(tooltip)
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
+    button.setFixedWidth(int(theme.metric("column.roll-button")))
+    button.clicked.connect(lambda _=False: on_undo())
+    return button
+
 
 #: How many cards the panel keeps on screen. The log itself is unbounded and
 #: lives on the server; a few hundred widgets is already more than anyone
@@ -260,6 +316,7 @@ def chain_widgets(
     on_follow_up: Callable[[RollSpec], None],
     localize: bool = True,
     total: int | None = None,
+    on_plain: Callable[[RollSpec], None] | None = None,
 ) -> list[QWidget]:
     """What a rolled :class:`RollSpec` adds under its history card: the chain.
 
@@ -268,7 +325,8 @@ def chain_widgets(
     * a **follow-up button** when the roll provoked another one and landed — an
       attack that hit makes its target save, and the button primes that save with
       its DC already filled in, adjusted for a critical hit or a natural 1
-      (:func:`~mm_companion.core.rules.follow_up_for_result`);
+      (:func:`~mm_companion.core.rules.follow_ups_for_result`), one per roll
+      it provoked;
     * an **outcome line** — "Incapacitated!" on a failed save, or the Hit a *made*
       Toughness save still costs, rather than a bare "2 degrees of failure".
 
@@ -296,15 +354,19 @@ def chain_widgets(
     if resolved is None:
         return []
     widgets: list[QWidget] = []
-    follow_up = follow_up_for_result(resolved, die, degree, load_game_data(), total)
-    if follow_up is not None and not localize:
-        follow_up = replace(follow_up, trait_key="")
-    if follow_up is not None:
-        button = QPushButton(f"🎲 {follow_up.label}")
-        button.setCursor(Qt.CursorShape.PointingHandCursor)
-        button.setToolTip(follow_up.hint or f"Roll {follow_up.label}")
-        button.clicked.connect(lambda _=False, s=follow_up: on_follow_up(s))
-        widgets.append(button)
+    # Usually one; a Linked power's single attack lands a save per effect, each its own.
+    for follow_up in follow_ups_for_result(resolved, die, degree, load_game_data(), total):
+        if not localize:
+            follow_up = replace(follow_up, trait_key="")
+        widgets.append(
+            roll_button(
+                follow_up,
+                f"🎲 {follow_up.label}",
+                follow_up.hint or f"Roll {follow_up.label}",
+                on_follow_up,
+                on_plain,
+            )
+        )
     outcome = resistance_outcome(resolved, degree)
     if outcome:
         line = QLabel(f"{escape_rich_text(outcome)}!")
@@ -322,7 +384,12 @@ def request_caption(spec: RollSpec) -> str:
     return f"{spec.label} vs. DC {spec.dc}" if spec.dc is not None else spec.label
 
 
-def request_widgets(spec: object, *, on_roll: Callable[[RollSpec], None]) -> list[QWidget]:
+def request_widgets(
+    spec: object,
+    *,
+    on_roll: Callable[[RollSpec], None],
+    on_plain: Callable[[RollSpec], None] | None = None,
+) -> list[QWidget]:
     """What a *requested* roll adds under its card: the one button that rolls it.
 
     Deliberately not :func:`chain_widgets`, which asks a rolled spec what it
@@ -341,11 +408,30 @@ def request_widgets(spec: object, *, on_roll: Callable[[RollSpec], None]) -> lis
     resolved = spec if isinstance(spec, RollSpec) else RollSpec.from_dict(spec)
     if resolved is None:
         return []
-    button = QPushButton(f"🎲 {request_caption(resolved)}")
-    button.setCursor(Qt.CursorShape.PointingHandCursor)
-    button.setToolTip(resolved.hint or f"Roll {resolved.label} on this sheet")
-    button.clicked.connect(lambda _=False, s=resolved: on_roll(s))
-    return [button]
+    choices = [resolved]
+    if resolved.dc_if_resisted is not None:
+        # A save offered at two DCs — an area's, at full rank or at half after a made
+        # Dodge: one button each, so whoever answers picks the one that is theirs.
+        plain = replace(resolved, dc_if_resisted=None, note_if_resisted="")
+        half = f"{resolved.label} (half)"
+        if resolved.note_if_resisted:
+            half = f"{half} — {resolved.note_if_resisted}"
+        choices = [
+            replace(plain, label=f"{resolved.label} (full)"),
+            replace(plain, label=half, dc=resolved.dc_if_resisted),
+        ]
+    buttons: list[QWidget] = []
+    for choice in choices:
+        buttons.append(
+            roll_button(
+                choice,
+                f"🎲 {request_caption(choice)}",
+                choice.hint or f"Roll {choice.label} on this sheet",
+                on_roll,
+                on_plain,
+            )
+        )
+    return buttons
 
 
 def reroll_label(label: str, reroll: bool) -> str:
@@ -355,10 +441,27 @@ def reroll_label(label: str, reroll: bool) -> str:
     return f"{label} {REROLL_MARK}" if label else REROLL_MARK
 
 
+def roll_actor(roll: dict) -> str:
+    """The creature a roll was made *as* (an NPC the GM answered with), or ``""``."""
+    spec = RollSpec.from_dict(roll.get("spec"))
+    return spec.actor if spec is not None else ""
+
+
 def roll_heading(roll: dict) -> str:
-    """A roll's first line, as rich text: who rolled it, and what it was."""
+    """A roll's first line, as rich text: who rolled it, and what it was.
+
+    A roll made *as* a creature is headed by the creature, the seat after it in
+    brackets ("Thug (GM)"), and its label loses the "Thug: " it carries for a table
+    that does not know the field.
+    """
     who = str(roll.get("player_name", "")) or "Someone"
-    label = reroll_label(str(roll.get("label", "")), bool(roll.get("reroll")))
+    text = str(roll.get("label", ""))
+    actor = roll_actor(roll)
+    if actor:
+        who = f"{actor} ({ACTOR_SEAT})"
+        if text.startswith(f"{actor}: "):
+            text = text[len(actor) + 2 :]
+    label = reroll_label(text, bool(roll.get("reroll")))
     heading = f"<b>{escape_rich_text(who)}</b>"
     if roll.get("hidden"):
         heading = f"{HIDDEN_MARK} {heading}"
@@ -452,6 +555,41 @@ def announce_entry(entry: dict, source: QWidget | None) -> None:
     announce(lambda: toast_widgets(entry), key=key, accent=toast_accent(entry), source=source)
 
 
+def heading_row(info: QVBoxLayout, line: QWidget) -> QHBoxLayout:
+    """Put *line* at the top of a card, and hand back the row its small buttons go in.
+
+    A card's small buttons (☆, Show, ↶, ✕) sit beside its first line rather than down
+    its side: they take their width from the one line that wraps most gracefully — a
+    name, a label — and every line below has the card's whole width. Down the side,
+    they made the card that much wider all the way down, roll buttons included.
+    """
+    top = QHBoxLayout()
+    top.setSpacing(int(theme.metric("space.sm")))
+    top.addWidget(line, stretch=1)
+    buttons = QHBoxLayout()
+    buttons.setSpacing(int(theme.metric("space.xxs")))
+    top.addLayout(buttons)
+    info.insertLayout(0, top)
+    return buttons
+
+
+def remove_button(tooltip: str, on_remove: Callable[[], None]) -> QPushButton:
+    """The GM's ✕ on a card."""
+    button = QPushButton("✕")
+    button.setToolTip(tooltip)
+    button.setFixedWidth(int(theme.metric("column.roll-button")))
+    button.clicked.connect(lambda _=False: on_remove())
+    return button
+
+
+def fit_button(text: str) -> QPushButton:
+    """A push button only as wide as its caption — not the platform's default width."""
+    button = QPushButton(text)
+    pad = int(theme.metric("space.lg")) + int(theme.metric("border.width"))
+    button.setFixedWidth(button.fontMetrics().horizontalAdvance(text) + 2 * pad)
+    return button
+
+
 def tighten_card(layout: QHBoxLayout, info: QVBoxLayout) -> None:
     """Pack a history card's lines close: the strip shows more rolls at once."""
     small = int(theme.metric("space.sm"))
@@ -509,12 +647,13 @@ class NoteCard(HistoryCard):
         info = QVBoxLayout()
         tighten_card(layout, info)
 
+        buttons: QHBoxLayout | None = None
         if show_author:
             who = str(note.get("player_name", "")) or "Someone"
             name_line = QLabel(f"<b>{escape_rich_text(who)}</b>")
             name_line.setTextFormat(Qt.TextFormat.RichText)
             name_line.setWordWrap(True)
-            info.addWidget(name_line)
+            buttons = heading_row(info, name_line)
 
         # Plain text explicitly: a QLabel defaults to AutoText and will render this
         # as HTML the moment it looks like markup. The sentence comes off the wire
@@ -529,11 +668,13 @@ class NoteCard(HistoryCard):
         layout.addLayout(info, stretch=1)
 
         if can_remove and self.seq is not None:
-            remove_button = QPushButton("✕")
-            remove_button.setToolTip("Remove this note from the history")
-            remove_button.setFixedWidth(int(theme.metric("column.roll-button")))
-            remove_button.clicked.connect(lambda: self.removeRequested.emit(self.seq))
-            layout.addWidget(remove_button, alignment=Qt.AlignmentFlag.AlignVCenter)
+            remove = remove_button(
+                "Remove this note from the history", lambda: self.removeRequested.emit(self.seq)
+            )
+            if buttons is not None:
+                buttons.addWidget(remove, alignment=Qt.AlignmentFlag.AlignTop)
+            else:
+                layout.addWidget(remove, alignment=Qt.AlignmentFlag.AlignVCenter)
 
 
 class RequestCard(HistoryCard):
@@ -555,6 +696,8 @@ class RequestCard(HistoryCard):
     removeRequested = Signal(int)
     #: This card's button was pressed — roll this spec here, on this sheet.
     rollRequested = Signal(object)
+    #: This card's button was right-clicked — the GM's "roll it as written".
+    rollPlain = Signal(object)
 
     def __init__(
         self,
@@ -575,23 +718,23 @@ class RequestCard(HistoryCard):
         # not always a third party: off the air the asker is the reader, and the
         # private history names them "you" — which the second phrasing cannot take
         # without disagreeing with its own verb.
+        buttons: QHBoxLayout | None = None
         if show_author:
             who = str(request.get("player_name", "")) or "Someone"
             name_line = QLabel(f"Requested by <b>{escape_rich_text(who)}</b>")
             name_line.setTextFormat(Qt.TextFormat.RichText)
             name_line.setWordWrap(True)
-            info.addWidget(name_line)
+            buttons = heading_row(info, name_line)
 
-        # Who the roll is for — the players an area caught. Anyone may still answer it
-        # (an ally interposing), but the ones it names should not have to hunt for it.
+        # Who the roll is for — the players an area caught, the one a GM asked. Anyone
+        # may still answer it (an ally interposing), but the ones it names should not
+        # have to hunt for it.
         spec = RollSpec.from_dict(request.get("spec"))
         self.for_reader = False
         if spec is not None and spec.targets:
             self.for_reader = bool(own_names & set(spec.targets))
             names = escape_rich_text(", ".join(spec.targets))
-            caught = QLabel(
-                f"<b>You're caught</b> — {names}" if self.for_reader else f"Caught: {names}"
-            )
+            caught = QLabel(f"<b>For you</b> — {names}" if self.for_reader else f"For: {names}")
             caught.setTextFormat(Qt.TextFormat.RichText)
             caught.setWordWrap(True)
             caught.setStyleSheet(
@@ -599,17 +742,22 @@ class RequestCard(HistoryCard):
             )
             info.addWidget(caught)
 
-        for widget in request_widgets(request.get("spec"), on_roll=self.rollRequested.emit):
+        for widget in request_widgets(
+            request.get("spec"), on_roll=self.rollRequested.emit, on_plain=self.rollPlain.emit
+        ):
             info.addWidget(widget)
 
         layout.addLayout(info, stretch=1)
 
         if can_remove and self.seq is not None:
-            remove_button = QPushButton("✕")
-            remove_button.setToolTip("Remove this request from the history")
-            remove_button.setFixedWidth(int(theme.metric("column.roll-button")))
-            remove_button.clicked.connect(lambda: self.removeRequested.emit(self.seq))
-            layout.addWidget(remove_button, alignment=Qt.AlignmentFlag.AlignVCenter)
+            remove = remove_button(
+                "Remove this request from the history",
+                lambda: self.removeRequested.emit(self.seq),
+            )
+            if buttons is not None:
+                buttons.addWidget(remove, alignment=Qt.AlignmentFlag.AlignTop)
+            else:
+                layout.addWidget(remove, alignment=Qt.AlignmentFlag.AlignVCenter)
 
 
 class SessionRollCard(HistoryCard):
@@ -635,6 +783,8 @@ class SessionRollCard(HistoryCard):
     #: on one's own card, since a follow-up is read off local game data (see
     #: :func:`chain_widgets`).
     rollFollowUp = Signal(object)
+    #: A chain button was right-clicked — the GM's "roll it as written".
+    rollPlain = Signal(object)
 
     def __init__(
         self,
@@ -651,10 +801,11 @@ class SessionRollCard(HistoryCard):
         degree = roll.get("degree")
 
         layout = QHBoxLayout(self)
+        self.undo: QPushButton | None = None
         info = QVBoxLayout()
         tighten_card(layout, info)
 
-        info.addWidget(_rich(roll_heading(roll)))
+        self._buttons = heading_row(info, _rich(roll_heading(roll)))
         info.addWidget(_rich(roll_headline(roll)))
 
         # The chain — on every card, whoever rolled it. A save an attack forced is
@@ -667,6 +818,7 @@ class SessionRollCard(HistoryCard):
             total=die + int(roll.get("bonus", 0)) - int(roll.get("penalty", 0)),
             on_follow_up=self.rollFollowUp.emit,
             localize=not own,
+            on_plain=self.rollPlain.emit,
         ):
             info.addWidget(widget)
 
@@ -678,28 +830,45 @@ class SessionRollCard(HistoryCard):
         if own:
             self.star = QuickRollStar()
             self.star.clicked.connect(lambda: self.saveToggled.emit(roll_parameters(self.roll)))
-            layout.addWidget(self.star, alignment=Qt.AlignmentFlag.AlignVCenter)
+            self._add_button(self.star)
 
         # GM only, and only for a session roll: a pre-hosting roll (negative seq) was
         # never in a log the table could be shown.
         self.reveal_button: QPushButton | None = None
         if can_remove and roll.get("hidden") and self.seq is not None and self.seq > 0:
-            self.reveal_button = QPushButton("Show")
+            self.reveal_button = fit_button("Show")
             self.reveal_button.setToolTip("Show this hidden roll to the table")
             self.reveal_button.clicked.connect(lambda: self.revealRequested.emit(self.seq))
-            layout.addWidget(self.reveal_button, alignment=Qt.AlignmentFlag.AlignVCenter)
+            self._add_button(self.reveal_button)
 
         if can_remove and self.seq is not None:
             # GM only — strikes the roll from the log (from every screen, in a session).
-            remove_button = QPushButton("✕")
-            remove_button.setToolTip("Remove this roll from the history")
-            remove_button.setFixedWidth(int(theme.metric("column.roll-button")))
-            remove_button.clicked.connect(lambda: self.removeRequested.emit(self.seq))
-            layout.addWidget(remove_button, alignment=Qt.AlignmentFlag.AlignVCenter)
+            self._add_button(
+                remove_button(
+                    "Remove this roll from the history",
+                    lambda: self.removeRequested.emit(self.seq),
+                )
+            )
 
     def parameters(self) -> dict:
         """The quick-roll parameters this card would save."""
         return roll_parameters(self.roll)
+
+    def set_undo(self, undo: tuple[str, Callable[[], None]] | None) -> None:
+        """Show the ↶ that takes back what this roll applied — ``(tooltip, do it)`` —
+        or, with ``None``, take it away."""
+        if self.undo is not None:
+            self._buttons.removeWidget(self.undo)
+            discard_widget(self.undo)
+            self.undo = None
+        if undo is None:
+            return
+        self.undo = undo_button(*undo)
+        # First, before the star and the GM's buttons.
+        self._add_button(self.undo, 0)
+
+    def _add_button(self, button: QWidget, index: int = -1) -> None:
+        self._buttons.insertWidget(index, button, alignment=Qt.AlignmentFlag.AlignTop)
 
     def set_save_state(self, saved_keys: set, room: bool) -> None:
         """Light this card's star if its roll is among *saved_keys* (a no-op without one)."""
@@ -754,6 +923,43 @@ def _provokes(roll: dict) -> bool:
     return spec is not None and spec.follow_up is not None
 
 
+def action_table_key(roll: dict) -> str:
+    """The table a roll belongs to: its group's, or the action its spec names.
+
+    A group's rolls are the server's (:func:`table_key`). A roll a *player* made for an
+    action — their Dodge against an area, the impress check the GM asked them for, an
+    area's attack — is an ordinary roll, but its spec carries the action's id and a
+    title, and the action's groups are named after that same id. So it joins the table.
+    """
+    group = str(roll.get("group", "") or "")
+    if group:
+        return table_key(group)
+    spec = RollSpec.from_dict(roll.get("spec"))
+    if spec is not None and spec.action_id and spec.title:
+        return spec.action_id
+    return ""
+
+
+def answer_context(roll: dict) -> AnswerContext:
+    """Where a follow-up chip on *roll*'s card was pressed.
+
+    Its source is whoever made the roll: the creature it was made as, an impress
+    check's impresser (the GM's NPC's check is the GM seat's roll, naming its impresser
+    in ``targets``), or else the seat.
+    """
+    provoking = RollSpec.from_dict(roll.get("spec"))
+    seq = roll.get("seq")
+    source = str(roll.get("player_name", ""))
+    if provoking is not None:
+        if provoking.actor:
+            source = provoking.actor
+        elif provoking.kind == KIND_IMPRESS and provoking.targets:
+            source = provoking.targets[0]
+    return AnswerContext(
+        seq=seq if isinstance(seq, int) else None, source=source, provoking=provoking
+    )
+
+
 def _row_name(roll: dict) -> str:
     """The creature a group roll concerns — the first name its spec targets, or none."""
     spec = RollSpec.from_dict(roll.get("spec"))
@@ -784,17 +990,21 @@ class GroupTableCard(HistoryCard):
         super().__init__(None, parent)
         self.key = key
         self.records: list[dict] = []
+        #: Looks up a roll's ↶ by its ``seq`` — ``(tooltip, do it)`` or ``None``. The
+        #: panel's, so a table redrawn after a replay finds the same buttons again.
+        self.undo_lookup: Callable[[int], tuple[str, Callable[[], None]] | None] | None = None
         layout = QHBoxLayout(self)
         self._info = QVBoxLayout()
         tighten_card(layout, self._info)
         layout.addLayout(self._info, stretch=1)
         self._lines: list[QLabel] = []
+        # A row with a ↶ is its label and the button, in a row widget of their own.
+        self._rows: list[QWidget] = []
         if can_remove:
-            remove_button = QPushButton("✕")
-            remove_button.setToolTip("Remove this whole table from the history")
-            remove_button.setFixedWidth(int(theme.metric("column.roll-button")))
-            remove_button.clicked.connect(self._remove_all)
-            layout.addWidget(remove_button, alignment=Qt.AlignmentFlag.AlignTop)
+            layout.addWidget(
+                remove_button("Remove this whole table from the history", self._remove_all),
+                alignment=Qt.AlignmentFlag.AlignTop,
+            )
 
     @property
     def seqs(self) -> set[int]:
@@ -846,10 +1056,11 @@ class GroupTableCard(HistoryCard):
         return ""
 
     def _redraw(self) -> None:
-        for line in self._lines:
-            self._info.removeWidget(line)
-            discard_widget(line)
+        for widget in [*self._rows, *self._lines]:
+            self._info.removeWidget(widget)
+            discard_widget(widget)
         self._lines = []
+        self._rows = []
         if not self.records:
             return
         who = str(self.records[0].get("player_name", "")) or "Someone"
@@ -872,12 +1083,36 @@ class GroupTableCard(HistoryCard):
             if outcome:
                 tint = theme.color("tint.worse" if outcome_is_failure(degree) else "tint.warning")
                 text += f" → <span style='color:{tint}'><b>{escape_rich_text(outcome)}</b></span>"
-            self._add_line(text)
+            self._add_line(text, self._undo_of(rolls))
 
-    def _add_line(self, text: str) -> None:
+    def _undo_of(self, rolls: list[dict]) -> tuple[str, Callable[[], None]] | None:
+        """The ↶ of the latest roll in a row that has one."""
+        if self.undo_lookup is None:
+            return None
+        for roll in reversed(rolls):
+            seq = roll.get("seq")
+            undo = self.undo_lookup(seq) if isinstance(seq, int) else None
+            if undo is not None:
+                return undo
+        return None
+
+    def refresh(self) -> None:
+        """Draw the table again — a ↶ came or went."""
+        self._redraw()
+
+    def _add_line(self, text: str, undo: tuple[str, Callable[[], None]] | None = None) -> None:
         line = _rich(text)
-        self._info.addWidget(line)
         self._lines.append(line)
+        if undo is None:
+            self._info.addWidget(line)
+            return
+        row = QWidget()
+        box = QHBoxLayout(row)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.addWidget(line, stretch=1)
+        box.addWidget(undo_button(*undo), alignment=Qt.AlignmentFlag.AlignVCenter)
+        self._info.addWidget(row)
+        self._rows.append(row)
 
     def lines(self) -> list[str]:
         """The table's rows as plain text, heading first — what a test reads."""
@@ -927,6 +1162,19 @@ class ActionCard(HistoryCard):
     def set_text(self, text: str) -> None:
         self._text.setText(text)
 
+    def set_status(self, text: str, *, button: str = "") -> None:
+        """Say where the action stands while it still waits — who is still to roll.
+
+        *button* renames the button to what it does now ("Open" once it is rolling).
+        """
+        if button:
+            self.button.setText(button)
+        self._status.setText(text)
+        self._status.setVisible(bool(text))
+
+    def status(self) -> str:
+        return self._status.text()
+
     def set_done(self, text: str) -> None:
         """The action is settled: say how, and take the button away."""
         self.pending = False
@@ -949,6 +1197,11 @@ class RollHistoryPanel(QWidget):
 
     #: A card's follow-up button was pressed — roll this spec (see :func:`chain_widgets`).
     rollFollowUp = Signal(object)
+    #: The same press with where it was made — ``(spec, AnswerContext)``. What the GM's
+    #: window answers, since whom it rolls for depends on the card.
+    rollAnswer = Signal(object, object)
+    #: A card's roll button was right-clicked: roll the spec as written.
+    rollPlain = Signal(object)
 
     def __init__(self, parent: QWidget | None = None, *, gm: bool = False) -> None:
         super().__init__(parent)
@@ -977,6 +1230,9 @@ class RollHistoryPanel(QWidget):
         # vanish for good.
         self._awaiting_own = False
         self._held: dict[int, dict] = {}
+        # The ↶ each roll that applied conditions by itself shows, by seq — kept here
+        # rather than on the card, so a card rebuilt by a replay gets it back.
+        self._undo: dict[int, tuple[str, Callable[[], None]]] = {}
         # True while a whole log is being laid in (a join, a reconnect, the GM's log
         # off disk): none of that is news, so none of it pops up as a notification.
         self._replaying = False
@@ -1200,9 +1456,9 @@ class RollHistoryPanel(QWidget):
                 return
             self._seen.add(seq)
 
-        group = str(roll.get("group", "") or "")
-        if group and roll.get("kind", KIND_ROLL) == KIND_ROLL and not _provokes(roll):
-            self._add_to_table(roll, table_key(group))
+        key = action_table_key(roll) if roll.get("kind", KIND_ROLL) == KIND_ROLL else ""
+        if key and not _provokes(roll):
+            self._add_to_table(roll, key)
             return
 
         card: HistoryCard
@@ -1222,6 +1478,10 @@ class RollHistoryPanel(QWidget):
             # reason: both are "roll this on your own sheet", and the roller
             # already answers it (localizer and all).
             card.rollRequested.connect(self.rollFollowUp)
+            card.rollRequested.connect(
+                lambda spec, c=card: self.rollAnswer.emit(spec, AnswerContext(seq=c.seq))
+            )
+            card.rollPlain.connect(self.rollPlain)
         else:
             card = self._roll_card(roll)
         # Newest on top: insert above every existing card (the stretch is last).
@@ -1244,6 +1504,7 @@ class RollHistoryPanel(QWidget):
             table.add_record(roll)
             return
         table = GroupTableCard(key, can_remove=self._gm)
+        table.undo_lookup = self._undo.get
         table.removeRequested.connect(self._request_remove)
         table.add_record(roll)
         self._layout.insertWidget(0, table)
@@ -1269,7 +1530,29 @@ class RollHistoryPanel(QWidget):
         card.removeRequested.connect(self._request_remove)
         card.revealRequested.connect(self._request_reveal)
         card.rollFollowUp.connect(self.rollFollowUp)
+        card.rollFollowUp.connect(
+            lambda spec, c=card: self.rollAnswer.emit(spec, answer_context(c.roll))
+        )
+        card.rollPlain.connect(self.rollPlain)
+        if card.seq is not None and card.seq in self._undo:
+            card.set_undo(self._undo[card.seq])
         return card
+
+    def set_undo(self, seq: int, tooltip: str, on_undo: Callable[[], None] | None) -> None:
+        """Give the roll *seq* a ↶ that calls *on_undo*; ``None`` takes it away."""
+        if on_undo is None:
+            self._undo.pop(seq, None)
+        else:
+            self._undo[seq] = (tooltip, on_undo)
+        for card in self.cards():
+            if isinstance(card, SessionRollCard) and card.seq == seq:
+                card.set_undo(self._undo.get(seq))
+            elif isinstance(card, GroupTableCard) and seq in card.seqs:
+                card.refresh()
+
+    def undo_for(self, seq: int) -> tuple[str, Callable[[], None]] | None:
+        """The ↶ the roll *seq* carries, if any."""
+        return self._undo.get(seq)
 
     def _request_reveal(self, seq: int) -> None:
         """A hidden roll's Show was clicked — show it to the table (GM action).

@@ -1650,11 +1650,12 @@ def test_non_attack_roll_still_uses_the_effect_rank() -> None:
     assert rows["opposed"].value.startswith("7 vs. ")
 
 
-def test_effect_stat_rows_opposed_effect_uses_rank_as_the_threshold() -> None:
+def test_effect_stat_rows_move_object_is_resisted_at_the_effect_dc() -> None:
     data = load_game_data()
-    # Move Object is resisted by Strength against its effective Strength (its rank).
+    # "RESISTANCE: Strength vs. Effect DC" (p134), and the effect DC is 10 + rank (p105).
+    # It used to read the bare rank, which no reading of the book supports.
     rows = {r.key: r for r in effect_stat_rows(PowerEffectInstance("move_object", rank=6), data)}
-    assert rows["resistance"].value == "Strength vs. 6"  # base 0 + rank
+    assert rows["resistance"].value == "Strength vs. 16"
 
 
 def test_effect_stat_rows_append_dc_to_a_config_chosen_resistance() -> None:
@@ -2236,6 +2237,8 @@ def test_affliction_exposes_config_fields() -> None:
         "degree1",
         "degree2",
         "degree3",
+        # The trait a Weaken-style Affliction's Impaired is scoped to.
+        "scope",
         # The Transformed condition may impose a Personal Range effect (p110); both
         # fields are gated shut until a degree actually reads Transformed.
         "imposedEffect",
@@ -2672,7 +2675,9 @@ def test_linked_game_terms_prefix_a_header() -> None:
         structure=STRUCTURE_LINKED,
         effects=[PowerEffectInstance("damage", rank=8), PowerEffectInstance("affliction", rank=4)],
     )
-    assert power_game_terms(power, data).startswith("Linked (all effects activate together):")
+    assert power_game_terms(power, data).startswith(
+        "Linked (all effects activate together, as a standard action):"
+    )
 
 
 def _pl_char(data, *, atk: int = 0, strength: int = 0, power_level: int = 10) -> Character:

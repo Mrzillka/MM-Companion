@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core import notes
 from mm_companion.ui.notes.events import note_events
-from mm_companion.ui.widgets import muted_style
+from mm_companion.ui.widgets import muted_style, with_help
 
 HELP_TEXT = (
     "Notes are markdown files in your workspace. One can be open on more than one "
@@ -56,16 +56,11 @@ class NotePickerDialog(QDialog):
 
         layout = QVBoxLayout(self)
 
-        help_label = QLabel(HELP_TEXT)
-        help_label.setWordWrap(True)
-        help_label.setStyleSheet(muted_style())
-        layout.addWidget(help_label)
-
         self._filter = QLineEdit()
         self._filter.setPlaceholderText("Filter…")
         self._filter.setClearButtonEnabled(True)
         self._filter.textChanged.connect(self._apply_filter)
-        layout.addWidget(self._filter)
+        layout.addWidget(with_help(self._filter, HELP_TEXT, stretch=False))
 
         self._list = QListWidget()
         self._list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)

@@ -46,6 +46,16 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   comes back. `set_rolls` also re-reads `own_player_id()` before repainting, since
   `attach` runs once per join and a redial that failed to reclaim the old seat returns
   under a new `player_id`.
+- **A card is as narrow as its longest word, and widens only when it has room.** Every
+  roll button on a card is a `WrappingButton` (`roll_button`), and the small buttons
+  (☆, Show, ↶, ✕, the private card's −) sit beside the card's first line
+  (`heading_row`), not down its side. There they take width only from the name line,
+  which wraps, and every line below gets the card's whole width. Down the side they
+  made the card that wide all the way down. "Show" is only as wide as its word
+  (`fit_button`), not the platform's default button width. A reflowing side box (row
+  when there is room, stacked when not) was tried first. The card's row layout always
+  squeezed the box to its stacked minimum, and making that adaptive would have had the
+  card's minimum follow the decision, which the standing rules forbid.
 - **A history holds notes as well as rolls.** A `NoteCard` is a line nobody rolled —
   "spent a hero point — 2 left" — written by the `note-requested` topic (see "Rolling
   from the sheet"). In a session it goes to the server and comes back through the shared
@@ -527,7 +537,9 @@ clearing is precisely what `_settle_spec` does one line after the roll wrote one
   reading the same shared history, clicks the save straight off it. So the spec
   travels: `RollSpec.to_dict()` → `RollRequest.spec` → `RollRecord.spec` → every
   client. An earlier version kept it local "because it's derived data", which left
-  the chip in front of the one person who had no use for it.
+  the chip in front of the one person who had no use for it. A roll may provoke **several**
+  (`RollSpec.also`, beside `follow_up`; `follow_ups_for_result` adjusts each): a
+  Linked power's one attack lands a save per effect, and each gets its own chip.
 - The server stays **rules-free**. It validates the spec's *shape*
   (`protocol.sanitize_spec` — a key whitelist, text/ladder caps, a `follow_up` depth
   cap, since this is client-supplied data rendered on other people's screens) and

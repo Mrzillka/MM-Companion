@@ -30,11 +30,47 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   their meaning is a rules question.
 - **`core/dice.resolve_group`** rolls a group rules-free and seedably, so the session
   server (which must not load game data) and a GM off the air resolve it identically.
-- **UI:** `ui/impress.py` holds the three windows (the impresser's `ImpressDialog`,
-  a target's `ResistPromptDialog`, the GM's `ImpressWindow`) and computes nothing;
-  `ui/impress_gm.py`'s `ImpressController` is the only part that touches the session,
-  and reaches the GM window through the four-method `ImpressHost` surface rather than
-  its internals. `session_player.ResistPromptReceiver` is the player's end.
+- **UI:** both actions are built from the same pieces, and look alike for it.
+  - `ui/action_ui.py` is what they share: the table's rule (below), the target picker
+    a player's dialog takes scene cards into (`TargetsBox`, `TargetDropField`), the
+    GM's `ActionWindow` skeleton, the `RollPromptDialog` a player is asked to roll in,
+    and `fit_to_screen`.
+  - `ui/action_run.py`'s `ActionRun` rolls one action: NPCs as server-side group lines,
+    players **asked**, and every roll gathered again (see *Running one*, below).
+  - `ui/impress.py` holds the impresser's `ImpressDialog` and the GM's `ImpressWindow`
+    and computes nothing; `ui/impress_gm.py`'s `ImpressController` is the only part
+    that touches the session, through the `ImpressHost` surface.
+  - `session_player.ActionPromptReceiver` is the player's end of every ask.
+
+## Who sets an action up
+
+- **Two settings decide whether a player gets a window at all.** The GM's *Let players
+  set up their own Impress and area attacks* (GM Mode page, **on** by default) and the
+  player's *Set up my own Impress and area attacks* (General page, **off** by default).
+  A player gets the dialog only when both are on (`sets_up_own_actions`).
+  - Otherwise the action goes to the GM **bare**: an `ImpressAttempt` with no
+    impression (`attempt.bare`), or an `AreaAttempt` with no primary and no targets. The
+    GM picks the impression and the skill off the player's snapshot, or the area's
+    shape, primary and who is caught.
+  - The GM resolves it either way, and the GM's own sheets never get the dialog — the
+    GM's window is where they set things up.
+  - Off the air there is no GM, so the dialog always opens.
+- **The GM may start either action for anybody**, a player included: the roller's
+  Impress and Area buttons, an NPC card's 🗣 and 💥, and a creature's card on the board
+  (right-click: **Impress…**, **Area attack…**). Impress's impresser combo lists the cast
+  and the players; the area window grows an **Attacker** combo for one the GM started,
+  and switching it reads that creature's builds afresh (a player's off their snapshot —
+  `start_for` refuses one whose snapshot has not come). A player picked as the
+  attacker is asked for their check or attack exactly as one who declared it.
+- **The GM's setting is published, not asked for.** It rides the session's
+  shared-state channel as the core app's own entry (`TABLE_MOD_ID`
+  `"mm-companion.table"`, key `"actions"`), so it is stored, replayed in a joiner's
+  `Welcome`, and read the moment a player clicks. The GM window publishes it when the
+  session starts or is joined, and the GM page's Save publishes it again. A table that
+  never said (an older GM) lets players choose.
+- **A player's declaration waits in the GM's history** as an `ActionCard` — **Resolve
+  Impress** or **Resolve Area Attack** — rather than opening a window on top of the GM.
+  The GM's own (an NPC's card, the roller's Impress, an NPC sheet) opens straight away.
 
 ## How one attempt runs
 
@@ -43,38 +79,52 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   what is rolled. An impression's `skill` is only the one preselected when it is
   picked. Advantage-gated impressions are *shown greyed* with the advantage in the
   tooltip rather than hidden — a player should be able to see Dazed exists.
-- **The GM always sets the situational modifiers**, whoever is impressing. A player's
-  dialog in a session therefore carries no modifiers at all; it declares (impression,
-  skill, targets off the scene, mode) and the GM's window opens on it, the player's
-  own choices read-only. Toggles sharing an `exclusive` group (simple vs. full action)
-  turn each other off; a slider stops only on its `step`, so "earlier attempts" moves
-  in fives.
+- **The GM always sets the situational modifiers**, whoever is impressing, and a
+  **adjustment to the impresser's check** of their own (one signed box, a bonus "+2" or
+  a penalty "-2" — it was two boxes, which doubled every row). A player's dialog in
+  a session therefore carries no modifiers at all; it declares (impression, skill,
+  targets off the scene, mode) and the GM's window opens on it, the player's own
+  choices picked (and still the GM's to change). Toggles sharing an `exclusive` group (simple vs. full action)
+  turn each other off; a range's `StepSpin` stops only on its `step`, so "earlier
+  attempts" moves in fives. The panel is **folded by default** behind a header saying
+  what the modifiers add up to ("none", or the tinted total), and unfolds itself when
+  `set_values` sets one that counts. Each modifier's `label` is a short caption and its
+  `hint` the explanation, shown as the control's tooltip.
+- **A declared impression is the player's pick, not a lock.** The GM window opens on the
+  impression and skill they declared, picked out of everything their snapshot offers, and
+  the GM may change either (the declared skill keeps the number the player's own sheet
+  sent with it). Only the impresser is fixed — it is still their action.
 - **Several targets is a group impression**: one check, the group penalty once, each
-  target resisting separately. Every target also gets a **bonus and a penalty on the
-  check against them alone** — applied as an offset to the DC that target resists,
+  target resisting separately. Every target also gets an **adjustment to the check
+  against them alone** (its row's **Adjust**) — applied as an offset to the DC that
+  target resists,
   which is the same arithmetic as adjusting the check and the only way one die can
   stand against several totals.
-- **Resisting is "Use highest" by default.** The candidates are the impresser's skill
+- **Resisting is "Highest" by default** — the first entry of each target's one
+  combo, followed by every option by name. The candidates are the impresser's skill
   (as the skill — a specialized pool resists as its base skill), then `resist.skills`
-  and `resist.resistances`. A targeted *player* is asked through a prompt and may pick
-  another; their answer comes back with their own numbers, which the GM window then
-  trusts over the snapshot's. The GM can override either way, and can roll without
-  waiting — an unanswered player resists with their highest off the snapshot.
-- **A prompt lives exactly as long as the question does.** Players are asked only in
-  *resolve* mode (request mode asks nobody — they roll from the card), and switching
-  to resolve asks whoever is ticked. Unticking a player who was asked withdraws their
-  prompt (``resist-closed``) and ignores a late answer. Changing the impresser's skill
-  voids every answer — the same skill is one of the ways to resist — and asks again.
-  The window settles in ``done()``, not ``closeEvent``: **Esc rejects a dialog with no
-  close event**, and that once left players staring at a prompt nobody would roll.
-- **Two modes.** *Resolve* rolls the check and every resistance as one server-side
-  group, and applies the rung each failure lands on: straight onto an NPC's model
-  (through `_after_npc_condition_change`, the path every NPC condition change takes),
-  or as condition commands to a player's app (escalation resolved against their
-  snapshot first, so the GM decides it once). *Request only* rolls just the check,
-  whose spec carries the resistance as a `dc_from_total` follow-up — every card offers
-  "🎲 Resist Demoralized vs. DC 23", and clicking it rolls the *clicker's* best
-  option (`KIND_BEST_OF`, below).
+  and `resist.resistances`. An NPC resists with the GM window's pick. A targeted
+  *player* is asked nothing before the roll: once the check is in, they are asked to
+  roll their resistance (`impress_ask_resist_spec`, a `KIND_BEST_OF` spec with the DC
+  in), and pick another trait in the prompt's own "Highest"-first combo if they want.
+  If the GM picked one trait for them, the ask names that trait instead.
+- **Two stages, and the check is the impresser's.** *Resolve* rolls the check first:
+  the server rolls an NPC's as a lead-only group; a **player** impressing is asked to
+  roll it, with every GM adjustment already in its modifier. Its total, plus
+  `critical_effect_bonus` on a natural 20, is the DC. Then each NPC target's
+  resistance is a line of one group (`dc_offset` = that DC plus the target's own
+  adjustment, from a group DC of 0) and each player target is asked. The rung each
+  failure lands on is applied as it arrives: straight onto an NPC's model (through
+  `_after_npc_condition_change`, the path every NPC condition change takes), or as
+  condition commands to a player's app (escalation resolved against their snapshot
+  first, so the GM decides it once). A player's own check used to be rolled by the
+  server as the group's lead, which they never saw as theirs.
+- **Request only** rolls just the check — the server for an NPC, the player when it
+  is theirs — whose spec carries the resistance as a `dc_from_total` follow-up: every
+  card offers "🎲 Resist Demoralized vs. DC 23", and clicking it rolls the *clicker's*
+  best option (`KIND_BEST_OF`, below).
+- The window settles in ``done()``, not ``closeEvent``: **Esc rejects a dialog with no
+  close event**. During setup that is a cancel; once rolling it only hides (below).
 - **The GM's own sheets** (an NPC's, opened from the cast) have the same Impress
   button, and its declaration must not go on the wire: the server forwards nothing
   from the GM's seat to the GM's seat. ``SessionBridge.send_action_request`` raises it
@@ -88,19 +138,69 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   the sheet's own roller. A GM off the air still resolves fully against their NPCs:
   `resolve_group` runs locally and the records are shown as offline cards.
 
-## The wire (protocol v11)
+## Running one: stages, asks and the window that watches them
+
+- **`ActionRun`** rolls every stage. A creature nobody plays is a line of a
+  server-side group (`roll_group`; off the air the same group is rolled here by
+  `resolve_group` and shown as offline cards). A **player is asked** (`ask`): an
+  `ActionPrompt` kind `"roll"` pops a `RollPromptDialog` up on their screen, *and* the
+  same spec goes in everyone's history as a request card — anyone may answer it, an
+  ally interposing, and the first roll back counts.
+  - The ask's spec names the row in `targets` and carries the action id, so the roll
+    that comes back is found by `(name, is it an attack)` — an area's attack and the
+    primary's save name the same row.
+  - When it is answered the run closes the prompt (`"roll-closed"`) and strikes the
+    history's request card by the `seq` it saw it arrive with.
+  - **Roll for the waiting** rolls every ask still out here, as the GM's own line, off
+    the player's snapshot — for a player who has gone quiet.
+  - `"outcome"` tells a player what the action did to them, as a notice on their sheet.
+- **The GM's window stays.** `ActionWindow` has a setup phase and a running one: once
+  rolled, its controls lock and each roll lands in its row's **Result** column as it
+  comes back, with who is still being waited for underneath. Closing it then only
+  hides it; the history card (**Open**, with a live "Waiting for …" status) brings it
+  back. **Call off** stops waiting and withdraws every prompt; **Dismiss** throws a
+  player's declaration away before it is rolled. The controllers forget an action once
+  it is settled and its window closed.
+- **Fits the screen.** Every window and dialog body is a `BodyScroll` (which asks for
+  all of its content) and `fit_to_screen` caps the window at 85% of the screen, so a
+  whole scene of targets scrolls rather than running off the bottom. The two dialogs
+  open at least `DIALOG_CHARS` wide, so the area's summary is not wrapped into three
+  lines in a dialog sized to its widest combo.
+- **The windows show numbers; the rules sit behind a "?".** How an Impress or an area
+  resolves, what the modes mean, how a creature is put in the table — each is a
+  `HelpButton` (the dialogs' and the GM window's by the buttons, the table's in its
+  header row, the primary target's beside its attack button), never a paragraph in
+  the window. What stays on screen is what changes: the ladder, the DC, the total and
+  what it is made of (the group penalty is a part of that line, not a warning of its
+  own), and who is still being waited for. The impress check's total sits under the
+  scroll (`add_footer`), and hides once rolled, since the check note above the table
+  then says what it came to. The heading says only whose declaration it is, and is
+  gone for the GM's own (`set_heading`).
+
+## The wire (protocol v14)
 
 - `ActionRequest` (any seat → the GM alone, stamped with the sender, like
   `ModRequest`), `ActionPrompt` (GM → one named player) and `GroupRollRequest` (GM
   only). Payloads go through `sanitize_mod_payload` and are never read by the server.
-  Kinds: `impress` (a declared attempt), `resist` (a target's answer, and the GM's
-  question), `resist-closed` (the GM rolled or closed the window).
+  Kinds: `impress` and `area` (a declared attempt, whole or bare); prompts `roll` (roll
+  this), `roll-closed` (that ask is settled) and `outcome` (what it did to you). The old
+  `resist` / `resist-closed` pre-roll question is gone.
+- **No protocol bump** for the asks. Nothing new crosses the server, and an older
+  client that ignores a `roll` prompt still has the request card in its history,
+  whose roll carries the action id home all the same. (v14 is for the spec's `ladder`
+  and `actor`: see *Answering a history roll as an NPC*.)
+- **An ask's prompt goes without the spec's ladder** (`ActionRun.ask`). An action's
+  payload is nested at most four deep and capped at 4 KB by `sanitize_mod_payload`, so
+  a ladder would be cut down without a word or sink the prompt. The player does not
+  need it, since the GM's table applies what their save did. The request card keeps
+  it, for an NPC the GM answers it with.
 - **A group roll lands as ordinary records**, a line per creature, each tagged with
   `RollRecord.group` and attributed to the seat its line names (or the GM's, for a
-  creature nobody plays). Nothing about drawing a card changed. The GM's controller
-  gathers them again by group and applies once it has as many as it asked for — and
+  creature nobody plays). Nothing about drawing a card changed. The run gathers them
+  again by group and finishes the stage once it has as many as it asked for — and
   registers that expectation **before** asking, because a hosting server raises each
   record as an event inside the `group_roll` call.
+- **Group ids are `"<action id>.<n>"`**, so `table_key` reads the action id back.
 - **A lead with no lines is allowed** — that is request mode. A group with lines and
   neither a lead nor a fixed DC is refused.
 - **The roller ignores group records** (`_on_session_roll`): a resistance line bearing
@@ -159,6 +259,9 @@ The second action on this layer, following the 4e rules (Area Effect extra, PDF 
 - The card's **Area** row says "Dodge DC N for half" only for an effect someone
   resists. An area Healing or Environment is just a size.
 - **The free area use.** Any attack may be used as an area at the table.
+  - The GM need not flip anything: an NPC card's **Area** button offers every build
+    `area_capable_builds` finds (bought areas, and any attack), and
+    `power_area_use(..., free_use=True)` reads the switch as on.
   - A checkable "Use as an area attack" on the power card's right-click menu sets
     `Power.area_use`. It is saved, runtime-like, undoable and priced at nothing.
   - The area rank is capped at the Power Level (`freeUsePlCap`), **plus the size
@@ -170,11 +273,18 @@ The second action on this layer, following the 4e rules (Area Effect extra, PDF 
     blocks learn they are on an NPC sheet through `set_npc_mode` and redraw.
   - The book's version is the size rule (PDF p58). Here it is the GM's call, not a
     gate the app checks.
-- **The area line.** `power_rolls_with_area` appends one `KIND_AREA` spec to the
-  footer. It is not a die, and it **never travels as one**.
+- **The area line.** `power_rolls_with_area` appends a `KIND_AREA` spec to the
+  footer for each area the build makes. It is not a die, and it **never travels as one**.
+  - **A linked area is one area per effect.** A build whose effects are several areas
+    gets a line for each (`power_area_uses`, the effect's name in the label), and each
+    runs as an area of its own: its own Dodge against its own rank, its own save. It
+    used to be one Dodge against the first effect's rank with the rest as further
+    saves; the user asked for two buttons rather than that. An `AreaUse` carries one
+    effect and its `effect_index`, and the line's key is `area_key` —
+    `"<build id>#<index>"`, the bare id for the first (`find_area_power` strips it).
   - It goes *last*, so a pin's index keeps naming the roll it was made on. The footer
     offers no pin menu on it.
-  - Its `trait_key` is the build's id, which `find_area_power` looks up. That lookup
+  - Its `trait_key` is the area key, which `find_area_power` looks up. That lookup
     is why `item_effective_build` now keeps the host's id.
   - Clicking it raises `RollsFooter.areaRequested(build id)`, not `rollRequested`. It
     reaches the bus as its own topic, `area-requested`, which the Dice block serves
@@ -192,6 +302,8 @@ The second action on this layer, following the 4e rules (Area Effect extra, PDF 
 - **It is modeless** (`show()`, not `exec()`). The cards are dragged off the Scene
   block on the same window, and a modal dialog swallows the press that starts the drag.
 - A player's scene cards are draggable now; only the GM's board takes the drop back.
+- A **mode** row (**GM resolves** / **Request only**) rides on `AreaAttempt.mode`, and
+  the GM's window opens on it. An area Healing has neither: no primary box and no mode.
 - At a table, sending it does three things:
   1. sends the `AreaAttempt` (`ActionRequest` kind `"area"`);
   2. posts a note naming who is caught;
@@ -212,6 +324,11 @@ The second action on this layer, following the 4e rules (Area Effect extra, PDF 
 
 ### The GM's side
 
+- **NPC cards carry the actions.** 🗣 (Impress) and 💥 (Area, shown only for a creature
+  with an attack) sit in the card's header so a collapsed card keeps them, and both are
+  on the right-click menu. Area goes straight to the window for one attack, or offers
+  a menu of them. The window then lets the GM switch the **power** and, for a free
+  use, the **shape** (a player's too, worked out again off their snapshot).
 - `AreaController` puts an `ActionCard` with **Resolve Area Attack** in the GM's
   history. The card is GM-only and not a record, and it is the only way back to the
   attack. So while it is `pending`, `RollHistoryPanel.clear()` keeps it through a
@@ -227,16 +344,30 @@ The second action on this layer, following the 4e rules (Area Effect extra, PDF 
   are all keyed by display name. Without the numbers, two Thugs share one row and the
   last roll stands for both.
 - `AreaWindow` lets the GM edit:
+  - the attacker (one the GM started), the **power** — every area of every build the
+    attacker's sheet offers, a player's off their snapshot — and, for a free use, the
+    shape;
+  - an **Adjust** to the area's **rank** (`area_use_adjusted`: the Dodge DC and every
+    save DC move with it) and one to the **attack** check. The attack's is added when
+    Hit is judged, never to the spec asked for, so an attack the player rolled at
+    declaration counts it the same way as one asked for later;
   - who is in the area. A dropped card ticks a row, and a roster card's `kind:source`
-    ref works too.
+    ref works too. The attacker's own row is shown but cannot be ticked.
   - the primary, and whether it was hit. "Hit" is pre-ticked from the attack's total
     against the primary's Defense class.
-  - per creature, a cover combo (Dodge only) and a bonus and penalty (both of that
-    creature's checks).
-- An NPC attacker gets a 🎲 Roll attack button.
+  - per creature, a cover combo (Dodge only) and an Adjust (both of that creature's
+    checks; `AreaTarget.adjust`).
+- An NPC attacker gets a 🎲 Roll attack button. A player's gets **🎲 Ask for the
+  attack**, which asks them for it like any other roll — how a bare declaration's
+  attack gets rolled once the GM has picked a primary. Resolving does not wait on it:
+  the GM may tick Hit by hand.
 - A player's fresh snapshot reaches open area windows as it does Impress ones
   (`AreaController.windows`). If the primary's Defense changed, the Hit tick is
   re-read, unless the GM set Hit by hand.
+- **A rerolled attack is followed until the GM resolves.** A reroll travels with the
+  same spec, so it reaches `_take_attack` like the first roll; the window replaces the
+  attack, says "(rerolled)" and judges Hit afresh. Once the area is resolved or
+  requested, an attack that comes in changes nothing (`declared.resolving` is set).
 
 ### Resolving
 
@@ -259,32 +390,112 @@ The second action on this layer, following the 4e rules (Area Effect extra, PDF 
   `KIND_WORST_OF` with a `best_of_key`. Before this, those NPC saves were rolled at
   +0. Which modifier choice means "the worse" is data, `area.worstOf`. A player's
   request uses the same kind, so `localize_spec` fills in their pick.
-- **Players are asked, not rolled for.** Caught players get one request per set of
-  numbers the GM chose for them (`area_request_specs`, grouped by cover and
-  adjustment):
-  - It is a `KIND_AREA_DODGE` spec naming them in `targets`, chained to the save.
-  - The chain uses `follow_up_always`, because a *failed* Dodge is exactly when the
-    save is due.
-  - It also carries `dc_if_resisted`, the halved DC, which `follow_up_for_result`
-    picks on a made Dodge.
-  - Any player may click it (Interpose), and `localize_spec` adds the clicker's
-    Evasion.
-  - The GM's cover and adjustment ride as the spec's modifier, which the clicker's
-    own number is added to. Cover counts on the Dodge only, the adjustment on the
-    Dodge and the save, and the label names both. They used to be dropped without a
-    word.
-  - A hit primary player gets a plain full-rank save instead.
-  - Players apply their own conditions.
+- **Players are asked, not rolled for — one roll at a time.** Each caught player is
+  asked for their Dodge alone (`area_ask_dodge_spec`: no save chained to it). When it
+  comes back the controller works out the rank it left (`area_stage_rank`, Evasion
+  read off their snapshot) and asks for that save (`area_ask_save_spec`, its DC from
+  `area_save_dc`) — one ask per effect, in turn. A hit primary player is asked for the
+  full-rank save straight away.
+  - `localize_spec` fills in the player's own Dodge and Evasion, or their save.
+  - The GM's cover and adjustment ride as the spec's modifier, which the player's own
+    number is added to. Cover counts on the Dodge only, the adjustment on the Dodge and
+    the save, and the label names both.
+  - **The GM applies what the save did**, as for an NPC — condition commands to the
+    player's app — and tells them with an `"outcome"`. Players used to apply their own
+    off a chained request; off the air they still answer the two request cards.
+- **A heavy weapon's two ranks.** An area bought on part of an effect — a rank band on
+  the area selection, which an equipment modifier ref gives with `appliesTo` (the Rocket
+  Launcher's Area on 7 of its 10 Damage ranks) — is an area of that many ranks
+  (`area_band_ranks`, read by `effect_area_rank`, so the card's Area row agrees). The
+  creature the attack hits directly resists the whole effect: `AreaEffect.primary_rank`,
+  read through `area_primary_rank` by both the NPC saves and the player's ask.
 - **No crits on the area half.** An area's Dodge and save follow-ups take no natural-20
   bump and no natural-1 graze, because area effects make no attack check (PDF p195).
   The primary's attack is an ordinary attack and keeps its own.
+
+### Request only
+
+- The GM's **Request** rolls nothing more: `_request` leaves the history two cards per
+  effect (`area_request_specs`) — the **Dodge**, for everyone caught but a primary the
+  attack hit, and the **save**, offered at full rank and at half through
+  `dc_if_resisted`, which `request_widgets` draws as two buttons. A hit primary shares
+  the save card (its button the full one), or gets a full-rank card alone when nobody
+  else is caught or it takes a different rank. Creatures the GM set the same cover and
+  adjustment for share their cards. Off the air the dialog leaves the same two.
+- Each card carries the action id, so the answers fill the action's table.
+- The GM answers these cards as an NPC — see *Answering a history roll as an NPC*, below.
+
+### Area Healing
+
+- An area of an effect that is **checked** rather than resisted — Healing, by its
+  `checkOutcomes` (DC, and the conditions each degree removes in order) — has no Dodge,
+  no primary and no request mode: `area_use_heals`. The wielder makes one check
+  (`area_heal_spec`: the rank against the DC), rolled by the server for an NPC and asked
+  of a player, and each degree of success takes a condition off everyone in the area,
+  least severe first (`targeting.success_removals`, worked on a copy). They come off
+  through `action_remove` — an NPC's model, a player's app's remove commands.
+
+## Answering a history roll as an NPC
+
+A trait roll clicked in the GM's history — a request card, or a save chip under a roll
+— used to roll at +0, because the GM's roller has no sheet. Now:
+
+- **A click opens a menu of the NPCs on the board** (`GMWindow._on_history_roll`), never
+  the cast and never players. The ones the spec names come first, then the board's
+  order. Each row is the scene card's picture, the name, and the number it would roll
+  (`answer_reading`): a best-of names the trait it picks ("Will +8"). A trained-only
+  skill the NPC lacks is marked ⚠ but still rolls, and an NPC that already answered
+  this card (by the card's `seq`) is ticked ✓ and may roll again. An empty board shows
+  a disabled line rather than quietly rolling +0. It is one NPC per click: the user
+  dropped picking several, to keep it a plain context menu.
+- **A right-click rolls it as written**, with nobody's number (`roll_button`'s
+  `on_plain`, the panel's `rollPlain`). The menu's last line does the same. A player's
+  panel connects nothing to it, so there a right-click does nothing.
+- **The roll is the roller's**, so its adjustment and Hidden apply. The spec carries
+  the NPC as `RollSpec.actor`, and every history heads the card "Mook (GM)" with the
+  "Mook: " label prefix dropped (`roll_heading`). `actor` is a v14 spec key. An answer
+  to an action's card still carries its `action_id` and title, so it lands as the NPC's
+  row of that action's table.
+- **A failed save applies itself.** When the roll comes back (`sessionRollRevealed`, or
+  `_show_offline_roll` off the air), `_apply_answer` applies the rung of the ladder the
+  spec carries (`RollSpec.ladder`, a `SpecLadder`, protocol v14). Whoever built the
+  save made it concrete with `concrete_rung`: an Affliction's ids as the wielder picked
+  them, a Weaken's scope as a parameter, the damage ladder's escalation, an impression's
+  `{source}` template. The builders are `effect_spec_ladder` (a power's save),
+  `impress_resist_spec` and `area_resist_spec`. Whose `{source}` it is comes from the
+  roll the chip hangs off (`answer_context`). The rung goes on through `impress_apply`.
+  The first version read the ladder back out of the outcome *words* to avoid a bump,
+  and the user asked for the bump instead.
+- **Four GM switches** (GM Mode ▸ *Saves you roll for NPCs*, `gm_auto_apply`, all on by
+  default): damage, afflictions and other effects, impressions, and area attacks.
+  The switch is the ladder's own `kind`, and an area's save is `area` whatever its
+  effect.
+- **↶ takes it back.** The card (or the table row) of a roll that applied something
+  gets a small ↶ (`RollHistoryPanel.set_undo`, kept by `seq` so a replay rebuilds it).
+  It removes what the rung added and puts back what it replaced, by `condition_changes`
+  between the NPC's conditions before and after. So a Stunned that escalated from a
+  Dazed comes off and the Dazed returns.
+
+## End of turn
+
+- A creature's card on the GM's board offers **End turn**. For now it does one thing:
+  every impression the table resolved onto that creature (`ImpressController._lingering`,
+  remembered as each rung lands, with its DC and how the target resisted) is resisted
+  again **against the original DC** — the server rolls an NPC's, a player is asked for
+  each in turn (`Shake off Demoralized`). One that is made comes off; one that is
+  failed stays. An impression whose conditions are already gone is forgotten unrolled.
+- The rolls land in their own table (`"<name>: end of turn"`) and the outcome on the
+  notice. What it does not do yet is in the debts.
 
 ## One table per group (Impress too)
 
 `RollHistoryPanel` draws every record carrying a `group` as **one** `GroupTableCard`:
 
-- **The key** is `table_key(group)`: the group id without a numeric `.n` suffix. That
-  is how an area's two stages fill in one table.
+- **The key** is `table_key(group)`: the group id without a numeric `.n` suffix — the
+  action id. That is how an action's stages fill in one table. A roll a *player* made
+  for an action (an asked Dodge, their impress check, an area's attack) is an ordinary
+  roll with no group, but its spec carries the action id and a title, so
+  `action_table_key` puts it in the same table.
 - **A row** is the creature a line's spec names in `targets`. The Impress controller
   now sets it, plus a `title` the card is headed by. A roll naming nobody is a row of
   its own, and each row ends on its last roll's outcome.
@@ -300,7 +511,9 @@ The second action on this layer, following the 4e rules (Area Effect extra, PDF 
 
 These are in [the debts](debts.md):
 
-- the end-of-turn save to shake an impression off;
-- counting earlier attempts automatically;
-- the area pieces left out: a Hero Point inside the table, areas that do not resolve
-  to conditions, heavy weapons' two ranks, and linked areas.
+- End turn's other checks (Stunned recovery, Affliction overcome, Suffocation), and a
+  memory of impressions that outlives the GM's app;
+- the area pieces left out: a Hero Point inside the table, and Nullify and Move Object
+  areas.
+
+Counting earlier Impress attempts automatically was dropped: the GM sets the slider.

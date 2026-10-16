@@ -299,7 +299,8 @@
         "trait": "STA",
         "dc": 10,
         "cadence": "end_of_turn",
-        "condition": "damage-caused"
+        "condition": "damage-caused",
+        "blockedBy": ["dead"]
       }
     },
     {
@@ -553,7 +554,10 @@
         "trait": "STA",
         "dc": 10,
         "cadence": "start_of_turn",
-        "outcome": "2+ degrees stabilizes; 3+ cumulative failures = Dead"
+        "outcome": "2+ degrees stabilizes; 3+ cumulative failures = Dead",
+        "successDegrees": 2,
+        "becomes": "incapacitated",
+        "blockedBy": ["dead"]
       }
     },
     {
@@ -722,7 +726,8 @@
         "trait": "STA",
         "dc": 10,
         "cadence": "per_minute",
-        "outcome": "removes one Hit instance"
+        "outcome": "removes one Hit instance",
+        "blockedBy": ["dead"]
       },
       "stackingRule": {
         "perInstancePenalty": -1,
@@ -819,7 +824,8 @@
         "trait": "STA",
         "dc": 10,
         "cadence": "per_minute",
-        "outcome": "clears"
+        "outcome": "clears",
+        "blockedBy": ["dying", "dead"]
       }
     },
     {
@@ -940,7 +946,8 @@
         "dc": 10,
         "cadence": "per_minute",
         "condition": "no worse damage condition present",
-        "outcome": "clears"
+        "outcome": "clears",
+        "blockedBy": ["stunned", "incapacitated", "dying", "dead"]
       }
     },
     {
@@ -967,7 +974,8 @@
         "trait": "STA",
         "dc": 10,
         "cadence": "end_of_turn",
-        "condition": "damage-caused"
+        "condition": "damage-caused",
+        "blockedBy": ["incapacitated", "dying", "dead"]
       }
     },
     {

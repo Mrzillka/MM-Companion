@@ -193,10 +193,16 @@ DEFAULT_SETTINGS: dict[str, object] = {
             {"kind": "initiative"},
             {"kind": "skill", "key": "Perception"},
         ],
+        # A creature's whole defensive line, then what it hits with: the rank of
+        # its first Damage (read — it sets the save) and that power's attack bonus
+        # (rolled — the chip clicked when it swings). Six, because the NPC card lays
+        # its pins out as a grid two rows of three deep rather than a strip.
         "npc": [
             {"kind": "resistance", "key": "DEF"},
             {"kind": "resistance", "key": "TOUGHNESS"},
-            {"kind": "ability", "key": "ATK"},
+            {"kind": "resistance", "key": "WILL"},
+            {"kind": "resistance", "key": "FORTITUDE"},
+            {"kind": "effect", "select": "first_damage"},
             {"kind": "power", "select": "first_damage"},
         ],
     },
@@ -229,6 +235,21 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # on by the eye or by a drag exactly as NPCs are, and their cards grow the eye
     # to do it with. Read through :func:`gm_scene_auto_players`.
     "gm_scene_auto_players": True,
+    # Whether players at this GM's table may pick their own targets (and impression,
+    # skill, or area shape) for an Impress or an area attack. On, a player whose own
+    # setting below is on gets the window; off, every declaration reaches the GM bare
+    # and the GM chooses. Published to the table — see :mod:`mm_companion.ui.action_ui`.
+    # Read through :func:`gm_players_choose_actions`.
+    "gm_players_choose_actions": True,
+    # A player's own half of the same choice: whether *I* pick the targets of my
+    # Impress or area attack, or send it to the GM to set up. Off by default — the GM
+    # sets them either way. Read through :func:`resolve_actions_myself`.
+    "resolve_actions_myself": False,
+    # Whether a failed save the GM rolls for an NPC off the history (a request card, a
+    # save chip) puts its conditions on the NPC by itself — one switch per kind of
+    # ladder, keyed as :data:`mm_companion.core.rules.ANSWER_CATEGORIES` names them.
+    # Read through :func:`gm_auto_apply`, which merges per key.
+    "gm_auto_apply": {"damage": True, "effect": True, "impress": True, "area": True},
     # Compact mode — the mini dice roller a window collapses to (see
     # :mod:`mm_companion.ui.compact`). Read through :func:`compact_settings`.
     #
@@ -514,6 +535,56 @@ def gm_scene_auto_players() -> bool:
 def set_gm_scene_auto_players(enabled: bool) -> None:
     """Record whether players join the Scene by themselves."""
     update_settings(gm_scene_auto_players=bool(enabled))
+
+
+def gm_players_choose_actions() -> bool:
+    """Whether this GM lets players set up their own Impress and area attacks.
+
+    Through an accessor for the :func:`gm_scene_auto_players` reason: a workspace older
+    than the key reads ``None``, which would turn the default off.
+    """
+    stored = load_settings().get("gm_players_choose_actions")
+    if stored is None:
+        return bool(DEFAULT_SETTINGS["gm_players_choose_actions"])
+    return bool(stored)
+
+
+def set_gm_players_choose_actions(enabled: bool) -> None:
+    """Record whether players may set up their own actions at this GM's table."""
+    update_settings(gm_players_choose_actions=bool(enabled))
+
+
+def gm_auto_apply() -> dict[str, bool]:
+    """Which kinds of failed save put their conditions on an NPC by themselves.
+
+    Merged per key, like :func:`gm_default_pins`: a settings file naming only one
+    kind still reads the shipped answer for the rest, and a kind added later is on.
+    """
+    default = dict(DEFAULT_SETTINGS["gm_auto_apply"])  # type: ignore[arg-type]
+    stored = load_settings().get("gm_auto_apply")
+    if isinstance(stored, dict):
+        for key in default:
+            if isinstance(stored.get(key), bool):
+                default[key] = stored[key]
+    return default
+
+
+def set_gm_auto_apply(choices: dict[str, bool]) -> None:
+    """Record which kinds of failed save apply their conditions by themselves."""
+    update_settings(gm_auto_apply={str(k): bool(v) for k, v in choices.items()})
+
+
+def resolve_actions_myself() -> bool:
+    """Whether this player picks the targets of their own Impress and area attacks."""
+    stored = load_settings().get("resolve_actions_myself")
+    if stored is None:
+        return bool(DEFAULT_SETTINGS["resolve_actions_myself"])
+    return bool(stored)
+
+
+def set_resolve_actions_myself(enabled: bool) -> None:
+    """Record whether this player sets up their own actions."""
+    update_settings(resolve_actions_myself=bool(enabled))
 
 
 def clear_gm_card_pins() -> None:

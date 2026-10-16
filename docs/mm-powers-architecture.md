@@ -99,8 +99,31 @@ attack-plus-rank PL cap. `core.rules.effect_makes_attack` reads the resolved
 "Deflect vs. Attack" is correctly *not* an attack, and `dropsCheck` (Perception Range)
 still cancels the roll.
 
-Note the PL caps remain gated on `resistanceDcBase`: an attack with no save DC has no
-resisted rank to cap, so a Flight + Attack stays out of PL scope.
+The PL caps are gated on whether the effect is **resisted** at all —
+`core.rules.effect_resistance_dc_base`, which reads the effect's own `resistanceDcBase` or,
+for an effect that has none, a granting modifier's. An attack nobody resists has no resisted
+rank to cap, so a Flight + Attack stays out of PL scope.
+
+### A modifier can give an effect its save
+
+An effect with no resistance of its own can be given one, and two modifiers do: the
+**Resistible** flaw ("gives it one. Choose the resistance when the flaw is configured",
+p160) and the **Attack** extra itself, so a Teleport taken as an attack can send whoever it
+hits away on a failed Will check. Both carry a `grantsResistance` block — the DC's fixed
+part (`dcBase`, added to the rank), optionally a `dcTrait` whose *wielder's* total stands in
+for the rank (Fortune Control's Resistible is DC 10 + your Will), and a `placeholder` phrase
+shown before anything is picked — and a config field with `overrides: "resistance"` and
+`grants: true`, which may **supply** the stat rather than only replace one. A placeholder is
+what decides whether the grant waits: Resistible exists to add a save, so it shows one at
+once; the Attack extra adds nothing until a resistance is picked. On an effect that already
+has a resistance the granting field is *claimed* (`modifier_field_claimed`), so the chip
+does not offer it.
+
+A config field's `template` wraps the choice before it replaces the stat — **Alternate
+Defense** writes `"Attack vs. {value} + 10"` into the check, since the attack is made
+against that resistance + 10 instead of the Defense Class (p149) — and `required` marks a
+choice whose absence leaves the build unfinished (Affliction's resistance and conditions,
+Resistible's resistance), which `power_unfinished_violations` warns about.
 
 ---
 
@@ -533,6 +556,8 @@ Effect (from effects.json)
 │                                        // `int` column is a TRAIT ALLOCATION: each row
 │                                        // names a trait and the ranks put into it, spent
 │                                        // out of the effect's own rank
+├── resistanceVsCheck (bool)             // the first save is against the wielder's check
+│                                        // *result*, an opposed check (Mind Reading, p133)
 ├── implicitModifiers: []                // modifier ids the effect carries by definition;
 │                                        // an attacking effect has ["attack"], which is what
 │                                        // supplies its check (so its own `check` is null)
@@ -551,7 +576,13 @@ Modifier (from modifiers.json)
 │                                        // allocation (Reduced Trait, §6)
 ├── overrides: { range?, action?, duration?, check?, resistance?, effectType? }
 ├── grantsAttack (bool)                  // gives the effect its attack roll
-├── dropsCheck (bool)                    // removes it again (Perception Range)
+├── dropsCheck (bool)                    // removes it again (Perception Range) — the
+│                                        // *attack* roll only: an effect's own check
+│                                        // (Healing's, Deflect's) is never dropped
+├── grantsResistance: {dcBase, dcTrait?, placeholder?}
+│                                        // a save for an effect that has none (Resistible,
+│                                        // the Attack extra); the resistance comes from a
+│                                        // config field with `grants: true`
 ├── distanceRankBonus (int)              // distance ranks each rank adds to a Ranged
 │                                        // reach (Extended Range's 1) — see §10
 ├── requiresCheck (bool)                 // using the effect calls for an extra roll first;

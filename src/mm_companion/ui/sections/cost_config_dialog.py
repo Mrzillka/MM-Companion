@@ -49,7 +49,7 @@ from mm_companion.core.rules.costs import (
     RESISTANCES_CATEGORY,
     SKILLS_CATEGORY,
 )
-from mm_companion.ui.widgets import make_spin_box, muted_style
+from mm_companion.ui.widgets import dialog_buttons, make_spin_box, muted_style
 
 #: The editable category rates, in display order: ``(override key, label, unit suffix)``.
 #: Every key but ``pp_per_level`` is a field of ``TraitCosts``.
@@ -61,6 +61,11 @@ _RATES: tuple[tuple[str, str, str], ...] = (
     ("skill_ranks_per_pp", "Skill (normal)", "ranks / PP"),
     ("skill_specialized_ranks_per_pp", "Skill (specialized)", "ranks / PP"),
     ("pp_per_level", "Points per Power Level", "PP / level"),
+)
+
+_INTRO = (
+    "Homebrew the power-point cost of the non-power traits for this character. A rate "
+    "left at its default is not overridden."
 )
 
 _FOCUSED_NOTE = (
@@ -101,13 +106,6 @@ class CostConfigDialog(QDialog):
         self._items_by_global: dict[str, list[_ItemRow]] = {}
 
         layout = QVBoxLayout(self)
-
-        intro = QLabel(
-            "Homebrew the power-point cost of the non-power traits for this character. "
-            "A rate left at its default is not overridden."
-        )
-        intro.setWordWrap(True)
-        layout.addWidget(intro)
 
         # Everything scrolls: the per-item tables can be long.
         scroll = QScrollArea()
@@ -154,10 +152,6 @@ class CostConfigDialog(QDialog):
             )
         )
 
-        note = QLabel(_FOCUSED_NOTE)
-        note.setWordWrap(True)
-        note.setStyleSheet(muted_style())
-        body.addWidget(note)
         body.addStretch()
 
         scroll.setWidget(content)
@@ -172,7 +166,7 @@ class CostConfigDialog(QDialog):
         buttons.addButton(reset, QDialogButtonBox.ButtonRole.ResetRole)
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        layout.addLayout(dialog_buttons(buttons, f"{_INTRO}\n\n{_FOCUSED_NOTE}"))
 
         self.resize(520, 640)
 

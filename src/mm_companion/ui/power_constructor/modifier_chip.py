@@ -30,6 +30,7 @@ from mm_companion.ui import theme
 from mm_companion.ui.drop_feedback import DropFeedback, DropIndicator
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.power_constructor.common import (
+    CARD_MIME,
     CHIP_MIME,
     STRENGTH_AMOUNT_MAX,
     TRAIT_SOURCES,
@@ -523,6 +524,8 @@ class ModifierGroup(QWidget):
             self._drops.show_accept()
             self._show_indicator(event.position().toPoint())
             event.acceptProposedAction()
+        elif event.mimeData().hasFormat(CARD_MIME):
+            event.ignore()  # a whole card being reordered; the canvas takes it
         else:
             # Most often a flaw dragged onto Extras (or the reverse): a move that
             # would change the modifier's category, which is never allowed. Saying

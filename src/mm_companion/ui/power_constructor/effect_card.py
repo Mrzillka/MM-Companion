@@ -3,7 +3,8 @@ from __future__ import annotations
 from fractions import Fraction
 from html import escape
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QMimeData, Qt, Signal
+from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -42,6 +43,7 @@ from mm_companion.ui import theme
 from mm_companion.ui.drop_feedback import DropFeedback
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.power_constructor.common import (
+    CARD_MIME,
     CONFIG_WIDGET_BUILDERS,
     MODIFIER_MIME,
     RANK_MAX,
@@ -60,7 +62,7 @@ from mm_companion.ui.power_constructor.common import (
 from mm_companion.ui.power_constructor.modifier_chip import ModifierChip, ModifierGroup
 from mm_companion.ui.power_constructor.sub_build import SubBuildPanel
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import discard_widget, make_spin_box
+from mm_companion.ui.widgets import DragHandle, discard_widget, make_spin_box
 
 
 def _fraction_text(value: Fraction) -> str:
@@ -178,9 +180,14 @@ class EffectCard(QFrame):
 
     # -- construction pieces ----------------------------------------------
     def _build_header(self, effect) -> QHBoxLayout:
-        """The card's top row: effect name, structure badge, rank spin, remove button."""
+        """The card's top row: grip, effect name, structure badge, rank spin, remove."""
 
         header = QHBoxLayout()
+        # The order of the effects is the player's: it decides which one leads a Linked
+        # power's single attack roll. The canvas takes the drop (see PowerCanvas).
+        grip = DragHandle("Drag to reorder the effects")
+        grip.dragStarted.connect(self._start_drag)
+        header.addWidget(grip)
         name = QLabel(effect.name if effect else self.instance.effect_id)
         name.setStyleSheet("font-weight: bold;")
         header.addWidget(name)
@@ -959,11 +966,24 @@ class EffectCard(QFrame):
         specific = self._data.effect_modifiers.get(self.instance.effect_id, [])
         return next((m for m in specific if m.id == modifier_id), None)
 
-    # -- drops ------------------------------------------------------------
+    # -- drags and drops ----------------------------------------------------
+    def _start_drag(self) -> None:
+        """Pick the card up by its grip; the canvas it sits on takes the drop."""
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setData(CARD_MIME, b"1")  # the card is read from drag.source()
+        drag.setMimeData(mime)
+        drag.setPixmap(self.grab())
+        drag.exec(Qt.DropAction.MoveAction)
+
     def dragEnterEvent(self, event) -> None:  # noqa: N802 (Qt override)
         if event.mimeData().hasFormat(MODIFIER_MIME):
             self._drops.show_accept()  # light up as a drop target
             event.acceptProposedAction()
+        elif event.mimeData().hasFormat(CARD_MIME):
+            # Another card being reordered: not this card's drop, and not a mistake,
+            # so no reject wash — ignored, it goes on up to the canvas.
+            event.ignore()
         else:
             # An effect brick dragged onto a card, say: only modifiers attach here.
             self._drops.show_reject()

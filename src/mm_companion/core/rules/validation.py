@@ -652,6 +652,7 @@ def power_linked_bonus_violations(
     bonus each effect has, and which one the roll uses.
     """
 
+    pick = _LINKED_BONUS_PICKS.get(game_data.system.linked_attack_bonus, "the first effect's")
     messages = []
     for attack in linked_attacks(power, game_data, char):
         if len(set(attack.bonuses)) < 2:
@@ -660,11 +661,16 @@ def power_linked_bonus_violations(
             f"{_effect_name(power.effects[index], game_data)} {bonus:+d}"
             for index, bonus in zip(attack.indices, attack.bonuses, strict=True)
         )
-        messages.append(
-            f"Linked attacks roll once at {attack.bonus:+d} ({game_data.system.linked_attack_bonus}"
-            f" of {each})."
-        )
+        messages.append(f"Linked attacks roll once at {attack.bonus:+d}, {pick} ({each}).")
     return messages
+
+
+#: How :func:`power_linked_bonus_violations` names each ``linkedAttackBonus`` pick.
+_LINKED_BONUS_PICKS = {
+    "first": "the first effect's",
+    "highest": "the highest",
+    "lowest": "the lowest",
+}
 
 
 def _field_waived(field, effect: PowerEffectInstance, game_data: GameData) -> bool:

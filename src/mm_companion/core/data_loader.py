@@ -1521,9 +1521,9 @@ class SystemRules:
     alternate_effect_modifier: str = "alternate_effect"
     linked_modifier: str = "linked"
     #: Which bonus the **one** attack check of a Linked power rolls at when its effects'
-    #: bonuses differ (p155 gives a single check and no rule for that): ``"highest"``,
-    #: ``"lowest"`` or ``"first"`` (the first attacking effect on the card).
-    linked_attack_bonus: str = "highest"
+    #: bonuses differ (p155 gives a single check and no rule for that): ``"first"`` (the
+    #: first attacking effect on the card), ``"highest"`` or ``"lowest"``.
+    linked_attack_bonus: str = "first"
     improvised_effect: ImprovisedEffectRules = field(default_factory=ImprovisedEffectRules)
     extra_effort: ExtraEffortRules = field(default_factory=ExtraEffortRules)
     ranged_distance: RangeDistance = field(default_factory=RangeDistance)

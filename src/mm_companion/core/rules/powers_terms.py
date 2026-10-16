@@ -2248,9 +2248,9 @@ def _pick_linked_bonus(bonuses: tuple[int, ...], game_data: GameData) -> int:
     policy = game_data.system.linked_attack_bonus
     if policy == "lowest":
         return min(bonuses)
-    if policy == "first":
-        return bonuses[0]
-    return max(bonuses)
+    if policy == "highest":
+        return max(bonuses)
+    return bonuses[0]
 
 
 def linked_attacks(
@@ -2262,7 +2262,7 @@ def linked_attacks(
     Linked power that makes an attack roll is rolled **once**, together. The book does
     not say what that roll's bonus is when the effects' differ (one has Accurate, one
     is tied to a combat focus), so the ruleset says — ``system.linkedAttackBonus``,
-    ``"highest"`` unless a mod retunes it. Effects aimed at *different* things (an
+    ``"first"`` (the lead effect's) unless a mod retunes it. Effects aimed at *different* things (an
     Alternate Defense against Will beside an ordinary attack against Defense) cannot
     share a roll, so each target gets its own group. Only groups of two or more are
     returned; a lone attacker rolls as it always did. Empty for anything not Linked.

@@ -36,7 +36,14 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
   token. A preset the Settings window writes is a **full snapshot** (every
   resolved token, no `extends`) so it stays portable; the price is that it cannot
   inherit a token added later, which `theme._lookup` pays by falling back to the
-  default preset's value before raising.
+  default preset's value before raising. **`qss.build` reads the preset directly,
+  not through `_lookup`, so it carries the same fallback itself** (`qss._color` /
+  `qss._metric`). It did not until v0.9.2, the first release whose sheet read a
+  token (`space.indent`) newer than some saved snapshots: the sheet is built at
+  startup, so that one missing token was an unhandled exception before the window
+  opened. Anything else that reads `theme.colors`/`theme.metrics` off a `Theme`
+  rather than through the module API owes the same fallback;
+  `test_a_snapshot_older_than_a_token_still_builds` guards the sheet's.
 - **Three mechanisms, and which does what.** `theme.apply(app)` installs all
   three, and mixing them up is the main way to break this:
   1. **Palette** (`styled` only) — colour for ordinary widgets, reaching them

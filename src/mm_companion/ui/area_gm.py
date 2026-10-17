@@ -817,13 +817,25 @@ class AreaController(QObject):
     ) -> str:
         """Put the rung a save landed on onto its creature; what it did, in words."""
         degree = record.get("degree")
-        rung = area_effect_rung(effect, None if degree is None else int(degree), self._data)
-        if rung is None:
-            return ""
-        source = declared.resolving.plan.source.name if declared.resolving else ""
         # Escalation reads the target's current conditions; with no sheet to read yet
         # (a player whose snapshot has not arrived) it reads none.
         character = target.party.character or Character()
+        # The rank this creature resisted (halved by a made Dodge) is what its save's DC
+        # was set from, so it is read back off that DC for the Toughness defences.
+        dc = record.get("dc")
+        resisted = (
+            dc - effect.dc_base if isinstance(dc, int) and isinstance(effect.dc_base, int) else None
+        )
+        rung = area_effect_rung(
+            effect,
+            None if degree is None else int(degree),
+            self._data,
+            target.party.character,
+            resisted,
+        )
+        if rung is None:
+            return ""
+        source = declared.resolving.plan.source.name if declared.resolving else ""
         changes = list(
             resolve_rung(character, rung, self._data, source=source, config=effect.config)
         )

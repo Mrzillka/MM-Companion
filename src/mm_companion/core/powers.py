@@ -201,6 +201,11 @@ class PowerEffectInstance:
     the fatigue ladder, on the character) and validation never sees it, because a Power
     Level cap is a statement about the build.
 
+    ``uses`` is how many times the effect has been used since it was last recharged —
+    runtime state for the two flaws that count them (p158, p160): a **Short-Term**
+    effect stops after six, a **Fades** one loses a rank each time. 0 for every effect
+    nobody is counting, which is what keeps it out of an untouched effect's save.
+
     ``overrides`` holds the constructor's **Dev-mode / homerule** edits to this
     effect's derived game-terms: a mapping ``field_key -> {"value", "order",
     "label"?}``. ``field_key`` is a standard game-term field (``effect_type``,
@@ -228,6 +233,7 @@ class PowerEffectInstance:
     dynamic: bool = False
     dynamic_points: int | None = None
     extra_effort: int = 0
+    uses: int = 0
     overrides: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -264,6 +270,8 @@ class PowerEffectInstance:
             data["dynamic_points"] = self.dynamic_points
         if self.extra_effort:
             data["extra_effort"] = self.extra_effort
+        if self.uses:
+            data["uses"] = self.uses
         if self.overrides:
             data["overrides"] = {k: dict(v) for k, v in self.overrides.items()}
         return data
@@ -291,6 +299,7 @@ class PowerEffectInstance:
             dynamic=bool(raw.get("dynamic", False)),
             dynamic_points=None if share is None else max(0, int(share)),
             extra_effort=max(0, int(raw.get("extra_effort", 0))),
+            uses=max(0, int(raw.get("uses", 0))),
             overrides={k: dict(v) for k, v in raw.get("overrides", {}).items()},
         )
 

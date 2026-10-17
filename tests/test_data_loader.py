@@ -182,7 +182,7 @@ def test_costs_are_loaded() -> None:
 def test_effects_and_modifiers_are_loaded() -> None:
     data = load_game_data()
     assert len(data.effects) == 42
-    assert len(data.modifiers) == 69
+    assert len(data.modifiers) == 71
 
 
 def test_effect_carries_numeric_base_cost_and_integration() -> None:
@@ -284,7 +284,7 @@ def test_effect_specific_modifiers_retain_mechanical_fields() -> None:
 def test_modifier_catalog_merges_general_and_effect_specific_pools() -> None:
     data = load_game_data()
     catalog = data.modifier_catalog()
-    assert len(catalog) == 69 + 232  # ids are globally unique, so no collisions
+    assert len(catalog) == 71 + 232  # ids are globally unique, so no collisions
     assert catalog["ranged"].category == "extra"  # general pool
     assert catalog["strength_based"].category == "extra"  # effect-specific pool
 

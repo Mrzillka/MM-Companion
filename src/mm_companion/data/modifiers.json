@@ -15,6 +15,7 @@
     "duration": ["Instant", "Concentration", "Sustained", "Continuous", "Permanent"],
     "action": ["None", "Reaction", "Free", "Simple", "Move", "Standard", "Full round"]
   },
+  "useCostsNote": "useCosts lists what USING the effect puts on its wielder, applied when its first roll is thrown off the card: condition ids (Distracting's vulnerable), or \"fatigue-ladder\" for one rung of the Extra Effort fatigue ladder (Tiring: Fatigued, then Exhausted, then Incapacitated). requiresCheck with checkTrait/checkDc is a roll the rules fix rather than the player: Unreliable's reliability die (DC 11, no trait), Leaping's Acrobatics check (DC 10). usesPerCharge (Short-Term's 6) and fadesPerUse (Fades' 1 rank) are counted on the effect each time its first roll is thrown off the card, or by its card's Use once; the card's Recharge clears the count.",
   "durationActionFloorNote": "durationActionFloor maps a resulting duration to the minimum action its effect must take: a Sustained effect has to be toggled on and maintained with at least a free action, so an effect whose action is below this floor (a Permanent effect made toggleable by the Sustained extra carries action 'None') is raised to it in the game-terms summary. Read by core.rules against the gameTermLadders 'action' order.",
   "durationActionFloor": {
     "Sustained": "Free"
@@ -311,6 +312,22 @@
             { "value": "emanation", "label": "Emanation", "costDelta": 1 },
             { "value": "sensory", "label": "Sensory" }
           ]
+        },
+        {
+          "key": "sense",
+          "label": "Sense (Sensory spread)",
+          "type": "text",
+          "hint": "A Sensory spread affects whoever in the shape can perceive it with one particular sense, chosen when the effect is configured (p150): sight for a Dazzle flash, hearing for a sonic burst."
+        },
+        {
+          "key": "user",
+          "label": "You",
+          "type": "select",
+          "hint": "A Close area originates from you and leaves you out of it. Being caught in it along with everyone else is +1 per rank, the equivalent of Affects Others (p150).",
+          "options": [
+            { "value": "excluded", "label": "Leaves you out" },
+            { "value": "included", "label": "Includes you", "costDelta": 1 }
+          ]
         }
       ],
       "description": "Expands the effect to hit everyone in an area instead of a single target. Targets in the area make a Dodge check against 10 + rank; success halves the rank they resist. One creature may instead be targeted directly with an attack check, and a hit gives them no Dodge."
@@ -347,10 +364,46 @@
       "id": "aura",
       "name": "Aura",
       "category": "extra",
-      "costFormula": "+3 points per rank",
+      "costFormula": "+3 points per rank (+2 to +5 by its options)",
       "costValue": 3,
       "flat": false,
-      "description": "Turns a close-range effect into a field surrounding your body."
+      "overrides": { "action": "Free" },
+      "config": [
+        {
+          "key": "duration",
+          "label": "Duration",
+          "type": "select",
+          "overrides": "duration",
+          "hint": "An Aura is normally Sustained. Concentration costs 1 less per rank, Continuous 1 more (p151).",
+          "options": [
+            { "value": "Sustained", "label": "Sustained" },
+            { "value": "Concentration", "label": "Concentration", "costDelta": -1 },
+            { "value": "Continuous", "label": "Continuous", "costDelta": 1 }
+          ]
+        },
+        {
+          "key": "selective",
+          "label": "Who it affects",
+          "type": "select",
+          "hint": "Deciding who is and is not affected by the Aura is the Selective extra, +1 per rank on top of the Aura.",
+          "options": [
+            { "value": "everyone", "label": "Everyone touching you" },
+            { "value": "selective", "label": "Selective", "costDelta": 1 }
+          ]
+        },
+        {
+          "key": "contact",
+          "label": "Contact",
+          "type": "select",
+          "hint": "A Mental Aura affects whoever comes into mental contact with you instead (+0); one that is both physical and mental is +1 per rank.",
+          "options": [
+            { "value": "physical", "label": "Physical contact" },
+            { "value": "mental", "label": "Mental contact" },
+            { "value": "both", "label": "Physical and mental", "costDelta": 1 }
+          ]
+        }
+      ],
+      "description": "Turns a close-range effect into a field surrounding your body: anyone touching you, or you touch, is affected, once per turn."
     },
     {
       "id": "contagious",
@@ -601,9 +654,13 @@
       "id": "reaction_extra",
       "name": "Reaction",
       "category": "extra",
+      "repeatable": true,
       "costFormula": "+1 point flat",
       "costValue": 1,
       "flat": true,
+      "config": [
+        { "key": "trigger", "label": "When", "type": "text", "hint": "The triggering circumstance, approved by the GM (p154). Each circumstance is a separate instance of this extra." }
+      ],
       "description": "Lets the effect be triggered with your reaction under a chosen circumstance."
     },
     {
@@ -718,6 +775,37 @@
       "description": "Lets you pre-set the effect to activate automatically on a chosen event."
     },
     {
+      "id": "triggered_unlimited",
+      "name": "Unlimited Triggers",
+      "category": "extra",
+      "costFormula": "+10 points flat",
+      "costValue": 10,
+      "flat": true,
+      "requiresAny": ["triggered"],
+      "description": "At the GM's discretion, a Triggered effect has unlimited activations once set, until the trigger is disarmed or countered (p156)."
+    },
+    {
+      "id": "variable_trigger",
+      "name": "Variable Trigger",
+      "category": "extra",
+      "costFormula": "+1 or +2 points flat",
+      "costValue": 1,
+      "flat": true,
+      "requiresAny": ["triggered"],
+      "config": [
+        {
+          "key": "points",
+          "label": "Points",
+          "type": "points",
+          "min": 1,
+          "max": 2,
+          "default": 1,
+          "hint": "Choose the triggering circumstance when you set the effect rather than when it is configured: 1 point for a close group of circumstances, 2 for a broad group (p156)."
+        }
+      ],
+      "description": "A Triggered effect's trigger is chosen each time it is set, from a close or broad group of circumstances."
+    },
+    {
       "id": "variable_descriptor",
       "name": "Variable Descriptor",
       "category": "extra",
@@ -725,10 +813,11 @@
       "costValue": 1,
       "flat": true,
       "ranked": true,
+      "maxRank": 2,
       "config": [
         { "key": "pool", "label": "Descriptor pool", "type": "text", "hint": "Which descriptors it can shift between, or 'any' (GM discretion)." }
       ],
-      "description": "Lets you change the effect's descriptor (fire, cold, sonic, etc.) on the fly."
+      "description": "Lets you change the effect's descriptor once per round as a free action: rank 1 within a close group (weather, temperature), rank 2 within a broad group (any magical, any technological)."
     },
     {
       "id": "activation",
@@ -813,6 +902,7 @@
       "costValue": 1,
       "flat": true,
       "ranked": true,
+      "distanceRankBonus": -1,
       "description": "Shortens a ranged effect's short/medium/long distances."
     },
     {
@@ -822,6 +912,7 @@
       "costFormula": "-1 point per rank",
       "costValue": 1,
       "flat": false,
+      "useCosts": ["vulnerable"],
       "description": "Using the effect leaves you Vulnerable until your next turn."
     },
     {
@@ -831,6 +922,7 @@
       "costFormula": "-1 point per rank",
       "costValue": 1,
       "flat": false,
+      "fadesPerUse": 1,
       "description": "The effect loses potency with each use until it needs to recharge."
     },
     {
@@ -916,6 +1008,9 @@
       "costFormula": "-1 point flat",
       "costValue": 1,
       "flat": true,
+      "config": [
+        { "key": "display", "label": "Display", "type": "text", "hint": "How the effect shows itself: glowing eyes, armoured scales, a hum (p159)." }
+      ],
       "description": "A standing effect has some obvious, unavoidable tell."
     },
     {
@@ -933,9 +1028,10 @@
       "name": "Quirk",
       "category": "flaw",
       "repeatable": true,
-      "costFormula": "-1 point flat",
+      "costFormula": "-1 point per rank flat",
       "costValue": 1,
       "flat": true,
+      "ranked": true,
       "config": [
         { "key": "detail", "label": "Quirk", "type": "text", "hint": "The minor nuisance or drawback (e.g. 'always speaks in rhyme')." }
       ],
@@ -1010,6 +1106,9 @@
       "costFormula": "-1 point per rank",
       "costValue": 1,
       "flat": false,
+      "config": [
+        { "key": "sense", "label": "Sense", "type": "text", "hint": "The sense the target must perceive the source with: sight, hearing... Sensory effects are sense-dependent already and cannot take this flaw (p160)." }
+      ],
       "description": "The target must be able to perceive the effect's source for it to work."
     },
     {
@@ -1019,6 +1118,7 @@
       "costFormula": "-1 point per rank",
       "costValue": 1,
       "flat": false,
+      "usesPerCharge": 6,
       "description": "The effect only works for a handful of uses before it needs to recharge."
     },
     {
@@ -1049,6 +1149,7 @@
       "costFormula": "-1 point per rank",
       "costValue": 1,
       "flat": false,
+      "useCosts": ["fatigue-ladder"],
       "description": "Using the effect leaves you Fatigued, like spending Extra Effort."
     },
     {
@@ -1067,6 +1168,9 @@
       "costFormula": "-1 point per rank",
       "costValue": 1,
       "flat": false,
+      "requiresCheck": true,
+      "checkDc": 11,
+      "noteTemplate": "Reliability: works on 11 or higher, fails on 10 or less",
       "description": "The effect has a real chance of simply not working each time you use it."
     }
   ]

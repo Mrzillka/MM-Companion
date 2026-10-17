@@ -40,7 +40,20 @@
           "2": "Same region / state",
           "3": "Same continent",
           "4": "Worldwide",
-          "5": "Unlimited (same planet)"
+          "5": "Unlimited (effectively anywhere)"
+        }
+      }
+    ],
+    "remote_sensing": [
+      {
+        "kind": "state",
+        "label": "Range",
+        "byRank": {
+          "1": "Same city",
+          "2": "Same region / state",
+          "3": "Same continent",
+          "4": "Worldwide",
+          "5": "Unlimited (effectively anywhere)"
         }
       }
     ],

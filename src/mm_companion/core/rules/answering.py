@@ -25,6 +25,7 @@ from dataclasses import dataclass
 
 from ..character import AppliedCondition, Character
 from ..data_loader import GameData, ResistanceOutcome
+from .defenses import damage_negated, toughness_defense
 from .derived import skill_usable
 from .rolls import (
     KIND_SKILL,
@@ -74,9 +75,24 @@ class AnswerReading:
     usable: bool = True
 
 
-def answer_rung(ladder: SpecLadder, degree: int | None) -> ResistanceOutcome | None:
-    """The rung a roll of *degree* lands on (a made one: the ladder's success rung)."""
+def answer_rung(
+    ladder: SpecLadder,
+    degree: int | None,
+    char: Character | None = None,
+    game_data: GameData | None = None,
+) -> ResistanceOutcome | None:
+    """The rung a roll of *degree* lands on (a made one: the ladder's success rung).
 
+    Given the creature that rolled, a damage ladder is first measured against its
+    Toughness defences (:mod:`.defenses`): an Impervious rank the attack does not
+    exceed, or two degrees of success on a Hardened one, and nothing lands at all — not
+    even the Hit a made save otherwise costs.
+    """
+
+    if char is not None and game_data is not None and ladder.kind == LADDER_DAMAGE:
+        defense = toughness_defense(char, game_data)
+        if damage_negated(defense, rank=ladder.rank, penetrating=ladder.penetrating, degree=degree):
+            return None
     return outcome_rung(ladder.rungs, degree, ladder.success)
 
 

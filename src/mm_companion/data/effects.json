@@ -7,7 +7,7 @@
       "flat": "baseCostValue points per rank - the ordinary rule, and the default when the key is absent",
       "as_trait": "The effect costs whatever the traits it raises cost to buy outright, summed unrounded across its trait allocation and rounded once. baseCostValue is then only the NOMINAL rate the per-rank extras and flaws are read against: a -1/rank flaw takes 2 to 1 and so halves the whole total. The final cost is floored at 1 point."
     },
-    "rankFollowsAllocationNote": "rankFollowsAllocation says the effect's rank IS the ranks its trait allocation spends, not a budget the player sets. Only meaningful on an effect with a trait allocation, and only Enhanced Trait sets it: that effect's cost comes from the traits it raises, so its rank has no independent meaning and a hand-set one is just a second number to keep in step. The constructor shows such a rank read-only and writes it from the rows; over-allocation cannot happen, so it is not checked. Omitting the key leaves the rank a hand-set budget, which is what Enhanced Senses, Enhanced Movement, Comprehend, Immunity and Feature want.",
+    "rankFollowsAllocationNote": "rankFollowsAllocation says the effect's rank IS the ranks its trait allocation spends, not a budget the player sets. Only meaningful on an effect with a trait allocation, and only Enhanced Trait sets it: that effect's cost comes from the traits it raises, so its rank has no independent meaning and a hand-set one is just a second number to keep in step. The constructor shows such a rank read-only and writes it from the rows; over-allocation cannot happen, so it is not checked. Enhanced Senses, Enhanced Movement, Comprehend, Concealment, Immunity and Feature set it too: what they cost is what their rows buy, so their rank is the sum of the rows and the player never sets it. Omitting the key leaves the rank a hand-set budget.",
     "traitSourceKey": {
       "traits": "The traits a power can buy up or down: abilities, non-derived resistances, skills",
       "boost_traits": "As 'traits', plus advantages - what an Enhanced Trait may raise or a Reduced Trait lower",
@@ -77,22 +77,15 @@
           "type": "select",
           "overrides": "resistance",
           "required": true,
-          "widenWith": "alternate_resistance",
+          "hiddenWith": "alternate_resistance",
           "widenSource": "resistance_targets",
+          "hint": "One of the four defenses. For any other resistance, an ability, a skill or Damage - or the best or worst of two - attach Alternate Resistance and pick it on the extra.",
           "options": [
             { "value": "Dodge", "label": "Dodge" },
             { "value": "Fortitude", "label": "Fortitude" },
             { "value": "Toughness", "label": "Toughness" },
             { "value": "Will", "label": "Will" }
           ]
-        },
-        {
-          "key": "resistanceSecond",
-          "label": "Or (best/worst of two)",
-          "type": "select",
-          "shownWith": "alternate_resistance",
-          "source": "resistance_targets",
-          "hint": "The second resistance, for an Alternate Resistance bought as the worst of two (+1) or settled for as the best of two (-1). Leave unset for a plain swap to one other resistance."
         },
         {
           "key": "overcomeBy",
@@ -285,6 +278,7 @@
       "resistance": null,
       "baseCost": "2 per rank",
       "baseCostValue": 2,
+      "rankFollowsAllocation": true,
       "configurableTarget": false,
       "statIntegration": {
         "pattern": "passive_permanent",
@@ -297,8 +291,8 @@
           "type": "allocation",
           "hint": "Spend the effect's ranks across categories; each is independently tiered (Languages scales furthest).",
           "allocOptions": [
-            { "id": "animals", "label": "Animals", "tiers": [1, 2] },
-            { "id": "computers", "label": "Computers", "tiers": [1, 2] },
+            { "id": "animals", "label": "Animals", "prompt": "communicate or comprehend", "tiers": [1, 2] },
+            { "id": "computers", "label": "Computers", "prompt": "communicate or comprehend", "tiers": [1, 2] },
             { "id": "languages", "label": "Languages", "tiers": [1, 2, 3, 4] },
             { "id": "objects", "label": "Objects", "tiers": [2] },
             { "id": "plants", "label": "Plants", "tiers": [2] },
@@ -319,6 +313,7 @@
       "resistance": null,
       "baseCost": "2 per rank",
       "baseCostValue": 2,
+      "rankFollowsAllocation": true,
       "configurableTarget": false,
       "statIntegration": {
         "pattern": "passive_toggle",
@@ -465,6 +460,7 @@
       "resistance": null,
       "baseCost": "1 per rank",
       "baseCostValue": 1,
+      "rankFollowsAllocation": true,
       "configurableTarget": true,
       "statIntegration": {
         "pattern": "passive_toggle",
@@ -477,15 +473,15 @@
           "type": "allocation",
           "hint": "Check modes to spend the effect's ranks; tiered modes let you buy increasing scope.",
           "allocOptions": [
-            { "id": "dimensional_travel", "label": "Dimensional Travel", "tiers": [2, 4, 6], "description": "Travel to another dimension: one fixed dimension, then any of a group, then any dimension at all." },
-            { "id": "environmental_adaptation", "label": "Environmental Adaptation", "tiers": [1], "perNote": "per environment", "description": "Ignore the penalties one environment imposes on movement and checks (zero-g, underwater, extreme cold)." },
-            { "id": "permeate", "label": "Permeate", "tiers": [2, 4, 6], "speeds": [0, 1, "ground"], "description": "Move through solid matter — slowly at first, then quicker, and at the top tier as fast as you walk." },
+            { "id": "dimensional_travel", "label": "Dimensional Travel", "prompt": "which dimension(s)", "tiers": [2, 4, 6], "description": "Travel to another dimension: one fixed dimension, then any of a group, then any dimension at all." },
+            { "id": "environmental_adaptation", "label": "Environmental Adaptation", "prompt": "which environment", "tiers": [1], "perNote": "per environment", "description": "Ignore the penalties one environment imposes on movement and checks (zero-g, underwater, extreme cold)." },
+            { "id": "permeate", "label": "Permeate", "prompt": "e.g. limited to earth", "tiers": [2, 4, 6], "speeds": [0, 1, "ground"], "description": "Move through solid matter — slowly at first, then quicker, and at the top tier as fast as you walk." },
             { "id": "safe_fall", "label": "Safe Fall", "tiers": [1], "description": "Fall any distance without harm, so long as you are free to move." },
             { "id": "slithering", "label": "Slithering", "tiers": [1], "speeds": ["ground"], "description": "Move at your normal ground speed without limbs, and through gaps a body your size would not normally pass." },
             { "id": "space_travel", "label": "Space Travel", "tiers": [2, 4, 6], "description": "Cross interplanetary, then interstellar, then intergalactic distances." },
-            { "id": "stable", "label": "Stable", "tiers": [1], "perNote": "per mode", "description": "Keep your footing on unstable ground: no penalty for moving over a surface that would normally unbalance you." },
+            { "id": "stable", "label": "Stable", "prompt": "which movement mode", "tiers": [1], "perNote": "per mode", "description": "Keep your footing on unstable ground: no penalty for moving over a surface that would normally unbalance you." },
             { "id": "swinging", "label": "Swinging", "tiers": [2], "speeds": [2], "description": "Swing from anchor points at speed rank 2, given something overhead to catch." },
-            { "id": "trackless", "label": "Trackless", "tiers": [1], "perNote": "per sense", "description": "Leave no trail one chosen sense can follow." },
+            { "id": "trackless", "label": "Trackless", "prompt": "which sense type", "tiers": [1], "perNote": "per sense", "description": "Leave no trail one chosen sense can follow." },
             { "id": "wall_crawling", "label": "Wall-Crawling", "tiers": [2, 4], "speeds": ["ground-1", "ground"], "tierNotes": ["vulnerable while climbing", "not vulnerable"], "description": "Move across walls and ceilings — one rank slower than your ground speed and vulnerable while you climb, or at full ground speed and not vulnerable." },
             { "id": "water_walking", "label": "Water-Walking", "tiers": [1, 2], "speeds": ["ground", "ground"], "tierNotes": ["sinks if knocked prone", "stays up even when prone"], "description": "Walk on liquid surfaces at your normal ground speed. The lower tier sinks if you are knocked prone; the higher one does not." }
           ]
@@ -504,6 +500,7 @@
       "resistance": null,
       "baseCost": "1 per rank",
       "baseCostValue": 1,
+      "rankFollowsAllocation": true,
       "configurableTarget": true,
       "statIntegration": {
         "pattern": "passive_permanent",
@@ -516,29 +513,29 @@
           "type": "allocation",
           "hint": "Spend the effect's ranks across sense qualities (each applied to a chosen sense or sense type). Tiered qualities buy increasing scope.",
           "allocOptions": [
-            { "id": "accurate", "label": "Accurate", "tiers": [2, 4], "tierLabels": ["one sense", "a whole sense type"], "description": "The sense pinpoints a target precisely enough to target with it, rather than only noticing that something is there." },
-            { "id": "acute", "label": "Acute", "tiers": [1, 2], "tierLabels": ["one sense", "a whole sense type"], "description": "The sense distinguishes fine detail, telling one thing apart from another of its kind (one scent from another)." },
-            { "id": "analytical", "label": "Analytical", "tiers": [1, 2], "tierLabels": ["one sense", "a whole sense type"], "description": "An acute sense that also reads exact composition — the precise chemical make-up, not just 'smells of almonds'." },
-            { "id": "awareness", "label": "Awareness", "tiers": [1], "description": "Notice effects of one chosen descriptor being used at a distance, which is the usual way a Subtle effect gets spotted at all." },
-            { "id": "counters_concealment", "label": "Counters Concealment", "tiers": [2, 5], "tierLabels": ["one Concealment effect", "every Concealment on the sense type"], "description": "Ignore Concealment against this sense — one Concealment effect, then every Concealment effect for the whole sense type." },
-            { "id": "counters_illusion", "label": "Counters Illusion", "tiers": [2], "description": "See through an Illusion affecting this sense." },
-            { "id": "danger_sense", "label": "Danger Sense", "tiers": [2], "description": "Never be caught fully unaware — you get a notice check against surprise through this sense." },
+            { "id": "accurate", "label": "Accurate", "prompt": "which sense or type", "tiers": [2, 4], "tierLabels": ["one sense", "a whole sense type"], "description": "The sense pinpoints a target precisely enough to target with it, rather than only noticing that something is there." },
+            { "id": "acute", "label": "Acute", "prompt": "which sense or type", "tiers": [1, 2], "tierLabels": ["one sense", "a whole sense type"], "description": "The sense distinguishes fine detail, telling one thing apart from another of its kind (one scent from another)." },
+            { "id": "analytical", "label": "Analytical", "prompt": "which sense or type", "tiers": [1, 2], "tierLabels": ["one sense", "a whole sense type"], "description": "An acute sense that also reads exact composition — the precise chemical make-up, not just 'smells of almonds'." },
+            { "id": "awareness", "label": "Awareness", "prompt": "which descriptor", "tiers": [1], "description": "Notice effects of one chosen descriptor being used at a distance, which is the usual way a Subtle effect gets spotted at all." },
+            { "id": "counters_concealment", "label": "Counters Concealment", "prompt": "which concealment, which sense type", "tiers": [2, 5], "tierLabels": ["one Concealment effect", "every Concealment on the sense type"], "description": "Ignore Concealment against this sense — one Concealment effect, then every Concealment effect for the whole sense type." },
+            { "id": "counters_illusion", "label": "Counters Illusion", "prompt": "which sense type", "tiers": [2], "description": "See through an Illusion affecting this sense." },
+            { "id": "danger_sense", "label": "Danger Sense", "prompt": "which sense", "tiers": [2], "description": "Never be caught fully unaware — you get a notice check against surprise through this sense." },
             { "id": "dark_vision", "label": "Dark-Vision", "tiers": [2], "description": "See normally in total darkness; darkness does not conceal from this sense at all." },
-            { "id": "detect", "label": "Detect", "tiers": [1], "description": "A new sense for one thing, quality or effect. It says only that the thing is there — add Accurate, Acute, Radius or Ranged for more." },
-            { "id": "dimensional", "label": "Dimensional", "tiers": [1, 2, 3], "tierLabels": ["one named dimension", "a group of dimensions", "any dimension"], "description": "Extend every one of your senses into another dimension near where you stand in it — one named dimension, then a related group of them, then any dimension the setting has. The same 1 / 2 / 3 points as the Dimensional extra; take it here or there, not both." },
+            { "id": "detect", "label": "Detect", "prompt": "what it detects, by which sense type", "tiers": [1], "description": "A new sense for one thing, quality or effect. It says only that the thing is there — add Accurate, Acute, Radius or Ranged for more." },
+            { "id": "dimensional", "label": "Dimensional", "prompt": "which dimension(s)", "tiers": [1, 2, 3], "tierLabels": ["one named dimension", "a group of dimensions", "any dimension"], "description": "Extend every one of your senses into another dimension near where you stand in it — one named dimension, then a related group of them, then any dimension the setting has. The same 1 / 2 / 3 points as the Dimensional extra; take it here or there, not both." },
             { "id": "direction_sense", "label": "Direction Sense", "tiers": [1], "description": "Always know which way is north and which way you are facing." },
             { "id": "distance_sense", "label": "Distance Sense", "tiers": [1], "description": "Judge distances exactly by sense alone." },
-            { "id": "extended", "label": "Extended", "tiers": [1, 2], "tierLabels": ["one sense", "a whole sense type"], "perNote": "per sense", "description": "The sense reaches ten times as far before distance penalties start — one sense, then the whole sense type." },
+            { "id": "extended", "label": "Extended", "prompt": "which sense or type", "tiers": [1, 2], "tierLabels": ["one sense", "a whole sense type"], "perNote": "per sense", "description": "The sense reaches ten times as far before distance penalties start — one sense, then the whole sense type." },
             { "id": "infravision", "label": "Infravision", "tiers": [1], "description": "See heat, letting you make out warm shapes in darkness or through smoke." },
             { "id": "low_light_vision", "label": "Low-Light Vision", "tiers": [1], "description": "Dim light does not conceal — you see in shadow as though it were bright." },
-            { "id": "microscopic_vision", "label": "Microscopic Vision", "tiers": [1, 2, 3, 4], "tierLabels": ["cell", "microbe", "molecule", "atom"], "description": "See detail far too small for the naked eye, each tier one step finer (cell, then microbe, then molecule, then atom)." },
-            { "id": "penetrates_concealment", "label": "Penetrates Concealment", "tiers": [2, 4], "tierLabels": ["a non-accurate sense type", "an accurate sense"], "description": "Obstacles do not conceal from this sense: it reads straight through them. The lower tier buys a non-accurate sense type, the higher one an accurate sense." },
+            { "id": "microscopic_vision", "label": "Microscopic Vision", "tiers": [1, 2, 3, 4], "tierLabels": ["dust", "cell", "molecule", "atom"], "description": "See detail far too small for the naked eye, each tier one step finer: dust-sized, then cellular, then DNA and complex molecules, then individual atoms." },
+            { "id": "penetrates_concealment", "label": "Penetrates Concealment", "prompt": "which sense or type", "tiers": [2, 4], "tierLabels": ["a non-accurate sense type", "an accurate sense"], "description": "Obstacles do not conceal from this sense: it reads straight through them. The lower tier buys a non-accurate sense type, the higher one an accurate sense." },
             { "id": "radio", "label": "Radio", "tiers": [1], "description": "A new radio sense: receive broadcast radio signals directly." },
-            { "id": "radius", "label": "Radius", "tiers": [1, 2], "tierLabels": ["one sense", "a whole sense type"], "description": "The sense works in every direction at once, so nothing can approach from a blind side — one sense, then the whole sense type." },
-            { "id": "ranged", "label": "Ranged", "tiers": [1, 2], "tierLabels": ["one sense", "a whole sense type"], "description": "A normally touch-range sense works at a distance, at a penalty per space — one sense, then the whole sense type." },
-            { "id": "rapid", "label": "Rapid", "tiers": [1, 2], "tierLabels": ["one sense", "a whole sense type"], "perNote": "per sense", "description": "The sense takes in detail three time ranks faster than normal, letting you speed-read or catch what flickers past — one sense, then the whole sense type." },
+            { "id": "radius", "label": "Radius", "prompt": "which sense or type", "tiers": [1, 2], "tierLabels": ["one sense", "a whole sense type"], "description": "The sense works in every direction at once, so nothing can approach from a blind side — one sense, then the whole sense type." },
+            { "id": "ranged", "label": "Ranged", "prompt": "which sense or type", "tiers": [1, 2], "tierLabels": ["one sense", "a whole sense type"], "description": "A normally touch-range sense works at a distance, at a penalty per space — one sense, then the whole sense type." },
+            { "id": "rapid", "label": "Rapid", "prompt": "which sense or type", "tiers": [1, 2], "tierLabels": ["one sense", "a whole sense type"], "perNote": "per sense", "description": "The sense takes in detail three time ranks faster than normal, letting you speed-read or catch what flickers past — one sense, then the whole sense type." },
             { "id": "time_sense", "label": "Time Sense", "tiers": [1], "description": "Always know what time it is, and time an event as exactly as a stopwatch." },
-            { "id": "tracking", "label": "Tracking", "tiers": [1, 2], "tierLabels": ["half speed", "full speed"], "description": "Follow a trail with the sense, at half speed then at full speed." },
+            { "id": "tracking", "label": "Tracking", "prompt": "which sense", "tiers": [1, 2], "tierLabels": ["half speed", "full speed"], "description": "Follow a trail with the sense, at half speed then at full speed." },
             { "id": "ultra_hearing", "label": "Ultra-Hearing", "tiers": [1], "description": "Hear frequencies above and below the normal range, including ultrasound." },
             { "id": "ultravision", "label": "Ultravision", "tiers": [1], "description": "See ultraviolet light, making otherwise invisible marks and traces visible." }
           ]
@@ -667,6 +664,7 @@
       "resistance": null,
       "baseCost": "1 per rank",
       "baseCostValue": 1,
+      "rankFollowsAllocation": true,
       "configurableTarget": false,
       "statIntegration": {
         "pattern": "passive_permanent",
@@ -677,10 +675,11 @@
           "key": "features",
           "label": "Features",
           "type": "repeatable",
-          "hint": "Each rank buys one minor custom capability (e.g. Battery, Built-in Equipment, Quick Change, Remote). Number of features may not exceed the effect's rank.",
+          "hint": "One row per minor capability (Battery, Built-in Equipment, Quick Change, Remote...). Each is typically 1 rank; the GM may rate an especially useful one higher (p125). The effect's rank is the sum of the rows.",
           "columns": [
             { "key": "name", "label": "Feature", "type": "text" },
-            { "key": "description", "label": "Notes", "type": "text" }
+            { "key": "description", "label": "Notes", "type": "text" },
+            { "key": "ranks", "label": "Ranks", "type": "int", "default": 1 }
           ]
         }
       ],
@@ -819,7 +818,8 @@
       "resistance": null,
       "baseCost": "1 per rank",
       "baseCostValue": 1,
-      "configurableTarget": true,
+      "rankFollowsAllocation": true,
+      "configurableTarget": false,
       "statIntegration": {
         "pattern": "passive_permanent",
         "affects": "resistance"
@@ -829,9 +829,40 @@
           "key": "scopes",
           "label": "Immune to",
           "type": "repeatable",
-          "hint": "Suggested ranks — 1: a single hazard; 2: critical hits / all suffocation; 5: an uncommon descriptor; 10: a common descriptor (cold, fire); 20: a very common damage type; 30: everything one resistance covers. Named scopes' ranks sum to the effect rank.",
+          "hint": "One row per immunity. Pick a standard one to fill in its ranks, or type your own and set them: 1 a single hazard or a very rare descriptor, 2 a rare one or critical hits, 5 an uncommon descriptor, 10 a common one, 20 a very common damage type, 30 everything one resistance covers (p129). The effect's rank is the sum of the rows.",
           "columns": [
-            { "key": "name", "label": "Scope", "type": "text" },
+            {
+            "key": "name",
+            "label": "Scope",
+            "type": "suggest",
+            "suggestions": [
+              { "label": "Aging", "ranks": 1 },
+              { "label": "Cold (environment)", "ranks": 1 },
+              { "label": "Heat (environment)", "ranks": 1 },
+              { "label": "Disease", "ranks": 1 },
+              { "label": "Poison", "ranks": 1 },
+              { "label": "Pressure", "ranks": 1 },
+              { "label": "Radiation (environment)", "ranks": 1 },
+              { "label": "Sleep", "ranks": 1 },
+              { "label": "Starvation and thirst", "ranks": 1 },
+              { "label": "Suffocation (one type)", "ranks": 1 },
+              { "label": "Vacuum", "ranks": 1 },
+              { "label": "Your own powers", "ranks": 1 },
+              { "label": "Critical hits", "ranks": 2 },
+              { "label": "All suffocation", "ranks": 2 },
+              { "label": "A rare descriptor", "ranks": 2 },
+              { "label": "An uncommon descriptor", "ranks": 5 },
+              { "label": "One Affliction descriptor (e.g. Dazzle)", "ranks": 5 },
+              { "label": "Interaction skills", "ranks": 5 },
+              { "label": "One damage descriptor (e.g. fire damage)", "ranks": 5 },
+              { "label": "All environmental hazards (Life Support)", "ranks": 10 },
+              { "label": "A common descriptor (e.g. all fire)", "ranks": 10 },
+              { "label": "Mental powers", "ranks": 10 },
+              { "label": "A very common damage type (e.g. energy)", "ranks": 20 },
+              { "label": "All Fortitude effects", "ranks": 30 },
+              { "label": "All Will effects", "ranks": 30 }
+            ]
+          },
             { "key": "rank", "label": "Ranks", "type": "int" }
           ]
         }
@@ -854,6 +885,14 @@
         "pattern": "passive_toggle",
         "affects": "special"
       },
+      "config": [
+        {
+          "key": "stillAffectedBy",
+          "label": "Still affected by",
+          "type": "text",
+          "hint": "At rank 4 (Incorporeal) choose one other reasonably common effect or descriptor that still works on you, besides sensory effects, effects targeting Will and Affects Insubstantial ones (p131)."
+        }
+      ],
       "description": "Turns your body into a less solid, harder-to-affect state, up to fully incorporeal."
     },
     {

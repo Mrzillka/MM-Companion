@@ -94,6 +94,7 @@ from mm_companion.core.rules import (
     power_total_cost,
     power_trait_allocation_violations,
     power_trait_bonuses,
+    power_unfinished_violations,
     powers_points_spent,
     resistance_total,
     selection_band,
@@ -317,6 +318,7 @@ def test_the_ruleset_marks_exactly_the_repeatable_modifiers() -> None:
         "limited",  # "only at night" beside "only vs. robots"
         "limited_degree",  # the book: two applications blank two of the three degrees
         "quirk",
+        "reaction_extra",  # p154: "each specific circumstance is a separate instance"
     }
     # The Transform configuration is built on two Limited Degrees, so the flag is load-
     # bearing rather than decorative.
@@ -341,11 +343,12 @@ def test_concealment_spends_its_ranks_on_the_senses_it_hides_from() -> None:
     assert effect_total_cost(effect, data) == 10
     assert power_allocation_violations(Power(effects=[effect]), data) == []
 
-    # Every sight sense costs 4, so a Concealment 2 cannot afford it.
+    # Every sight sense costs 4, so hiding from them *is* a Concealment 4: the rank is
+    # what the senses buy, never a budget they could overspend.
     over = PowerEffectInstance(
         "concealment", rank=2, config={"senses": [{"id": "sight", "tier": 2}]}
     )
-    assert len(power_allocation_violations(Power(effects=[over]), data)) == 1
+    assert synced_effect_rank(over, data) == 4
 
     # Touch is absent on purpose: hiding from touch means being incorporeal, which is
     # the Insubstantial effect (p115).
@@ -369,14 +372,51 @@ def test_the_two_concealment_configurations_record_which_sense() -> None:
         assert power_total_cost(power, data) == cost
 
 
-def test_over_allocation_is_flagged() -> None:
+def test_an_allocation_effect_ranks_at_what_its_rows_buy() -> None:
+    """Comprehend Languages 4 is a Comprehend 4 — the rank is the rows, not a budget."""
     data = load_game_data()
     effect = PowerEffectInstance(
         "comprehend", rank=3, config={"categories": [{"id": "languages", "tier": 4}]}
     )
     assert effect_allocation_used(effect, data) == 4
-    violations = power_allocation_violations(Power(effects=[effect]), data)
-    assert len(violations) == 1 and "over budget" in violations[0]
+    assert synced_effect_rank(effect, data) == 4
+    # Saved at 3 while the rank was still a budget: the card says so rather than
+    # charging the old price silently, and a level one says nothing.
+    (message,) = power_allocation_violations(Power(effects=[effect]), data)
+    assert "come to 4 ranks but it is saved at 3" in message
+    effect.rank = 4
+    assert power_allocation_violations(Power(effects=[effect]), data) == []
+
+
+def test_every_allocation_effect_follows_its_rows() -> None:
+    data = load_game_data()
+    following = {e.id for e in data.effects if e.rank_follows_allocation}
+    assert following == {
+        "comprehend",
+        "concealment",
+        "enhanced_movement",
+        "enhanced_senses",
+        "enhanced_trait",
+        "feature",
+        "immunity",
+    }
+
+
+def test_an_allocation_option_can_be_bought_twice_for_two_senses() -> None:
+    """Accurate hearing beside Accurate smell: 4 ranks, each row naming its sense."""
+    data = load_game_data()
+    senses = PowerEffectInstance(
+        "enhanced_senses",
+        config={
+            "senses": [
+                {"id": "accurate", "tier": 1, "note": "hearing"},
+                {"id": "accurate", "tier": 1, "note": "smell"},
+            ]
+        },
+    )
+    assert synced_effect_rank(senses, data) == 4
+    row = next(r for r in effect_stat_rows(senses, data) if r.key == "senses")
+    assert row.value == "Accurate (hearing; one sense), Accurate (smell; one sense)"
 
 
 def test_repeatable_immunity_sums_ranks_and_feature_counts_rows() -> None:
@@ -388,8 +428,10 @@ def test_repeatable_immunity_sums_ranks_and_feature_counts_rows() -> None:
     feature = PowerEffectInstance(
         "feature", rank=1, config={"features": [{"name": "Battery"}, {"name": "Remote"}]}
     )
-    assert effect_allocation_used(feature, data) == 2  # one per row
-    assert power_allocation_violations(Power(effects=[feature]), data)  # 2 rows > rank 1
+    # A row saved before Feature had a rank column is the 1 rank a Feature typically is.
+    assert effect_allocation_used(feature, data) == 2
+    feature.config["features"][1]["ranks"] = 2  # a Quick Change into any outfit (p125)
+    assert synced_effect_rank(feature, data) == 3
 
 
 def test_allocation_choices_appear_in_game_terms() -> None:
@@ -763,29 +805,36 @@ def test_affliction_offers_the_four_resistances_before_any_extra() -> None:
     assert offered == ["Dodge", "Fortitude", "Toughness", "Will"]
 
 
-def test_alternate_resistance_widens_the_field_to_every_trait_a_check_uses() -> None:
-    from mm_companion.core.rules import config_field_options
+def test_alternate_resistance_on_affliction_is_picked_on_its_chip() -> None:
+    """The chip carries every trait a check uses, as on any effect; the card's field steps aside.
+
+    It used to be the other way round — the chip showed only its price tier and the wide
+    list moved into the card's own "Resisted by", which nobody found.
+    """
+    from mm_companion.core.rules import config_source_options, modifier_field_claimed
 
     data = load_game_data()
-    field = _affliction_field(data, "resistance")
-    effect = _resisted_affliction("alternate_resistance")
-    offered = [value for _label, value in config_field_options(field, effect, data)]
-
-    assert offered[:4] == ["Dodge", "Fortitude", "Toughness", "Will"]
+    affliction = next(e for e in data.effects if e.id == "affliction")
+    modifier = data.modifier_catalog()["alternate_resistance"]
+    pickers = [f for f in modifier.config_fields if f.overrides == "resistance"]
+    assert [f.key for f in pickers] == ["resistance", "resistanceSecond"]
+    assert not any(modifier_field_claimed(f, affliction) for f in pickers)
+    offered = [value for _label, value in config_source_options(pickers[0], data)]
     assert all(ability.name in offered for ability in data.abilities)
     assert "Damage" in offered
     assert all(skill.name in offered for skill in data.skills)
-    # Every option exactly once, so the widened list never doubles the base four.
     assert len(offered) == len(set(offered))
+    # The card's own picker is the one that hides while the extra is on.
+    assert _affliction_field(data, "resistance").hidden_with == "alternate_resistance"
 
 
-def test_the_second_resistance_is_only_there_with_the_extra() -> None:
-    from mm_companion.core.rules import config_field_shown
-
+def test_an_affliction_reads_the_best_or_worst_of_two_off_its_chip() -> None:
     data = load_game_data()
-    field = _affliction_field(data, "resistanceSecond")
-    assert not config_field_shown(field, _resisted_affliction())
-    assert config_field_shown(field, _resisted_affliction("alternate_resistance"))
+    effect = _alt_resisted(
+        "affliction", resistance="Fortitude", resistanceSecond="Will", against="worst"
+    )
+    rows = {r.key: r for r in effect_stat_rows(effect, data)}
+    assert rows["resistance"].value == "Fortitude or Will vs. DC 18"
 
 
 def test_a_widened_resistance_still_reads_by_name_once_the_extra_comes_off() -> None:
@@ -795,11 +844,11 @@ def test_a_widened_resistance_still_reads_by_name_once_the_extra_comes_off() -> 
     effect.config["resistance"] = "Athletics"
     line = effect_game_terms(effect, data)
     assert "Athletics" in line
-    # ...but the second-resistance row goes with the extra that made it meaningful.
-    effect.config["resistanceSecond"] = "Will"
-    assert not [r for r in effect_stat_rows(effect, data) if r.key == "resistanceSecond"]
+    # ...but the second overcome row goes with the extra that made it meaningful.
+    effect.config["overcomeBySecond"] = "Will"
+    assert not [r for r in effect_stat_rows(effect, data) if r.key == "overcomeBySecond"]
     effect.extras.append(ModifierSelection("alternate_resistance"))
-    assert [r for r in effect_stat_rows(effect, data) if r.key == "resistanceSecond"]
+    assert [r for r in effect_stat_rows(effect, data) if r.key == "overcomeBySecond"]
 
 
 def _alt_resisted(effect_id: str, **config) -> PowerEffectInstance:
@@ -844,13 +893,32 @@ def test_an_unset_alternate_resistance_leaves_the_usual_one() -> None:
     assert rows["resistance"].value == "Toughness vs. 18"
 
 
-def test_affliction_keeps_its_own_resistance_picker_over_the_chips() -> None:
-    """Affliction answers "resisted by" itself; the extra widens that, not a second one."""
+def test_an_affliction_chip_pick_beats_the_hidden_card_field() -> None:
+    """Under Alternate Resistance the chip answers; the card's stale pick does not."""
     data = load_game_data()
-    effect = _alt_resisted("affliction", resistance="Will")
+    effect = _alt_resisted("affliction", resistance="Athletics")
+    effect.config["resistance"] = "Will"
+    rows = {r.key: r for r in effect_stat_rows(effect, data)}
+    assert rows["resistance"].value.startswith("Athletics")
+
+
+def test_an_affliction_saved_with_its_pick_on_the_card_still_reads_it() -> None:
+    """A build from before the move held the wide pick on the card and nothing on the chip."""
+    data = load_game_data()
+    effect = _alt_resisted("affliction", against="easier")
     effect.config["resistance"] = "Athletics"
     rows = {r.key: r for r in effect_stat_rows(effect, data)}
     assert rows["resistance"].value.startswith("Athletics")
+    messages = power_unfinished_violations(Power("p", effects=[effect]), data)
+    assert not [m for m in messages if "Alter" in m]
+
+
+def test_an_affliction_under_alternate_resistance_asks_its_chip_for_one() -> None:
+    data = load_game_data()
+    effect = _alt_resisted("affliction", against="easier")
+    effect.config.update(degree1="dazed", degree2="stunned", degree3="incapacitated")
+    messages = power_unfinished_violations(Power("p", effects=[effect]), data)
+    assert messages == ["Affliction: Alternate Resistance needs Resisted by chosen."]
 
 
 def test_regeneration_reads_its_recovery_interval_and_resurrection_off_its_rank() -> None:
@@ -2228,11 +2296,10 @@ def test_affliction_exposes_config_fields() -> None:
     data = load_game_data()
     affliction = next(e for e in data.effects if e.id == "affliction")
     assert [f.key for f in affliction.config_fields] == [
+        # Hidden while Alternate Resistance is attached: the extra's chip picks then.
         "resistance",
-        # Each resistance picker is followed by its second, which is only on the card
-        # once Alternate Resistance is attached (see the widening tests above).
-        "resistanceSecond",
         "overcomeBy",
+        # Only on the card once Alternate Resistance is attached.
         "overcomeBySecond",
         "degree1",
         "degree2",
@@ -3151,17 +3218,32 @@ def test_an_unallocated_enhanced_trait_costs_nothing() -> None:
 
 def test_an_enhanced_traits_rank_is_its_allocation_not_a_budget() -> None:
     """Its rank has no meaning of its own, so it cannot be overspent — see
-    :func:`synced_effect_rank`. The budget warning is for the effects that do have one."""
+    :func:`synced_effect_rank`. A rank saved out of step with the rows says so."""
 
     data = load_game_data()
     power = Power(effects=[_enhanced(3, [("STR", 2), ("Treatment", 7)])])
     assert effect_allocation_used(power.effects[0], data) == 9
     assert synced_effect_rank(power.effects[0], data) == 9
+    (message,) = power_allocation_violations(power, data)
+    assert "come to 9 ranks but it is saved at 3" in message
+    power.effects[0].rank = 9
     assert power_allocation_violations(power, data) == []
 
 
-def test_an_ordinary_allocation_effect_still_warns_when_overspent() -> None:
+def test_a_budgeted_allocation_effect_still_warns_when_overspent() -> None:
+    """The check survives for a ruleset (a mod) whose allocation is still a budget."""
     data = load_game_data()
+    data = dataclasses.replace(
+        data,
+        effects=[
+            (
+                dataclasses.replace(e, rank_follows_allocation=False)
+                if e.id == "enhanced_senses"
+                else e
+            )
+            for e in data.effects
+        ],
+    )
     senses = PowerEffectInstance(
         "enhanced_senses",
         rank=2,

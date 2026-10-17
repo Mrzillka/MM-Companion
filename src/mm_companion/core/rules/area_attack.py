@@ -43,6 +43,7 @@ from .area import (
     effect_is_area,
     evasion_negates,
 )
+from .defenses import damage_negated, penetrating_ranks, toughness_defense
 from .powers_cost import effect_resistance_dc_base, effect_size_rank_shift
 from .powers_terms import (
     effect_area_rank,
@@ -224,6 +225,9 @@ class AreaEffect:
     #: The rank the creature the attack hits directly resists, when it is not the area's
     #: (a heavy weapon's Area on part of its Damage). ``None``: the same rank.
     primary_rank: int | None = None
+    #: How many of its ranks are Penetrating — what a target's Impervious Toughness is
+    #: measured against (:mod:`.defenses`).
+    penetrating: int = 0
 
     def to_dict(self) -> dict:
         raw = {
@@ -239,6 +243,8 @@ class AreaEffect:
             raw["dc_base"] = self.dc_base
         if self.primary_rank is not None:
             raw["primary_rank"] = self.primary_rank
+        if self.penetrating:
+            raw["penetrating"] = self.penetrating
         return raw
 
     @classmethod
@@ -263,6 +269,7 @@ class AreaEffect:
                 if isinstance(primary_rank, int) and not isinstance(primary_rank, bool)
                 else None
             ),
+            penetrating=max(0, _int(raw, "penetrating")),
         )
 
 
@@ -611,6 +618,7 @@ def _effect_use(
         dc_base=dc_base,
         config=dict(effect.config),
         primary_rank=full if full != rank else None,
+        penetrating=min(penetrating_ranks(effect, game_data), rank),
     )
     if free:
         known = {value for value, _label in area_shape_options(game_data)}
@@ -1174,13 +1182,30 @@ def area_stage_rank(
 
 
 def area_effect_rung(
-    effect: AreaEffect, degree: int | None, game_data: GameData
+    effect: AreaEffect,
+    degree: int | None,
+    game_data: GameData,
+    char: Character | None = None,
+    rank: int | None = None,
 ) -> ResistanceOutcome | None:
-    """The rung of *effect*'s ladder a save of *degree* lands on (a made one: its Hit)."""
+    """The rung of *effect*'s ladder a save of *degree* lands on (a made one: its Hit).
+
+    Given the creature that saved, a Damage area is first measured against its
+    Toughness defences (:mod:`.defenses`) at *rank* — the rank it resisted, halved by a
+    made Dodge (the area's own rank when not given).
+    """
 
     base = _base(game_data, effect.effect_id)
     if base is None:
         return None
+    if char is not None and base.id == game_data.system.damage_effect:
+        if damage_negated(
+            toughness_defense(char, game_data),
+            rank=effect.rank if rank is None else rank,
+            penetrating=effect.penetrating,
+            degree=degree,
+        ):
+            return None
     return outcome_rung(base.resistance_outcomes, degree, base.resistance_success)
 
 

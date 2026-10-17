@@ -394,10 +394,72 @@ def effect_current_rank(
     else:
         rank = max(1, min(effect.rank, int(effect.current_rank)))
     push = max(0, effect.extra_effort)
+    # A Fades effect has lost a rank a use since it was last recharged (p158) — after
+    # every clamp, like the push, but taken away rather than added, and never below 0.
+    faded = effect_faded_ranks(effect, game_data)
     if game_data is None or char is None or _dynamic_rank_cap is None:
-        return rank + push
+        return max(0, rank - faded) + push
     cap = _dynamic_rank_cap(effect, game_data, char)
-    return (rank if cap is None else max(0, cap)) + push
+    return max(0, (rank if cap is None else max(0, cap)) - faded) + push
+
+
+def effect_use_limit(effect: PowerEffectInstance, game_data: GameData | None) -> int | None:
+    """How many uses the effect gets per recharge (Short-Term's six), or ``None``."""
+
+    if game_data is None:
+        return None
+    catalog = game_data.modifier_catalog()
+    limits = [
+        modifier.uses_per_charge
+        for selection in (*effect.extras, *effect.flaws)
+        if (modifier := catalog.get(selection.modifier_id)) is not None and modifier.uses_per_charge
+    ]
+    return min(limits) if limits else None
+
+
+def effect_faded_ranks(effect: PowerEffectInstance, game_data: GameData | None) -> int:
+    """How many ranks the effect has faded by since its last recharge (0 for none)."""
+
+    if game_data is None or not effect.uses:
+        return 0
+    catalog = game_data.modifier_catalog()
+    per_use = sum(
+        modifier.fades_per_use
+        for selection in (*effect.extras, *effect.flaws)
+        if (modifier := catalog.get(selection.modifier_id)) is not None
+    )
+    return per_use * effect.uses
+
+
+def effect_counts_uses(effect: PowerEffectInstance, game_data: GameData | None) -> bool:
+    """Whether anything on the effect counts its uses (Short-Term, Fades)."""
+
+    if game_data is None:
+        return False
+    catalog = game_data.modifier_catalog()
+    return any(
+        (modifier := catalog.get(selection.modifier_id)) is not None
+        and (modifier.uses_per_charge or modifier.fades_per_use)
+        for selection in (*effect.extras, *effect.flaws)
+    )
+
+
+def effect_is_spent(effect: PowerEffectInstance, game_data: GameData | None) -> bool:
+    """Whether the effect has run out until it is recharged.
+
+    A Short-Term effect "has six uses where the effect works normally, then it stops
+    working altogether" (p160); a Fades one stops "once the effect reaches 0 ranks"
+    (p158). Both come back with a recharge, which is the table's call — clearing
+    :attr:`~mm_companion.core.powers.PowerEffectInstance.uses` is all it takes.
+    """
+
+    if game_data is None or not effect.uses:
+        return False
+    limit = effect_use_limit(effect, game_data)
+    if limit is not None and effect.uses >= limit:
+        return True
+    faded = effect_faded_ranks(effect, game_data)
+    return bool(faded) and faded >= effect.rank
 
 
 def effect_is_active(
@@ -441,6 +503,8 @@ def effect_is_active(
         return False
     if effect.suppressed:
         return False
+    if effect_is_spent(effect, game_data):
+        return False  # a Short-Term or Fades effect used up until it is recharged
     if not power.activated:  # master on/off (also the Activation gate)
         return False
     if not power.array_active:  # an array member not currently selected as active

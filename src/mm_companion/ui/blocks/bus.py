@@ -84,6 +84,11 @@ Request topic           Payload / server
 ``recovery-requested``  ``(condition_id, parameter)``; the Conditions block
                         sheds a condition whose recovery check the Dice block
                         just saw made
+``use-spent``           the :class:`RollSpec` the Dice block just threw off a
+                        card, when it is a *use* of something: the Conditions
+                        block puts on what its flaws charge (Tiring,
+                        Distracting), the Powers block counts the use
+                        (Short-Term, Fades)
 ======================  ====================================================
 
 The last exists because **Extra Effort is paid for in another block's currency**
@@ -162,6 +167,12 @@ AREA_REQUESTED = "area-requested"
 #: ``(condition_id, parameter)``. Raised by the roller, which knows the result, and
 #: served by the Conditions block, which owns the change — a roll is not an edit.
 RECOVERY_REQUESTED = "recovery-requested"
+#: A power was used: the payload is the :class:`~mm_companion.core.rules.RollSpec` whose
+#: die was just thrown. Raised by the roller, because only the roller knows a die really
+#: was thrown (a click while it still tumbles is refused), and served twice: the
+#: Conditions block puts on what using it costs (``costs``: Tiring's fatigue, Distracting's
+#: Vulnerable) and the Powers block counts the use (``spends``: Short-Term, Fades).
+USE_SPENT = "use-spent"
 
 #: Request topics whose server is **not** brought into view when they are raised.
 #: A note is a side effect of an edit somewhere else on the sheet, so reopening a
@@ -187,7 +198,14 @@ RECOVERY_REQUESTED = "recovery-requested"
 #: roll, and dropping the bonus into a Dice block they cannot see would be the app
 #: charging them for something they never got.
 QUIET_REQUESTS = frozenset(
-    {NOTE_REQUESTED, PIN_REQUESTED, UNPIN_REQUESTED, HERO_POINT_REQUESTED, RECOVERY_REQUESTED}
+    {
+        NOTE_REQUESTED,
+        PIN_REQUESTED,
+        UNPIN_REQUESTED,
+        HERO_POINT_REQUESTED,
+        RECOVERY_REQUESTED,
+        USE_SPENT,
+    }
 )
 
 #: The requests a sheet passes *out* when it was built without the block that

@@ -199,6 +199,7 @@
       "effects": [
         {
           "effectId": "enhanced_trait",
+          "rank": 2,
           "config": {
             "traits": [
               {
@@ -210,6 +211,7 @@
         },
         {
           "effectId": "enhanced_trait",
+          "rank": 2,
           "config": {
             "traits": [
               {

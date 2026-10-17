@@ -978,6 +978,9 @@ _SPEC_INT_KEYS = ("modifier", "dc", "dc_if_resisted")
 MAX_SPEC_TARGETS = 24
 #: How many condition ids, escalations or parameters one ladder rung may carry.
 MAX_RUNG_ITEMS = 12
+#: The largest effect rank a ladder may carry — far past any Power Level, and only there
+#: so a hostile client cannot send an unbounded number through the relay.
+MAX_LADDER_RANK = 250
 
 
 def sanitize_spec(raw: object, _depth: int = 0) -> dict | None:
@@ -1083,6 +1086,12 @@ def _sanitize_ladder(raw: object) -> dict | None:
     }
     if isinstance(raw.get("success"), dict):
         ladder["success"] = _sanitize_rung(raw["success"])
+    # The attack's rank and Penetrating ranks, what a target's Impervious Toughness is
+    # measured against. Plain bounded counts; their meaning is the rules' business.
+    for key in ("rank", "penetrating"):
+        value = raw.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            ladder[key] = min(value, MAX_LADDER_RANK)
     return ladder
 
 

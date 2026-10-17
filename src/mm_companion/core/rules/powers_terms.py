@@ -41,7 +41,11 @@ from .powers_cost import (
     selection_band,
 )
 from .runtime import (
+    effect_counts_uses,
     effect_current_rank,
+    effect_faded_ranks,
+    effect_is_spent,
+    effect_use_limit,
     live_array_effects,
     resolved_trait_allocation,
     trait_allocation_field,
@@ -416,11 +420,13 @@ def _render_note(
         # Strip whatever is left, so a note rendered without a chip still reads as a
         # sentence rather than showing its own braces.
         return re.sub(r"\s*\{[^{}]*\}", "", text).strip()
-    dc_base = game_data.system.defense_dc_base if game_data else 10
     text = text.replace("{rank}", str(selection.rank))
-    text = text.replace("{dc}", str(dc_base + selection.rank))
+    text = text.replace("{dc}", str(_required_check_dc(modifier, selection, game_data)))
     for key, chosen in selection.config.items():
         text = text.replace(f"{{{key}}}", _config_trait_name(game_data, str(chosen)))
+    if modifier.check_trait:
+        # A check the rules fix (Leaping's Acrobatics) names its trait without a chip.
+        text = text.replace("{trait}", _config_trait_name(game_data, modifier.check_trait))
     # A placeholder the player hasn't filled in yet drops out rather than showing its
     # braces, so an unconfigured Check Required still reads as a sentence.
     text = re.sub(r"\s*\{[^{}]*\}", "", text).strip()
@@ -444,16 +450,51 @@ def required_checks(
     back out of the prose.
     """
 
+    return tuple((check.note, check.dc) for check in required_check_rolls(effect, game_data))
+
+
+@dataclass(frozen=True)
+class RequiredCheck:
+    """One extra roll a modifier demands before the effect works.
+
+    ``trait`` is the trait key it is rolled with — the player's pick on a Check
+    Required chip, the rules' own on Leaping's Acrobatics Check Required — or ``""``
+    for a bare d20 (Unreliable). With a trait the roll carries the wielder's number,
+    which a Check Required used to leave out: a "Magic check, DC 12" rolled at +0.
+    """
+
+    note: str
+    dc: int | None
+    trait: str = ""
+
+
+def _required_check_dc(modifier: Modifier, selection, game_data: GameData | None) -> int:
+    """A required check's DC: the rules' fixed one, else the base DC plus its rank."""
+
+    if modifier.check_dc is not None:
+        return modifier.check_dc
+    dc_base = game_data.system.defense_dc_base if game_data else 10
+    return dc_base + selection.rank
+
+
+def required_check_rolls(
+    effect: PowerEffectInstance, game_data: GameData
+) -> tuple[RequiredCheck, ...]:
+    """Every :class:`RequiredCheck` the effect's modifiers demand, in chip order."""
+
     catalog = game_data.modifier_catalog()
-    checks: list[tuple[str, int | None]] = []
+    checks: list[RequiredCheck] = []
     for selection in (*effect.extras, *effect.flaws):
         modifier = catalog.get(selection.modifier_id)
         if modifier is None or not modifier.requires_check:
             continue
         rendered = _render_note(modifier, effect.rank, selection, game_data)
-        dc = game_data.system.defense_dc_base + selection.rank
         checks.append(
-            (rendered or modifier_label(modifier, selection, effect_rank=effect.rank), dc)
+            RequiredCheck(
+                note=rendered or modifier_label(modifier, selection, effect_rank=effect.rank),
+                dc=_required_check_dc(modifier, selection, game_data),
+                trait=str(selection.config.get("trait") or modifier.check_trait),
+            )
         )
     return tuple(checks)
 
@@ -502,10 +543,17 @@ def _modifier_notes(
 def modifier_field_claimed(field, base_effect) -> bool:
     """Whether a modifier's config ``field`` names a game term the effect itself picks.
 
-    Alternate Resistance chooses what an effect is resisted by — except on an effect
-    that already has its own "Resisted by" (Affliction), where the extra *widens* that
-    field instead. Two pickers for one answer would be a question of which wins, so
-    the modifier's yields: the constructor does not show it and the summary ignores it.
+    An effect with a "Resisted by" of its own that stays on the card keeps the answer,
+    and a modifier field naming the same stat yields: two pickers for one answer would
+    be a question of which wins, so the constructor does not show it and the summary
+    ignores it.
+
+    An own field that **steps aside** for a modifier (``hidden_with``) claims nothing.
+    That is Affliction's "Resisted by", which offers the four defenses until
+    Alternate Resistance is attached and then hides, so the extra's chip carries the
+    wider pickers exactly as it does on every other effect — it used to be the other way
+    round, the chip showing nothing but its price tier while the wider list moved into
+    the card's field, where nobody looked for it.
     """
 
     if not field.overrides or base_effect is None:
@@ -514,7 +562,10 @@ def modifier_field_claimed(field, base_effect) -> bool:
         # A field that *supplies* a stat stands down where the effect has its own:
         # Resistible on a Damage, or the Attack extra's "Resisted by" on an Illusion.
         return True
-    return any(own.overrides == field.overrides for own in base_effect.config_fields)
+    return any(
+        own.overrides == field.overrides and not own.hidden_with
+        for own in base_effect.config_fields
+    )
 
 
 def _record_stat(base_effect, key: str) -> str:
@@ -643,6 +694,7 @@ def _effective_stats(
     # rather than from a Permanent effect's bare "None".
     action_step = 0
     action_step_tint = ""
+    modifier_set: set[str] = set()  # stats a modifier's own config field replaced
 
     for selection in (*effect.extras, *effect.flaws):
         modifier = catalog.get(selection.modifier_id)
@@ -678,6 +730,7 @@ def _effective_stats(
             if stats.get(key) or granting:
                 stats[key] = value
                 change[key] = tint if granting else ""
+                modifier_set.add(key)
                 touched = True
         if modifier.step_field == "action":
             action_step += steps
@@ -721,9 +774,19 @@ def _effective_stats(
 
     # Config choices that name a stat replace it (e.g. Affliction's chosen
     # resistance). These are neutral player choices, not modifiers, so they carry
-    # no better/worse tint.
+    # no better/worse tint. A field that steps aside for an attached modifier
+    # (``hidden_with``) gives way to whatever that modifier picked — Affliction's own
+    # "Resisted by" under an Alternate Resistance — and still answers while the
+    # modifier has picked nothing, so a build saved when the card held the pick reads
+    # as it did.
     for field in base_effect.config_fields:
         if field.overrides and field.overrides in stats:
+            if (
+                field.hidden_with
+                and field.overrides in modifier_set
+                and _has_modifier(effect, field.hidden_with)
+            ):
+                continue
             value = effect.config.get(field.key)
             if value:
                 stats[field.overrides] = _config_display(field, value, game_data)
@@ -955,7 +1018,8 @@ def _ranged_distance_rows(
 
     "Ranged" on its own says nothing about how far, so the reach is spelled out: the
     distance rank, then that rank's range increments as real measurements. The rank row
-    reads as improved when a modifier bought the reach up past its base.
+    reads as improved when a modifier bought the reach up past its base, and as worse
+    when Diminished Range cut it short.
     """
 
     ranks = ranged_distance_ranks(effect, game_data, char)
@@ -969,7 +1033,7 @@ def _ranged_distance_rows(
             "Distance",
             f"rank {base_rank}",
             f"rank {rank}",
-            "better" if rank > base_rank else "",
+            "better" if rank > base_rank else "worse" if rank < base_rank else "",
         )
     ]
     increments = ranged_distance_increments(rank, game_data, spec)
@@ -1478,9 +1542,35 @@ def effect_stat_rows(
                 "better",
             )
         )
+    uses_note = effect_uses_note(effect, game_data)
+    if uses_note:
+        rows.append(EffectStat("uses", "Uses", "", uses_note, "worse" if effect.uses else ""))
     if impact.notes:
         rows.append(EffectStat("notes", "Notes", "", ", ".join(impact.notes), ""))
     return _apply_row_overrides(rows, effect)
+
+
+def effect_uses_note(effect: PowerEffectInstance, game_data: GameData) -> str:
+    """What a Short-Term or Fades effect has left — ``""`` for one that counts nothing.
+
+    The card's way of saying why a Blast reads 4 when it was bought at 6, or why it has
+    stopped working: neither number appears anywhere in the build.
+    """
+
+    if not effect_counts_uses(effect, game_data):
+        return ""
+    if effect_is_spent(effect, game_data):
+        return "spent — recharge it to use it again"
+    parts = []
+    limit = effect_use_limit(effect, game_data)
+    if limit is not None:
+        parts.append(f"{max(0, limit - effect.uses)} of {limit} left")
+    faded = effect_faded_ranks(effect, game_data)
+    if faded:
+        parts.append(f"faded {faded} rank{'' if faded == 1 else 's'}")
+    elif limit is None:
+        parts.append("loses a rank each use")
+    return ", ".join(parts)
 
 
 def _apply_row_overrides(rows: list[EffectStat], effect: PowerEffectInstance) -> list[EffectStat]:
@@ -1825,15 +1915,19 @@ def _config_display_allocation(field, value) -> str:
         option = by_id.get(entry.get("id"))
         if option is None:
             continue
-        label = option.label
+        # What the row applies to comes first — "Accurate (hearing; a whole sense type)"
+        # — because an option can now be taken twice, and the note is what tells the
+        # two apart.
+        qualifiers = [str(entry.get("note", "")).strip()]
         if len(option.tiers) > 1:
             tier = entry.get("tier", 1)
             named = option.tier_label(tier)
             if not named:
                 ranks = option.tier_cost(tier)
                 named = f"{ranks} rank" if ranks == 1 else f"{ranks} ranks"
-            label += f" ({named})"
-        parts.append(label)
+            qualifiers.append(named)
+        qualifiers = [q for q in qualifiers if q]
+        parts.append(f"{option.label} ({'; '.join(qualifiers)})" if qualifiers else option.label)
     return ", ".join(parts)
 
 

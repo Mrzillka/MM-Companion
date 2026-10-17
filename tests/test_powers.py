@@ -773,10 +773,12 @@ def test_state_readout_clamps_above_the_table() -> None:
 
 def test_illusion_maintenance_readout_flips_on_the_moving_checkbox() -> None:
     data = load_game_data()
-    static = effect_readout_rows(PowerEffectInstance("illusion", rank=4), data)[0]
-    moving = effect_readout_rows(
-        PowerEffectInstance("illusion", rank=4, config={"moving": True}), data
-    )[0]
+
+    def maintenance(effect: PowerEffectInstance):
+        return next(r for r in effect_readout_rows(effect, data) if r.label == "Maintenance")
+
+    static = maintenance(PowerEffectInstance("illusion", rank=4))
+    moving = maintenance(PowerEffectInstance("illusion", rank=4, config={"moving": True}))
     assert "Sustain" in static.value
     assert "Concentrate" in moving.value
 

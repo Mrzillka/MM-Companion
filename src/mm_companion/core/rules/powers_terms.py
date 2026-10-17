@@ -962,6 +962,28 @@ def _distance_rank_bonus(effect: PowerEffectInstance, game_data: GameData) -> in
     return bonus
 
 
+def _modifier_range_rank(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None
+) -> int | None:
+    """The rank a range-giving modifier starts the range at (Thrown: 2 + Strength), or ``None``.
+
+    Without a wielder the ability counts as 0, so the constructor shows the floor the
+    rules give rather than inventing a Strength.
+    """
+
+    catalog = game_data.modifier_catalog()
+    for selection in (*effect.extras, *effect.flaws):
+        modifier = catalog.get(selection.modifier_id)
+        if modifier is None or not modifier.range_rank:
+            continue
+        rank = int(modifier.range_rank.get("base", 0))
+        ability = modifier.range_rank.get("ability", "")
+        if ability and char is not None:
+            rank += max(0, effective_ability(char, game_data, ability))
+        return rank
+    return None
+
+
 def ranged_distance_ranks(
     effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
 ) -> tuple[int, int] | None:
@@ -984,6 +1006,9 @@ def ranged_distance_ranks(
     if effective_effect_stats(effect, game_data).get("range") != spec.range_value:
         return None
     source = effect_effective_rank(effect, game_data, char) if spec.rank is None else spec.rank
+    thrown = _modifier_range_rank(effect, game_data, char)
+    if thrown is not None:
+        source = thrown
     base_rank = source + spec.offset
     return base_rank, base_rank + _distance_rank_bonus(effect, game_data)
 
@@ -1516,7 +1541,7 @@ def effect_stat_rows(
         rows.append(EffectStat("enhances", "Enhances", "", ", ".join(raised), "better"))
     # Tier-5 derived readouts (Growth's size mods, Insubstantial's state, ...) — purely
     # computed information, appended as untinted (or sign-tinted) rows.
-    rows.extend(effect_readout_rows(effect, game_data, char))
+    _merge_readouts(rows, effect_readout_rows(effect, game_data, char))
     # A Check Required-style flaw is a roll, not a footnote — its own row, which is
     # what carries it into the power card's dice footer.
     for note in required_check_notes(effect, game_data):
@@ -1608,6 +1633,25 @@ def _apply_row_overrides(rows: list[EffectStat], effect: PowerEffectInstance) ->
     return out
 
 
+def _merge_readouts(rows: list[EffectStat], readouts: list[EffectStat]) -> None:
+    """Append *readouts* to *rows*, letting one that restates a game term **replace** it.
+
+    Communication's Range is not a distance: its rank buys a band (same city, same
+    continent, anywhere), and the generic "a Rank range is that distance rank" rule
+    printed "Range: 1 mile" above a second row reading "Range: Same continent". A
+    readout keyed like a row already on the card (``range`` here) now takes that row's
+    place — but only an untinted one, so a modifier that changed the range keeps its say.
+    """
+
+    by_key = {row.key: index for index, row in enumerate(rows)}
+    for readout in readouts:
+        index = by_key.get(readout.key)
+        if index is not None and readout.key in _STANDARD_STAT_KEYS and not rows[index].change:
+            rows[index] = replace(rows[index], value=readout.value)
+        else:
+            rows.append(readout)
+
+
 def effect_readout_rows(
     effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
 ) -> list[EffectStat]:
@@ -1626,8 +1670,23 @@ def effect_readout_rows(
 
     rows: list[EffectStat] = []
     for readout in game_data.effect_readouts.get(effect.effect_id, ()):
+        # ``withModifier``: a readout about something only an extra buys (Teleport's
+        # Extended reach) says nothing until that extra is on.
+        needs = readout.data.get("withModifier", "")
+        if needs and not _has_modifier(effect, needs):
+            continue
         rows.extend(_readout_rows(readout, effect, game_data, char))
     return rows
+
+
+def _modifier_rank(effect: PowerEffectInstance, modifier_id: str) -> int:
+    """The rank of *modifier_id* on the effect (0 when it is not attached)."""
+
+    return sum(
+        selection.rank
+        for selection in (*effect.extras, *effect.flaws)
+        if selection.modifier_id == modifier_id
+    )
 
 
 # One handler per readout ``kind`` (``docs/mm-powers-ui-design.md`` §2 Tier 5). Each takes
@@ -1705,17 +1764,25 @@ def _readout_state(
 def _readout_measure_offsets(
     readout, effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
 ):
-    rank = effect.rank
     data = readout.data
+    # ``fromRank``: a measure read off a fixed rank rather than the effect's — Teleport
+    # carries mass rank 0 whatever its distance — which ``plusModifier``'s ranks then
+    # raise (Increased Mass).
+    rank = int(data["fromRank"]) if "fromRank" in data else effect.rank
+    if data.get("plusModifier"):
+        rank += _modifier_rank(effect, data["plusModifier"])
     column = data.get("column", "distance")
     out = []
     for row in data.get("rows", []):
-        value = game_data.measurements.label(column, rank + int(row.get("offset", 0)))
+        measured = rank + int(row.get("offset", 0))
+        value = game_data.measurements.label(column, measured)
         if not value:
             continue
         if row.get("perRound"):
             value = f"{value}/round"
-        out.append(EffectStat("readout", row.get("label", ""), "", value, ""))
+        template = row.get("format") or "{value}"
+        value = template.format(value=value, rank=measured)
+        out.append(EffectStat(row.get("key", "readout"), row.get("label", ""), "", value, ""))
     return out
 
 
@@ -1765,8 +1832,26 @@ def _readout_rank_scaled(
 
     data = readout.data
     value = effect.rank * int(data.get("perRank", 1)) + int(data.get("offset", 0))
+    if "max" in data:
+        value = min(value, int(data["max"]))  # Leaping is speed only up to rank 10
     template = data.get("format") or "{value}"
-    return [EffectStat("readout", readout.label or "Rank", "", template.format(value=value), "")]
+    key = data.get("key", "readout")
+    return [EffectStat(key, readout.label or "Rank", "", template.format(value=value), "")]
+
+
+@READOUT_KINDS.handler("fixed")
+def _readout_fixed(
+    readout, effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+):
+    """A row the rules state outright, rank or no rank — Mind Reading's degrees of contact.
+
+    Still a readout rather than prose in the description, because it is what the card's
+    numbers *mean*: a Mind Reading check that won by two degrees has a question's worth
+    of the target's mind, and the card is where the player looks for that.
+    """
+
+    text = readout.data.get("text", "")
+    return [EffectStat("readout", readout.label, "", text, "")] if text else []
 
 
 @READOUT_KINDS.handler("reach_extension")

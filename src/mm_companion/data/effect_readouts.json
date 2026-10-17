@@ -29,6 +29,16 @@
           "3": "Energy",
           "4": "Incorporeal"
         }
+      },
+      {
+        "kind": "state",
+        "label": "In that form",
+        "byRank": {
+          "1": "flows through any opening that is not watertight and out of any restraint that is not; keeps its Strength",
+          "2": "no effective Strength; immune to direct physical damage, but energy and area attacks still hurt; passes anything not airtight",
+          "3": "no effective Strength; immune to physical damage and to its own energy; passes solids permeable to that energy",
+          "4": "no effective Strength; immune to physical and energy attacks; passes through matter at full speed. Sensory effects, effects on Will and Affects Insubstantial still work, as does the one effect named below"
+        }
       }
     ],
     "communication": [
@@ -42,6 +52,12 @@
           "4": "Worldwide",
           "5": "Unlimited (effectively anywhere)"
         }
+      },
+      {
+        "kind": "rank_scaled",
+        "label": "Overheard",
+        "offset": 10,
+        "format": "Perception DC {value}, by someone with an Acute sense for the medium; two degrees to understand it"
       }
     ],
     "remote_sensing": [
@@ -55,6 +71,12 @@
           "4": "Worldwide",
           "5": "Unlimited (effectively anywhere)"
         }
+      },
+      {
+        "kind": "rank_scaled",
+        "label": "Noticed",
+        "offset": 10,
+        "format": "Insight DC {value} for a subject to feel watched; you are Vulnerable and Unaware of your own surroundings meanwhile"
       }
     ],
     "burrowing": [
@@ -69,6 +91,11 @@
       }
     ],
     "extra_limbs": [
+      {
+        "kind": "state",
+        "label": "Limbs",
+        "byRank": { "1": "one extra limb", "2": "up to two", "3": "up to four", "4": "up to eight", "5": "any number that suits your descriptors" }
+      },
       {
         "kind": "capped_rank_bonus",
         "label": "Bonus",
@@ -88,6 +115,7 @@
       }
     ],
     "illusion": [
+      { "kind": "rank_scaled", "label": "Size", "format": "fills an area up to a total size rank of {value}" },
       {
         "kind": "config_flag",
         "label": "Maintenance",
@@ -149,7 +177,13 @@
           { "label": "Hollow object volume", "offset": 2 }
         ]
       },
+      {
+        "kind": "measure_offsets",
+        "column": "mass",
+        "rows": [{ "label": "Object mass", "offset": 0, "format": "up to {value}" }]
+      },
       { "kind": "rank_scaled", "label": "Object Toughness", "format": "up to {value}" },
+      { "kind": "rank_scaled", "label": "Supports weight", "format": "as Strength {value} (+1 for a turn on a Concentrate action or Extra Effort)" },
       { "kind": "rank_scaled", "label": "Maintained at once", "format": "{value} total volume ranks (double while concentrating)" }
     ],
     "morph": [
@@ -176,6 +210,7 @@
       { "kind": "rank_scaled", "label": "Lifting Strength", "format": "+{value} ranks for lifting, carrying and throwing" }
     ],
     "move_object": [
+      { "kind": "rank_scaled", "label": "Moves", "format": "an object to distance rank {value} minus its mass rank" },
       { "kind": "rank_scaled", "label": "Effective Strength", "format": "rank {value} for lifting and moving (+1 for a round on a Concentrate)" },
       {
         "kind": "measure_offsets",
@@ -198,9 +233,93 @@
     ],
     "teleport": [
       {
-        "kind": "state",
-        "label": "Carries",
-        "byRank": { "1": "Yourself plus mass rank 0 (25 lbs.) worn or carried, raised by Increased Mass" }
+        "kind": "measure_offsets",
+        "column": "mass",
+        "fromRank": 0,
+        "plusModifier": "increased_mass_teleport",
+        "rows": [{ "label": "Carries", "offset": 0, "format": "yourself plus {value} worn or carried (mass rank {rank})" }]
+      },
+      {
+        "kind": "measure_offsets",
+        "column": "distance",
+        "withModifier": "extended",
+        "rows": [{ "label": "Extended", "offset": 10, "format": "{value}: two consecutive simple actions, Dazed and Vulnerable until your next turn" }]
+      }
+    ],
+    "environment": [
+      {
+        "kind": "measure_offsets",
+        "column": "distance",
+        "rows": [
+          {
+            "key": "range",
+            "label": "Range",
+            "offset": 0,
+            "format": "an area {value} across, like a Sphere Area"
+          }
+        ]
+      }
+    ],
+    "transmute": [
+      {
+        "kind": "measure_offsets",
+        "column": "mass",
+        "rows": [
+          {
+            "label": "Affects",
+            "offset": -6,
+            "format": "up to {value} of material (mass rank {rank})"
+          }
+        ]
+      }
+    ],
+    "obscure": [
+      {
+        "kind": "measure_offsets",
+        "column": "distance",
+        "rows": [
+          {
+            "label": "Area",
+            "offset": 0,
+            "format": "{value} across (distance rank {rank}), in the Area shape chosen; repositioned as a simple action"
+          }
+        ]
+      }
+    ],
+    "postcognition": [
+      {
+        "kind": "rank_scaled",
+        "label": "Uses",
+        "format": "{value} per adventure; each counts as a rank of Guidance against your heroic advantage limit"
+      }
+    ],
+    "precognition": [
+      {
+        "kind": "rank_scaled",
+        "label": "Uses",
+        "format": "{value} per adventure, as Guidance or a precognitive warning; each counts as a rank of Guidance"
+      }
+    ],
+    "leaping": [
+      {
+        "kind": "rank_scaled",
+        "label": "As movement",
+        "max": 10,
+        "format": "speed rank {value} when leaping beats your ground speed — never faster than rank 10"
+      }
+    ],
+    "mind_reading": [
+      {
+        "kind": "fixed",
+        "label": "Contact",
+        "text": "1 degree: surface thoughts · 2: one question answered from the mind · 3: memories, one a round · 4: the subconscious"
+      }
+    ],
+    "healing": [
+      {
+        "kind": "rank_scaled",
+        "label": "Disease / poison",
+        "format": "one degree grants +{value} on the subject's next check against it"
       }
     ],
     "variable": [

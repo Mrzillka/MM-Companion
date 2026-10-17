@@ -909,6 +909,26 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   `effect_current_rank`, the same dialled rank `reach_extension_feet` reads, so a
   turned-down Elongation shortens on the card and on the block together. (The older
   kinds read the bought `effect.rank`; that predates this and is left alone.)
+- **A Rank range is not always a distance, and a readout can say so.** The generic rule
+  turns a `"Rank"` range into the distance at the effect's rank, which is right for
+  Teleport and wrong for Communication and Remote Sensing, whose ranks buy a *band* (same
+  city … anywhere, p111, p140): the card printed "Range: 1 mile" over a second "Range:
+  Same continent". A readout keyed like a game-term row (`range`) now **replaces** that
+  row's value (`_merge_readouts`) — only an untinted one, so a modifier that moved the
+  range keeps it — which is also how Environment's Range reads as the area it fills ("an
+  area 500 feet across, like a Sphere Area", p122). The second pass of 2026-10-17 put on
+  the cards the other numbers the book ties to a rank: who can overhear a Communication
+  or feel a Remote Sensing (DC 10 + rank), Teleport's carried mass and Extended reach,
+  Transmute's mass (rank − 6), Illusion's size, Obscure's area, Post/Precognition's uses
+  per adventure, Leaping's speed cap of 10, Extra Limbs' count, Create's mass and
+  supporting Strength, Move Object's throw distance, Healing's disease/poison bonus, Mind
+  Reading's degrees of contact and what each Insubstantial form does. Three small
+  generic levers made that data: a readout may be **gated on a modifier**
+  (`withModifier` — Extended), a `measure_offsets` row may start at a fixed rank
+  (`fromRank`) raised by a **modifier's ranks** (`plusModifier` — Increased Mass) and carry
+  a `format`, and `rank_scaled` takes a `max`; `fixed` is a row the rules state outright.
+  And a modifier may set where its range **starts** (`rangeRank`): Thrown's short range is
+  distance rank 2 + Strength (p155), not the effect's rank — 2 with no wielder.
 - **A modifier is taken once unless the ruleset says otherwise.** `repeatable` in
   `modifiers.json` / `effect_modifiers.json` is what `EffectCard.attach_modifier` reads,
   and only seven records carry it: **Limited**, **Quirk**, **Feature**, the **Custom** pair,

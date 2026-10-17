@@ -1200,6 +1200,10 @@ class Modifier:
     #: the rules state it, and because it lands on the same total the Size Table's reach
     #: column does. Zero for every modifier that extends no reach.
     reach_spaces: int = 0
+    #: Where a range this modifier gives starts, when it is not the effect's rank:
+    #: ``{"base": 2, "ability": "STR"}`` is Thrown's "short range is distance rank 2 +
+    #: the character's Strength rank" (p155). Empty for every other modifier.
+    range_rank: dict = field(default_factory=dict)
     adds_ability: str = ""
     cost_scope: str = ""
     cost_per_points: int = 0
@@ -3245,6 +3249,7 @@ def _parse_modifier(m: dict, category: str | None = None) -> Modifier:
         step_field=m.get("stepField", ""),
         step_by=int(m.get("stepBy", 0)),
         distance_rank_bonus=int(m.get("distanceRankBonus", 0)),
+        range_rank=dict(m.get("rangeRank", {})),
         reach_spaces=int(m.get("reachSpaces", 0)),
         adds_ability=m.get("addsAbility", ""),
         cost_scope=m.get("costScope", ""),

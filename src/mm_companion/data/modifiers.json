@@ -759,7 +759,8 @@
       "costValue": 0,
       "flat": false,
       "overrides": { "range": "Ranged" },
-      "description": "Lets a close-range attack be hurled to hit at a distance."
+      "rangeRank": { "base": 2, "ability": "STR" },
+      "description": "Lets a close-range attack be hurled to hit at a distance: short range is distance rank 2 + your Strength, medium one rank more at -2, long another at -5. Once thrown it has to be retrieved."
     },
     {
       "id": "triggered",

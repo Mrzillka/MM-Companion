@@ -14,6 +14,8 @@ unchanged. Submodules form a dependency DAG: ``appliers`` → ``runtime``/``adva
 ``conditions`` (base) → ``size`` → ``derived`` → ``trait_rates`` → ``powers_cost`` →
 ``costs`` → ``movement``/``powers_terms``/``damage`` → ``platforms`` → ``equipment`` →
 ``validation`` → ``subbuilds``/``extra_effort`` → ``rolls`` → ``pins``.
+``defenses`` (what a target's Hardened or Impervious Toughness does to a Damage save)
+sits on ``runtime``, ``accessories`` and ``powers_cost`` and under ``rolls``.
 ``targeting`` (one check against several targets' ladders) sits on ``damage``, whose
 rung resolver it shares, and under ``rolls``; ``impress`` sits on ``rolls``.
 
@@ -57,6 +59,7 @@ from .conditions import *  # noqa: F401,F403
 from .configurations import *  # noqa: F401,F403
 from .costs import *  # noqa: F401,F403
 from .damage import *  # noqa: F401,F403
+from .defenses import *  # noqa: F401,F403
 from .derived import *  # noqa: F401,F403
 from .equipment import *  # noqa: F401,F403
 from .extra_effort import *  # noqa: F401,F403

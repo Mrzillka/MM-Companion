@@ -73,6 +73,22 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   open sheet, so the two copies of the character cannot disagree about an escalation.
   Note `dead` supersedes `staggered` for this: it is the terminal rung, and without
   it the third click left a corpse Staggered.
+- **A target's Toughness can refuse the ladder** (`core/rules/defenses.py`). Impervious
+  leaves a Damage rank no greater than its own untouched, two degrees of success against
+  Hardened, Impervious or Impenetrable leave not even the Hit, and Penetrating cuts back
+  through (the target resists the Penetrating rank instead, and two degrees still leave a
+  Hit) unless the defence is Impenetrable (p152, p154, p116). It used to be words in the
+  success rung's note, so the GM's auto-apply put a Hit on a creature the rules say was
+  never touched. Which modifiers play which part is `system.json`'s `damage_defenses`;
+  what a defence covers is the ranks of the active Toughness boosts carrying it (a rank
+  band covers its band), off powers and worn gear alike (`toughness_defense`). The save
+  carries what it is measured against: `SpecLadder.rank` (read back off its DC) and
+  `penetrating`, both 0 when unknown, which waives the rank tests. Three readers:
+  `answer_rung` (the GM answering an NPC's save), `area_effect_rung` (an area, at the
+  rank the creature resisted, read back off its save's DC) and `localize_spec` (the
+  target's own sheet: the label says "unaffected: Impervious 10" or "roll twice, keep the
+  higher", and Penetrating against Impervious lowers the DC). The relay passes the two
+  ladder keys (`_sanitize_ladder`) from protocol v17 on.
 - **Recovery checks are rolled** (`core/rules/recovery.py`). A record whose
   `recoveryCheck` names a `trait` and a `dc` offers a 🎲 on its chip — every chip: the
   sheet's, the simple sheet's, both GM cards' and the GM's scene cards. The data

@@ -272,6 +272,9 @@
           "costFormula": "-1 point per rank",
           "costValue": 1,
           "flat": false,
+          "config": [
+            { "key": "condition", "label": "Limited to", "type": "text", "hint": "Which materials it can dig through, e.g. 'only loose sand and soil' (p111)." }
+          ],
           "description": "Only works through certain materials, like loose soil but not rock."
         },
         {
@@ -355,6 +358,9 @@
           "costFormula": "-1 point per rank",
           "costValue": 1,
           "flat": false,
+          "config": [
+            { "key": "condition", "label": "Limited to", "type": "text", "hint": "Who it reaches, e.g. 'members of the Legion only' (p112)." }
+          ],
           "description": "Only reaches a specific group, like a species or organization."
         },
         {
@@ -392,7 +398,8 @@
               "max": 2,
               "default": 1,
               "hint": "1 point: a broad category (avians, canines, sea creatures). 2 points: a narrow one (dogs, falcons, dolphins)."
-            }
+            },
+            { "key": "subject", "label": "Only", "type": "text", "hint": "The category understood: avians, canines, ancestral spirits, dolphins... (p113)." }
           ],
           "description": "You only comprehend one category of subject rather than all of them."
         }
@@ -432,6 +439,9 @@
           "costFormula": "-1 point per rank",
           "costValue": 1,
           "flat": false,
+          "config": [
+            { "key": "condition", "label": "Limited to", "type": "text", "hint": "When it works, e.g. 'only in shadows', 'only against machines' (p113)." }
+          ],
           "description": "Only works under specific conditions, like in fog, shadows, or against technological senses."
         },
         {
@@ -635,7 +645,8 @@
                 { "value": "all", "label": "All Damage", "costValue": 2 },
                 { "value": "specific", "label": "One specific type of Damage", "costValue": 1 }
               ]
-            }
+            },
+            { "key": "damage", "label": "Weak to", "type": "text", "hint": "For the specific-weakness version, the damage type the objects cannot resist (p115)." }
           ],
           "description": "Your creations automatically fail their Damage resistance checks."
         }
@@ -746,7 +757,8 @@
                 { "value": "narrow", "label": "A narrow category (flat)", "costValue": 1, "flat": true },
                 { "value": "very_narrow", "label": "A very narrow category (flat)", "costValue": 2, "flat": true }
               ]
-            }
+            },
+            { "key": "attacks", "label": "Attacks", "type": "text", "hint": "Which attacks it deflects: thrown weapons, ballistics, energy... (p117)." }
           ],
           "description": "Only deflects a specific category of ranged attack."
         }
@@ -804,6 +816,9 @@
           "costFormula": "-1 point per rank (typically)",
           "costValue": 1,
           "flat": false,
+          "config": [
+            { "key": "condition", "label": "Limited to", "type": "text", "hint": "When the bonus applies, e.g. 'only at night', 'only while angry' (p122)." }
+          ],
           "description": "The bonus only applies in a specific circumstance, like at night or while angry."
         },
         {
@@ -897,6 +912,7 @@
           "costFormula": "-1 point per rank",
           "costValue": 1,
           "flat": false,
+          "useCosts": ["vulnerable"],
           "description": "You're left Vulnerable while actively using your extra limbs."
         },
         {
@@ -905,6 +921,9 @@
           "costFormula": "-1 point per rank (typically)",
           "costValue": 1,
           "flat": false,
+          "config": [
+            { "key": "condition", "label": "Limited part", "type": "text", "hint": "Which effect or modifier works only through the extra limbs (p124)." }
+          ],
           "description": "Another effect or modifier only works through your extra limbs."
         }
       ]
@@ -983,6 +1002,7 @@
           "costFormula": "-1 point per rank",
           "costValue": 1,
           "flat": false,
+          "useCosts": ["vulnerable"],
           "description": "You're Vulnerable the whole time you're flying."
         },
         {
@@ -1035,6 +1055,7 @@
           "costFormula": "+1 point flat per use",
           "costValue": 1,
           "flat": true,
+          "ranked": true,
           "description": "Grants an extra use of Fortune Control per rank (capped by heroic-advantage limits)."
         },
         {
@@ -1043,6 +1064,10 @@
           "costFormula": "+1 point flat per advantage",
           "costValue": 1,
           "flat": true,
+          "ranked": true,
+          "config": [
+            { "key": "advantages", "label": "Advantages", "type": "text", "hint": "The fortune or heroic advantages acquired, one per rank (p127)." }
+          ],
           "description": "Lets you acquire fortune/heroic advantages through this effect."
         }
       ],
@@ -1252,6 +1277,9 @@
           "costFormula": "-1 point per rank",
           "costValue": 1,
           "flat": false,
+          "config": [
+            { "key": "condition", "label": "Limited to", "type": "text", "hint": "e.g. 'one type of damage', 'others only', 'self only' (p128)." }
+          ],
           "description": "Restricted to one type of damage, or only usable on others (or only on yourself)."
         },
         {
@@ -1373,9 +1401,22 @@
         {
           "id": "redirect_immunity",
           "name": "Redirect",
-          "costFormula": "+1 point flat (or per rank for sustained/continuous)",
+          "costFormula": "+1 point flat, or +1/+2 points per rank",
           "costValue": 1,
           "flat": true,
+          "config": [
+            {
+              "key": "mode",
+              "label": "Redirect as",
+              "type": "select",
+              "hint": "Spending your reaction is +1 point flat. Redirecting as a non-action while you maintain it is +1 point per rank (Sustained); with no maintenance at all, +2 per rank (Continuous).",
+              "options": [
+                { "value": "reaction", "label": "A reaction", "costValue": 1, "flat": true },
+                { "value": "sustained", "label": "Sustained", "costValue": 1, "flat": false },
+                { "value": "continuous", "label": "Continuous", "costValue": 2, "flat": false }
+              ]
+            }
+          ],
           "description": "Lets you redirect attacks you're immune to at a new target."
         },
         {
@@ -1543,6 +1584,10 @@
           "costFormula": "-1 point per rank",
           "costValue": 1,
           "flat": false,
+          "requiresCheck": true,
+          "checkTrait": "Acrobatics",
+          "checkDc": 10,
+          "noteTemplate": "{trait} check, DC {dc}: each point over buys 1 rank of Leaping",
           "description": "Needs a successful Acrobatics check to use your full Leaping rank."
         },
         {
@@ -1671,6 +1716,9 @@
           "costFormula": "-1 point per rank",
           "costValue": 1,
           "flat": false,
+          "config": [
+            { "key": "sense", "label": "Sense", "type": "text", "hint": "Sight, hearing, scent, or 'Mental Communication' (p134)." }
+          ],
           "description": "Requires an additional sense of the target, like seeing their expression."
         }
       ]
@@ -1924,6 +1972,7 @@
           "costFormula": "-1 point per rank",
           "costValue": 1,
           "flat": false,
+          "fadesPerUse": 1,
           "description": "Each resistance check it's used for wears the protection down by a rank."
         },
         {
@@ -1932,6 +1981,9 @@
           "costFormula": "-1 point per rank (typically)",
           "costValue": 1,
           "flat": false,
+          "config": [
+            { "key": "condition", "label": "Limited to", "type": "text", "hint": "Which damage it stops, e.g. 'physical damage only' (p138)." }
+          ],
           "description": "Only protects against a specific category of damage."
         },
         {
@@ -1948,6 +2000,9 @@
           "costFormula": "-1 point per rank",
           "costValue": 1,
           "flat": false,
+          "requiresCheck": true,
+          "checkDc": 11,
+          "noteTemplate": "Reliability: works on 11 or higher, fails on 10 or less",
           "description": "Only offers partial coverage — some attacks get through."
         }
       ]
@@ -2058,6 +2113,9 @@
           "costFormula": "-1 point per rank",
           "costValue": 1,
           "flat": false,
+          "config": [
+            { "key": "medium", "label": "Medium", "type": "text", "hint": "Shadows, flames, mirrors, water, screens... (p141)." }
+          ],
           "description": "Only works through a specific medium, like mirrors or shadows."
         },
         {
@@ -2303,6 +2361,10 @@
           "costFormula": "+1 point flat per location",
           "costValue": 1,
           "flat": true,
+          "ranked": true,
+          "config": [
+            { "key": "locations", "label": "Locations", "type": "text", "hint": "The places memorized, one per rank (p144)." }
+          ],
           "description": "Lets you teleport to a memorized place without perceiving it."
         },
         {
@@ -2321,6 +2383,7 @@
           "costFormula": "-1 point per rank",
           "costValue": 1,
           "flat": false,
+          "requiresAny": ["extended"],
           "description": "You can only make the longer, riskier extended teleport."
         },
         {
@@ -2329,6 +2392,9 @@
           "costFormula": "-1 point per rank",
           "costValue": 1,
           "flat": false,
+          "config": [
+            { "key": "medium", "label": "Medium", "type": "text", "hint": "Wires, root systems, waterways, shadows, mirrors... (p145)." }
+          ],
           "description": "Requires a medium to teleport from and to, like wires or shadows."
         }
       ]
@@ -2482,6 +2548,9 @@
           "costFormula": "-1 point per rank",
           "costValue": 1,
           "flat": false,
+          "config": [
+            { "key": "direction", "label": "Direction", "type": "text", "hint": "e.g. 'up and down only', 'towards and away from me' (p135)." }
+          ],
           "description": "Can only move objects along a fixed path, like straight up/down or directly toward/away from you."
         },
         {
@@ -2500,7 +2569,8 @@
                 { "value": "broad", "label": "A broad material", "costValue": 1 },
                 { "value": "narrow", "label": "A particularly limited material", "costValue": 2 }
               ]
-            }
+            },
+            { "key": "material", "label": "Material", "type": "text", "hint": "Which material it moves: metals, plants, water... (p135)." }
           ],
           "description": "Only works on a specific type of material, like metal, plants, or water."
         }
@@ -2554,7 +2624,8 @@
                 { "value": "rare", "label": "Rare (flat)", "costValue": 1, "flat": true },
                 { "value": "very_rare", "label": "Very rare (flat)", "costValue": 2, "flat": true }
               ]
-            }
+            },
+            { "key": "descriptor", "label": "Descriptor", "type": "text", "hint": "The damage it cannot heal: fire, holy weapons, bludgeoning... (p140)." }
           ],
           "description": "Can't heal damage from one specific descriptor (fire, holy weapons, etc.)."
         },
@@ -2580,6 +2651,9 @@
           "costFormula": "-1 point per rank",
           "costValue": 1,
           "flat": false,
+          "config": [
+            { "key": "source", "label": "Source", "type": "text", "hint": "What it needs access to: blood, electricity, sunlight... (p140)." }
+          ],
           "description": "Requires access to a specific resource (sunlight, electricity, raw material) during recovery."
         }
       ]
@@ -2630,6 +2704,9 @@
           "costFormula": "-1 point per rank",
           "costValue": 1,
           "flat": false,
+          "config": [
+            { "key": "condition", "label": "Limited to", "type": "text", "hint": "What the sense picks up or when, e.g. 'only magic' (p121)." }
+          ],
           "description": "The sense only works on certain things or under certain circumstances."
         },
         {
@@ -2646,6 +2723,9 @@
           "costFormula": "-1 point per rank",
           "costValue": 1,
           "flat": false,
+          "requiresCheck": true,
+          "checkDc": 11,
+          "noteTemplate": "Reliability (the GM rolls it in secret): works on 11 or higher",
           "description": "The GM secretly rolls reliability; it may simply fail, or feed you wrong information."
         }
       ]

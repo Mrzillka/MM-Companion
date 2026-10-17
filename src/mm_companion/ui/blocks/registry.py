@@ -42,6 +42,7 @@ from mm_companion.ui.blocks.bus import (
     RECOVERY_REQUESTED,
     ROLL_REQUESTED,
     UNPIN_REQUESTED,
+    USE_SPENT,
 )
 from mm_companion.ui.blocks.declarative import DeclarativeBlock
 from mm_companion.ui.sections import (
@@ -266,7 +267,7 @@ _BASE_BLOCKS = [
         # A recovery check off a chip's 🎲 is rolled by whoever serves rolls, and
         # comes back here as the condition to shed once the roller has seen it made.
         {"rollRequested": (ROLL_REQUESTED,)},
-        {RECOVERY_REQUESTED: "recover_condition"},
+        {RECOVERY_REQUESTED: "recover_condition", USE_SPENT: "take_use_costs"},
     ),
     (
         "advantages",
@@ -357,7 +358,9 @@ _BASE_BLOCKS = [
             "noteRequested": (NOTE_REQUESTED,),
             "heroPointRequested": (HERO_POINT_REQUESTED,),
         },
-        {},
+        # A die thrown off a card that is a use of a Short-Term or Fades effect: the
+        # roller says it really was thrown, and the block that owns the power counts it.
+        {USE_SPENT: "count_use"},
     ),
     (
         "equipment",
@@ -428,8 +431,9 @@ _BASE_BLOCKS = [
         # one that owns a history for a note to be written in.
         {},
         {},
-        # A recovery check it saw made: the Conditions block sheds the condition.
-        {"recovered": (RECOVERY_REQUESTED,)},
+        # A recovery check it saw made: the Conditions block sheds the condition. A
+        # power it rolled whose flaws charge for using it: the Conditions block takes it.
+        {"recovered": (RECOVERY_REQUESTED,), "useSpent": (USE_SPENT,)},
         {
             ROLL_REQUESTED: "perform_roll",
             LOAD_REQUESTED: "load_roll",

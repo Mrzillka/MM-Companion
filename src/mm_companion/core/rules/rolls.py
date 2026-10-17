@@ -37,6 +37,7 @@ from .conditions import (
     condition_scope_penalty,
     resistance_condition_effect,
 )
+from .defenses import localized_damage_save, penetrating_ranks
 from .derived import (
     effective_ability,
     initiative_ability,
@@ -45,6 +46,7 @@ from .derived import (
     skill_modifiers,
     skill_total,
 )
+from .extra_effort import effect_use_costs
 from .improvised import ImprovisedPlan
 from .powers_cost import effect_action_at_most, effect_resistance_dc_base
 from .powers_terms import (
@@ -56,8 +58,9 @@ from .powers_terms import (
     effect_stat_rows,
     effective_effect_stats,
     linked_attacks,
-    required_checks,
+    required_check_rolls,
 )
+from .runtime import effect_counts_uses
 from .targeting import concrete_rung, opposed_dc, rung_caption
 
 #: The slowest action an effect may take and still be readied to counter in action time:
@@ -163,16 +166,27 @@ class SpecLadder:
     and its parameter templates (``{source}`` left for whoever applies it). It travels
     on the spec so the GM can put a save an NPC failed straight onto it, whoever
     built the spec (see :mod:`.answering`). ``kind`` is one of the ``LADDER_*`` values.
+
+    ``rank`` and ``penetrating`` are the attack's effect rank and how many of its ranks
+    are Penetrating — what the *target's* Impervious or Hardened Toughness is measured
+    against (:mod:`.defenses`). Both 0 when unknown, which waives the rank tests and
+    leaves a ladder from an older build reading as it always did.
     """
 
     kind: str
     rungs: tuple[ResistanceOutcome, ...] = ()
     success: ResistanceOutcome | None = None
+    rank: int = 0
+    penetrating: int = 0
 
     def to_dict(self) -> dict:
         raw: dict = {"kind": self.kind, "rungs": [_rung_to_dict(r) for r in self.rungs]}
         if self.success is not None:
             raw["success"] = _rung_to_dict(self.success)
+        if self.rank:
+            raw["rank"] = self.rank
+        if self.penetrating:
+            raw["penetrating"] = self.penetrating
         return raw
 
     @classmethod
@@ -188,7 +202,17 @@ class SpecLadder:
             kind=str(raw.get("kind", "")),
             rungs=tuple(_rung_from_dict(r) for r in rungs),
             success=_rung_from_dict(success) if isinstance(success, dict) else None,
+            rank=_nonnegative(raw.get("rank")),
+            penetrating=_nonnegative(raw.get("penetrating")),
         )
+
+
+def _nonnegative(value: object) -> int:
+    """A wire integer that may be missing or junk, as a count (0 for either)."""
+
+    if isinstance(value, int) and not isinstance(value, bool):
+        return max(0, value)
+    return 0
 
 
 @dataclass(frozen=True)
@@ -264,6 +288,16 @@ class RollSpec:
     #: GM *asks* a player for still knows what it is for when that player rolls it.
     recovers: str = ""
     recovers_parameter: str = ""
+    #: What *using* the effect costs its wielder, as condition ids put on the roller's
+    #: own sheet when this roll is thrown — Tiring's rung of fatigue, Distracting's
+    #: Vulnerable (:func:`~.extra_effort.effect_use_costs`). **Local only**, and never
+    #: written by :meth:`to_dict`: a roll thrown again off the history is a reroll of a
+    #: use already paid for, not a second use.
+    costs: tuple[str, ...] = ()
+    #: Which effects this roll *uses*, as ``(power id, index into its effects)`` pairs,
+    #: for the ones that count their uses (Short-Term, Fades): the Powers block adds one
+    #: to each once the die is really thrown. Local only, for :attr:`costs`' reason.
+    spends: tuple[tuple[str, int], ...] = ()
     #: More rolls this one provokes **alongside** :attr:`follow_up`, offered on the same
     #: terms (a hit, a critical, a graze). A Linked power's one attack check lands every
     #: effect in it at once, and each is resisted separately (p155); a Nullify's hit
@@ -799,6 +833,9 @@ def localize_spec(spec: RollSpec, char: Character | None, game_data: GameData) -
     own = _own_trait_roll(spec, char, game_data)
     if own is None:
         return spec
+    # A Toughness save against Damage: the target's Impervious or Hardened decides what
+    # the roll is for before it is made (the DC Penetrating leaves, a second die).
+    spec = localized_damage_save(spec, char, game_data)
     if spec.kind in (KIND_BEST_OF, KIND_WORST_OF):
         # Which candidate won is worth saying: "Resist Demoralized (Will)".
         return replace(
@@ -929,6 +966,33 @@ class _EffectRolls:
     after: tuple[RollSpec, ...] = ()
 
 
+def _required_check_bonus(trait: str, char: Character | None, game_data: GameData) -> int:
+    """The wielder's own number for a required check's trait (0: a bare d20, or no sheet)."""
+
+    if not trait or char is None:
+        return 0
+    # A save's dispatch is the widest one: a resistance, an ability or a skill.
+    probe = RollSpec(label=trait, kind=KIND_POWER_SAVE, trait_key=trait)
+    own = _own_trait_roll(probe, char, game_data)
+    return own.modifier if own is not None else 0
+
+
+def _damage_measured(
+    ladder: SpecLadder | None, effect: PowerEffectInstance, game_data: GameData, dc: int | None
+) -> SpecLadder | None:
+    """A damage ladder stamped with what a target's Toughness is measured against.
+
+    The rank is read back off the save's DC (DC 10 + rank) rather than recomputed, so it
+    is the rank the save is really made against — Strength folded in, a dial turned down.
+    """
+
+    if ladder is None or ladder.kind != LADDER_DAMAGE or dc is None:
+        return ladder
+    base = effect_resistance_dc_base(effect, game_data)
+    rank = dc - base if base is not None else 0
+    return replace(ladder, rank=max(0, rank), penetrating=penetrating_ranks(effect, game_data))
+
+
 def _effect_roll_parts(
     effect: PowerEffectInstance, game_data: GameData, char: Character | None, prefix: str
 ) -> _EffectRolls:
@@ -954,7 +1018,9 @@ def _effect_roll_parts(
             success_outcome=effect_success_outcome(effect, game_data, base_effect),
             rolled_by_target=True,
             trait_key=_save_key(resistance_row.value, game_data),
-            ladder=effect_spec_ladder(effect, game_data, base_effect),
+            ladder=_damage_measured(
+                effect_spec_ladder(effect, game_data, base_effect), effect, game_data, numbers.dc
+            ),
         )
 
     opposed: RollSpec | None = None
@@ -971,8 +1037,13 @@ def _effect_roll_parts(
         )
 
     required = tuple(
-        RollSpec(label=named(note), dc=dc, kind=KIND_POWER_CHECK)
-        for note, dc in required_checks(effect, game_data)
+        RollSpec(
+            label=named(check.note),
+            modifier=_required_check_bonus(check.trait, char, game_data),
+            dc=check.dc,
+            kind=KIND_POWER_CHECK,
+        )
+        for check in required_check_rolls(effect, game_data)
     )
     check: RollSpec | None = None
     check_row = rows.get("check")
@@ -1010,6 +1081,14 @@ def _effect_roll_parts(
             also=tuple(provoked[1:]),
         )
     after = tuple(spec for spec in (save, opposed) if spec is not None)
+    # Using the effect is what Tiring and Distracting charge for, and the first roll the
+    # wielder makes is the use: the attack or effect check, else the check required
+    # before it. An effect that rolls nothing keeps its flaw as a note.
+    costs = effect_use_costs(effect, game_data)
+    if costs and check is not None:
+        check = replace(check, costs=costs)
+    elif costs and required:
+        required = (replace(required[0], costs=costs), *required[1:])
     return _EffectRolls(required=required, check=check, after=after)
 
 
@@ -1029,6 +1108,25 @@ def _effect_rolls(
     return [*parts.required, *check, *parts.after]
 
 
+def _counted_use(
+    part: _EffectRolls, where: tuple[str, int], effect: PowerEffectInstance, game_data: GameData
+) -> _EffectRolls:
+    """*part* with its use roll marked as spending a use of the effect *where* names.
+
+    The use roll is the one :attr:`RollSpec.costs` rides on: the check, else the check
+    required before it.
+    """
+
+    if not effect_counts_uses(effect, game_data):
+        return part
+    if part.check is not None:
+        return replace(part, check=replace(part.check, spends=(where,)))
+    if part.required:
+        first = replace(part.required[0], spends=(where,))
+        return replace(part, required=(first, *part.required[1:]))
+    return part
+
+
 def _linked_check(power: Power, attack, parts: list[_EffectRolls], prefixes: list[str]) -> RollSpec:
     """The one attack check a Linked group rolls, provoking every member's save."""
 
@@ -1040,6 +1138,10 @@ def _linked_check(power: Power, attack, parts: list[_EffectRolls], prefixes: lis
     hint = f"The target's {attack.against} goes in the DC box. One roll lands every linked effect."
     if differ:
         hint += " The effects' bonuses differ; this rolls the ruleset's pick of them."
+    costs = tuple(
+        dict.fromkeys(c for part in members if part.check is not None for c in part.check.costs)
+    )
+    spends = tuple(i for part in members if part.check is not None for i in part.check.spends)
     return RollSpec(
         label=f"{names}: {label}" if names else label,
         modifier=attack.bonus,
@@ -1047,6 +1149,8 @@ def _linked_check(power: Power, attack, parts: list[_EffectRolls], prefixes: lis
         hint=hint,
         follow_up=provoked[0] if provoked else None,
         also=tuple(provoked[1:]),
+        costs=costs,
+        spends=spends,
     )
 
 
@@ -1077,8 +1181,13 @@ def power_rolls(power: Power, char: Character | None, game_data: GameData) -> li
             prefix = base.name if base else effect.effect_id
         prefixes.append(prefix)
     parts = [
-        _effect_roll_parts(effect, game_data, char, prefix)
-        for effect, prefix in zip(power.effects, prefixes, strict=True)
+        _counted_use(
+            _effect_roll_parts(effect, game_data, char, prefix),
+            (power.id, index),
+            effect,
+            game_data,
+        )
+        for index, (effect, prefix) in enumerate(zip(power.effects, prefixes, strict=True))
     ]
     shared = {}
     for attack in linked_attacks(power, game_data, char):

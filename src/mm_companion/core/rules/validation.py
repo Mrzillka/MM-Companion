@@ -322,9 +322,11 @@ def effect_allocation_used(effect: PowerEffectInstance, game_data: GameData) -> 
                 tier = min(max(int(entry.get("tier", 1)), 1), len(option.tiers))
                 used += option.tiers[tier - 1]
         elif cfg.type == "repeatable":
-            int_key = next((c.key for c in cfg.columns if c.type == "int"), None)
-            if int_key is not None:
-                used += sum(int(row.get(int_key, 0) or 0) for row in value)
+            int_column = next((c for c in cfg.columns if c.type == "int"), None)
+            if int_column is not None:
+                # A row with nothing stored counts as the column's default — a Feature
+                # row saved before it had a rank column is still one rank.
+                used += sum(int(row.get(int_column.key) or int_column.default) for row in value)
             else:
                 used += len(value)
     return used
@@ -350,6 +352,21 @@ def synced_effect_rank(effect: PowerEffectInstance, game_data: GameData) -> int 
     return effect_allocation_used(effect, game_data)
 
 
+def _has_rows(effect: PowerEffectInstance, base) -> bool:
+    """Whether an allocation effect has any rows at all.
+
+    A row-less one is a skeleton — the book's own Absorption leaves its choices to the
+    player — and its stored rank is the only statement of intent there is, so it is not
+    measured against a sum of nothing.
+    """
+
+    return any(
+        effect.config.get(field.key)
+        for field in base.config_fields
+        if field.type in ("allocation", "repeatable")
+    )
+
+
 def power_allocation_violations(power: Power, game_data: GameData) -> list[str]:
     """Over-allocation breaches: a Tier-4 effect spending more ranks than it has.
 
@@ -365,7 +382,20 @@ def power_allocation_violations(power: Power, game_data: GameData) -> list[str]:
     violations: list[str] = []
     for effect in power.effects:
         base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
-        if base is None or base.rank_follows_allocation:
+        if base is None:
+            continue
+        if base.rank_follows_allocation:
+            # No budget to overspend — but a power saved while its rank was still a
+            # hand-set budget (an Enhanced Senses 4 with two ranks chosen) keeps that
+            # rank, and its price, until it is opened again. Nothing is rewritten on
+            # load, so the card says so rather than charging silently for the old one.
+            used = effect_allocation_used(effect, game_data)
+            if base.config_fields and used != effect.rank and _has_rows(effect, base):
+                violations.append(
+                    f"{base.name}: its choices come to {used} rank{'' if used == 1 else 's'} "
+                    f"but it is saved at {effect.rank} — open it in the Power Constructor "
+                    "to bring the two level."
+                )
             continue
         if not any(f.type in ("allocation", "repeatable") for f in base.config_fields):
             continue
@@ -695,6 +725,21 @@ def _field_waived(field, effect: PowerEffectInstance, game_data: GameData) -> bo
     return False
 
 
+def _second_of_two(field, modifier) -> bool:
+    """Whether an earlier field of *modifier* already overrides the stat *field* does.
+
+    Alternate Resistance's "Or" is the second half of a best- or worst-of-two pick and
+    is optional by design; only the first "Resisted by" can be what a build is missing.
+    """
+
+    for own in modifier.config_fields:
+        if own is field:
+            return False
+        if own.overrides and own.overrides == field.overrides:
+            return True
+    return False
+
+
 def power_unfinished_violations(power: Power, game_data: GameData) -> list[str]:
     """Choices a build needs and has not had made yet (a warning).
 
@@ -726,12 +771,25 @@ def power_unfinished_violations(power: Power, game_data: GameData) -> list[str]:
             modifier = catalog.get(selection.modifier_id)
             if modifier is None:
                 continue
+            # A required field of the effect's own that steps aside for this modifier
+            # hands its requirement on: Affliction must be resisted by *something*, and
+            # under Alternate Resistance the chip is where that is picked — unless a
+            # build saved before the move still holds the answer on the card.
+            handed_on = {
+                own.overrides
+                for own in base.config_fields
+                if own.required
+                and own.overrides
+                and own.hidden_with == selection.modifier_id
+                and not effect.config.get(own.key)
+            }
             unset = [
                 field.label
                 for field in modifier.config_fields
-                if field.required
+                if (field.required or (field.overrides in handed_on and not field.template))
                 and not modifier_field_claimed(field, base)
                 and not selection.config.get(field.key)
+                and not _second_of_two(field, modifier)
             ]
             if unset:
                 messages.append(f"{name}: {modifier.name} needs {', '.join(unset)} chosen.")

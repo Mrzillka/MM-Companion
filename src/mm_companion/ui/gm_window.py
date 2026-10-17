@@ -996,10 +996,12 @@ class GMWindow(QMainWindow):
             return
         if not storage.gm_auto_apply().get(ladder.kind, True):
             return
-        rung = answer_rung(ladder, int(degree))
         party = answering.party
         entry = self._npc_state.get(party.source)
-        if rung is None or entry is None:
+        if entry is None:
+            return
+        rung = answer_rung(ladder, int(degree), entry.character, self._data)
+        if rung is None:
             return
         before = deepcopy(entry.character.conditions)
         changes = resolve_rung(entry.character, rung, self._data, source=answering.where.source)

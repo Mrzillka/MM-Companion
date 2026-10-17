@@ -528,6 +528,12 @@ class AllocationOption:
     used to print "Sight 2" beside a combo reading "4 ranks", two numbers that mean
     different things sitting next to each other. Optional — an option without one falls
     back to naming the ranks the tier costs, which is still not its index.
+
+    ``prompt`` is what the row's note asks for — "which sense", "what it detects", "which
+    environment". Most of these options apply *to* something the rules leave the player
+    to name, and an option may be taken more than once for different things (Accurate
+    hearing beside Accurate smell), so every chosen row carries a free-text note. Empty
+    means the generic prompt.
     """
 
     id: str
@@ -538,6 +544,7 @@ class AllocationOption:
     speeds: tuple[SpeedRank | None, ...] = ()
     tier_notes: tuple[str, ...] = ()
     tier_labels: tuple[str, ...] = ()
+    prompt: str = ""
 
     def speed(self, tier: int) -> SpeedRank | None:
         """The rate a 1-based ``tier`` grants, or ``None`` when it grants none."""
@@ -586,6 +593,15 @@ class RepeatableColumn:
     #: vocabulary a ``select`` field's ``source`` uses (see
     #: :data:`mm_companion.ui.power_constructor.TRAIT_SOURCES`). Empty elsewhere.
     source: str = ""
+    #: For a ``"suggest"`` column: the standard answers offered in its editable combo,
+    #: as ``(label, ranks)`` pairs — picking one also sets the row's ``int`` column to
+    #: its ranks (Immunity's tiers: Aging is 1, Critical Hits 2, all Fortitude effects
+    #: 30). Free text is still accepted; the list is a shortcut, not a limit.
+    suggestions: tuple[tuple[str, int], ...] = ()
+    #: What a row with no stored value in this ``int`` column counts as — 1 for a
+    #: Feature, which "typically requires 1 rank", so a row saved before the column
+    #: existed still costs what it did.
+    default: int = 0
 
 
 @dataclass(frozen=True)
@@ -1184,6 +1200,10 @@ class Modifier:
     #: the rules state it, and because it lands on the same total the Size Table's reach
     #: column does. Zero for every modifier that extends no reach.
     reach_spaces: int = 0
+    #: Where a range this modifier gives starts, when it is not the effect's rank:
+    #: ``{"base": 2, "ability": "STR"}`` is Thrown's "short range is distance rank 2 +
+    #: the character's Strength rank" (p155). Empty for every other modifier.
+    range_rank: dict = field(default_factory=dict)
     adds_ability: str = ""
     cost_scope: str = ""
     cost_per_points: int = 0
@@ -1205,6 +1225,23 @@ class Modifier:
     #: Such a modifier gets its own game-term row and a line in the card's dice footer
     #: rather than being buried in Notes — it is something someone has to roll.
     requires_check: bool = False
+    #: The trait such a check is made with when the rules fix it rather than the player
+    #: (Leaping's Acrobatics Check Required). ``""``: a config field picks it, or the
+    #: roll is a bare d20 (Unreliable's reliability die).
+    check_trait: str = ""
+    #: The DC of such a check when the rules fix it (Unreliable fails on 10 or less, so
+    #: 11; Leaping's Acrobatics is DC 10). ``None``: the system's base DC plus the
+    #: modifier's own rank, Check Required's "10 + ranks in Check Required".
+    check_dc: int | None = None
+    #: What using the effect puts on its wielder, as condition ids — or the fatigue
+    #: ladder's sentinel (:data:`~mm_companion.core.rules.extra_effort.USE_COST_FATIGUE`)
+    #: for Tiring. Distracting's is ``("vulnerable",)``. Empty for everything else.
+    use_costs: tuple[str, ...] = ()
+    #: How many uses the effect gets before it stops until recharged (Short-Term's
+    #: six). 0: the modifier counts no uses.
+    uses_per_charge: int = 0
+    #: How many ranks each use costs the effect until recharged (Fades' one). 0: none.
+    fades_per_use: int = 0
     requires_any: tuple[str, ...] = ()
     config_fields: tuple[EffectConfigField, ...] = ()
     custom: bool = False
@@ -1501,6 +1538,33 @@ class QuickNPCRules:
 
 
 @dataclass(frozen=True)
+class DamageDefenses:
+    """Which modifiers on a Toughness change what Damage does, and how (``system.json``).
+
+    Each entry is a list of modifier ids, so the rules are read off the data and the
+    names stay content (p152, p154, p116):
+
+    - ``roll_twice`` — the target rolls twice and keeps the higher against a Damage
+      rank no greater than the ranks the modifier covers (Hardened);
+    - ``two_degrees`` — two or more degrees of success on the save leave *no* damage
+      conditions, not even the Hit (Hardened, Impervious, Impenetrable);
+    - ``immune`` — the target is simply unaffected by a Damage rank no greater than the
+      ranks covered (Impervious, Impenetrable);
+    - ``ignores_penetrating`` — the defense holds against a Penetrating attack too
+      (Impenetrable);
+    - ``penetrating`` — the attacker's side: those ranks of an attack cut through
+      ``immune`` (the target resists the Penetrating rank instead) and deny
+      ``two_degrees`` a defense that does not ignore them.
+    """
+
+    roll_twice: tuple[str, ...] = ()
+    two_degrees: tuple[str, ...] = ()
+    immune: tuple[str, ...] = ()
+    ignores_penetrating: tuple[str, ...] = ()
+    penetrating: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class SystemRules:
     """System-level rule references (from ``system.json``).
 
@@ -1532,6 +1596,8 @@ class SystemRules:
     #: quick-damage buttons walk. An id, not a rule, so a ruleset that calls its
     #: damage effect something else retargets the whole control from data.
     damage_effect: str = "damage"
+    #: The Toughness modifiers that change what that damage does (Impervious and kin).
+    damage_defenses: DamageDefenses = field(default_factory=DamageDefenses)
     #: The presets and cap pairs the GM's Quick NPC dialog builds a creature from.
     quick_npc: QuickNPCRules = field(default_factory=QuickNPCRules)
 
@@ -2848,6 +2914,7 @@ def _parse_config_field(c: dict) -> EffectConfigField:
                 speeds=tuple(_parse_speed_rank(s) for s in o.get("speeds", ())),
                 tier_notes=tuple(o.get("tierNotes", ())),
                 tier_labels=tuple(o.get("tierLabels", ())),
+                prompt=o.get("prompt", ""),
             )
             for o in c.get("allocOptions", [])
         ),
@@ -2857,6 +2924,11 @@ def _parse_config_field(c: dict) -> EffectConfigField:
                 label=col.get("label", col["key"]),
                 type=col.get("type", "text"),
                 source=col.get("source", ""),
+                suggestions=tuple(
+                    (str(item["label"]), int(item.get("ranks", 0)))
+                    for item in col.get("suggestions", ())
+                ),
+                default=int(col.get("default", 0)),
             )
             for col in c.get("columns", [])
         ),
@@ -3177,6 +3249,7 @@ def _parse_modifier(m: dict, category: str | None = None) -> Modifier:
         step_field=m.get("stepField", ""),
         step_by=int(m.get("stepBy", 0)),
         distance_rank_bonus=int(m.get("distanceRankBonus", 0)),
+        range_rank=dict(m.get("rangeRank", {})),
         reach_spaces=int(m.get("reachSpaces", 0)),
         adds_ability=m.get("addsAbility", ""),
         cost_scope=m.get("costScope", ""),
@@ -3191,6 +3264,11 @@ def _parse_modifier(m: dict, category: str | None = None) -> Modifier:
         note_per_rank=int(m.get("notePerRank", 0)),
         note_values={k: dict(v) for k, v in m.get("noteValues", {}).items()},
         requires_check=bool(m.get("requiresCheck", False)),
+        check_trait=str(m.get("checkTrait", "")),
+        check_dc=m.get("checkDc") if isinstance(m.get("checkDc"), int) else None,
+        use_costs=tuple(str(c) for c in m.get("useCosts", ())),
+        uses_per_charge=int(m.get("usesPerCharge", 0)),
+        fades_per_use=int(m.get("fadesPerUse", 0)),
         requires_any=tuple(m.get("requiresAny", ())),
         config_fields=tuple(_parse_config_field(c) for c in m.get("config", [])),
         custom=bool(m.get("custom", False)),
@@ -3997,6 +4075,7 @@ def _parse_system(raw: dict) -> SystemRules:
         ),
         extra_effort=_parse_extra_effort(sys.get("extra_effort"), defaults.extra_effort),
         damage_effect=sys.get("damage_effect", defaults.damage_effect),
+        damage_defenses=_parse_damage_defenses(sys.get("damage_defenses")),
         ranged_distance=_parse_range_distance(sys.get("ranged_distance"), defaults.ranged_distance)
         or defaults.ranged_distance,
         derived_traits=tuple(
@@ -4004,6 +4083,25 @@ def _parse_system(raw: dict) -> SystemRules:
             for d in sys.get("derived_traits", [])
         ),
         quick_npc=_parse_quick_npc(sys.get("quick_npc"), defaults.quick_npc),
+    )
+
+
+def _parse_damage_defenses(raw: object) -> DamageDefenses:
+    """Parse ``system.json``'s ``damage_defenses``; a missing block defends nothing."""
+
+    if not isinstance(raw, dict):
+        return DamageDefenses()
+
+    def ids(key: str) -> tuple[str, ...]:
+        value = raw.get(key, ())
+        return tuple(str(v) for v in value) if isinstance(value, list) else ()
+
+    return DamageDefenses(
+        roll_twice=ids("rollTwice"),
+        two_degrees=ids("twoDegrees"),
+        immune=ids("immune"),
+        ignores_penetrating=ids("ignoresPenetrating"),
+        penetrating=ids("penetrating"),
     )
 
 

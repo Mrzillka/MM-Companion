@@ -66,6 +66,14 @@
     "unscoped_scope_values": ["All checks"],
     "_damage_effect": "Which effect's resistance ladder is the generic damage ladder — the one the GM's quick-damage buttons walk. Named here rather than spelled in Python, so a ruleset whose damage effect is called something else retargets it.",
     "damage_effect": "damage",
+    "_damage_defenses": "What the modifiers on a target's Toughness do to a Damage save (p152, p154, p116). rollTwice: roll two dice and keep the higher against a Damage rank no greater than the ranks it covers (Hardened). twoDegrees: two or more degrees of success leave no damage conditions at all, not even the Hit. immune: unaffected by a Damage rank no greater than the ranks it covers. ignoresPenetrating: holds against Penetrating too. penetrating: the attacker's modifier whose ranks the target resists instead of being immune, and which denies twoDegrees to a defense that does not ignore it.",
+    "damage_defenses": {
+      "rollTwice": ["hardened"],
+      "twoDegrees": ["hardened", "impervious", "impenetrable"],
+      "immune": ["impervious", "impenetrable"],
+      "ignoresPenetrating": ["impenetrable"],
+      "penetrating": ["penetrating"]
+    },
     "_improvised_effects": "Improvised Effects (p101-102): preparing one takes a time rank equal to its Power Point cost, never less than minTimeRank. Each time rank shaved off adds dcPerTimeRankSaved to the preparation DC; each one added grants checkBonusPerTimeRankSpent on the check. Both DCs are defense_dc_base plus the effect's cost.",
   "improvised_effect": {
    "minTimeRank": 3,

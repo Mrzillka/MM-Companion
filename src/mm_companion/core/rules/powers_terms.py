@@ -41,7 +41,11 @@ from .powers_cost import (
     selection_band,
 )
 from .runtime import (
+    effect_counts_uses,
     effect_current_rank,
+    effect_faded_ranks,
+    effect_is_spent,
+    effect_use_limit,
     live_array_effects,
     resolved_trait_allocation,
     trait_allocation_field,
@@ -416,11 +420,13 @@ def _render_note(
         # Strip whatever is left, so a note rendered without a chip still reads as a
         # sentence rather than showing its own braces.
         return re.sub(r"\s*\{[^{}]*\}", "", text).strip()
-    dc_base = game_data.system.defense_dc_base if game_data else 10
     text = text.replace("{rank}", str(selection.rank))
-    text = text.replace("{dc}", str(dc_base + selection.rank))
+    text = text.replace("{dc}", str(_required_check_dc(modifier, selection, game_data)))
     for key, chosen in selection.config.items():
         text = text.replace(f"{{{key}}}", _config_trait_name(game_data, str(chosen)))
+    if modifier.check_trait:
+        # A check the rules fix (Leaping's Acrobatics) names its trait without a chip.
+        text = text.replace("{trait}", _config_trait_name(game_data, modifier.check_trait))
     # A placeholder the player hasn't filled in yet drops out rather than showing its
     # braces, so an unconfigured Check Required still reads as a sentence.
     text = re.sub(r"\s*\{[^{}]*\}", "", text).strip()
@@ -444,16 +450,51 @@ def required_checks(
     back out of the prose.
     """
 
+    return tuple((check.note, check.dc) for check in required_check_rolls(effect, game_data))
+
+
+@dataclass(frozen=True)
+class RequiredCheck:
+    """One extra roll a modifier demands before the effect works.
+
+    ``trait`` is the trait key it is rolled with — the player's pick on a Check
+    Required chip, the rules' own on Leaping's Acrobatics Check Required — or ``""``
+    for a bare d20 (Unreliable). With a trait the roll carries the wielder's number,
+    which a Check Required used to leave out: a "Magic check, DC 12" rolled at +0.
+    """
+
+    note: str
+    dc: int | None
+    trait: str = ""
+
+
+def _required_check_dc(modifier: Modifier, selection, game_data: GameData | None) -> int:
+    """A required check's DC: the rules' fixed one, else the base DC plus its rank."""
+
+    if modifier.check_dc is not None:
+        return modifier.check_dc
+    dc_base = game_data.system.defense_dc_base if game_data else 10
+    return dc_base + selection.rank
+
+
+def required_check_rolls(
+    effect: PowerEffectInstance, game_data: GameData
+) -> tuple[RequiredCheck, ...]:
+    """Every :class:`RequiredCheck` the effect's modifiers demand, in chip order."""
+
     catalog = game_data.modifier_catalog()
-    checks: list[tuple[str, int | None]] = []
+    checks: list[RequiredCheck] = []
     for selection in (*effect.extras, *effect.flaws):
         modifier = catalog.get(selection.modifier_id)
         if modifier is None or not modifier.requires_check:
             continue
         rendered = _render_note(modifier, effect.rank, selection, game_data)
-        dc = game_data.system.defense_dc_base + selection.rank
         checks.append(
-            (rendered or modifier_label(modifier, selection, effect_rank=effect.rank), dc)
+            RequiredCheck(
+                note=rendered or modifier_label(modifier, selection, effect_rank=effect.rank),
+                dc=_required_check_dc(modifier, selection, game_data),
+                trait=str(selection.config.get("trait") or modifier.check_trait),
+            )
         )
     return tuple(checks)
 
@@ -502,10 +543,17 @@ def _modifier_notes(
 def modifier_field_claimed(field, base_effect) -> bool:
     """Whether a modifier's config ``field`` names a game term the effect itself picks.
 
-    Alternate Resistance chooses what an effect is resisted by — except on an effect
-    that already has its own "Resisted by" (Affliction), where the extra *widens* that
-    field instead. Two pickers for one answer would be a question of which wins, so
-    the modifier's yields: the constructor does not show it and the summary ignores it.
+    An effect with a "Resisted by" of its own that stays on the card keeps the answer,
+    and a modifier field naming the same stat yields: two pickers for one answer would
+    be a question of which wins, so the constructor does not show it and the summary
+    ignores it.
+
+    An own field that **steps aside** for a modifier (``hidden_with``) claims nothing.
+    That is Affliction's "Resisted by", which offers the four defenses until
+    Alternate Resistance is attached and then hides, so the extra's chip carries the
+    wider pickers exactly as it does on every other effect — it used to be the other way
+    round, the chip showing nothing but its price tier while the wider list moved into
+    the card's field, where nobody looked for it.
     """
 
     if not field.overrides or base_effect is None:
@@ -514,7 +562,10 @@ def modifier_field_claimed(field, base_effect) -> bool:
         # A field that *supplies* a stat stands down where the effect has its own:
         # Resistible on a Damage, or the Attack extra's "Resisted by" on an Illusion.
         return True
-    return any(own.overrides == field.overrides for own in base_effect.config_fields)
+    return any(
+        own.overrides == field.overrides and not own.hidden_with
+        for own in base_effect.config_fields
+    )
 
 
 def _record_stat(base_effect, key: str) -> str:
@@ -643,6 +694,7 @@ def _effective_stats(
     # rather than from a Permanent effect's bare "None".
     action_step = 0
     action_step_tint = ""
+    modifier_set: set[str] = set()  # stats a modifier's own config field replaced
 
     for selection in (*effect.extras, *effect.flaws):
         modifier = catalog.get(selection.modifier_id)
@@ -678,6 +730,7 @@ def _effective_stats(
             if stats.get(key) or granting:
                 stats[key] = value
                 change[key] = tint if granting else ""
+                modifier_set.add(key)
                 touched = True
         if modifier.step_field == "action":
             action_step += steps
@@ -721,9 +774,19 @@ def _effective_stats(
 
     # Config choices that name a stat replace it (e.g. Affliction's chosen
     # resistance). These are neutral player choices, not modifiers, so they carry
-    # no better/worse tint.
+    # no better/worse tint. A field that steps aside for an attached modifier
+    # (``hidden_with``) gives way to whatever that modifier picked — Affliction's own
+    # "Resisted by" under an Alternate Resistance — and still answers while the
+    # modifier has picked nothing, so a build saved when the card held the pick reads
+    # as it did.
     for field in base_effect.config_fields:
         if field.overrides and field.overrides in stats:
+            if (
+                field.hidden_with
+                and field.overrides in modifier_set
+                and _has_modifier(effect, field.hidden_with)
+            ):
+                continue
             value = effect.config.get(field.key)
             if value:
                 stats[field.overrides] = _config_display(field, value, game_data)
@@ -899,6 +962,28 @@ def _distance_rank_bonus(effect: PowerEffectInstance, game_data: GameData) -> in
     return bonus
 
 
+def _modifier_range_rank(
+    effect: PowerEffectInstance, game_data: GameData, char: Character | None
+) -> int | None:
+    """The rank a range-giving modifier starts the range at (Thrown: 2 + Strength), or ``None``.
+
+    Without a wielder the ability counts as 0, so the constructor shows the floor the
+    rules give rather than inventing a Strength.
+    """
+
+    catalog = game_data.modifier_catalog()
+    for selection in (*effect.extras, *effect.flaws):
+        modifier = catalog.get(selection.modifier_id)
+        if modifier is None or not modifier.range_rank:
+            continue
+        rank = int(modifier.range_rank.get("base", 0))
+        ability = modifier.range_rank.get("ability", "")
+        if ability and char is not None:
+            rank += max(0, effective_ability(char, game_data, ability))
+        return rank
+    return None
+
+
 def ranged_distance_ranks(
     effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
 ) -> tuple[int, int] | None:
@@ -921,6 +1006,9 @@ def ranged_distance_ranks(
     if effective_effect_stats(effect, game_data).get("range") != spec.range_value:
         return None
     source = effect_effective_rank(effect, game_data, char) if spec.rank is None else spec.rank
+    thrown = _modifier_range_rank(effect, game_data, char)
+    if thrown is not None:
+        source = thrown
     base_rank = source + spec.offset
     return base_rank, base_rank + _distance_rank_bonus(effect, game_data)
 
@@ -955,7 +1043,8 @@ def _ranged_distance_rows(
 
     "Ranged" on its own says nothing about how far, so the reach is spelled out: the
     distance rank, then that rank's range increments as real measurements. The rank row
-    reads as improved when a modifier bought the reach up past its base.
+    reads as improved when a modifier bought the reach up past its base, and as worse
+    when Diminished Range cut it short.
     """
 
     ranks = ranged_distance_ranks(effect, game_data, char)
@@ -969,7 +1058,7 @@ def _ranged_distance_rows(
             "Distance",
             f"rank {base_rank}",
             f"rank {rank}",
-            "better" if rank > base_rank else "",
+            "better" if rank > base_rank else "worse" if rank < base_rank else "",
         )
     ]
     increments = ranged_distance_increments(rank, game_data, spec)
@@ -1452,7 +1541,7 @@ def effect_stat_rows(
         rows.append(EffectStat("enhances", "Enhances", "", ", ".join(raised), "better"))
     # Tier-5 derived readouts (Growth's size mods, Insubstantial's state, ...) — purely
     # computed information, appended as untinted (or sign-tinted) rows.
-    rows.extend(effect_readout_rows(effect, game_data, char))
+    _merge_readouts(rows, effect_readout_rows(effect, game_data, char))
     # A Check Required-style flaw is a roll, not a footnote — its own row, which is
     # what carries it into the power card's dice footer.
     for note in required_check_notes(effect, game_data):
@@ -1478,9 +1567,35 @@ def effect_stat_rows(
                 "better",
             )
         )
+    uses_note = effect_uses_note(effect, game_data)
+    if uses_note:
+        rows.append(EffectStat("uses", "Uses", "", uses_note, "worse" if effect.uses else ""))
     if impact.notes:
         rows.append(EffectStat("notes", "Notes", "", ", ".join(impact.notes), ""))
     return _apply_row_overrides(rows, effect)
+
+
+def effect_uses_note(effect: PowerEffectInstance, game_data: GameData) -> str:
+    """What a Short-Term or Fades effect has left — ``""`` for one that counts nothing.
+
+    The card's way of saying why a Blast reads 4 when it was bought at 6, or why it has
+    stopped working: neither number appears anywhere in the build.
+    """
+
+    if not effect_counts_uses(effect, game_data):
+        return ""
+    if effect_is_spent(effect, game_data):
+        return "spent — recharge it to use it again"
+    parts = []
+    limit = effect_use_limit(effect, game_data)
+    if limit is not None:
+        parts.append(f"{max(0, limit - effect.uses)} of {limit} left")
+    faded = effect_faded_ranks(effect, game_data)
+    if faded:
+        parts.append(f"faded {faded} rank{'' if faded == 1 else 's'}")
+    elif limit is None:
+        parts.append("loses a rank each use")
+    return ", ".join(parts)
 
 
 def _apply_row_overrides(rows: list[EffectStat], effect: PowerEffectInstance) -> list[EffectStat]:
@@ -1518,6 +1633,25 @@ def _apply_row_overrides(rows: list[EffectStat], effect: PowerEffectInstance) ->
     return out
 
 
+def _merge_readouts(rows: list[EffectStat], readouts: list[EffectStat]) -> None:
+    """Append *readouts* to *rows*, letting one that restates a game term **replace** it.
+
+    Communication's Range is not a distance: its rank buys a band (same city, same
+    continent, anywhere), and the generic "a Rank range is that distance rank" rule
+    printed "Range: 1 mile" above a second row reading "Range: Same continent". A
+    readout keyed like a row already on the card (``range`` here) now takes that row's
+    place — but only an untinted one, so a modifier that changed the range keeps its say.
+    """
+
+    by_key = {row.key: index for index, row in enumerate(rows)}
+    for readout in readouts:
+        index = by_key.get(readout.key)
+        if index is not None and readout.key in _STANDARD_STAT_KEYS and not rows[index].change:
+            rows[index] = replace(rows[index], value=readout.value)
+        else:
+            rows.append(readout)
+
+
 def effect_readout_rows(
     effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
 ) -> list[EffectStat]:
@@ -1536,8 +1670,23 @@ def effect_readout_rows(
 
     rows: list[EffectStat] = []
     for readout in game_data.effect_readouts.get(effect.effect_id, ()):
+        # ``withModifier``: a readout about something only an extra buys (Teleport's
+        # Extended reach) says nothing until that extra is on.
+        needs = readout.data.get("withModifier", "")
+        if needs and not _has_modifier(effect, needs):
+            continue
         rows.extend(_readout_rows(readout, effect, game_data, char))
     return rows
+
+
+def _modifier_rank(effect: PowerEffectInstance, modifier_id: str) -> int:
+    """The rank of *modifier_id* on the effect (0 when it is not attached)."""
+
+    return sum(
+        selection.rank
+        for selection in (*effect.extras, *effect.flaws)
+        if selection.modifier_id == modifier_id
+    )
 
 
 # One handler per readout ``kind`` (``docs/mm-powers-ui-design.md`` §2 Tier 5). Each takes
@@ -1615,17 +1764,25 @@ def _readout_state(
 def _readout_measure_offsets(
     readout, effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
 ):
-    rank = effect.rank
     data = readout.data
+    # ``fromRank``: a measure read off a fixed rank rather than the effect's — Teleport
+    # carries mass rank 0 whatever its distance — which ``plusModifier``'s ranks then
+    # raise (Increased Mass).
+    rank = int(data["fromRank"]) if "fromRank" in data else effect.rank
+    if data.get("plusModifier"):
+        rank += _modifier_rank(effect, data["plusModifier"])
     column = data.get("column", "distance")
     out = []
     for row in data.get("rows", []):
-        value = game_data.measurements.label(column, rank + int(row.get("offset", 0)))
+        measured = rank + int(row.get("offset", 0))
+        value = game_data.measurements.label(column, measured)
         if not value:
             continue
         if row.get("perRound"):
             value = f"{value}/round"
-        out.append(EffectStat("readout", row.get("label", ""), "", value, ""))
+        template = row.get("format") or "{value}"
+        value = template.format(value=value, rank=measured)
+        out.append(EffectStat(row.get("key", "readout"), row.get("label", ""), "", value, ""))
     return out
 
 
@@ -1675,8 +1832,61 @@ def _readout_rank_scaled(
 
     data = readout.data
     value = effect.rank * int(data.get("perRank", 1)) + int(data.get("offset", 0))
+    if "max" in data:
+        value = min(value, int(data["max"]))  # Leaping is speed only up to rank 10
     template = data.get("format") or "{value}"
-    return [EffectStat("readout", readout.label or "Rank", "", template.format(value=value), "")]
+    key = data.get("key", "readout")
+    return [EffectStat(key, readout.label or "Rank", "", template.format(value=value), "")]
+
+
+@READOUT_KINDS.handler("ability_measure")
+def _readout_ability_measure(
+    readout, effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+):
+    """A measure read off the wielder's ability **plus** the effect's rank.
+
+    Lifting is the case: "characters with the Lifting effect add the effect rank to
+    their Strength rank to determine how much they can lift or throw" (p60), and what
+    a Strength rank lifts is the mass at that rank. So the card can say "Lifts 25 tons"
+    rather than "+10 ranks", which only the Measurements Table turns into a weight.
+    Each row's ``format`` gets ``{value}`` (the measure), ``{total}`` (ability + rank)
+    and ``{ability}``. With no wielder there is no Strength to add, and the row says so
+    in its ``withoutWielder`` sentence instead of measuring a Strength of 0.
+    """
+
+    data = readout.data
+    rank = effect_current_rank(effect, game_data, char) * int(data.get("perRank", 1))
+    ability_key = data.get("ability", "")
+    column = data.get("column", "mass")
+    out = []
+    for row in data.get("rows", []):
+        if char is None:
+            text = row.get("withoutWielder", "").format(rank=rank)
+            if text:
+                out.append(EffectStat("readout", row.get("label", ""), "", text, ""))
+            continue
+        ability = max(0, effective_ability(char, game_data, ability_key))
+        total = ability + rank + int(row.get("offset", 0))
+        value = game_data.measurements.label(column, total) or ""
+        template = row.get("format") or "{value}"
+        text = template.format(value=value, total=total, ability=ability, rank=rank)
+        out.append(EffectStat("readout", row.get("label", ""), "", text, ""))
+    return out
+
+
+@READOUT_KINDS.handler("fixed")
+def _readout_fixed(
+    readout, effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+):
+    """A row the rules state outright, rank or no rank — Mind Reading's degrees of contact.
+
+    Still a readout rather than prose in the description, because it is what the card's
+    numbers *mean*: a Mind Reading check that won by two degrees has a question's worth
+    of the target's mind, and the card is where the player looks for that.
+    """
+
+    text = readout.data.get("text", "")
+    return [EffectStat("readout", readout.label, "", text, "")] if text else []
 
 
 @READOUT_KINDS.handler("reach_extension")
@@ -1825,15 +2035,19 @@ def _config_display_allocation(field, value) -> str:
         option = by_id.get(entry.get("id"))
         if option is None:
             continue
-        label = option.label
+        # What the row applies to comes first — "Accurate (hearing; a whole sense type)"
+        # — because an option can now be taken twice, and the note is what tells the
+        # two apart.
+        qualifiers = [str(entry.get("note", "")).strip()]
         if len(option.tiers) > 1:
             tier = entry.get("tier", 1)
             named = option.tier_label(tier)
             if not named:
                 ranks = option.tier_cost(tier)
                 named = f"{ranks} rank" if ranks == 1 else f"{ranks} ranks"
-            label += f" ({named})"
-        parts.append(label)
+            qualifiers.append(named)
+        qualifiers = [q for q in qualifiers if q]
+        parts.append(f"{option.label} ({'; '.join(qualifiers)})" if qualifiers else option.label)
     return ", ".join(parts)
 
 

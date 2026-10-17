@@ -37,6 +37,7 @@ from mm_companion.core.rules import (
     apply_condition,
     apply_damage_step,
     apply_recovery,
+    apply_use_costs,
     can_recover,
     damage_steps,
     decrement_condition,
@@ -381,6 +382,20 @@ class ConditionsSection(QGroupBox):
             self._character, self._data, condition_id, parameter if parameter else None
         )
         if not removed:
+            return
+        self._render_conditions()
+        self._emit_conditions_changed()
+
+    def take_use_costs(self, payload: object) -> None:
+        """A power was used and its flaws charge for it — the ``use-spent`` handler.
+
+        *payload* is the roll thrown; its ``costs`` are condition ids, or the fatigue
+        ladder's sentinel for Tiring, which climbs a rung the way Extra Effort does.
+        """
+        costs = getattr(payload, "costs", ())
+        if not isinstance(costs, tuple) or not all(isinstance(c, str) for c in costs):
+            return
+        if not costs or not apply_use_costs(self._character, costs, self._data):
             return
         self._render_conditions()
         self._emit_conditions_changed()

@@ -248,7 +248,20 @@ and a troubleshooting table are in the [networking guide](docs/mm-session-networ
 
 ## Future plans
 
-Direction, not commitments:
+Next up:
+
+- **Minions** — minions as creatures at the table, not only builds: summoned and
+  advantage-granted minions the GM can run, damage and dismiss.
+- **Ranks & Measures** — the rank / measurement table as a tool: convert distance,
+  mass, time and volume both ways, and work out the rank of a feat.
+- **Actions** — the combat maneuvers on the sheet (All-out Attack, Defensive Attack,
+  Power Attack, Accurate Attack and the rest), trading bonuses as the rules allow.
+- **GM actions** — the GM's own table tools: acting for NPCs, applying effects and
+  conditions to several creatures at once.
+- **GM request help** — a player asks the GM for a ruling or a hand, and the GM
+  answers from the session.
+
+Further out, direction rather than commitments:
 
 - Richer character exports, more of the rules surface flowing into the displayed
   sheet numbers, and continued expansion of the moddable data catalogs.

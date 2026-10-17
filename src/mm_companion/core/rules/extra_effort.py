@@ -209,6 +209,47 @@ def next_fatigue(char: Character, game_data: GameData, steps: int = 1) -> str:
     return ladder[min(index + max(1, steps), len(ladder) - 1)]
 
 
+#: A use cost naming the fatigue *ladder* rather than one condition: Tiring "causes you
+#: to gain the Fatigued condition" the way Extra Effort does (p161), so a second use
+#: climbs to Exhausted rather than adding nothing. The ladder itself is data
+#: (``system.json``'s ``extra_effort.fatigueLadder``); this only names it.
+USE_COST_FATIGUE = "fatigue-ladder"
+
+
+def effect_use_costs(effect: PowerEffectInstance, game_data: GameData) -> tuple[str, ...]:
+    """What using *effect* puts on its wielder: its modifiers' ``useCosts``, in order.
+
+    Tiring's rung of fatigue, Distracting's Vulnerable. Each modifier contributes once,
+    however many ranks it covers — Tiring on four ranks of a Blast is still one rung.
+    """
+
+    catalog = game_data.modifier_catalog()
+    costs: list[str] = []
+    for selection in (*effect.extras, *effect.flaws):
+        modifier = catalog.get(selection.modifier_id)
+        if modifier is not None:
+            costs.extend(modifier.use_costs)
+    return tuple(costs)
+
+
+def apply_use_costs(char: Character, costs: tuple[str, ...], game_data: GameData) -> list[str]:
+    """Put a use's *costs* on *char*, returning the condition ids actually applied.
+
+    Through the ordinary condition resolver, so a Vulnerable that is already there
+    changes nothing and :data:`USE_COST_FATIGUE` climbs one rung of the same ladder
+    Extra Effort climbs.
+    """
+
+    applied: list[str] = []
+    for cost in costs:
+        condition_id = next_fatigue(char, game_data) if cost == USE_COST_FATIGUE else cost
+        if not condition_id or condition_id not in game_data.condition_catalog():
+            continue
+        apply_condition(char, condition_id, game_data)
+        applied.append(condition_id)
+    return applied
+
+
 def fatigue_label(condition_id: str, game_data: GameData) -> str:
     """A rung's display name (``"exhausted"`` → ``"Exhausted"``), out of the catalog."""
 

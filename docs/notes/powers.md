@@ -284,8 +284,8 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   hides you from, and the senses are *bought with the ranks* — 1 rank a sense, 2 a whole
   sense type, and sight double (2 for normal sight, 4 for every sight sense, p115). So it
   carries an `allocation` field like Enhanced Senses, not a `baseCostBy` like Obscure, and
-  `power_allocation_violations` is what checks a Concealment 5 spent its five ranks
-  legally. **Touch is deliberately absent from the option list**: hiding from touch means
+  its rank is what those senses add up to (see *Rank as allocation* below) — hiding from
+  every sight sense and normal hearing *is* a Concealment 5. **Touch is deliberately absent from the option list**: hiding from touch means
   being incorporeal, which is the Insubstantial effect, and the rules say so outright. The
   *Invisibility* and *Inaudibility* configurations seed the field, so they record which
   sense they hide rather than only naming it in their prose.
@@ -346,6 +346,37 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   of the phrase before its numbers were filled in. An effect check that states its DC now
   **carries** it (`EffectRollNumbers.check_dc`, from the phrase or the record's
   `checkOutcomes.dc`) — Healing rolled ungraded before, its "DC 10" only in the words.
+- **A required check is rolled at the wielder's number, and the rules may fix it.** Check
+  Required's footer line used to roll at +0 — "Magic check, DC 12" with nothing added —
+  because the spec was built without the trait. `required_check_rolls` returns a
+  `RequiredCheck` carrying its trait, and `_required_check_bonus` puts the wielder's own
+  number in (probed as a power save, the widest dispatch: a resistance, an ability or a
+  skill). A modifier may fix the trait and the DC itself (`checkTrait` / `checkDc`), which
+  is how **Unreliable** became a roll (a bare d20 against 11: "on a 10 or less it doesn't
+  work", p161) and Leaping's **Acrobatics Check Required** a DC 10 Acrobatics check.
+  `required_checks` keeps its old `(note, DC)` shape for anyone who called it.
+- **What using an effect costs lands when its roll is thrown.** Tiring "causes you to gain
+  the Fatigued condition when you use it" and Distracting leaves you Vulnerable (p158,
+  p161). A modifier's `useCosts` names them — a condition id, or `fatigue-ladder`
+  (`USE_COST_FATIGUE`) for one rung of the ladder Extra Effort climbs, since a second
+  Tiring use is Exhausted, not a second Fatigued. They ride on the effect's **first
+  wielder roll** (`RollSpec.costs`: the check, else the check required before it; a Linked
+  check carries its members'), and the Dice block raises the spec on `use-spent` once it
+  has really thrown that die — a click while it still tumbles is refused and must cost
+  nothing — for the Conditions block to apply, the recovery check's pattern. `costs` is **never serialised**: a roll thrown again off the history is
+  a reroll of a use already paid for. An effect that rolls nothing (a Distracting Flight)
+  keeps the flaw as a note.
+- **Short-Term and Fades count uses.** `PowerEffectInstance.uses` is runtime state like
+  `extra_effort`, saved only when non-zero. A modifier's `usesPerCharge` (Short-Term's 6)
+  or `fadesPerUse` (Fades' 1 rank) makes the effect count; `effect_current_rank` takes the
+  faded ranks off after every clamp and before the push, `effect_is_spent` turns the effect
+  off in `effect_is_active` once six are used or the rank reaches 0, and the card's game
+  terms carry a `Uses` row ("1 of 6 left", "faded 2 ranks", "spent"). The use is counted by
+  the Powers block off the same `use-spent` the roller raises (`RollSpec.spends`, `(power
+  id, effect index)` pairs; local only like `costs`) — *after* the roll, so a Fades Blast 6
+  fires at 6 and then reads 5 — and by the card menu's **Use once** for an effect with
+  nothing to roll (an ablative Protection).
+  **Recharge** clears the count; when is the GM's call (p158, p160).
 - **Perception Range drops the attack roll, never an effect's own check.** `dropsCheck`
   is honoured only alongside `grantsAttack`, so a Perception Healing still rolls Effect
   vs. DC 10 and a Deflect still rolls against the attack. It used to delete both rows.
@@ -506,21 +537,33 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   (`_unoffered_label` — "Athletics (needs Alternate Resistance)"), because "—" in the
   picker beside a row still reading "resisted by Athletics" is the card contradicting
   itself.
-- **Every other effect picks its alternate resistance on the chip.** Alternate
-  Resistance's own config used to be only its *cost tier* (weaker / no gain / worst of
-  two / best of two) under the label "Resisted by", so a Damage resisted by Fortitude had
-  nowhere to say Fortitude. The chip now carries "Resisted by" and "Or", both fed from
-  `resistance_targets`, with the tier kept under its old `against` key (so saved builds
-  still price) as "Worth". A **modifier's** config field with `overrides` now replaces
+- **Every effect picks its alternate resistance on the chip — Affliction included.**
+  Alternate Resistance's own config used to be only its *cost tier* (weaker / no gain /
+  worst of two / best of two) under the label "Resisted by", so a Damage resisted by
+  Fortitude had nowhere to say Fortitude. The chip carries "Resisted by" and "Or", both
+  fed from `resistance_targets`, with the tier kept under its old `against` key (so saved
+  builds still price) as "Worth". A **modifier's** config field with `overrides` replaces
   that stat just as an effect's does (`modifier_config_overrides`), several onto one
   stat reading as alternatives ("Fortitude or Will"). It replaces only a stat the effect
   *has* (no save invented on a Flight), and **untinted**: a best-of-two pick is a flaw, so
   the extra's green would read it backwards. A save naming alternatives fills in no
   trait on the target's sheet (`rolls._resistance_key`), since which one applies is not
-  something one name can say. A field the effect already answers
-  itself — Affliction's own Resisted by — is **claimed** (`modifier_field_claimed`): the
-  chip does not show it and the summary ignores it, so there is never a question of
-  which of two pickers wins. On Affliction the extra still only widens the card's field.
+  something one name can say. A field the effect answers itself and keeps on the card is
+  **claimed** (`modifier_field_claimed`): the chip does not show it and the summary
+  ignores it, so there is never a question of which of two pickers wins.
+  **Affliction used to be that case, and it read as a bug.** Its own Resisted by widened
+  to the whole list while the extra's chip showed nothing but the Worth tier, so a player
+  looking at the chip saw "best of two / worst of two" and no way to say Athletics. Its
+  field now offers the four defenses and **steps aside** (`hiddenWith`) once Alternate
+  Resistance is attached: the card reads "picked on Alternate Resistance" and the chip
+  carries the pickers, exactly as on a Damage. A field that steps aside claims nothing,
+  and in `_effective_stats` it gives way to whatever the modifier picked — but still
+  answers while the modifier has picked nothing, and the card **keeps** its stored value
+  rather than dropping it, so an Affliction saved with Athletics on the card reads
+  Athletics until the chip is given a pick. Its "Or (best/worst of two)" went with it (the
+  chip's Or is the same question); a save that held one loses only that second name. The
+  requirement moves too: `power_unfinished_violations` asks the chip for a Resisted by
+  when the card's required field stepped aside for it with nothing stored.
 - **The book's ~90 named powers are data, not a catalog.** `configurations.json` holds
   the standard power configurations (Blast, Dazzle, Snare, Force Field, Invisibility, …)
   as ready-made assemblies of records that already exist elsewhere, and
@@ -730,11 +773,32 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   the picker offers therefore always folds in the pool its *current* value names: a
   closed list rebuilt without it would reselect the whole skill and drop a saved power's
   row the first time its cell committed.
-- **Rank as allocation, not budget.** An effect declaring `rankFollowsAllocation`
-  (Enhanced Trait alone, in the base data) has its rank *written from* its rows —
-  `synced_effect_rank` — and shown read-only; `power_allocation_violations` skips it,
-  since there is no budget to overspend. Every other allocation effect keeps the hand-set
-  rank and the warning. The one per-trait ceiling that does exist is an advantage's, via
+- **Rank as allocation, not budget.** An effect declaring `rankFollowsAllocation` has its
+  rank *written from* its rows — `synced_effect_rank` — and shown read-only. It used to be
+  Enhanced Trait alone; since 2026-10-17 it is every allocation effect (Enhanced Senses,
+  Enhanced Movement, Comprehend, Concealment, Immunity, Feature), because a hand-set
+  budget metered against the choices made the player set one number and then make the
+  choices agree with it — Enhanced Trait priced off what was picked while Enhanced Senses
+  charged for what was allocated. The constructor resyncs a card **on open**, so a power
+  saved under the old budget comes back at what its rows buy; until it is opened the sheet
+  keeps the stored rank (nothing is rewritten on load) and `power_allocation_violations`
+  says so ("its choices come to 6 ranks but it is saved at 2"). A row-less effect is a
+  skeleton (the book's Absorption) and is not measured. The overspend warning survives for
+  a mod's effect that does not set the flag.
+  **The checklist became rows** (`_allocation_widget`): option ▾, tier ▾ and a note per
+  row, because the rules buy most of these options *for* something — Accurate hearing
+  beside Accurate smell, Environmental Adaptation once per environment, Detect naming what
+  it detects — and a tick box could be ticked once and named nothing. The stored shape is
+  the checklist's `[{"id", "tier"}]` plus an optional `note`, so an old build opens row
+  for row; duplicates are simply legal now. What each note asks for is data (`prompt` on
+  an `allocOptions` entry), and `_config_display_allocation` prints it first —
+  "Accurate (hearing; one sense)". Immunity's scope is a `suggest` column (an editable
+  combo of the book's tiers, each with its ranks, which picking one fills in), and
+  Feature grew a `ranks` column whose `default` of 1 is what an old row with none counts
+  as. **Immunity had `configurableTarget: true`**, which built Enhanced Trait's
+  single-trait "Enhances" picker on its card — and picking Toughness there would have
+  added the Immunity's rank to Toughness. It is `false` now; its scopes are words, not
+  traits. The one per-trait ceiling that does exist is an advantage's, via
   `trait_rank_cap`: the constructor's rank spin stops there and
   `power_trait_allocation_violations` warns about a stored row that went past it. It
   warns rather than clamps — repricing a row the player can see would leave the cost line
@@ -845,9 +909,30 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   `effect_current_rank`, the same dialled rank `reach_extension_feet` reads, so a
   turned-down Elongation shortens on the card and on the block together. (The older
   kinds read the bought `effect.rank`; that predates this and is left alone.)
+- **A Rank range is not always a distance, and a readout can say so.** The generic rule
+  turns a `"Rank"` range into the distance at the effect's rank, which is right for
+  Teleport and wrong for Communication and Remote Sensing, whose ranks buy a *band* (same
+  city … anywhere, p111, p140): the card printed "Range: 1 mile" over a second "Range:
+  Same continent". A readout keyed like a game-term row (`range`) now **replaces** that
+  row's value (`_merge_readouts`) — only an untinted one, so a modifier that moved the
+  range keeps it — which is also how Environment's Range reads as the area it fills ("an
+  area 500 feet across, like a Sphere Area", p122). The second pass of 2026-10-17 put on
+  the cards the other numbers the book ties to a rank: who can overhear a Communication
+  or feel a Remote Sensing (DC 10 + rank), Teleport's carried mass and Extended reach,
+  Transmute's mass (rank − 6), Illusion's size, Obscure's area, Post/Precognition's uses
+  per adventure, Leaping's speed cap of 10, Extra Limbs' count, Create's mass and
+  supporting Strength, Move Object's throw distance, Healing's disease/poison bonus, Mind
+  Reading's degrees of contact and what each Insubstantial form does. Three small
+  generic levers made that data: a readout may be **gated on a modifier**
+  (`withModifier` — Extended), a `measure_offsets` row may start at a fixed rank
+  (`fromRank`) raised by a **modifier's ranks** (`plusModifier` — Increased Mass) and carry
+  a `format`, and `rank_scaled` takes a `max`; `fixed` is a row the rules state outright.
+  And a modifier may set where its range **starts** (`rangeRank`): Thrown's short range is
+  distance rank 2 + Strength (p155), not the effect's rank — 2 with no wielder.
 - **A modifier is taken once unless the ruleset says otherwise.** `repeatable` in
   `modifiers.json` / `effect_modifiers.json` is what `EffectCard.attach_modifier` reads,
-  and only six records carry it: **Limited**, **Quirk**, **Feature**, the **Custom** pair,
+  and only seven records carry it: **Limited**, **Quirk**, **Feature**, the **Custom** pair,
+  **Reaction** ("each specific circumstance is a separate instance of this extra", p154),
   and Affliction's **Limited Degree** (the book: "with two applications of this flaw, the
   Affliction does not impose a condition for two of its degrees" — which is how the
   *Transform* configuration is built). Everything else is refused a second copy, because a
@@ -965,6 +1050,34 @@ deleted when it finished; the pass-by-pass record is in the `docs/powers-rules-a
   looks fine while it happens; four things count as a dial — priced `select` options, a
   `points` spin box, the modifier's own rank, or being `hidden` (structural, priced by
   the engine).
+
+### The modifier audit of 2026-10-17
+
+A pass over every modifier against the book, prompted by "some modifiers only write
+notes". What it changed is in the bullets above and in [conditions](conditions-and-damage.md);
+what it left:
+
+- **Hardened's second die is only said, not rolled.** The save's label tells the roller to
+  roll twice and keep the higher (`damage_defense_note`), but no roller does it: dice are
+  thrown by the panel and, online, by the session server, and the server treats a spec as
+  opaque — making it read one would be a protocol change of its own.
+- **Use costs and use counts are the Powers block's.** A Tiring weapon in the Equipment
+  block, or a power rolled from the GM window's NPC card, charges nothing and counts
+  nothing: neither raises its rolls through the Dice block's `use-spent`.
+- **Fades on a Protection is counted by hand.** Its "use" is every resistance check made
+  with it (p138), which no card throws — so it is the card menu's *Use once*.
+- **Several flaws stay words on purpose**: Side Effect, Feedback, Uncontrolled, Grab-Based,
+  Sense-Dependent's Dodge check. Each needs a second effect or the GM's judgement to
+  resolve, and the note now at least carries what the player typed (the sense, the
+  backfire).
+- **Data the book prices that is now a choice**: Aura's duration, Selective and mental
+  contact (`costDelta` options), Area Effect's "includes you" (+1) and Sensory spread's
+  sense, Immunity Redirect's reaction / sustained / continuous, Triggered's Unlimited
+  Triggers (+10 flat) and Variable Trigger (+1/+2) as extras of their own (a flat +10 on
+  top of a ranked modifier is no delta on it), Quirk, Known Location, Additional Use and
+  Enhanced Advantages bought in ranks, Variable Descriptor capped at 2, Diminished Range a
+  negative `distanceRankBonus` (the Distance row reads worse), Extended Only requiring
+  Extended, and a text field on every effect-specific Limited and on Noticeable.
 
 ### Readouts and warnings
 

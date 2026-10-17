@@ -842,7 +842,8 @@ def test_a_broken_build_warns_on_its_card_not_only_in_the_constructor(
     warnings = [lbl for lbl in sheet.powers.findChildren(QLabel) if lbl.text() == "⚠"]
     assert len(warnings) == 2
     tips = " ".join(w.toolTip() for w in warnings)
-    assert "allocated 6 of 2 ranks" in tips  # the over-spent Concealment
+    # A Concealment saved at 2 when its senses buy 6 (as the old budget allowed).
+    assert "come to 6 ranks but it is saved at 2" in tips
     assert "imposed" in tips.lower()  # the unaffordable Transformed effect
 
 
@@ -853,12 +854,9 @@ def test_the_card_and_the_constructor_read_the_same_checks(qapp: QApplication) -
 
     data = load_game_data()
     char = Character.new_default(data)
-    effect = PowerEffectInstance(
-        "concealment",
-        rank=1,
-        config={"senses": [{"id": "sight", "tier": 2}]},
-    )
-    power = Power(name="Vanish", effects=[effect])
+    # An Affliction nobody has finished: no resistance, no conditions.
+    effect = PowerEffectInstance("affliction", rank=4)
+    power = Power(name="Hex", effects=[effect])
     char.powers.append(power)
 
     sheet = CharacterSheet(data, char)
@@ -869,7 +867,7 @@ def test_the_card_and_the_constructor_read_the_same_checks(qapp: QApplication) -
     # naming which checks failed. Neither can gain or lose one without the other.
     assert window._warning.isVisible() or window._warning.toolTip()
     assert window._warning.toolTip() == warning.toolTip()
-    assert "Over-allocated" in window._warning.text()
+    assert "Unfinished" in window._warning.text()
     window.close()
 
 

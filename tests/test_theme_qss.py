@@ -224,6 +224,32 @@ def test_every_token_a_preset_needs_to_build_is_present(presets, theme_id: str) 
     assert isinstance(qss.build(presets[theme_id]), str)
 
 
+@pytest.mark.parametrize("theme_id", ["slate-dark", "parchment-light", "crimson-gold"])
+def test_a_snapshot_older_than_a_token_still_builds(presets, theme_id: str) -> None:
+    """A preset saved before the sheet grew a token takes Classic's value for it.
+
+    Settings writes a full snapshot with no ``extends``, so a token added after the
+    save is absent from it. The sheet is built at startup, and v0.9.2 crashed there
+    — before the window opened — on a saved styled theme without ``space.indent``.
+    """
+    from dataclasses import replace
+
+    saved = replace(
+        presets[theme_id],
+        id="my-old-theme",
+        metrics={k: v for k, v in presets[theme_id].metrics.items() if k != "space.indent"},
+    )
+    indent = presets["classic"].metrics["space.indent"]
+    item = next(r for r in qss.build(saved).splitlines() if r.startswith("QMenu::item {"))
+    assert f"px {indent}px " in item
+
+    # And the general case: whatever geometry the sheet reads, Classic can back it.
+    # (Not colours: a styled snapshot always carries its own surfaces, which Classic,
+    # a system preset, does not have to lend.)
+    bare = replace(presets[theme_id], id="my-ancient-theme", metrics={})
+    assert isinstance(qss.build(bare), str)
+
+
 @pytest.mark.parametrize("theme_id", BUNDLED)
 def test_a_box_on_a_complex_widget_gives_its_arrow_column_back(presets, theme_id: str) -> None:
     """State a complex widget's box, give its arrows their room back.

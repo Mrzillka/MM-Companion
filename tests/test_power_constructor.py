@@ -10,7 +10,7 @@ import html
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QApplication, QLabel, QWidget
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
@@ -667,6 +667,95 @@ def test_linked_badges_every_card(qapp: QApplication) -> None:
 
     assert a._role_badge.text() == "Linked"
     assert b._role_badge.text() == "Linked"
+
+
+def test_linked_has_a_help_button_naming_the_bonus_pick(qapp: QApplication) -> None:
+    from dataclasses import replace
+
+    data = load_game_data()
+    window = PowerConstructorWindow(data)
+    window.canvas.add_effect("damage")
+    window.canvas.add_effect("affliction")
+    help_ = window.canvas._mode_bar._linked_help
+    assert help_.isVisibleTo(window)
+    assert "single attack check" in help_.help_text()
+    assert "the first attacking effect's bonus" in help_.help_text()
+    lowest = replace(data, system=replace(data.system, linked_attack_bonus="lowest"))
+    assert (
+        "the worst bonus"
+        in PowerConstructorWindow(lowest).canvas._mode_bar._linked_help.help_text()
+    )
+
+
+def test_dragging_a_card_reorders_the_effects_and_the_linked_lead(qapp: QApplication) -> None:
+    char = _pl10_character()
+    char.abilities["ATK"] = 7
+    window = PowerConstructorWindow(load_game_data(), character=char)
+    canvas = window.canvas
+    damage = canvas.add_effect("damage")
+    damage.attach_modifier("accurate")  # Damage +9, Affliction +7
+    affliction = canvas.add_effect("affliction")
+    canvas._mode_bar.changed.emit(STRUCTURE_LINKED)
+    assert power_rolls(window.power, char, window._data)[0].label.endswith("+9 vs. Defense")
+    fired: list[None] = []
+    canvas.changed.connect(lambda: fired.append(None))
+
+    canvas.move_card(1, 0)  # the Affliction now leads
+
+    assert canvas.cards == [affliction, damage]
+    assert [e.effect_id for e in window.power.effects] == ["affliction", "damage"]
+    assert window.power.effects[0] is affliction.instance
+    layout = canvas._layout
+    assert layout.indexOf(affliction) < layout.indexOf(damage)
+    assert affliction._role_badge.text() == "Linked"
+    assert fired
+    assert power_rolls(window.power, char, window._data)[0].label.endswith("+7 vs. Defense")
+
+
+def test_a_card_dropped_back_in_place_changes_nothing(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    first = window.canvas.add_effect("damage")
+    window.canvas.add_effect("affliction")
+    fired: list[None] = []
+    window.canvas.changed.connect(lambda: fired.append(None))
+    window.canvas.move_card(0, 1)  # just after itself
+    assert window.canvas.cards[0] is first and not fired
+
+
+def test_the_canvas_takes_only_its_own_cards_for_a_reorder(qapp: QApplication) -> None:
+    from types import SimpleNamespace
+
+    from PySide6.QtCore import QMimeData
+
+    from mm_companion.ui.power_constructor.common import CARD_MIME
+
+    def drag(source):
+        mime = QMimeData()
+        mime.setData(CARD_MIME, b"1")
+        return SimpleNamespace(mimeData=lambda: mime, source=lambda: source)
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("damage")
+    other = PowerConstructorWindow(load_game_data()).canvas.add_effect("damage")
+    assert window.canvas._reordering(drag(card))
+    assert not window.canvas._reordering(drag(other))
+
+
+def test_a_reorder_drop_lands_in_the_gap_under_the_pointer(qapp: QApplication) -> None:
+    window = PowerConstructorWindow(load_game_data())
+    canvas = window.canvas
+    cards = [canvas.add_effect("damage"), canvas.add_effect("affliction")]
+    window.resize(1200, 900)
+    window.show()
+    qapp.processEvents()
+    first, second = (card.geometry() for card in cards)
+    assert canvas._drop_index(first.top() + 1) == 0
+    assert canvas._drop_index(first.bottom() - 1) == 1
+    assert canvas._drop_index(second.bottom() + 5) == 2
+    canvas._show_indicator(second.bottom() + 5)
+    assert canvas._indicator.isVisible()
+    assert canvas._indicator.geometry().top() > second.bottom() - canvas.INDICATOR_HEIGHT
+    window.close()
 
 
 def test_powers_section_launches_and_locks(qapp: QApplication) -> None:
@@ -1512,21 +1601,49 @@ def test_an_over_budget_imposed_effect_warns_in_the_constructor(qapp: QApplicati
     assert "15 PP" in window._warning.toolTip()
 
 
-def test_allocation_checklist_spends_ranks_and_warns_when_over(qapp: QApplication) -> None:
-    from PySide6.QtWidgets import QCheckBox
+def _allocation_rows(card):
+    """The (option, tier, note) widgets of each row of a card's allocation field."""
+    from PySide6.QtWidgets import QComboBox, QLineEdit
 
+    rows = []
+    for row in card._config_host.findChildren(QWidget):
+        combos = [c for c in row.findChildren(QComboBox) if c.parent() is row]
+        notes = [e for e in row.findChildren(QLineEdit) if e.parent() is row]
+        if len(combos) == 2 and len(notes) == 1:
+            rows.append((combos[0], combos[1], notes[0]))
+    return rows
+
+
+def _add_button(card):
+    from PySide6.QtWidgets import QPushButton
+
+    return next(b for b in card._config_host.findChildren(QPushButton) if "Add" in b.text())
+
+
+def test_allocation_rows_buy_ranks_and_the_rank_follows_them(qapp: QApplication) -> None:
+    """Each row is something bought; the effect's rank is what the rows add up to."""
     window = PowerConstructorWindow(load_game_data())
     card = window.canvas.add_effect("enhanced_senses")
-    card._rank.setValue(2)
+    assert card._rank.isReadOnly()
 
-    boxes = {b.text().split(" (")[0]: b for b in card._config_host.findChildren(QCheckBox)}
-    boxes["Accurate"].setChecked(True)  # tiered 2/4 → default tier 1 = 2 ranks
+    _add_button(card).click()  # a row buys the first option at its first tier: Accurate, 2
     assert card.instance.config["senses"] == [{"id": "accurate", "tier": 1}]
-    assert not window._warning.isVisibleTo(window)  # 2 of 2 ranks — exactly on budget
+    assert card.instance.rank == 2
 
-    boxes["Acute"].setChecked(True)  # +1 rank → 3 of 2, over budget
-    assert window._warning.isVisibleTo(window)
-    assert "Over-allocated" in window._warning.text()
+    option, _tier, note = _allocation_rows(card)[0]
+    note.setText("hearing")
+    _add_button(card).click()  # the same option again, for another sense
+    _option2, _tier2, note2 = _allocation_rows(card)[1]
+    note2.setText("smell")
+    assert card.instance.config["senses"] == [
+        {"id": "accurate", "tier": 1, "note": "hearing"},
+        {"id": "accurate", "tier": 1, "note": "smell"},
+    ]
+    assert card.instance.rank == 4
+
+    option.setCurrentIndex(option.findData("acute"))  # 1 rank for one sense
+    assert card.instance.rank == 3
+    assert not window._warning.isVisibleTo(window)  # nothing to overspend
 
 
 def test_repeatable_rows_add_remove_and_persist(qapp: QApplication) -> None:
@@ -1534,17 +1651,34 @@ def test_repeatable_rows_add_remove_and_persist(qapp: QApplication) -> None:
 
     window = PowerConstructorWindow(load_game_data())
     card = window.canvas.add_effect("feature")
-    card._rank.setValue(2)
 
     add = next(b for b in card.findChildren(QPushButton) if "Add" in b.text())
     add.click()
     name = next(e for e in card.findChildren(QLineEdit) if e.placeholderText() == "Feature")
     name.setText("Battery")
-    assert card.instance.config["features"] == [{"name": "Battery", "description": ""}]
+    # A fresh row is the 1 rank a Feature typically is, and the rank follows it.
+    assert card.instance.config["features"] == [{"name": "Battery", "description": "", "ranks": 1}]
+    assert card.instance.rank == 1
 
     remove = next(b for b in card.findChildren(QPushButton) if b.text() == "✕" and b.isFlat())
     remove.click()
     assert card.instance.config["features"] == []
+    assert card.instance.rank == 0
+
+
+def test_an_immunity_scope_picked_from_the_list_sets_its_ranks(qapp: QApplication) -> None:
+    """The book's tiers are one click away: Critical hits is a 2-rank row by itself."""
+    from PySide6.QtWidgets import QComboBox, QPushButton
+
+    window = PowerConstructorWindow(load_game_data())
+    card = window.canvas.add_effect("immunity")
+    next(b for b in card.findChildren(QPushButton) if "Add" in b.text()).click()
+    scope = next(c for c in card._config_host.findChildren(QComboBox) if c.isEditable())
+    index = scope.findText("Critical hits")
+    scope.setCurrentIndex(index)
+    scope.activated.emit(index)
+    assert card.instance.config["scopes"] == [{"name": "Critical hits", "rank": 2}]
+    assert card.instance.rank == 2
 
 
 def test_modifier_chip_config_drives_cost(qapp: QApplication) -> None:
@@ -2022,14 +2156,16 @@ def test_an_attached_chip_hints_the_same_description(qapp: QApplication) -> None
 
 
 def test_allocation_options_hint_what_each_mode_does(qapp: QApplication) -> None:
-    from PySide6.QtWidgets import QCheckBox
+    from PySide6.QtCore import Qt
 
     window = PowerConstructorWindow(load_game_data())
     card = window.canvas.add_effect("enhanced_movement")
-
-    boxes = card._config_host.findChildren(QCheckBox)
-    wall_crawling = next(b for b in boxes if b.text().startswith("Wall-Crawling"))
-    assert "walls" in wall_crawling.toolTip()
+    _add_button(card).click()
+    option, _tier, note = _allocation_rows(card)[0]
+    index = option.findData("wall_crawling")
+    assert "walls" in option.itemData(index, Qt.ItemDataRole.ToolTipRole)
+    option.setCurrentIndex(index)
+    assert "walls" in note.parentWidget().toolTip()
 
 
 def test_check_required_offers_derived_traits_the_boost_picker_hides(qapp: QApplication) -> None:
@@ -2140,42 +2276,6 @@ def test_dev_mode_keeps_the_attack_skill_bonus_in_its_auto_values(qapp: QApplica
 
     # And nothing was recorded as an override just by opening the editor.
     assert card.instance.overrides == {}
-
-
-def test_allocation_checklist_is_tall_enough_for_every_wrapped_row(
-    qapp: QApplication,
-) -> None:
-    """A two-dozen-option checklist (Enhanced Senses, Enhanced Movement) wraps onto
-    several rows, and the card has to grow for all of them.
-
-    The flow deliberately reports no height-for-width, so a bare ``QWidget`` host is
-    sized by its one-row hint and the form row around it clips everything below the
-    first line. The host is a ``FlowContainer``, which pins its height to what the
-    flow really wraps to at the width it was given."""
-    from PySide6.QtWidgets import QCheckBox
-
-    from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
-
-    window = PowerConstructorWindow(load_game_data())
-    for effect_id in ("enhanced_senses", "enhanced_movement"):
-        card = window.canvas.add_effect(effect_id)
-        window.show()
-        qapp.processEvents()
-
-        hosts = [
-            child
-            for child in card.findChildren(FlowContainer)
-            if isinstance(child.layout(), FlowLayout) and child.findChildren(QCheckBox)
-        ]
-        assert hosts, f"{effect_id} has no allocation checklist"
-        for host in hosts:
-            wrapped = host.layout().heightForWidth(host.width())
-            assert wrapped > host.layout().itemAt(0).sizeHint().height(), "expected >1 row"
-            assert host.height() >= wrapped, f"{effect_id}: checklist clipped"
-            # And the last option really lands inside the host, not painted past it.
-            last = host.findChildren(QCheckBox)[-1]
-            assert last.geometry().bottom() <= host.height()
-    window.close()
 
 
 # -- the Extended settings section ------------------------------------------------
@@ -2563,12 +2663,12 @@ def test_an_enhanced_traits_rank_follows_its_rows(qapp: QApplication) -> None:
     assert label.text() == "Allocated 8 ranks"
 
 
-def test_an_ordinary_allocation_effect_keeps_its_hand_set_rank(qapp: QApplication) -> None:
+def test_an_allocation_effect_reads_its_rank_off_its_rows(qapp: QApplication) -> None:
     window = PowerConstructorWindow(load_game_data())
     card = window.canvas.add_effect("enhanced_senses")
-    assert not card._rank.isReadOnly()
+    assert card._rank.isReadOnly()
     label = next(lbl for lbl in card.findChildren(QLabel) if lbl.text().startswith("Allocated"))
-    assert "/" in label.text()
+    assert "/" not in label.text()
 
 
 def test_a_rank_spin_stops_at_the_advantages_own_ceiling(qapp: QApplication) -> None:
@@ -2627,18 +2727,20 @@ def test_alternate_resistance_picks_the_resistance_on_its_chip(qapp: QApplicatio
     assert rows["resistance"].value.startswith("Will vs.")
 
 
-def test_affliction_keeps_its_resistance_on_the_card_not_the_chip(qapp: QApplication) -> None:
+def test_affliction_picks_its_alternate_resistance_on_the_chip(qapp: QApplication) -> None:
     from PySide6.QtWidgets import QComboBox
 
     window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
     card = window.canvas.add_effect("affliction")
     card.attach_modifier("alternate_resistance")
-    # Only the Worth tier: the card's own Resisted by is the one that widens.
-    assert len(card._chips[0].findChildren(QComboBox)) == 1
+    # Resisted by, Or and Worth — as on every other effect.
+    assert len(card._chips[0].findChildren(QComboBox)) == 3
+    notes = [lbl.text() for lbl in card._config_host.findChildren(QLabel)]
+    assert "picked on Alternate Resistance" in notes
 
 
 def test_a_narrowed_picker_still_shows_the_value_it_holds(qapp: QApplication) -> None:
-    """Taking Alternate Resistance off must not leave the picker denying the card.
+    """An Affliction saved resisted by a skill, its extra since taken off.
 
     Only what is *offered* narrows. The stored value survives — the game-terms row goes
     on printing it — so the combo has to keep showing it, and say what it is waiting on,
@@ -2646,20 +2748,13 @@ def test_a_narrowed_picker_still_shows_the_value_it_holds(qapp: QApplication) ->
     """
     from PySide6.QtWidgets import QComboBox
 
-    window = PowerConstructorWindow(load_game_data(), character=_pl10_character())
-    card = window.canvas.add_effect("affliction")
-    card.attach_modifier("alternate_resistance")
-
-    def resistance_combo() -> QComboBox:
-        return card._config_layout.itemAt(0).widget().findChildren(QComboBox)[0]
-
-    combo = resistance_combo()
-    combo.setCurrentIndex(combo.findData("Athletics"))
+    data = load_game_data()
+    effect = PowerEffectInstance("affliction", rank=8, config={"resistance": "Athletics"})
+    window = PowerConstructorWindow(
+        data, character=_pl10_character(), power=Power(name="Hex", effects=[effect])
+    )
+    card = window.canvas._cards[0]
+    combo = card._config_layout.itemAt(0).widget().findChildren(QComboBox)[0]
     assert card.instance.config["resistance"] == "Athletics"
-
-    card._remove_chip(card._chips[0])
-
-    assert card.instance.config["resistance"] == "Athletics"
-    combo = resistance_combo()
     assert combo.currentData() == "Athletics"
     assert combo.currentText() == "Athletics (needs Alternate Resistance)"

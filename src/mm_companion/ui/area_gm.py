@@ -310,9 +310,9 @@ class AreaController(QObject):
         """The GM picked *party* — an NPC or a player — to use an attack on an area.
 
         From a creature's card on the board, or the roller's Area button. The window
-        opens on the creature's first area, and the GM may switch the attacker, the
-        power and its shape there. A player is read off their latest snapshot, and asked
-        for the attack like one who declared it.
+        opens on the creature's first area, and the GM may switch the attacker and the
+        power there. A player is read off their latest snapshot, and asked for the
+        attack like one who declared it.
         """
         sources, _targets = self._host.impress_parties()
         party = next((p for p in sources if p.ref == party.ref), party)
@@ -384,7 +384,7 @@ class AreaController(QObject):
             return declared.window
         _sources, targets = self._host.impress_parties()
         if declared.source.character is None:
-            # A player's snapshot, for the shape and their own attack's numbers.
+            # A player's snapshot, for their own attack's numbers.
             found = next((p for p in targets if p.ref == declared.source.ref), None)
             if found is not None:
                 declared.source.character = found.character
@@ -817,13 +817,25 @@ class AreaController(QObject):
     ) -> str:
         """Put the rung a save landed on onto its creature; what it did, in words."""
         degree = record.get("degree")
-        rung = area_effect_rung(effect, None if degree is None else int(degree), self._data)
-        if rung is None:
-            return ""
-        source = declared.resolving.plan.source.name if declared.resolving else ""
         # Escalation reads the target's current conditions; with no sheet to read yet
         # (a player whose snapshot has not arrived) it reads none.
         character = target.party.character or Character()
+        # The rank this creature resisted (halved by a made Dodge) is what its save's DC
+        # was set from, so it is read back off that DC for the Toughness defences.
+        dc = record.get("dc")
+        resisted = (
+            dc - effect.dc_base if isinstance(dc, int) and isinstance(effect.dc_base, int) else None
+        )
+        rung = area_effect_rung(
+            effect,
+            None if degree is None else int(degree),
+            self._data,
+            target.party.character,
+            resisted,
+        )
+        if rung is None:
+            return ""
+        source = declared.resolving.plan.source.name if declared.resolving else ""
         changes = list(
             resolve_rung(character, rung, self._data, source=source, config=effect.config)
         )

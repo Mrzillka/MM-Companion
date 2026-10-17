@@ -2888,6 +2888,20 @@ def test_a_chip_measures_its_own_caption_and_reading(qapp: QApplication) -> None
     assert short.natural_width() < long.natural_width()
 
 
+def test_a_chips_look_stops_at_the_chip(qapp: QApplication) -> None:
+    """Its right-click menu is its child, and drew itself in the chip's border and fill.
+
+    A bare declaration reaches every child, so the menu took the chip's border, radius
+    and background and clipped its own item. The rules name the chip alone.
+    """
+    from mm_companion.ui.pin_panel import PinChip
+
+    chip = PinChip(PinnedValue(ref=PinRef(kind="ability", key="AGL"), label="Dodge", value="12"), 0)
+
+    assert chip.styleSheet().lstrip().startswith(f"#{chip.objectName()} {{")
+    assert chip.styleSheet().rstrip().endswith("}")
+
+
 def test_a_tile_never_grows_past_its_ceiling(window: GMWindow) -> None:
     """A long caption elides inside the tile rather than widening every card."""
     quick_npc_file(window)

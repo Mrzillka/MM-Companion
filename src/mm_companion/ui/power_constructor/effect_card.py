@@ -3,7 +3,8 @@ from __future__ import annotations
 from fractions import Fraction
 from html import escape
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QMimeData, Qt, Signal
+from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -42,6 +43,7 @@ from mm_companion.ui import theme
 from mm_companion.ui.drop_feedback import DropFeedback
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.power_constructor.common import (
+    CARD_MIME,
     CONFIG_WIDGET_BUILDERS,
     MODIFIER_MIME,
     RANK_MAX,
@@ -60,7 +62,7 @@ from mm_companion.ui.power_constructor.common import (
 from mm_companion.ui.power_constructor.modifier_chip import ModifierChip, ModifierGroup
 from mm_companion.ui.power_constructor.sub_build import SubBuildPanel
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import discard_widget, make_spin_box
+from mm_companion.ui.widgets import DragHandle, discard_widget, make_spin_box
 
 
 def _fraction_text(value: Fraction) -> str:
@@ -156,6 +158,9 @@ class EffectCard(QFrame):
         self._config_layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._config_host)
         self._populate_config_form()
+        # A build saved while these effects still had a hand-set budget (Enhanced Senses
+        # 4 with two ranks ticked) opens at what its rows buy: the rank *is* the rows now.
+        self._sync_rank_to_allocation()
 
         self._build_modifier_groups(layout)
         layout.addWidget(self._build_specific_button())
@@ -178,9 +183,14 @@ class EffectCard(QFrame):
 
     # -- construction pieces ----------------------------------------------
     def _build_header(self, effect) -> QHBoxLayout:
-        """The card's top row: effect name, structure badge, rank spin, remove button."""
+        """The card's top row: grip, effect name, structure badge, rank spin, remove."""
 
         header = QHBoxLayout()
+        # The order of the effects is the player's: it decides which one leads a Linked
+        # power's single attack roll. The canvas takes the drop (see PowerCanvas).
+        grip = DragHandle("Drag to reorder the effects")
+        grip.dragStarted.connect(self._start_drag)
+        header.addWidget(grip)
         name = QLabel(effect.name if effect else self.instance.effect_id)
         name.setStyleSheet("font-weight: bold;")
         header.addWidget(name)
@@ -454,6 +464,16 @@ class EffectCard(QFrame):
                 note.setEnabled(False)
                 form.addRow(field.label, note)
                 continue
+            if self._hidden_by_gate(field) and field.overrides:
+                # The extra picks this stat itself (Alternate Resistance on an
+                # Affliction's "Resisted by"). The stored value is *kept*: it is what
+                # the stat reads until the chip is given a pick, which is how a build
+                # saved with the wide choice on the card still resists the same way.
+                gate = self._modifier(field.hidden_with)
+                note = QLabel(f"picked on {gate.name if gate else field.hidden_with}")
+                note.setEnabled(False)
+                form.addRow(field.label, note)
+                continue
             if self._hidden_by_gate(field):
                 # A gating extra (e.g. Variable Conditions) defers this choice to
                 # use-time — drop any stored value and show a note in its place. A
@@ -610,7 +630,10 @@ class EffectCard(QFrame):
 
         labels = {v: label for label, v in config_source_options(field, self._data)}
         label = labels.get(value, value)
-        modifier = self._modifier(getattr(field, "widen_with", "") or "")
+        # The extra that widens the field, or the one it steps aside for (Affliction's
+        # Resisted by hides for Alternate Resistance, whose chip picks the wide list).
+        needs = getattr(field, "widen_with", "") or getattr(field, "hidden_with", "") or ""
+        modifier = self._modifier(needs)
         return f"{label} (needs {modifier.name})" if modifier is not None else label
 
     def _multiselect_widget(self, field) -> QWidget:
@@ -665,89 +688,134 @@ class EffectCard(QFrame):
         return update_total
 
     def _allocation_widget(self, field) -> QWidget:
-        """A Tier-4 rank-allocation checklist (Enhanced Senses/Movement, Comprehend).
+        """A Tier-4 allocation as a list of rows (Enhanced Senses/Movement, Comprehend...).
 
-        Each option is a check box; a tiered option (``2/4/6``) adds a small combo to
-        pick which tier. A live "Allocated N / rank" readout under the list turns red
-        when the selections spend more than the effect's rank. Selections are stored
-        in ``instance.config[key]`` as ``[{"id", "tier"}, ...]``.
+        One row per thing bought: which option, which tier of it, and a note saying what
+        it applies to ("hearing", "magic", "underwater"). Rows rather than a checklist
+        because the rules buy most of these options *for* something and let the same
+        option be bought again for something else — Accurate hearing beside Accurate
+        smell, Environmental Adaptation once per environment — and a tick box can be
+        ticked only once and names nothing. The effect's rank is what the rows add up to
+        (``rankFollowsAllocation``), so there is no budget to meter against.
+
+        Stored in ``instance.config[key]`` as ``[{"id", "tier", "note"?}, ...]`` — the
+        shape the checklist always wrote, plus the note, so a build saved by the old
+        checklist opens here row for row.
         """
 
         container = QWidget()
         outer = QVBoxLayout(container)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(3)
-        # A FlowContainer for the same reason the multiselect uses one: a bare host
-        # reports a single row's height, and a two-dozen-option checklist (Enhanced
-        # Senses, Enhanced Movement) is then cut off just below its first row.
-        grid_host = FlowContainer()
-        flow = FlowLayout(grid_host)
-        outer.addWidget(grid_host)
+        outer.setSpacing(2)
+        rows_host = QWidget()
+        rows_layout = QVBoxLayout(rows_host)
+        rows_layout.setContentsMargins(0, 0, 0, 0)
+        rows_layout.setSpacing(2)
+        outer.addWidget(rows_host)
         total = QLabel()
-        outer.addWidget(total)
-
-        chosen = {
-            e["id"]: int(e.get("tier", 1))
-            for e in self.instance.config.get(field.key, [])
-            if isinstance(e, dict) and "id" in e
-        }
-        controls: list[tuple] = []
-
+        by_id = {option.id: option for option in field.alloc_options}
+        rows: list[tuple[QWidget, QComboBox, QComboBox, QLineEdit]] = []
         update_total = self._allocation_readout(total)
 
         def commit() -> None:
-            new = []
-            for option, box, combo in controls:
-                if box.isChecked():
-                    tier = int(combo.currentData()) if combo is not None else 1
-                    new.append({"id": option.id, "tier": tier})
-            self.instance.config[field.key] = new
+            stored = []
+            for _row, picker, tiers, note in rows:
+                option = by_id.get(picker.currentData())
+                if option is None:
+                    continue
+                entry: dict = {"id": option.id, "tier": int(tiers.currentData() or 1)}
+                if note.text().strip():
+                    entry["note"] = note.text().strip()
+                stored.append(entry)
+            self.instance.config[field.key] = stored
+            self._sync_rank_to_allocation()
             update_total()
+            self.refresh_cost()
             self.changed.emit()
 
-        for option in field.alloc_options:
+        def fill_tiers(tiers: QComboBox, option, tier: int) -> None:
+            tiers.blockSignals(True)
+            tiers.clear()
+            for index, cost in enumerate(option.tiers, start=1):
+                # Name what the tier buys, not just what it costs; the game-terms panel
+                # says the same thing the same way (``_config_display_allocation``).
+                ranks = f"{cost} rank" if cost == 1 else f"{cost} ranks"
+                named = option.tier_label(index)
+                tiers.addItem(f"{named} ({ranks})" if named else ranks, index)
+            tiers.setCurrentIndex(min(max(tier, 1), len(option.tiers)) - 1)
+            # A single-tier option has nothing to choose; the combo stays as its price.
+            tiers.setEnabled(len(option.tiers) > 1)
+            tiers.blockSignals(False)
+
+        def describe(row: QWidget, note: QLineEdit, option) -> None:
+            row.setToolTip(option.description)
+            prompt = option.prompt or option.per_note or "applies to..."
+            note.setPlaceholderText(prompt)
+
+        def add_row(entry: dict | None = None) -> None:
+            entry = entry or {}
+            option = by_id.get(entry.get("id")) or field.alloc_options[0]
             row = QWidget()
             row_layout = QHBoxLayout(row)
             row_layout.setContentsMargins(0, 0, 0, 0)
             row_layout.setSpacing(3)
-            label = option.label + (f" ({option.per_note})" if option.per_note else "")
-            box = QCheckBox(label)
-            box.setChecked(option.id in chosen)
-            # A checklist of two dozen bare names (Permeate, Trackless, Ultravision…)
-            # says nothing about what each does; the option's description hints it.
-            if option.description:
-                box.setToolTip(option.description)
-                row.setToolTip(option.description)  # also over the tier combo beside it
-            row_layout.addWidget(box)
-            combo = None
-            if len(option.tiers) > 1:
-                combo = QComboBox()
-                for index, cost in enumerate(option.tiers, start=1):
-                    # Name what the tier buys, not just what it costs. The game-terms
-                    # panel beside the card says the same thing the same way
-                    # (``_config_display_allocation``), so the two never read as two
-                    # different facts about one choice.
-                    ranks = f"{cost} rank" if cost == 1 else f"{cost} ranks"
-                    named = option.tier_label(index)
-                    combo.addItem(f"{named} ({ranks})" if named else ranks, index)
-                combo.setCurrentIndex(min(max(chosen.get(option.id, 1), 1), len(option.tiers)) - 1)
-                combo.setEnabled(box.isChecked())
-                guard_wheel(combo)
-                combo.currentIndexChanged.connect(lambda _i: commit())
-                row_layout.addWidget(combo)
-            else:
-                cost = QLabel(f"({option.tiers[0]})")
-                cost.setEnabled(False)
-                row_layout.addWidget(cost)
-            controls.append((option, box, combo))
+            picker = QComboBox()
+            for candidate in field.alloc_options:
+                picker.addItem(candidate.label, candidate.id)
+                picker.setItemData(
+                    picker.count() - 1, candidate.description, Qt.ItemDataRole.ToolTipRole
+                )
+            picker.setCurrentIndex(max(picker.findData(option.id), 0))
+            guard_wheel(picker)
+            tiers = QComboBox()
+            guard_wheel(tiers)
+            fill_tiers(tiers, option, int(entry.get("tier", 1)))
+            note = QLineEdit(str(entry.get("note", "")))
+            describe(row, note, option)
+            remove = QPushButton("✕")
+            remove.setFlat(True)
+            remove.setFixedWidth(20)
+            row_layout.addWidget(picker, 2)
+            row_layout.addWidget(tiers, 2)
+            row_layout.addWidget(note, 3)
+            row_layout.addWidget(remove)
+            rows_layout.addWidget(row)
+            record = (row, picker, tiers, note)
+            rows.append(record)
 
-            def on_toggle(checked: bool, c=combo) -> None:
-                if c is not None:
-                    c.setEnabled(checked)
+            def on_option(_index: int) -> None:
+                chosen = by_id.get(picker.currentData())
+                if chosen is None:
+                    return
+                fill_tiers(tiers, chosen, 1)
+                describe(row, note, chosen)
                 commit()
 
-            box.toggled.connect(on_toggle)
-            flow.addWidget(row)
+            def do_remove(_checked: bool = False) -> None:
+                if record in rows:
+                    rows.remove(record)
+                discard_widget(row)
+                commit()
+
+            picker.currentIndexChanged.connect(on_option)
+            tiers.currentIndexChanged.connect(lambda _i: commit())
+            note.textChanged.connect(lambda _t: commit())
+            remove.clicked.connect(do_remove)
+
+        for entry in self.instance.config.get(field.key, []) or []:
+            if isinstance(entry, dict) and entry.get("id") in by_id:
+                add_row(entry)
+
+        add_button = QPushButton("＋ Add")
+        add_button.setToolTip(field.hint)
+
+        def on_add(_checked: bool = False) -> None:
+            add_row()
+            commit()  # a new row buys its first option at once, so the price moves now
+
+        add_button.clicked.connect(on_add)
+        outer.addWidget(add_button)
+        outer.addWidget(total)
 
         self._alloc_updaters.append(update_total)
         update_total()
@@ -959,11 +1027,24 @@ class EffectCard(QFrame):
         specific = self._data.effect_modifiers.get(self.instance.effect_id, [])
         return next((m for m in specific if m.id == modifier_id), None)
 
-    # -- drops ------------------------------------------------------------
+    # -- drags and drops ----------------------------------------------------
+    def _start_drag(self) -> None:
+        """Pick the card up by its grip; the canvas it sits on takes the drop."""
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setData(CARD_MIME, b"1")  # the card is read from drag.source()
+        drag.setMimeData(mime)
+        drag.setPixmap(self.grab())
+        drag.exec(Qt.DropAction.MoveAction)
+
     def dragEnterEvent(self, event) -> None:  # noqa: N802 (Qt override)
         if event.mimeData().hasFormat(MODIFIER_MIME):
             self._drops.show_accept()  # light up as a drop target
             event.acceptProposedAction()
+        elif event.mimeData().hasFormat(CARD_MIME):
+            # Another card being reordered: not this card's drop, and not a mistake,
+            # so no reject wash — ignored, it goes on up to the canvas.
+            event.ignore()
         else:
             # An effect brick dragged onto a card, say: only modifiers attach here.
             self._drops.show_reject()

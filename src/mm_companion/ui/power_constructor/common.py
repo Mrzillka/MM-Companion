@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from html import escape
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QMimeData
-from PySide6.QtWidgets import QLineEdit, QWidget
+from PySide6.QtCore import QMimeData, Qt
+from PySide6.QtWidgets import QComboBox, QLineEdit, QWidget
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
@@ -30,6 +30,7 @@ from mm_companion.ui.power_constructor.trait_picker import (
     build_trait_cell,
     fill_trait_combo,
 )
+from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box
 
 __all__ = [
@@ -140,11 +141,43 @@ def _repeatable_text_cell(context, column, initial: dict, commit) -> QWidget:
 
 
 def _repeatable_int_cell(context, column, initial: dict, commit) -> QWidget:
-    """A rank spin — the ranks this row spends out of the effect's rank pool."""
-    cell = make_spin_box(
-        0, RANK_MAX, value=int(initial.get(column.key, 0) or 0), buttons=False, max_width=48
-    )
+    """A rank spin — the ranks this row spends out of the effect's rank pool.
+
+    A fresh row starts at the column's ``default`` (a Feature's 1), not at 0, so adding
+    one buys what the rules say one costs.
+    """
+    stored = initial.get(column.key)
+    default = int(getattr(column, "default", 0) or 0)
+    value = default if stored in (None, "") else int(stored or 0)
+    cell = make_spin_box(0, RANK_MAX, value=value, buttons=False, max_width=48)
     cell.valueChanged.connect(lambda _v: commit())
+    return cell
+
+
+def _repeatable_suggest_cell(context, column, initial: dict, commit) -> QWidget:
+    """Free text with the ruleset's standard answers one click away (Immunity's scopes).
+
+    An editable combo rather than a closed one: the book's tiers are guidance and the GM
+    rates anything else, so a typed scope is as legal as a listed one. Picking a listed
+    one also sets the row's ranks — see :func:`link_trait_row`.
+    """
+
+    cell = QComboBox()
+    cell.setEditable(True)
+    cell.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+    cell.addItem("", 0)
+    for label, ranks in column.suggestions:
+        cell.addItem(f"{label}", ranks)
+        cell.setItemData(
+            cell.count() - 1,
+            f"{ranks} rank" + ("" if ranks == 1 else "s"),
+            Qt.ItemDataRole.ToolTipRole,
+        )
+    cell.setCurrentText(str(initial.get(column.key, "")))
+    if cell.lineEdit() is not None:
+        cell.lineEdit().setPlaceholderText(column.label)
+    guard_wheel(cell)
+    cell.currentTextChanged.connect(lambda _t: commit())
     return cell
 
 
@@ -158,6 +191,13 @@ def register_base_repeatable_cells() -> None:
     REPEATABLE_CELL_KINDS.register(
         "int",
         RepeatableCellKind(build=_repeatable_int_cell, read=lambda c: c.value()),
+        replace=True,
+    )
+    REPEATABLE_CELL_KINDS.register(
+        "suggest",
+        RepeatableCellKind(
+            build=_repeatable_suggest_cell, read=lambda c: c.currentText().strip(), stretch=1
+        ),
         replace=True,
     )
     REPEATABLE_CELL_KINDS.register(
@@ -185,11 +225,23 @@ def link_trait_row(context: CellContext, columns, cells: dict) -> None:
     the player could walk around.
     """
 
+    spin = next((cells.get(c.key) for c in columns if c.type == "int"), None)
+    # A suggestion list carries the ranks of each standard answer: picking "Critical
+    # hits" from an Immunity row's list is a 2-rank row without a second step.
+    suggest = next((cells.get(c.key) for c in columns if c.type == "suggest"), None)
+    if isinstance(suggest, QComboBox) and spin is not None:
+
+        def take_ranks(index: int) -> None:
+            ranks = suggest.itemData(index)
+            if ranks:
+                spin.setValue(int(ranks))
+
+        suggest.activated.connect(take_ranks)
+
     picker = next(
         (cells.get(c.key) for c in columns if c.type == TRAIT_COLUMN_TYPE),
         None,
     )
-    spin = next((cells.get(c.key) for c in columns if c.type == "int"), None)
     if not isinstance(picker, TraitPicker) or spin is None:
         return
 
@@ -252,6 +304,10 @@ MODIFIER_MIME = "application/x-mm-modifier"
 CONFIGURATION_MIME = "application/x-mm-configuration"
 # A chip carries its own index when dragged to reorder within its group.
 CHIP_MIME = "application/x-mm-chip"
+# An effect card dragged by its grip to reorder the power's effects; the card itself is
+# read from ``drag.source()``. The order matters: a Linked power's one attack rolls at
+# the first attacking effect's bonus (``system.linkedAttackBonus``).
+CARD_MIME = "application/x-mm-effect-card"
 
 # Object name marking a palette section header, so headers can be addressed as such
 # rather than by their text (a brick may share a group's name).

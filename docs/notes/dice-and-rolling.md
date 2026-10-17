@@ -470,6 +470,13 @@ is what keeps that prompt from eating a number: `load_spec` writes it whenever a
 is loaded, but on a *clear* only while the readout is not holding a result — and
 clearing is precisely what `_settle_spec` does one line after the roll wrote one there.
 
+The chip is **one line, always**: its caption is an `ElidingLabel` (the whole caption,
+and the spec's hint, in the tooltip; the readout under the die names the trait in
+full) and its vertical policy is `Maximum`. It used to word-wrap, and a wrapped label
+asks for its second line only through height-for-width, which nothing above the Roll
+box passes on — so a long trait in a narrow strip got one line's height for two and was
+drawn squashed, and a tall compact window stretched it the other way.
+
 - `core/rules/rolls.py` is the layer that answers "what does rolling X look like":
   a frozen `RollSpec` (`label`, `modifier`, `dc`, `kind`, `hint`, `follow_up`,
   `outcomes`) plus one builder per trait — `ability_roll`, `resistance_roll`,

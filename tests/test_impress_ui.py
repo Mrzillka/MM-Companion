@@ -164,6 +164,30 @@ def test_the_modifiers_fold_away_and_say_what_they_add_up_to(qapp, data) -> None
     assert panel.is_expanded() and panel._sum.text() == "+3"
 
 
+def test_folding_the_modifiers_only_ever_changes_the_windows_height(qapp, data) -> None:
+    """Unfolding widened the window and folding left it unfolded-tall, gaps and all.
+
+    The window opens at the width the modifiers need, unfolding adds their height, and
+    folding them takes exactly that height back.
+    """
+    window = ImpressDialog(data, Character.new_default(data))
+    window.show()
+    qapp.processEvents()
+    opened = window.size()
+    try:
+        window.modifiers.set_expanded(True)
+        qapp.processEvents()
+        unfolded = window.size()
+        window.modifiers.set_expanded(False)
+        qapp.processEvents()
+
+        assert unfolded.width() == opened.width()
+        assert unfolded.height() > opened.height()
+        assert window.size() == opened
+    finally:
+        window.close()
+
+
 def test_a_slider_whose_range_is_off_its_step_still_lands_on_values_it_may_take(qapp, data) -> None:
     """-3..3 in twos: positions are -3, -1, 1, 3, and 0 snaps down to -1."""
     odd = ActionModifier(

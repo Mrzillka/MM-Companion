@@ -717,6 +717,14 @@ The shape:
   v13 reason: a v15 server strips the key without a word and a Linked Damage + Affliction
   would hit and offer only the first save. v15 never shipped, so both reach the hub in
   the same release — **redeploy it** with that release.
+- **Protocol v17 measures a damage save against the target** — a `SpecLadder` carries
+  the attack's `rank` (read back off the save's DC) and how many of its ranks are
+  `penetrating`, and `_sanitize_ladder` passes both as bounded counts
+  (`MAX_LADDER_RANK`). The GM's auto-apply and an area's resolution then honour the
+  target's Impervious, Impenetrable and Hardened Toughness (see [conditions](conditions-and-damage.md)).
+  Bumped for the v13 reason: a v16 server strips both keys without a word, so an
+  Impervious NPC would take a Hit from an attack it is immune to. **Redeploy the hub**
+  with the release that ships it.
 - **A join code is version 2, and a public-server session's is 24 characters.**
   Version 1 spelled the relay URL out byte by byte and came to 130 characters for
   a session on the hub. `discovery.encode_join_code` now packs every field as

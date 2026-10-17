@@ -101,10 +101,12 @@ from mm_companion.core.rules import (
     dynamic_rank_share,
     dynamic_share_points,
     dynamic_share_steps,
+    effect_counts_uses,
     effect_current_rank,
     effect_display_name,
     effect_has_rank_dial,
     effect_is_selected,
+    effect_is_spent,
     effect_stands,
     group_scope_note,
     invalidate_build_cache,
@@ -1270,6 +1272,7 @@ class PowersSection(HeldRebuild, TitledSection):
             not counter_rolls(power, self._character, self._data)
             and not pushable_effects(power, self._data)
             and not self._offers_area_switch(power)
+            and not self._counted(power)
         ):
             return
         card.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -1295,6 +1298,27 @@ class PowersSection(HeldRebuild, TitledSection):
                 "turns — take the ranks back when it is over."
             )
             clear.triggered.connect(lambda _checked=False, p=power: self.clear_extra_effort(p))
+            offered = True
+        counted = self._counted(power)
+        if counted:
+            if offered:
+                menu.addSeparator()
+            use = menu.addAction("Use once")
+            use.setToolTip(
+                "Count a use of its Short-Term or Fades effects without rolling — an "
+                "always-on Protection that fades as it is hit, say. Rolling off the card "
+                "counts one by itself."
+            )
+            use.triggered.connect(
+                lambda _checked=False, p=power, i=tuple(counted): self.spend_uses(p, i)
+            )
+            recharge = menu.addAction("Recharge")
+            recharge.setEnabled(any(power.effects[i].uses for i in counted))
+            recharge.setToolTip(
+                "Give the uses back — recharging, rest, repair or reloading, usually "
+                "outside action time and at least an hour (p158, p160)."
+            )
+            recharge.triggered.connect(lambda _checked=False, p=power: self.recharge(p))
             offered = True
         specs = counter_rolls(power, self._character, self._data)
         if specs and offered:
@@ -1322,6 +1346,15 @@ class PowersSection(HeldRebuild, TitledSection):
         super().set_npc_mode(npc)
         if changed:
             self._rebuild_list()
+
+    def _counted(self, power: Power) -> list[int]:
+        """The indices of *power*'s effects that count their uses (Short-Term, Fades)."""
+
+        return [
+            index
+            for index, effect in enumerate(power.effects)
+            if effect_counts_uses(effect, self._data)
+        ]
 
     def _offers_area_switch(self, power: Power) -> bool:
         """Whether the card offers the free area use — an attack, or one already switched on."""
@@ -1453,6 +1486,51 @@ class PowersSection(HeldRebuild, TitledSection):
         self.runtimeChanged.emit()
         self.conditionsChanged.emit()
         return True
+
+    def count_use(self, spec: object) -> None:
+        """A card's die was thrown and it was a use — the ``use-spent`` handler.
+
+        Counted *after* the roll, so it was made at the rank the effect had when it was
+        used: a Fades Blast 6 fires at 6 and then reads 5. Raised by the roller rather
+        than counted here at the click, because only the roller knows the die really was
+        thrown — a click while it still tumbles is refused, and must not count.
+        """
+
+        by_id = {power.id: power for power in leaf_powers(self._character.powers)}
+        for power_id, index in getattr(spec, "spends", ()):
+            power = by_id.get(power_id)
+            if power is not None:
+                self.spend_uses(power, (index,))
+
+    def spend_uses(self, power: Power, indices) -> bool:
+        """Count one use of each effect of *power* at *indices*; ``False`` if none counts."""
+
+        counted = False
+        for index in indices:
+            if 0 <= index < len(power.effects):
+                effect = power.effects[index]
+                if effect_counts_uses(effect, self._data) and not effect_is_spent(
+                    effect, self._data
+                ):
+                    effect.uses += 1
+                    counted = True
+        if counted:
+            self._rebuild_list()
+            self.runtimeChanged.emit()
+        return counted
+
+    def recharge(self, power: Power) -> bool:
+        """Give every Short-Term and Fades effect of *power* its uses back; ``False`` if none."""
+
+        recharged = False
+        for effect in power.effects:
+            if effect.uses:
+                effect.uses = 0
+                recharged = True
+        if recharged:
+            self._rebuild_list()
+            self.runtimeChanged.emit()
+        return recharged
 
     def clear_extra_effort(self, power: Power) -> bool:
         """Take back every rank Extra Effort pushed into this power; ``False`` if none."""

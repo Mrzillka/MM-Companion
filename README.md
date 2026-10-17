@@ -5,7 +5,7 @@ Masterminds* tabletop RPG (3rd / 4th edition), built with Python and PySide6.
 
 ## Status
 
-🚧 **Early development (pre-alpha, `0.9.1`) — but functional.** You can build a
+🚧 **Early development (pre-alpha, `0.9.2`) — but functional.** You can build a
 character point by point, assemble powers in a drag-and-drop constructor, buy
 equipment, roll everything straight off the sheet, play from a one-page simple
 sheet or print it, and run a live online session with your group. The installed
@@ -248,7 +248,20 @@ and a troubleshooting table are in the [networking guide](docs/mm-session-networ
 
 ## Future plans
 
-Direction, not commitments:
+Next up:
+
+- **Minions** — minions as creatures at the table, not only builds: summoned and
+  advantage-granted minions the GM can run, damage and dismiss.
+- **Ranks & Measures** — the rank / measurement table as a tool: convert distance,
+  mass, time and volume both ways, and work out the rank of a feat.
+- **Actions** — the combat maneuvers on the sheet (All-out Attack, Defensive Attack,
+  Power Attack, Accurate Attack and the rest), trading bonuses as the rules allow.
+- **GM actions** — the GM's own table tools: acting for NPCs, applying effects and
+  conditions to several creatures at once.
+- **GM request help** — a player asks the GM for a ruling or a hand, and the GM
+  answers from the session.
+
+Further out, direction rather than commitments:
 
 - Richer character exports, more of the rules surface flowing into the displayed
   sheet numbers, and continued expansion of the moddable data catalogs.

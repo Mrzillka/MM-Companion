@@ -204,6 +204,21 @@ def test_a_stated_menu_colour_restates_the_disabled_one(presets, theme_id: str) 
 
 
 @pytest.mark.parametrize("theme_id", BUNDLED)
+def test_a_stated_menu_box_pads_its_items(presets, theme_id: str) -> None:
+    """State a menu's box, pad its items: the sheet now lays them out, by nothing.
+
+    A ``border`` or ``background`` on ``QMenu`` hands its items to ``QStyleSheetStyle``,
+    which gives an item exactly its text's height, flush against the menu's edges — a
+    one-line context menu came out clipped at the right and cramped top and bottom.
+    """
+    rules = qss.build(presets[theme_id]).splitlines()
+    if not any(r.startswith("QMenu {") for r in rules):
+        return  # Classic: no box stated, so the platform still lays the items out
+    items = [r for r in rules if r.startswith("QMenu::item {")]
+    assert items and "padding:" in items[0]
+
+
+@pytest.mark.parametrize("theme_id", BUNDLED)
 def test_every_token_a_preset_needs_to_build_is_present(presets, theme_id: str) -> None:
     """Building must not raise — a styled preset missing a surface fails here."""
     assert isinstance(qss.build(presets[theme_id]), str)

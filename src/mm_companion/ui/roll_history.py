@@ -983,6 +983,9 @@ class GroupTableCard(HistoryCard):
     """
 
     removeRequested = Signal(int)
+    #: The GM asked to show a hidden roll of this table to the table, by its ``seq`` —
+    #: once per hidden roll, since the server reveals them one at a time.
+    revealRequested = Signal(int)
 
     def __init__(
         self, key: str, *, can_remove: bool = False, parent: QWidget | None = None
@@ -997,11 +1000,22 @@ class GroupTableCard(HistoryCard):
         self._info = QVBoxLayout()
         tighten_card(layout, self._info)
         layout.addLayout(self._info, stretch=1)
+        # The heading stays put across a redraw, so its buttons — Show and ✕, beside it
+        # as on every other card — are built once.
+        self._heading = _rich("")
+        buttons = heading_row(self._info, self._heading)
         self._lines: list[QLabel] = []
         # A row with a ↶ is its label and the button, in a row widget of their own.
         self._rows: list[QWidget] = []
+        self.reveal_button: QPushButton | None = None
         if can_remove:
-            layout.addWidget(
+            # GM only, as on a roll's card: shows every hidden roll the table holds.
+            self.reveal_button = fit_button("Show")
+            self.reveal_button.setToolTip("Show this table's hidden rolls to the table")
+            self.reveal_button.clicked.connect(self._reveal_all)
+            buttons.addWidget(self.reveal_button, alignment=Qt.AlignmentFlag.AlignTop)
+            self.reveal_button.hide()
+            buttons.addWidget(
                 remove_button("Remove this whole table from the history", self._remove_all),
                 alignment=Qt.AlignmentFlag.AlignTop,
             )
@@ -1033,6 +1047,22 @@ class GroupTableCard(HistoryCard):
         for seq in sorted(self.seqs):
             self.removeRequested.emit(seq)
 
+    def hidden_seqs(self) -> list[int]:
+        """The session rolls in this table the table has not been shown, oldest first.
+
+        A pre-hosting roll (negative ``seq``) was never in a log the table could be
+        shown, exactly as on a roll's own card.
+        """
+        return [
+            r["seq"]
+            for r in self.records
+            if r.get("hidden") and isinstance(r.get("seq"), int) and r["seq"] > 0
+        ]
+
+    def _reveal_all(self) -> None:
+        for seq in self.hidden_seqs():
+            self.revealRequested.emit(seq)
+
     def rows(self) -> list[tuple[str, list[dict]]]:
         """``(row name, its rolls)`` in the order the rows first appeared."""
         rows: list[tuple[str, list[dict]]] = []
@@ -1061,7 +1091,10 @@ class GroupTableCard(HistoryCard):
             discard_widget(widget)
         self._lines = []
         self._rows = []
+        if self.reveal_button is not None:
+            self.reveal_button.setVisible(bool(self.hidden_seqs()))
         if not self.records:
+            self._heading.setText("")
             return
         who = str(self.records[0].get("player_name", "")) or "Someone"
         heading = f"<b>{escape_rich_text(who)}</b>"
@@ -1071,7 +1104,7 @@ class GroupTableCard(HistoryCard):
         if title:
             muted = theme.color("text.muted.rich")
             heading += f" <span style='color:{muted}'>— {escape_rich_text(title)}</span>"
-        self._add_line(heading)
+        self._heading.setText(heading)
         for name, rolls in self.rows():
             cells = " · ".join(_table_cell(r, name) for r in rolls)
             text = f"<b>{escape_rich_text(name)}</b> {cells}" if name else cells
@@ -1116,7 +1149,7 @@ class GroupTableCard(HistoryCard):
 
     def lines(self) -> list[str]:
         """The table's rows as plain text, heading first — what a test reads."""
-        return [line.text() for line in self._lines]
+        return [self._heading.text(), *(line.text() for line in self._lines)]
 
 
 class ActionCard(HistoryCard):
@@ -1506,6 +1539,7 @@ class RollHistoryPanel(QWidget):
         table = GroupTableCard(key, can_remove=self._gm)
         table.undo_lookup = self._undo.get
         table.removeRequested.connect(self._request_remove)
+        table.revealRequested.connect(self._request_reveal)
         table.add_record(roll)
         self._layout.insertWidget(0, table)
         self._trim()
@@ -1567,10 +1601,16 @@ class RollHistoryPanel(QWidget):
             # failed to send must not show the GM a roll the table never saw.
             self._bridge.reveal_roll(seq)
             return
-        card = next((c for c in self.cards() if c.seq == seq), None)
-        if isinstance(card, SessionRollCard):
-            self.reveal_roll({**card.roll, "hidden": False})
-            self.rollRevealedLocally.emit(seq)
+        for card in self.cards():
+            if isinstance(card, GroupTableCard) and seq in card.seqs:
+                record = next(r for r in card.records if r.get("seq") == seq)
+                card.add_record({**record, "hidden": False})
+                self.rollRevealedLocally.emit(seq)
+                return
+            if isinstance(card, SessionRollCard) and card.seq == seq:
+                self.reveal_roll({**card.roll, "hidden": False})
+                self.rollRevealedLocally.emit(seq)
+                return
 
     def reveal_roll(self, roll: object) -> None:
         """A hidden roll has been shown: redraw its card in place, or add it.

@@ -72,6 +72,11 @@ class DiceSection(QGroupBox):
     #: ``recovery-requested`` topic, which the Conditions block serves: a roll is not
     #: an edit, so the roller never touches the character itself.
     recovered = Signal(object)
+    #: A power roll this block just threw that is a *use* of something — what it costs
+    #: (Tiring, Distracting) and what it counts (Short-Term, Fades). Raised on
+    #: ``use-spent`` for the Conditions and Powers blocks, for the reason
+    #: :attr:`recovered` is: a roll is not an edit.
+    useSpent = Signal(object)
 
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -129,7 +134,11 @@ class DiceSection(QGroupBox):
         too, and a bad payload should cost a roll, not the sheet.
         """
         if isinstance(spec, RollSpec):
-            self.view.panel.roll_spec(spec)
+            if self.view.panel.roll_spec(spec) and (spec.costs or spec.spends):
+                # The die thrown off a card *is* using the power, so what using it
+                # costs and counts lands now — once, here, and only for a die that was
+                # really thrown, never for a click the tumbling roller refused.
+                self.useSpent.emit(spec)
 
     def settle_recovery(self, roll: object) -> None:
         """A roll of this seat's is back: if it was a recovery check and it made it,

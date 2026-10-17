@@ -35,6 +35,7 @@ from mm_companion.ui.blocks.bus import (
     RECOVERY_REQUESTED,
     ROLL_REQUESTED,
     UNPIN_REQUESTED,
+    USE_SPENT,
     SignalBus,
 )
 
@@ -60,6 +61,7 @@ REQUEST_TOPICS = {
     BONUS_REQUESTED,
     AREA_REQUESTED,
     RECOVERY_REQUESTED,
+    USE_SPENT,
 }
 
 

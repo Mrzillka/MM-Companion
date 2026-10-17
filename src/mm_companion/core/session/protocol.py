@@ -123,7 +123,13 @@ from typing import ClassVar
 #: and a Nullify's hit calls for its opposed check. Bumped for the v13 reason: a v15
 #: server strips the key without a word, and a Linked Damage + Affliction would hit and
 #: offer only the first save.
-PROTOCOL_VERSION = 16
+#:
+#: v17 measures a damage save against the target's Toughness: a ladder carries the
+#: attack's ``rank`` and ``penetrating`` ranks, so a GM answering an NPC's save or
+#: resolving an area applies Impervious, Impenetrable and Penetrating by the book.
+#: Bumped for the v13 reason: a v16 server strips the keys without a word, and an
+#: Impervious NPC would take the Hit the rules say it never felt.
+PROTOCOL_VERSION = 17
 
 #: Hard cap on one encoded message, including its trailing newline. A character
 #: snapshot is the largest thing that legitimately travels (tens of KB); anything

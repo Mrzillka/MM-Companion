@@ -282,3 +282,17 @@ def test_rolling_a_tiring_short_term_power_off_its_card_charges_the_use(qapp, da
 
     assert sheet.powers.recharge(power)
     assert power.effects[0].uses == 0
+
+
+def test_the_relay_keeps_the_attacks_rank_and_penetration_bounded(data) -> None:
+    from mm_companion.core.session.protocol import MAX_LADDER_RANK, sanitize_spec
+
+    attacker = Character.new_default(data)
+    spec = _save(Power(name="Blast", effects=[_blast(8, "penetrating")]), attacker, data)
+    wired = RollSpec.from_dict(sanitize_spec(spec.to_dict()))
+    assert (wired.ladder.rank, wired.ladder.penetrating) == (8, 8)
+    raw = spec.to_dict()
+    raw["ladder"]["rank"] = 10**9
+    raw["ladder"]["penetrating"] = -3
+    clipped = sanitize_spec(raw)["ladder"]
+    assert clipped["rank"] == MAX_LADDER_RANK and "penetrating" not in clipped

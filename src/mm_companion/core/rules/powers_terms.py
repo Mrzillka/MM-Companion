@@ -1839,6 +1839,41 @@ def _readout_rank_scaled(
     return [EffectStat(key, readout.label or "Rank", "", template.format(value=value), "")]
 
 
+@READOUT_KINDS.handler("ability_measure")
+def _readout_ability_measure(
+    readout, effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
+):
+    """A measure read off the wielder's ability **plus** the effect's rank.
+
+    Lifting is the case: "characters with the Lifting effect add the effect rank to
+    their Strength rank to determine how much they can lift or throw" (p60), and what
+    a Strength rank lifts is the mass at that rank. So the card can say "Lifts 25 tons"
+    rather than "+10 ranks", which only the Measurements Table turns into a weight.
+    Each row's ``format`` gets ``{value}`` (the measure), ``{total}`` (ability + rank)
+    and ``{ability}``. With no wielder there is no Strength to add, and the row says so
+    in its ``withoutWielder`` sentence instead of measuring a Strength of 0.
+    """
+
+    data = readout.data
+    rank = effect_current_rank(effect, game_data, char) * int(data.get("perRank", 1))
+    ability_key = data.get("ability", "")
+    column = data.get("column", "mass")
+    out = []
+    for row in data.get("rows", []):
+        if char is None:
+            text = row.get("withoutWielder", "").format(rank=rank)
+            if text:
+                out.append(EffectStat("readout", row.get("label", ""), "", text, ""))
+            continue
+        ability = max(0, effective_ability(char, game_data, ability_key))
+        total = ability + rank + int(row.get("offset", 0))
+        value = game_data.measurements.label(column, total) or ""
+        template = row.get("format") or "{value}"
+        text = template.format(value=value, total=total, ability=ability, rank=rank)
+        out.append(EffectStat("readout", row.get("label", ""), "", text, ""))
+    return out
+
+
 @READOUT_KINDS.handler("fixed")
 def _readout_fixed(
     readout, effect: PowerEffectInstance, game_data: GameData, char: Character | None = None

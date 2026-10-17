@@ -87,3 +87,13 @@ def test_thrown_starts_at_two_plus_strength(data) -> None:
 )
 def test_the_rules_numbers_are_on_the_card(data, effect_id, rank, label, expected) -> None:
     assert expected in _rows(PowerEffectInstance(effect_id, rank=rank), data)[label]
+
+
+def test_lifting_lifts_the_mass_at_strength_plus_its_rank(data) -> None:
+    char = Character.new_default(data)
+    char.abilities["STR"] = 4
+    rows = _rows(PowerEffectInstance("lifting", rank=8), data, char)
+    assert rows["Lifts"].startswith("50 tons")  # mass rank 12
+    assert "distance rank 12 minus" in rows["Throws"]
+    # No wielder, no Strength to add: the card says what to add rather than guessing 0.
+    assert "your Strength rank + 8" in _rows(PowerEffectInstance("lifting", rank=8), data)["Lifts"]

@@ -207,7 +207,24 @@
       { "kind": "rank_scaled", "label": "Routine tasks", "format": "time rank -{value} (rank 0 finishes within your turn)" }
     ],
     "lifting": [
-      { "kind": "rank_scaled", "label": "Lifting Strength", "format": "+{value} ranks for lifting, carrying and throwing" }
+      { "kind": "rank_scaled", "label": "Lifting Strength", "format": "+{value} ranks for lifting, carrying and throwing" },
+      {
+        "kind": "ability_measure",
+        "ability": "STR",
+        "column": "mass",
+        "rows": [
+          {
+            "label": "Lifts",
+            "format": "{value} (Strength {ability} + {rank}: mass rank {total})",
+            "withoutWielder": "the mass at your Strength rank + {rank}"
+          },
+          {
+            "label": "Throws",
+            "format": "an object to distance rank {total} minus its mass rank",
+            "withoutWielder": "an object to distance rank (your Strength + {rank}) minus its mass rank"
+          }
+        ]
+      }
     ],
     "move_object": [
       { "kind": "rank_scaled", "label": "Moves", "format": "an object to distance rank {value} minus its mass rank" },

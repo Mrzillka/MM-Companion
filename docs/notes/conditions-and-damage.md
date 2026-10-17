@@ -88,8 +88,7 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   rank the creature resisted, read back off its save's DC) and `localize_spec` (the
   target's own sheet: the label says "unaffected: Impervious 10" or "roll twice, keep the
   higher", and Penetrating against Impervious lowers the DC). The relay passes the two
-  ladder keys (`_sanitize_ladder`); a server that predates them strips them, and only the
-  rank tests go quiet.
+  ladder keys (`_sanitize_ladder`) from protocol v17 on.
 - **Recovery checks are rolled** (`core/rules/recovery.py`). A record whose
   `recoveryCheck` names a `trait` and a `dc` offers a 🎲 on its chip — every chip: the
   sheet's, the simple sheet's, both GM cards' and the GM's scene cards. The data

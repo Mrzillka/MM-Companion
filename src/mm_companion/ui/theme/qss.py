@@ -37,6 +37,7 @@ Four rules constrain everything below, each learned from a real breakage:
 
 from __future__ import annotations
 
+from mm_companion.ui.theme import loader
 from mm_companion.ui.theme.tokens import Theme, UnknownToken, rgba
 
 #: Widget classes that take a focus ring. Every one of them is either wheel-guarded
@@ -69,21 +70,45 @@ FALLBACK_ARROW_COLUMNS: ArrowColumns = (20, 20)
 ARROWLESS_PROPERTY = "mmArrowless"
 
 
+def _default_tokens(theme: Theme, group: str) -> dict:
+    """The default preset's *group* map, backing a preset that lacks a token.
+
+    The same fallback :func:`mm_companion.ui.theme._lookup` gives widget code, and
+    for the same reason: a preset the Settings window saved is a full snapshot with
+    no ``extends``, so a token the app grows later is simply absent from it. This
+    sheet is built at startup, so without the fallback that one missing token was
+    an unhandled exception before the window ever opened — ``space.indent`` in
+    v0.9.2, the first release to read it here.
+    """
+    if theme.id == loader.DEFAULT_THEME_ID:
+        return {}
+    default = loader.available_themes().get(loader.DEFAULT_THEME_ID)
+    return dict(getattr(default, group, {})) if default is not None else {}
+
+
 def _color(theme: Theme, name: str, fallback: str | None = None) -> str:
-    try:
+    if name in theme.colors:
         return str(theme.colors[name])
-    except KeyError:
-        if fallback is not None:
-            return fallback
-        raise UnknownToken("colors", name, theme.colors) from None
+    if fallback is not None:
+        return fallback
+    backing = _default_tokens(theme, "colors")
+    if name in backing:
+        return str(backing[name])
+    raise UnknownToken("colors", name, theme.colors)
 
 
 def _metric(theme: Theme, name: str, fallback: float | None = None) -> float:
     value = theme.metrics.get(name)
     if isinstance(value, (int, float)):
         return value
+    # A stated fallback first: it names a sibling token of the preset's own (a
+    # missing ``radius.block`` takes its ``radius.card``), which suits it better
+    # than whatever the default preset says.
     if fallback is not None:
         return fallback
+    value = _default_tokens(theme, "metrics").get(name)
+    if isinstance(value, (int, float)):
+        return value
     raise UnknownToken("metrics", name, theme.metrics)
 
 

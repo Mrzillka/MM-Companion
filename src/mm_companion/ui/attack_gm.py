@@ -420,13 +420,17 @@ class AttackController(QObject):
         decl = aimed.declaration
         text = (
             f"<b>{html.escape(aimed.source.name)}</b> attacks "
-            f"<b>{html.escape(decl.target_name)}</b> with {html.escape(decl.spec.label)}"
+            f"<b>{html.escape(decl.target_name)}</b> ({html.escape(decl.spec.label)})"
         )
         if aimed.roll is not None:
             text += f" — rolled <b>{total_of(aimed.roll)}</b>"
         aimed.card.set_text(text)
-        if aimed.roll is None and not aimed.accepted:
+        if aimed.accepted:
+            return
+        if aimed.roll is None:
             aimed.card.set_status("Waiting for the roll…")
+        else:
+            aimed.card.set_status("Accept to judge the hit and roll the save.")
 
     def _finish(self, aimed: _Aimed, text: str, *, notice: bool = True) -> None:
         aimed.done = True

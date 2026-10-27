@@ -67,9 +67,11 @@ from mm_companion.core.character import Character
 from mm_companion.core.data_loader import Condition, GameData
 from mm_companion.core.library import CharacterSummary
 from mm_companion.core.rules import (
+    DEFEAT_NONE,
     MinionRules,
     area_capable_builds,
     can_recover,
+    character_defeat_state,
     power_area_uses,
     recovery_hint,
 )
@@ -78,6 +80,7 @@ from mm_companion.ui import theme
 from mm_companion.ui.card_chips import _ConditionChip, start_card_drag
 from mm_companion.ui.card_summary import PortraitButton, character_summary_html
 from mm_companion.ui.damage_row import DamageRow
+from mm_companion.ui.defeat_look import apply_defeat_look, defeated_pixmap
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.pin_panel import PinPanel
 from mm_companion.ui.sections.conditions import (
@@ -199,6 +202,10 @@ class NPCCard(QFrame):
         #: no 👁 — but the right-click menu is a different question in each state.
         self._in_scene = False
         self._collapsed = collapsed
+        #: Out of the fight or not (see :meth:`_refresh_defeat`), and the picture as
+        #: loaded, kept so a creature that gets up again shows it in colour.
+        self._defeat = DEFEAT_NONE
+        self._portrait_pixmap: QPixmap | None = None
 
         layout = QVBoxLayout(self)
         margins = theme.box("card.margins")
@@ -503,9 +510,28 @@ class NPCCard(QFrame):
     def _set_portrait(self, image_path: str | None) -> None:
         """Show the NPC's picture on both sizes (a local file, so it resolves normally)."""
         resolved = library.resolve_image_path(image_path)
-        pixmap = QPixmap(resolved) if resolved else None
+        self._portrait_pixmap = QPixmap(resolved) if resolved else None
+        self._show_portrait()
+
+    def _show_portrait(self) -> None:
+        """Put the picture up as the creature now is: grey once it is down or dead."""
+        pixmap = defeated_pixmap(self._portrait_pixmap, self._defeat)
         self._portrait.set_image(pixmap)
         self._thumb.set_image(pixmap)
+
+    @property
+    def defeat(self) -> str:
+        """Whether the creature is out of the fight (``rules.defeat_state``'s answer)."""
+        return self._defeat
+
+    def _refresh_defeat(self) -> None:
+        """Fade the card, and grey its picture, while the creature is down or dead."""
+        state = character_defeat_state(self._character, self._data)
+        if state == self._defeat:
+            return
+        self._defeat = state
+        apply_defeat_look(self, state)
+        self._show_portrait()
 
     # -- hover summary -----------------------------------------------------
 
@@ -558,6 +584,7 @@ class NPCCard(QFrame):
         self._damage.refresh()
         self._sync_area_button()
         self._refresh_tooltip()
+        self._refresh_defeat()
 
     def condition_names(self) -> list[str]:
         """The chip captions, in order — the readable form of the NPC's conditions."""

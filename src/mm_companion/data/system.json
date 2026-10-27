@@ -12,6 +12,11 @@
       "impressBonus": 5,
       "ceiling": "incapacitated"
     },
+    "_defeat": "The conditions that take a creature out of the fight, for how its card looks: down (Incapacitated; Dying includes it) dims it, dead dims it further. Dead outranks down.",
+    "defeat": {
+      "down": ["incapacitated"],
+      "dead": ["dead"]
+    },
     "trait_keys": {
       "attack": "ATK",
       "defense": "DEF",

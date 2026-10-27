@@ -28,6 +28,7 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QVBoxLayout, Q
 
 from mm_companion.core.character import AppliedCondition
 from mm_companion.core.data_loader import Condition, GameData
+from mm_companion.core.rules import DEFEAT_NONE, defeat_state
 from mm_companion.core.session.protocol import (
     DISPOSITION_ENEMY,
     DISPOSITION_FRIENDLY,
@@ -41,6 +42,7 @@ from mm_companion.ui.card_chips import (
     _ConditionChip,
     start_card_drag,
 )
+from mm_companion.ui.defeat_look import apply_defeat_look, defeated_pixmap
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.sections.conditions import condition_display_name, condition_tooltip
 from mm_companion.ui.widgets import discard_widget, muted_style
@@ -225,6 +227,9 @@ class SceneCard(QFrame):
         #: wire and :meth:`_restyle` paints the edge with it.
         self._disposition = DISPOSITION_ENEMY
         self._minion = False
+        #: Out of the fight or not, and the portrait as given (see :meth:`set_portrait`).
+        self._defeat = DEFEAT_NONE
+        self._portrait_pixmap: QPixmap | None = None
 
         self._data = data
         self._gm = gm
@@ -397,9 +402,35 @@ class SceneCard(QFrame):
         self._badge.set_initiative(self._initiative)
         self._show_conditions(entry.get("conditions") or [])
         self._name.setToolTip(self._hover_text(name))
+        self._refresh_defeat(entry.get("conditions") or [])
+
+    def _refresh_defeat(self, conditions: list) -> None:
+        """Fade the card, and grey its picture, while the creature is down or dead.
+
+        Read off the entry's condition ids, which every seat has — so the players'
+        boards dim a downed thug exactly as the GM's does.
+        """
+        ids = [str(c.get("id", "")) for c in conditions if isinstance(c, dict)]
+        state = defeat_state(ids, self._data)
+        if state == self._defeat:
+            return
+        self._defeat = state
+        apply_defeat_look(self, state)
+        self.set_portrait(self._portrait_pixmap)
+
+    @property
+    def defeat(self) -> str:
+        """Whether the creature is out of the fight (``rules.defeat_state``'s answer)."""
+        return self._defeat
 
     def set_portrait(self, pixmap: QPixmap | None) -> None:
-        """Show a decoded thumbnail, or fall back to the placeholder."""
+        """Show a decoded thumbnail, or fall back to the placeholder.
+
+        The thumbnail as given is kept, so a creature that gets up again is shown in
+        colour once more; while it is down or dead it is shown in grey.
+        """
+        self._portrait_pixmap = pixmap
+        pixmap = defeated_pixmap(pixmap, self._defeat)
         if pixmap is None or pixmap.isNull():
             self._thumb.setText("?")
             self._thumb.setPixmap(QPixmap())

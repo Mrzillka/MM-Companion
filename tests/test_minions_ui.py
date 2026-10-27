@@ -318,9 +318,7 @@ def _mixed_impress(window: GMWindow, monkeypatch, lead_die: int) -> dict[str, in
     return dcs
 
 
-def test_a_high_roll_counts_against_minions_in_a_mixed_group(
-    window: GMWindow, monkeypatch
-) -> None:
+def test_a_high_roll_counts_against_minions_in_a_mixed_group(window: GMWindow, monkeypatch) -> None:
     dcs = _mixed_impress(window, monkeypatch, 18)
     # The roll beat a routine check: both resist it, the minion no easier.
     assert dcs["Mook"] == dcs["Brute"] == 18 + dcs["modifier"]

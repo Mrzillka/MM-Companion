@@ -639,3 +639,57 @@ def test_the_gm_window_reads_the_rules_off_its_session(window: GMWindow, monkeyp
     monkeypatch.setattr(window, "_bridge", bridge)
     assert not window.rolls_as_minion(Character(minion=True))
     monkeypatch.setattr(window, "_bridge", real)
+
+
+# -- the summoned tag ---------------------------------------------------------------
+
+
+def test_the_summoned_tag_round_trips_only_when_set(data) -> None:
+    char = Character.new_default(data)
+    assert "summoned" not in char.to_dict()
+    char.summoned = True
+    assert Character.from_dict(char.to_dict()).summoned
+
+
+def test_the_card_tags_a_creature_summoned_and_the_scene_says_so(window: GMWindow) -> None:
+    name = mook_file(window, "Imp")
+    window._set_in_scene(SCENE_NPC, name, True)
+    window._set_npc_summoned(name, True)
+    entry = window._npc_state[name]
+    assert entry.character.summoned
+    assert library.load_character(entry.path).summoned
+    assert "summoned" in card_of(window, name)._pl_label.text()
+    (item,) = [e for e in window._scene_payload() if e.get("name") == "Imp"]
+    assert item.get("summoned") is True
+    window._set_npc_summoned(name, False)
+    assert not window._npc_state[name].character.summoned
+
+
+def test_a_scene_card_says_summoned_and_minion_on_one_line(qapp, data) -> None:
+    card = SceneCard({"ref": "s1", "name": "Imp", "summoned": True}, data, gm=False)
+    assert card.summoned and card._minion_label.text() == "Summoned"
+    card.set_entry({"ref": "s1", "name": "Imp", "summoned": True, "minion": True})
+    assert card._minion_label.text() == "Minion · Summoned"
+
+
+def test_the_wire_keeps_the_summoned_tag() -> None:
+    from mm_companion.core.session.protocol import sanitize_scene
+
+    (entry,) = sanitize_scene([{"ref": "abc", "name": "Imp", "summoned": True}])
+    assert entry.get("summoned") is True
+    (plain,) = sanitize_scene([{"ref": "abc", "name": "Imp", "summoned": "yes"}])
+    assert "summoned" not in plain
+
+
+def test_the_npc_sheet_has_an_undoable_summoned_box(qapp) -> None:
+    window = NPCWindow()
+    try:
+        box = window.sheet.system_info.summoned_check
+        assert box.isVisibleTo(window)
+        box.click()
+        assert window.sheet.character.summoned
+        window.sheet.undo.undo()
+        assert not window.sheet.character.summoned and not box.isChecked()
+    finally:
+        window._dirty = False
+        window.close()

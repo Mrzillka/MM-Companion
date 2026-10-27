@@ -732,6 +732,7 @@ The shape:
   - A group line's `minion` is kept by `sanitize_group_line`.
   - A scene entry's `minion` badge is whitelisted by `sanitize_scene`, and only when it
     is true.
+  - A scene entry's `summoned` tag rides the same way (additive, no bump of its own).
   - Bumped for the v13 reason: a v17 server ignores the request fields without a word,
     so a hero taking 10 would roll a d20 and a minion's 20 would crit. **Redeploy the
     hub** with the release.

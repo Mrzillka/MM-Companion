@@ -93,6 +93,15 @@ def entry_ref(entry: dict) -> str:
 MINION_BADGE = "Minion"
 
 
+#: What a summoned creature's scene card says under its name.
+SUMMONED_BADGE = "Summoned"
+
+
+def entry_summoned(entry: dict) -> bool:
+    """Whether the GM tagged this entry as summoned."""
+    return entry.get("summoned") is True
+
+
 def entry_minion(entry: dict) -> bool:
     """Whether this entry is a minion — only ever said when it is, and when the GM's
     session lets the table see it."""
@@ -227,6 +236,7 @@ class SceneCard(QFrame):
         #: wire and :meth:`_restyle` paints the edge with it.
         self._disposition = DISPOSITION_ENEMY
         self._minion = False
+        self._summoned = False
         #: Out of the fight or not, and the portrait as given (see :meth:`set_portrait`).
         self._defeat = DEFEAT_NONE
         self._portrait_pixmap: QPixmap | None = None
@@ -313,7 +323,7 @@ class SceneCard(QFrame):
         # hero may take 10 against it and a failed save is its worst. A word rather
         # than a colour, for the reason "(you)" is one. Only ever hidden here — the
         # card may not have a parent yet — and set_entry decides.
-        self._minion_label = QLabel(MINION_BADGE)
+        self._minion_label = QLabel()
         self._minion_label.setStyleSheet(muted_style(italic=True))
         minion_font = self._minion_label.font()
         minion_font.setPointSizeF(theme.font_size("size.terms"))
@@ -394,7 +404,13 @@ class SceneCard(QFrame):
         self._turn_label.setVisible(self._turn is not None)
         self._disposition = entry_disposition(entry)
         self._minion = entry_minion(entry)
-        self._minion_label.setVisible(self._minion)
+        self._summoned = entry_summoned(entry)
+        # One muted line under the name says what the creature is to the rules.
+        badges = [
+            b for b, on in ((MINION_BADGE, self._minion), (SUMMONED_BADGE, self._summoned)) if on
+        ]
+        self._minion_label.setText(" · ".join(badges))
+        self._minion_label.setVisible(bool(badges))
         self._restyle()
         # A player's entry carries their id; an NPC's carries nothing that says
         # what it stands for, which is the whole point of an opaque ref.
@@ -461,6 +477,11 @@ class SceneCard(QFrame):
         """Whether this entry said it is a minion."""
         return self._minion
 
+    @property
+    def summoned(self) -> bool:
+        """Whether the GM tagged this entry as summoned."""
+        return self._summoned
+
     def condition_chips(self) -> list[_ConditionChip]:
         """The chips themselves, in order."""
         return [
@@ -523,6 +544,8 @@ class SceneCard(QFrame):
         parts = [f"{name} (you)" if self._own else name, DISPOSITION_LABELS[self._disposition]]
         if self._minion:
             parts.append(MINION_BADGE)
+        if self._summoned:
+            parts.append(SUMMONED_BADGE)
         if self._turn is not None:
             parts.append(f"Turn {self._turn}")
         if self._initiative is not None:

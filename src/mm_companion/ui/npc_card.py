@@ -107,6 +107,12 @@ SCENE_KIND = "npc"
 #: The minion toggle's caption, and what the Power Level line adds for one.
 MINION_CAPTION = "Minion"
 MINION_MARK = "minion"
+#: What the Power Level line adds for a creature the GM tagged as summoned.
+SUMMONED_MARK = "summoned"
+SUMMONED_HINT = (
+    "Summoned: a creature called up by a power, an advantage or a spell. Only a tag "
+    "for now — the table sees it on the Scene."
+)
 MINION_HINT = (
     "A minion is a minor character (thugs, bystanders, a horde): a failed save is its "
     "worst outcome, its natural 20 is no critical, and heroes may take 10 against it. "
@@ -177,6 +183,8 @@ class NPCCard(QFrame):
     impressRequested = Signal(str)
     #: ``(file_name, minion)`` — the GM made this creature a minion, or a full NPC again.
     minionToggled = Signal(str, bool)
+    #: ``(file_name, summoned)`` — the GM tagged this creature as summoned, or untagged it.
+    summonedToggled = Signal(str, bool)
 
     def __init__(
         self,
@@ -404,9 +412,11 @@ class NPCCard(QFrame):
         what it already decided), and the damage row collapses to a minion's two.
         """
         minion = self._character.minion
-        mark = f" · {MINION_MARK}" if minion else ""
+        summoned = self._character.summoned
+        tags = [(MINION_MARK, MINION_HINT, minion), (SUMMONED_MARK, SUMMONED_HINT, summoned)]
+        mark = "".join(f" · {m}" for m, _hint, on in tags if on)
         self._pl_label.setText(f"PL {self._summary.power_level}{mark}")
-        self._pl_label.setToolTip(MINION_HINT if minion else "")
+        self._pl_label.setToolTip("\n\n".join(hint for _m, hint, on in tags if on))
         self._minion_button.blockSignals(True)
         self._minion_button.setChecked(minion)
         self._minion_button.blockSignals(False)
@@ -730,6 +740,11 @@ class NPCCard(QFrame):
             "Make a full NPC" if minion else "Make a minion",
             lambda: self.minionToggled.emit(self.name_key, not minion),
         )
+        summoned = self._character.summoned
+        menu.addAction(
+            "Untag as summoned" if summoned else "Tag as summoned",
+            lambda: self.summonedToggled.emit(self.name_key, not summoned),
+        ).setToolTip(SUMMONED_HINT)
         menu.addAction("Pin a parameter…", lambda: self.pinPickerRequested.emit(self.name_key))
         menu.addSeparator()
         menu.addAction(

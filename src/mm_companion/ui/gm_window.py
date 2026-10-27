@@ -1284,14 +1284,30 @@ class GMWindow(QMainWindow):
         takes: replayed onto an open sheet (absorbed, so its undo cannot split the two
         copies apart) or written to the file now.
         """
+        what = "a minion" if minion else "a full NPC"
+        self._set_npc_flag(name, "minion", minion, what)
+
+    def _set_npc_summoned(self, name: str, summoned: bool) -> None:
+        """Tag an NPC as summoned, or take the tag off (its card's menu)."""
+        what = "tagged as summoned" if summoned else "no longer tagged as summoned"
+        self._set_npc_flag(name, "summoned", summoned, what)
+
+    def _set_npc_flag(self, name: str, attribute: str, value: bool, what: str) -> None:
+        """Set one of an NPC's own flags (``minion``, ``summoned``) from its card.
+
+        The flag is the creature's own, saved in its file like any edit, so every copy
+        and every later session sees it. It goes down the road a condition change
+        takes: replayed onto an open sheet (absorbed, so its undo cannot split the two
+        copies apart) or written to the file now.
+        """
         entry = self._npc_state.get(name)
-        if entry is None or entry.character.minion == minion:
+        if entry is None or getattr(entry.character, attribute) == value:
             return
-        entry.character.minion = minion
+        setattr(entry.character, attribute, value)
         window = self._window_for(entry.path)
         if window is not None:
             with absorbing(window.sheet):
-                window.sheet.character.minion = minion
+                setattr(window.sheet.character, attribute, value)
                 window.sheet.system_info.reseed()
         else:
             try:
@@ -1301,7 +1317,6 @@ class GMWindow(QMainWindow):
         if entry.card is not None:
             entry.card.refresh_minion()
         self._push_scene()
-        what = "a minion" if minion else "a full NPC"
         self._show_notice(f"“{entry.summary.name}” is now {what}.", theme.color("accent"))
 
     def _npc_roll(self, name: str, spec: object, *, load: bool = False) -> None:
@@ -2675,6 +2690,8 @@ class GMWindow(QMainWindow):
                 # lets the players see it (see _push_scene).
                 if npc.character.minion:
                     item["minion"] = True
+                if npc.character.summoned:
+                    item["summoned"] = True
                 conditions = [c.to_dict() for c in npc.character.conditions]
             else:
                 if entry.source not in self._cards:
@@ -3051,6 +3068,7 @@ class GMWindow(QMainWindow):
             card.collapsedChanged.connect(self._set_npc_collapsed)
             card.damageRequested.connect(self._apply_npc_damage)
             card.minionToggled.connect(self._set_npc_minion)
+            card.summonedToggled.connect(self._set_npc_summoned)
             card.set_minion_rules(self.minion_rules())
             card.areaRequested.connect(self._start_card_area)
             card.impressRequested.connect(self._start_card_impress)

@@ -70,7 +70,9 @@ Minions are in (see [the minions notes](minions.md)). These rules about them are
   rolls Assess against a group yet.
 - **Summoned and advantage minions as creatures.** A Summon's or a Minion advantage's
   build is still a build, not a creature on the board. Sending one to the GM window
-  should set `minion` on it unless the Summon is Heroic.
+  should set `minion` on it unless the Summon is Heroic, and set the `summoned` tag,
+  which exists already: the GM sets it by hand today (see [the minions
+  notes](minions.md#the-summoned-tag)).
 - **A minion's 20 against another minion** is suppressed too, since a roll does not know
   its target when it is thrown.
 - **Request-mode Impress against minions** is not routine: each target resists from the

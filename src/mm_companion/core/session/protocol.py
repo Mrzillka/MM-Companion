@@ -1253,6 +1253,9 @@ def sanitize_scene(raw: object) -> list[dict]:
         # the GM's session lets players see it.
         if item.get("minion") is True:
             entry["minion"] = True
+        # The GM's "summoned" tag: a label, shown on every seat, present only when true.
+        if item.get("summoned") is True:
+            entry["summoned"] = True
         conditions = _sanitize_scene_conditions(item.get("conditions"))
         if conditions:
             entry["conditions"] = conditions

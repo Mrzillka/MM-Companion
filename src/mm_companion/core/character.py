@@ -223,6 +223,11 @@ class Character:
     #: minions"); the rules it switches on are the session's (see
     #: :class:`~.rules.minions.MinionRules`). Written only when set.
     minion: bool = False
+    #: A GM's tag on an NPC: this creature was **summoned** (by a Summon effect, a
+    #: Minion advantage, a spell). Only a label today — on the card, the sheet and the
+    #: Scene — so a GM can tell the conjured from the hired; nothing reads it as a rule
+    #: yet. Named apart from the Summon *effect*. Written only when set.
+    summoned: bool = False
 
     @classmethod
     def new_default(cls, game_data: GameData) -> Character:
@@ -313,6 +318,7 @@ class Character:
             # Omitted while False, so every save written before minions existed (and
             # every player's sheet) round-trips byte-for-byte.
             **({"minion": True} if self.minion else {}),
+            **({"summoned": True} if self.summoned else {}),
         }
 
     @classmethod
@@ -384,6 +390,7 @@ class Character:
                 for key, value in (raw.get("notes") or {}).items()
             },
             minion=raw.get("minion") is True,
+            summoned=raw.get("summoned") is True,
         )
 
     def restore(self, raw: dict, *, keep_runtime: bool = True) -> None:

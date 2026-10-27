@@ -105,6 +105,20 @@ non-minions", but the die is thrown before anyone knows who it lands on, and min
 fight heroes. A minion attacking another minion is the one case this rounds the wrong
 way.
 
+## The summoned tag
+
+`Character.summoned` is a GM's **label**, not a rule: a creature called up by a power,
+an advantage or a spell. It is named apart from the Summon *effect*, which owns
+"summon" in the code.
+
+- Set from the card's menu ("Tag as summoned", through `GMWindow._set_npc_flag`, the
+  same road as the minion toggle) or the NPC sheet's **Summoned** box beside Minion.
+- It shows as "· summoned" on the card's Power Level line and as a "Summoned" badge on
+  every seat's Scene card (the scene entry's `summoned` key, whitelisted by
+  `sanitize_scene`; additive, so no protocol bump).
+- Written to the file only when set; Copy keeps it.
+- Nothing reads it as a rule yet. Wiring it to the Summon effect is a debt.
+
 ## Not done
 
 See [the debts](debts.md): Takedown's chained attacks, the menace rules, Assess counting

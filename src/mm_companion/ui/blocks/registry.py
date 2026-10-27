@@ -26,6 +26,7 @@ from mm_companion.ui.blocks.base import BlockDescriptor, instance_template
 from mm_companion.ui.blocks.bus import (
     ABILITY_CHANGED,
     AREA_REQUESTED,
+    ATTACK_REQUESTED,
     BONUS_REQUESTED,
     BUILD_CHANGED,
     CAPS_CHANGED,
@@ -355,6 +356,8 @@ _BASE_BLOCKS = [
             **_ROLLS,
             # The area line: no die, but the roller opens the window that aims it.
             "areaRequested": (AREA_REQUESTED,),
+            # An attack line aimed at someone on the Scene.
+            "targetRequested": (ATTACK_REQUESTED,),
             "noteRequested": (NOTE_REQUESTED,),
             "heroPointRequested": (HERO_POINT_REQUESTED,),
         },
@@ -381,7 +384,7 @@ _BASE_BLOCKS = [
         # an advantage edit has to reach it.
         {FACTS_CHANGED: "refresh", COST_RATES_CHANGED: "refresh"},
         # the 🎲 beside each line of a weapon card's dice footer, and its area line
-        {**_ROLLS, "areaRequested": (AREA_REQUESTED,)},
+        {**_ROLLS, "areaRequested": (AREA_REQUESTED,), "targetRequested": (ATTACK_REQUESTED,)},
         {},
     ),
     (
@@ -438,6 +441,7 @@ _BASE_BLOCKS = [
             ROLL_REQUESTED: "perform_roll",
             LOAD_REQUESTED: "load_roll",
             AREA_REQUESTED: "start_area",
+            ATTACK_REQUESTED: "aim_attack",
             NOTE_REQUESTED: "post_note",
             BONUS_REQUESTED: "add_bonus",
         },

@@ -51,6 +51,12 @@ from mm_companion.core.session.protocol import sanitize_mod_payload
 from mm_companion.ui import theme
 from mm_companion.ui.action_ui import sets_up_own_actions
 from mm_companion.ui.area import KIND_AREA_ATTACK, AreaDialog
+from mm_companion.ui.attack_targets import (
+    KIND_ATTACK,
+    AttackDeclaration,
+    SceneTarget,
+    aimed_spec,
+)
 from mm_companion.ui.dice_roller import DiceRollerView
 from mm_companion.ui.impress import IMPRESS_ACTION, KIND_IMPRESS, ImpressDialog, new_action_id
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
@@ -139,6 +145,37 @@ class DiceSection(QGroupBox):
                 # costs and counts lands now — once, here, and only for a die that was
                 # really thrown, never for a click the tumbling roller refused.
                 self.useSpent.emit(spec)
+
+    def aim_attack(self, payload: object) -> None:
+        """Roll an attack *at* a creature on the Scene — ``attack-requested``'s handler.
+
+        At a table the attack is declared to the GM first (``KIND_ATTACK``), then rolled
+        here like any attack, its spec carrying the declaration's id and the target's
+        name — so the GM's app ties the two together, judges the hit against the
+        target's Defense, and resolves the save once the GM accepts. Off the air there
+        is nobody to judge it, and it is simply rolled.
+        """
+        if not isinstance(payload, tuple) or len(payload) != 2:
+            return
+        spec, target = payload
+        if not isinstance(spec, RollSpec) or not isinstance(target, SceneTarget):
+            return
+        bridge = live_session()
+        if bridge is None:
+            self.perform_roll(spec)
+            return
+        name = library.display_name(self._character)
+        action_id = new_action_id()
+        aimed = aimed_spec(spec, action_id, target.name, name)
+        declaration = AttackDeclaration(action_id, target.ref, target.name, aimed, name)
+        if not bridge.send_action_request(KIND_ATTACK, action_id, declaration.to_dict()):
+            notify_window(
+                self.window(),
+                "Could not reach the GM — the attack was not aimed.",
+                theme.color("tint.worse"),
+            )
+            return
+        self.perform_roll(aimed)
 
     def settle_recovery(self, roll: object) -> None:
         """A roll of this seat's is back: if it was a recovery check and it made it,

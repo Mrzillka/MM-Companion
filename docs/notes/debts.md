@@ -62,8 +62,9 @@ notes](actions.md) for the shape they would plug into.
 Minions are in (see [the minions notes](minions.md)). These rules about them are not:
 
 - **Takedown** (PDF p95). Downing a minion grants a free attack on another; at rank 2
-  that target need not be adjacent. It wants the attack to know its target, which no
-  single-target attack here does yet.
+  that target need not be adjacent. Aimed attacks (see [the actions
+  notes](actions.md#aimed-attacks)) now know their target, so the controller can see a
+  minion go down to the attack; offering the free attack is what is left.
 - **Menaces** (PDF p25): bonus reactions per turn, and spending a commanded minion in
   place of a plot complication. There is no turn economy for either to hang off.
 - **Assess** (PDF p86) counts a group of identical minions as one opponent. Nothing

@@ -1361,6 +1361,15 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._transient = False
         self.load_spec(None)
 
+    def adjustment(self) -> int:
+        """The sliders' situational extra as it stands: bonus minus penalty.
+
+        What another roll made on this panel's behalf takes over — an aimed attack's
+        single save, which the GM's app rolls through the server rather than here, is
+        made at the GM's current bonus and penalty.
+        """
+        return self._bonus_spin.value() - self._penalty_spin.value()
+
     def _roll_parameters(self) -> tuple[int, int, int | None, bool]:
         """What the inputs currently ask for: bonus, penalty, DC, hidden.
 

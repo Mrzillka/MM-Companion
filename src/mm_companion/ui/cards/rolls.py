@@ -17,10 +17,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from mm_companion.core.rules import KIND_AREA, PinRef, RollSpec
+from mm_companion.core.rules import KIND_AREA, PinRef, RollSpec, targetable_attack
 from mm_companion.ui import theme
+from mm_companion.ui.attack_targets import add_target_actions, session_targets
 from mm_companion.ui.cards.card import card_ancestors_of, hand_back_highlight
 from mm_companion.ui.sections.stat_table import PinMenuState
+from mm_companion.ui.session_bridge import active_session
 from mm_companion.ui.widgets import tinted_style
 
 
@@ -178,6 +180,9 @@ class RollsFooter(QWidget):
     """
 
     rollRequested = Signal(object)  # RollSpec
+    #: ``(RollSpec, SceneTarget)``, one tuple — an attack line's right-click picked a
+    #: target. One payload, as the block bus carries one.
+    targetRequested = Signal(object)
     areaRequested = Signal(str)  # the build's id
     pinRequested = Signal(object)  # PinRef
     unpinRequested = Signal(object)  # PinRef
@@ -228,10 +233,13 @@ class RollsFooter(QWidget):
         row = RollLine(rollable)
         # The area line opens a window rather than naming a roll, so there is nothing
         # for a GM card to pin.
-        if self._pin_ref is not None and spec.kind != KIND_AREA:
+        # A right click: aim an attack at someone on the Scene, and/or pin the line to
+        # a GM card. The left click stays the plain roll it always was.
+        aimable = rollable and targetable_attack(spec)
+        if aimable or (self._pin_ref is not None and spec.kind != KIND_AREA):
             row.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             row.customContextMenuRequested.connect(
-                lambda pos, r=row, i=index: self._show_pin_menu(r, pos, i)
+                lambda pos, r=row, i=index, s=spec: self._show_menu(r, pos, i, s)
             )
         line = QHBoxLayout(row)
         pad = int(theme.metric("space.xs"))
@@ -280,11 +288,28 @@ class RollsFooter(QWidget):
             words.setToolTip(spec.hint)
             line.addWidget(words)
 
-    def _show_pin_menu(self, row: QWidget, pos, index: int) -> None:
-        if not self._pins.enabled or self._pin_ref is None:
-            return
-        ref = self._pin_ref(index)
-        sink = self.unpinRequested if self._pins.is_pinned(ref) else self.pinRequested
+    def build_menu(self, row: QWidget, index: int, spec: RollSpec) -> QMenu | None:
+        """A roll line's right-click menu, or ``None`` when it has nothing to offer:
+        the Scene's creatures for an attack line, then pinning it to a GM card."""
         menu = QMenu(row)
-        menu.addAction(self._pins.action_text(ref), lambda: sink.emit(ref))
-        menu.exec(row.mapToGlobal(pos))
+        added = False
+        if not spec.rolled_by_target:
+            added = add_target_actions(
+                menu,
+                spec,
+                session_targets(active_session()),
+                lambda s, t: self.targetRequested.emit((s, t)),
+            )
+        if self._pins.enabled and self._pin_ref is not None and spec.kind != KIND_AREA:
+            ref = self._pin_ref(index)
+            sink = self.unpinRequested if self._pins.is_pinned(ref) else self.pinRequested
+            if added:
+                menu.addSeparator()
+            menu.addAction(self._pins.action_text(ref), lambda: sink.emit(ref))
+            added = True
+        return menu if added else None
+
+    def _show_menu(self, row: QWidget, pos, index: int, spec: RollSpec) -> None:
+        menu = self.build_menu(row, index, spec)
+        if menu is not None:
+            menu.exec(row.mapToGlobal(pos))

@@ -531,6 +531,35 @@ Impress against it is routine at +5, and a critical hit on it as an area's prima
 needs no save. Its own rolls also score no added success. All of it is switched by
 the session's rules. See [the minions notes](minions.md).
 
+## Aimed attacks
+
+A single-target attack that knows its target. Any attack line (a power or gear card's
+footer, either sheet, the simple sheet; a pinned tile on an NPC card) keeps its **left
+click**: it rolls, as it always did. Its **right click** lists the Scene's creatures
+(`ui/attack_targets.py`, `rules.targetable_attack`); picking one rolls the attack *at* it.
+
+- **A player's** aimed attack is declared on the action channel (`KIND_ATTACK`,
+  `AttackDeclaration`: the target's Scene ref and name, the aimed spec) and then rolled
+  with the declaration's `action_id`, `targets=(name,)` and a "Ana → Thug" title — all
+  keys the server already keeps, so **no protocol change**. The roller's
+  `aim_attack` serves the bus topic `attack-requested`.
+- **The GM's** (`ui/attack_gm.py`, `AttackController`) gets an `ActionCard` with
+  **Accept / Decline** (its new optional second button). Accept judges the hit against
+  the target's Defense (`rules.judge_attack`: the roller's arithmetic, so a counted
+  natural 20 is an added degree and a critical) and then:
+  - one NPC save: rolled by the server at once, at the GM roller's bonus minus penalty
+    (`DiceRollerPanel.adjustment`), landed through `answer_rung`;
+  - several (a Linked power): `AttackWindow`, a resistance and an adjustment per save;
+  - a player target: asked for each save in turn, as an area attack asks.
+  Decline settles the card; nothing else happens.
+- **The GM's own** aimed attacks (an NPC card's tile, an NPC sheet's line through
+  `ATTACK_REQUESTED` in `OUTWARD_REQUESTS`) skip the card and run once the die is in.
+  Offline rolls reach the controller through `_show_offline_roll`, which now marks a
+  natural 1 or 20 with no DC as critical, as the server does.
+- **Minions:** a non-minion's attack on a minion hits on the routine result too
+  (`routine_attacks`); a critical on one lands its worst with no save
+  (`critical_answer`, Impervious respected); its failed save is the worst rung.
+
 ## Not done yet
 
 These are in [the debts](debts.md):

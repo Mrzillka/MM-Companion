@@ -77,6 +77,7 @@ from mm_companion.core.rules import (
 )
 from mm_companion.core.rules import recovery_check as condition_recovery_check
 from mm_companion.ui import theme
+from mm_companion.ui.attack_targets import add_target_actions
 from mm_companion.ui.card_chips import _ConditionChip, start_card_drag
 from mm_companion.ui.card_summary import PortraitButton, character_summary_html
 from mm_companion.ui.damage_row import DamageRow
@@ -189,6 +190,9 @@ class NPCCard(QFrame):
     leaveGroupRequested = Signal(str)
     #: The creature went down, died, or got up (``rules.defeat_state``'s answer).
     defeatChanged = Signal(str)
+    #: ``(file_name, (RollSpec, SceneTarget))`` — a pinned attack tile's right-click
+    #: aimed it at someone on the Scene (``ui/attack_targets.py``).
+    attackRequested = Signal(str, object)
 
     def __init__(
         self,
@@ -356,6 +360,10 @@ class NPCCard(QFrame):
         self.pins.loadRequested.connect(self.loadRequested)
         self.pins.rollRequested.connect(self.rollRequested)
         self.pins.pickRequested.connect(lambda: self.pinPickerRequested.emit(self.name_key))
+        #: Who this creature's attacks can be aimed at — set by the GM window, which
+        #: owns the Scene; ``None`` until it is.
+        self.aim_targets = None
+        self.pins.extend_menu = self._extend_tile_menu
         if not row:
             layout.addWidget(self.pins)
 
@@ -499,6 +507,13 @@ class NPCCard(QFrame):
         tiles = TILE_COLUMNS * tile + (TILE_COLUMNS - 1) * gap
         left, _top, right, _bottom = theme.box("card.margins")
         return max(body, tiles) + left + right + 2 * self.frameWidth()
+
+    def _extend_tile_menu(self, menu, spec) -> bool:
+        """A pinned tile's right-click: an attack offers the Scene's creatures."""
+        targets = self.aim_targets() if callable(self.aim_targets) else None
+        return add_target_actions(
+            menu, spec, targets, lambda s, t: self.attackRequested.emit(self.name_key, (s, t))
+        )
 
     def row_width_hint(self, strip: int) -> int:
         """How wide a row wants to be to keep its pieces on one line, tiles *strip* wide."""

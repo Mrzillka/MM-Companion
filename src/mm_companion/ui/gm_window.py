@@ -125,10 +125,13 @@ from mm_companion.ui.action_ui import (
 )
 from mm_companion.ui.area import AREA_ACTION, KIND_AREA_ATTACK
 from mm_companion.ui.area_gm import AreaController
+from mm_companion.ui.attack_gm import AttackController
+from mm_companion.ui.attack_targets import SceneTarget, scene_targets
 from mm_companion.ui.block_canvas import BlockCanvas
 from mm_companion.ui.block_sizes import RecommendedSize, load_block_sizes
 from mm_companion.ui.blocks.bus import (
     AREA_REQUESTED,
+    ATTACK_REQUESTED,
     BONUS_REQUESTED,
     LOAD_REQUESTED,
     NOTE_REQUESTED,
@@ -584,6 +587,9 @@ class GMWindow(QMainWindow):
         # And every area attack: a player's declaration lands in the history with a
         # Resolve button, and an NPC's starts from its sheet (mm_companion.ui.area_gm).
         self._area = AreaController(self._data, self._bridge, self, self)
+        # And every aimed attack: a player's lands with Accept / Decline, the GM's own
+        # (a card's tile, an NPC sheet) runs straight through (mm_companion.ui.attack_gm).
+        self._attack = AttackController(self._data, self._bridge, self, self)
         self._refresh_idle_status()
         self._refresh_trouble()
         self._refresh_rolls()
@@ -1252,6 +1258,60 @@ class GMWindow(QMainWindow):
         if self._bridge.in_session and self._bridge.is_gm:
             publish_table_rules(self._bridge)
 
+    def roller_adjustment(self) -> int:
+        """The roller's bonus minus penalty now — what an aimed attack's lone save is
+        rolled with on the GM's behalf."""
+        return self._roller.adjustment()
+
+    # -- aimed attacks -----------------------------------------------------------
+
+    def _aim_targets(self, skip_ref: str = "") -> list[SceneTarget]:
+        """Everyone on the GM's own Scene an attack can be aimed at (offline too)."""
+        return scene_targets(self._scene_payload(), skip_ref=skip_ref)
+
+    def _aim_targets_for(self, name: str) -> list[SceneTarget]:
+        """The targets an NPC's attack may be aimed at: the Scene, less itself."""
+        entry = self._scene_entry_for(SCENE_NPC, name)
+        return self._aim_targets(entry.ref if entry is not None else "")
+
+    def _aim_from_card(self, name: str, payload: object) -> None:
+        """An NPC card's pinned attack tile was aimed at someone."""
+        entry = self._npc_state.get(name)
+        if entry is None or not isinstance(payload, tuple) or len(payload) != 2:
+            return
+        spec, target = payload
+        if not isinstance(spec, RollSpec) or not isinstance(target, SceneTarget):
+            return
+        source = self._npc_party(name)
+        self._attack.aim_own(source, spec, target.ref, target.name)
+
+    def _aim_from_sheet(self, window, payload: object) -> None:
+        """An NPC sheet's attack line was aimed at someone (``attack-requested``)."""
+        if not isinstance(payload, tuple) or len(payload) != 2:
+            return
+        spec, target = payload
+        if not isinstance(spec, RollSpec) or not isinstance(target, SceneTarget):
+            return
+        path = Path(window.path) if window is not None and window.path else None
+        name = next((n for n, e in self._npc_state.items() if e.path == path), "")
+        if name:
+            source = self._npc_party(name)
+        else:
+            character = window.sheet.character if window is not None else None
+            label = library.display_name(character) if character is not None else "An NPC"
+            source = ImpressParty(f"sheet:{label}", label, PARTY_NPC, "", character)
+        self._attack.aim_own(source, spec, target.ref, target.name)
+
+    def _npc_party(self, name: str) -> ImpressParty:
+        """An NPC of the cast as an acting party — off the board's own list when it is
+        on the Scene (so its ref and numbered name match), else made up from the cast."""
+        sources, _targets = self.impress_parties()
+        found = next((p for p in sources if p.kind == PARTY_NPC and p.source == name), None)
+        if found is not None:
+            return found
+        entry = self._npc_state[name]
+        return ImpressParty(f"npc:{name}", entry.summary.name, PARTY_NPC, name, entry.character)
+
     def area_roll_attack(self, spec: RollSpec, attacker: Character | None = None) -> None:
         """Roll an NPC's attack against the primary on this window's roller.
 
@@ -1765,7 +1825,14 @@ class GMWindow(QMainWindow):
             "penalty": roll["penalty"],
             "dc": roll["dc"],
             "degree": None if result is None else result.degree,
-            "critical": bool(result is not None and result.critical),
+            "critical": (
+                bool(result.critical)
+                if result is not None
+                else (
+                    not roll.get("routine")
+                    and (roll["die"] == 1 or (roll["die"] == 20 and not roll.get("minion")))
+                )
+            ),
             "label": roll.get("label", ""),
             # Local-only, as everywhere: it carries the chain this card offers.
             "spec": roll.get("spec"),
@@ -1781,6 +1848,9 @@ class GMWindow(QMainWindow):
         # the air there is no rollAdded to bring its total back, so it is handed over.
         if getattr(self, "_area", None) is not None:
             self._area.take_roll(record)
+        # And an aimed attack's die, for the same reason.
+        if getattr(self, "_attack", None) is not None:
+            self._attack.take_roll(record)
 
     def _on_local_roll_removed(self, seq: int) -> None:
         """Persist a roll the GM struck while not hosting.
@@ -3123,6 +3193,8 @@ class GMWindow(QMainWindow):
         # the window to re-measure a grid it is halfway through building.
         card.pins.widthHintChanged.connect(self._sync_card_widths)
         card.leaveGroupRequested.connect(self._leave_group)
+        card.aim_targets = lambda n=name: self._aim_targets_for(n)
+        card.attackRequested.connect(self._aim_from_card)
         entry.card = card
         return card
 
@@ -3549,6 +3621,9 @@ class GMWindow(QMainWindow):
             # Rolled as the sheet's creature, so a minion's natural 20 is no critical.
             sheet = window.sheet.character if window is not None else None
             self._roller.roll_spec(payload, minion=self.rolls_as_minion(sheet))
+        elif topic == ATTACK_REQUESTED and window is not None:
+            # An attack line aimed at someone on the Scene: the GM's own, so no card.
+            self._aim_from_sheet(window, payload)
         elif topic == AREA_REQUESTED and isinstance(payload, str) and window is not None:
             # Not a die: the NPC uses a power on an area, and the GM picks who is in it.
             self._start_npc_area(window, payload)

@@ -54,6 +54,7 @@ from .answering import *  # noqa: F401,F403
 from .appliers import *  # noqa: F401,F403
 from .area import *  # noqa: F401,F403
 from .area_attack import *  # noqa: F401,F403
+from .attacks import *  # noqa: F401,F403
 from .build_cache import *  # noqa: F401,F403
 from .conditions import *  # noqa: F401,F403
 from .configurations import *  # noqa: F401,F403

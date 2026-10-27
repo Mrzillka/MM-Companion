@@ -726,6 +726,9 @@ class PowersSection(HeldRebuild, TitledSection):
     #: A card's area line was pressed — use that power on an area. Carries the power's
     #: id; it is no roll, so it never travels as one (see ``bus.AREA_REQUESTED``).
     areaRequested = Signal(str)
+    #: ``(RollSpec, SceneTarget)`` — an attack line aimed at a creature on the Scene
+    #: (see ``ui/attack_targets.py``); served by whoever rolls (``bus.ATTACK_REQUESTED``).
+    targetRequested = Signal(object)
 
     #: A sentence for the roll history — what a use of Extra Effort bought and what it
     #: cost. Carries the text, like the System block's own note.
@@ -2871,6 +2874,7 @@ class PowersSection(HeldRebuild, TitledSection):
             simple=self._simple,
         )
         footer.rollRequested.connect(self.rollRequested)
+        footer.targetRequested.connect(self.targetRequested)
         footer.areaRequested.connect(self.areaRequested)
         footer.pinRequested.connect(self.pinRequested)
         footer.unpinRequested.connect(self.unpinRequested)

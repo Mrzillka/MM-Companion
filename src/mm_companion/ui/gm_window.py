@@ -76,7 +76,7 @@ from mm_companion.core.rules import (
     area_key_power_id,
     can_recover,
     condition_changes,
-    critical_rung,
+    critical_answer,
     damage_step_summary,
     damage_steps,
     decrement_condition,
@@ -940,7 +940,7 @@ class GMWindow(QMainWindow):
         rules = self.minion_rules()
         for party in npcs:
             crit = (
-                critical_rung(spec.ladder.rungs, self._data, rules)
+                critical_answer(spec.ladder, party.character, self._data, rules)
                 if where.critical and party.minion and spec.ladder is not None
                 else None
             )

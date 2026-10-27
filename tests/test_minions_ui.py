@@ -286,6 +286,52 @@ def test_with_routine_impress_off_the_check_is_rolled(window: GMWindow, monkeypa
     assert calls[0]["lead"] is not None
 
 
+def _mixed_impress(window: GMWindow, monkeypatch, lead_die: int) -> dict[str, int]:
+    """Impress a full NPC and a minion together; the DC each resisted, by name."""
+    mook_file(window, "Thug")
+    brute = mook_file(window, "Brute")
+    mook = mook_file(window, "Mook", minion=True)
+    for name in (brute, mook):
+        window._set_in_scene(SCENE_NPC, name, True)
+    calls: list[dict] = []
+
+    def fake(lines, *, lead_modifier=None, dc=None, critical_bonus=0, rng=None):
+        calls.append({"lines": list(lines), "lead": lead_modifier})
+        if lead_modifier is not None:
+            return GroupResult(lead_die, lead_die + lead_modifier, ())
+        results = tuple(
+            CheckResult(10, line[0], 10 + line[0], (dc or 0) + line[1], 1, False) for line in lines
+        )
+        return GroupResult(None, None, results)
+
+    monkeypatch.setattr(action_run, "resolve_group", fake)
+    impress = window._impress.open_new()
+    impress._impression.setCurrentIndex(impress._impression.findData("demoralized"))
+    for row in impress._rows:
+        row.include.setChecked(row.party.source in (brute, mook))
+    modifier = impress.check_modifier()
+    impress._roll.click()
+    lead, lines = calls[0], calls[1]["lines"]
+    assert lead["lead"] is not None
+    dcs = {"Brute": lines[0][1], "Mook": lines[1][1]}
+    dcs["modifier"] = modifier
+    return dcs
+
+
+def test_a_high_roll_counts_against_minions_in_a_mixed_group(
+    window: GMWindow, monkeypatch
+) -> None:
+    dcs = _mixed_impress(window, monkeypatch, 18)
+    # The roll beat a routine check: both resist it, the minion no easier.
+    assert dcs["Mook"] == dcs["Brute"] == 18 + dcs["modifier"]
+
+
+def test_a_low_roll_leaves_minions_the_routine_dc(window: GMWindow, monkeypatch) -> None:
+    dcs = _mixed_impress(window, monkeypatch, 3)
+    assert dcs["Brute"] == 3 + dcs["modifier"]
+    assert dcs["Mook"] == 10 + dcs["modifier"] + 5
+
+
 # -- area attacks ------------------------------------------------------------------
 
 
@@ -327,6 +373,58 @@ def test_a_routine_attack_hits_a_minion_without_a_roll(qapp, data) -> None:
         assert area.hit() == (routine >= dc)
         area.set_minion_rules(MinionRules(routine_attacks=False))
         assert area.routine_attack() is None and not area.hit()
+    finally:
+        area.close()
+
+
+def _routine_hits(data) -> tuple:
+    """An area window whose routine attack on its minion primary hits, nothing rolled."""
+    source, targets = _parties(data, minion=True)
+    use = power_area_use(burst(), source.character, data)
+    area = AreaWindow(
+        data, attempt=AreaAttempt("a", use, primary="s1"), source=source, targets=targets
+    )
+    dc = defense_class(targets[1].character, data)
+    # Lift the attack until 10 + attack reaches the Defense, whatever the default sheet is.
+    area.set_attack_adjust(max(0, dc - (10 + use.attack)))
+    assert area.hit()
+    return area, targets
+
+
+def test_a_session_without_routine_attacks_unticks_the_routine_hit(qapp, data) -> None:
+    area, _targets = _routine_hits(data)
+    try:
+        area.set_minion_rules(MinionRules(routine_attacks=False))
+        assert not area.hit()
+    finally:
+        area.close()
+
+
+def test_a_primary_that_is_no_minion_unticks_the_routine_hit(qapp, data) -> None:
+    area, targets = _routine_hits(data)
+    try:
+        targets[1].character.minion = False
+        area._on_primary()
+        assert not area.hit()
+    finally:
+        area.close()
+
+
+def test_a_lowered_adjustment_unticks_the_routine_hit(qapp, data) -> None:
+    area, _targets = _routine_hits(data)
+    try:
+        area.set_attack_adjust(-20)
+        assert not area.hit()
+    finally:
+        area.close()
+
+
+def test_a_hit_the_gm_ticked_stays_whatever_the_rules(qapp, data) -> None:
+    area, _targets = _routine_hits(data)
+    try:
+        area.set_hit(True)
+        area.set_minion_rules(MinionRules(routine_attacks=False))
+        assert area.hit()
     finally:
         area.close()
 

@@ -767,8 +767,15 @@ class AreaController(QObject):
         if resolving is None:
             return
         captions = []
+        bonus = self._data.system.critical_effect_bonus
         for effect in resolving.plan.use.effects:
-            caption = self._apply(declared, target, effect, {"degree": WORST_DEGREE}, crit=True)
+            record: dict = {"degree": WORST_DEGREE}
+            if isinstance(effect.dc_base, int):
+                # A critical raises the effect's rank (PDF p197), and the minion's
+                # Impervious Toughness is measured against that raised rank. _apply
+                # reads the rank back off the DC, so the DC says it.
+                record["dc"] = effect.dc_base + effect.rank + bonus
+            caption = self._apply(declared, target, effect, record, crit=True)
             if caption:
                 captions.append(caption)
         text = "; ".join(captions) if captions else "nothing to resist"

@@ -92,7 +92,8 @@ RULE_TEXT: dict[str, tuple[str, str]] = {
     ),
     "show_players": (
         "Show players which creatures are minions",
-        "A minion's card on the Scene says so on every seat. Off, only you see it.",
+        "A minion's card on the Scene says so on every seat. Off, the badge is yours "
+        "alone — though a minion's rolls still read as a minion's on the history.",
     ),
 }
 

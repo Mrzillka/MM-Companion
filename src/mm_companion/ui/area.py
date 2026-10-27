@@ -797,6 +797,9 @@ class AreaWindow(ActionWindow):
         )
         self.setWindowTitle(f"{ACTION_NAME}: {use.power_name}")
         self.set_heading(self._heading_text())
+        # Another power may have an attack check where this one had none, or no
+        # longer reach a routine hit: Hit is judged afresh.
+        self._judge_hit()
         self.sync()
 
     # -- the parties -----------------------------------------------------------
@@ -840,6 +843,8 @@ class AreaWindow(ActionWindow):
         return bool(self.primary_ref()) and self._hit.isChecked()
 
     def set_hit(self, hit: bool) -> None:
+        """Tick or untick Hit as the GM's own call, which nothing re-judges."""
+        self._hit_by_hand = True
         self._hit.setChecked(hit)
 
     def set_attack(self, total: int, die: int, *, reroll: bool = False) -> None:
@@ -885,13 +890,22 @@ class AreaWindow(ActionWindow):
         result makes needs no roll at all.
         """
         dc = self._defense_dc()
+        if self._attack is None:
+            # Nothing rolled yet: only a routine attack on a minion can be a hit, and it
+            # stops being one the moment the primary, the adjustment or the session's
+            # rules say otherwise. An area with no attack check at all is always a hit,
+            # and a tick the GM set by hand is theirs.
+            if self._hit_by_hand:
+                return
+            if self.attempt.use.attack is None:
+                self._hit.setChecked(True)
+                return
+            routine = self.routine_attack()
+            self._hit.setChecked(dc is not None and routine is not None and routine >= dc)
+            return
         if dc is None:
             return
         routine = self.routine_attack()
-        if self._attack is None:
-            if routine is not None and routine >= dc and not self._hit_by_hand:
-                self._hit.setChecked(True)
-            return
         self._hit_by_hand = False
         rolled = self._attack[0] + self._attack_adjust.value()
         self._hit.setChecked(rolled >= dc or (routine is not None and routine >= dc))

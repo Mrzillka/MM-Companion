@@ -73,6 +73,9 @@ Minions are in (see [the minions notes](minions.md)). These rules about them are
   should set `minion` on it unless the Summon is Heroic.
 - **A minion's 20 against another minion** is suppressed too, since a roll does not know
   its target when it is thrown.
+- **Request-mode Impress against minions** is not routine: each target resists from the
+  card against the rolled total, minions included. The routine DC (and the better of the
+  two, as a resolved Impress uses) wants the request card to know who is a minion.
 
 ## End of turn does one thing so far
 

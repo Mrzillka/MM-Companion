@@ -11,6 +11,7 @@ import pytest
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import ResistanceOutcome, load_game_data
 from mm_companion.core.dice import ROUTINE_DIE, resolve_check, resolve_group
+from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
 from mm_companion.core.rules import (
     BOOK_MINION_RULES,
     LADDER_DAMAGE,
@@ -20,6 +21,7 @@ from mm_companion.core.rules import (
     SpecLadder,
     answer_rung,
     capped_escalation,
+    critical_answer,
     critical_rung,
     damage_steps,
     follow_up_for_result,
@@ -267,3 +269,36 @@ def test_the_scene_badge_is_whitelisted_only_when_true() -> None:
     )
     assert badged["minion"] is True
     assert "minion" not in plain
+
+
+# -- a critical hit against an Impervious minion ---------------------------------------
+
+
+def _armoured_minion(data, rank: int) -> Character:
+    char = Character.new_default(data)
+    char.minion = True
+    effect = PowerEffectInstance("protection", rank=rank)
+    effect.extras.append(ModifierSelection("impervious"))
+    char.powers.append(Power(name="Plating", effects=[effect]))
+    return char
+
+
+def _damage_ladder(data, rank: int) -> SpecLadder:
+    rungs = next(e for e in data.effects if e.id == data.system.damage_effect).resistance_outcomes
+    return SpecLadder(LADDER_DAMAGE, rungs=rungs, rank=rank)
+
+
+def test_a_critical_an_impervious_minion_shrugs_off_lands_nothing(data) -> None:
+    # Damage 4 critical is rank 9 against Impervious 10: no effect, so no auto-fail.
+    assert critical_answer(_damage_ladder(data, 4), _armoured_minion(data, 10), data) is None
+
+
+def test_a_critical_raised_past_impervious_lands_the_worst(data) -> None:
+    # Damage 6 critical is rank 11, past Impervious 10: the worst, unrolled.
+    rung = critical_answer(_damage_ladder(data, 6), _armoured_minion(data, 10), data)
+    assert rung is not None and "incapacitated" in rung.conditions
+
+
+def test_a_critical_on_a_minion_with_no_sheet_is_the_plain_rung(data) -> None:
+    ladder = _damage_ladder(data, 4)
+    assert critical_answer(ladder, None, data) == critical_rung(ladder.rungs, data)

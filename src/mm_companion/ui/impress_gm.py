@@ -488,9 +488,17 @@ class ImpressController(QObject):
         return target.party.minion and not plan.source.minion and self._rules().routine_impress
 
     def _target_dc(self, plan: ImpressPlan, target: PlannedTarget, dc: int | None) -> int:
-        """The DC *target* resists: the rolled one, or a minion's routine one."""
-        if dc is None or self._routine_against(plan, target):
-            return routine_impress_dc(plan.check_modifier, self._data, target.dc_offset)
+        """The DC *target* resists: the rolled one, or a minion's routine one.
+
+        A routine check is the impresser's *choice* (PDF p17): one who has rolled
+        anyway — a mixed group — keeps the better of the roll and the routine result,
+        so a high roll never makes the minions easier to impress than the rest.
+        """
+        routine = routine_impress_dc(plan.check_modifier, self._data, target.dc_offset)
+        if dc is None:
+            return routine
+        if self._routine_against(plan, target):
+            return max(dc + target.dc_offset, routine)
         return dc + target.dc_offset
 
     def _resolve_targets(self, action: _Action, die: int | None, total: int | None) -> None:
@@ -514,7 +522,10 @@ class ImpressController(QObject):
                 )
                 note = f"Check: <b>{total}</b>{natural} — DC <b>{dc}</b> to resist"
                 if any(self._routine_against(plan, t) for t in plan.targets):
-                    note += f"; minions resist {self._routine_text(plan)}"
+                    if dc >= routine_impress_dc(plan.check_modifier, self._data):
+                        note += "; minions too (the roll beat a routine check)"
+                    else:
+                        note += f"; minions resist {self._routine_text(plan)}"
                 action.window.set_check(note)
         elif action.window is not None:
             action.window.set_check(f"Routine against minions: {self._routine_text(plan)}")

@@ -40,7 +40,8 @@ from typing import TypeVar
 from ..character import Character
 from ..data_loader import GameData, ResistanceOutcome
 from ..dice import ROUTINE_DIE
-from .rolls import RollSpec
+from .defenses import damage_negated, toughness_defense
+from .rolls import LADDER_DAMAGE, RollSpec, SpecLadder
 from .targeting import outcome_rung
 
 __all__ = [
@@ -48,6 +49,7 @@ __all__ = [
     "MINION_RULE_KEYS",
     "MinionRules",
     "capped_escalation",
+    "critical_answer",
     "critical_rung",
     "is_minion",
     "minion_added_success",
@@ -221,6 +223,29 @@ def critical_rung(
         return None
     rung = ladder[-1]
     return _capped(rung, game_data) if rules.stop_at_incapacitated else rung
+
+
+def critical_answer(
+    ladder: SpecLadder,
+    char: Character | None,
+    game_data: GameData,
+    rules: MinionRules = BOOK_MINION_RULES,
+) -> ResistanceOutcome | None:
+    """What a critical hit on the minion *char* lands, measured against its Toughness.
+
+    :func:`critical_rung`, unless the hit is Damage the minion's Impervious or
+    Impenetrable Toughness shrugs off — at the critical's raised rank, since "a
+    critical hit increases the rank of the attack's effect by +5" (PDF p197). ``None``
+    then, and the minion makes its save like anyone else (where Hardened may still
+    turn it). A ladder whose rank is unknown (0) waives the test, as everywhere.
+    """
+
+    if ladder.kind == LADDER_DAMAGE and char is not None and ladder.rank:
+        rank = ladder.rank + game_data.system.critical_effect_bonus
+        defense = toughness_defense(char, game_data)
+        if damage_negated(defense, rank=rank, penetrating=ladder.penetrating):
+            return None
+    return critical_rung(ladder.rungs, game_data, rules)
 
 
 def minion_save_spec(spec: RollSpec, rules: MinionRules = BOOK_MINION_RULES) -> RollSpec:

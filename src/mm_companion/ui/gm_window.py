@@ -46,6 +46,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMainWindow,
     QMenu,
@@ -56,11 +57,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from mm_companion.core import library, storage
+from mm_companion.core import library, npc_groups, storage
 from mm_companion.core.character import AppliedCondition, Character
 from mm_companion.core.data_loader import GameData, load_game_data
 from mm_companion.core.dice import roll_d20
 from mm_companion.core.npc import quick_npc
+from mm_companion.core.npc_groups import NPCGroup
 from mm_companion.core.rules import (
     KIND_INITIATIVE,
     MinionRules,
@@ -153,6 +155,7 @@ from mm_companion.ui.impress import (
 )
 from mm_companion.ui.impress_gm import ImpressController
 from mm_companion.ui.npc_card import NPCCard
+from mm_companion.ui.npc_group import GROUP_KIND, NPCGroupCard
 from mm_companion.ui.npc_quick_dialog import QuickNPCDialog
 from mm_companion.ui.npc_window import NPCWindow
 from mm_companion.ui.pin_picker import PinPickerDialog
@@ -258,7 +261,7 @@ def _is_npc_ref(ref: str) -> bool:
     """Whether a dragged reference is an NPC's card — the only thing the cast can
     be reordered by. A player dragged here is not a thing that can be done, and a
     scene card carries an opaque ref that names no creature this grid holds."""
-    return ref.partition(":")[0] == SCENE_NPC
+    return ref.partition(":")[0] in (SCENE_NPC, GROUP_KIND)
 
 
 def _default_disposition(kind: str) -> str:
@@ -439,6 +442,10 @@ class GMWindow(QMainWindow):
         self._pins: dict[str, list[PinRef]] = _load_pins()
         # Which cards the GM has shrunk, by the same key as the pins above.
         self._collapsed_cards: dict[str, bool] = storage.gm_collapsed_cards()
+        #: The GM's NPC groups (squads), by file name — see core.npc_groups.
+        self._npc_groups: list[NPCGroup] = npc_groups.groups_from_raw(storage.gm_npc_groups())
+        #: The group cards on the board now, by group id.
+        self._group_cards: dict[str, NPCGroupCard] = {}
         # Pin pickers open on a card, keyed the same way, kept referenced while up.
         self._pin_pickers: dict[str, PinPickerDialog] = {}
         # Sheets opened from a card, so a change to that card's strip can be pushed
@@ -830,9 +837,13 @@ class GMWindow(QMainWindow):
         # by the card being dragged. Only an NPC's card, and *visibly* only that:
         # it used to light up green for a player or a scene card and then drop them
         # on the floor, which reads as a broken gesture rather than a refused one.
-        self._npc_container = CardDropFlow("gmNpcFlow", accepts=_is_npc_ref)
+        self._npc_container = CardDropFlow(
+            "gmNpcFlow", accepts=_is_npc_ref, merges=self._can_merge_npcs
+        )
         self._npc_flow = self._npc_container.flow
         self._npc_container.dropped.connect(self._drop_on_npcs)
+        # Dropped onto the middle of another card: the two become a group.
+        self._npc_container.merged.connect(self._merge_npcs)
         self._npc_container.widthChanged.connect(self._sync_card_widths)
         layout.addWidget(self._npc_container)
         layout.addStretch()
@@ -3045,39 +3056,26 @@ class GMWindow(QMainWindow):
         self._manual_order = [n for n in self._manual_order if n in self._npc_state]
         self._manual_order += [n for n in self._npc_state if n not in self._manual_order]
 
+        self._group_cards = {}
+        shown = npc_groups.shown_groups(self._npc_groups, self._npc_state)
+        drawn: set[str] = set()
         for name in self._ordered_npcs():
-            entry = self._npc_state[name]
-            card = NPCCard(
-                entry.character,
-                entry.summary,
-                self._data,
-                collapsed=entry.collapsed,
-            )
-            card.openRequested.connect(self._open_npc)
-            card.removeRequested.connect(self._remove_npc)
-            card.deleteRequested.connect(self._delete_npc)
-            card.applyConditionRequested.connect(self._apply_npc_condition)
-            card.removeConditionRequested.connect(self._remove_npc_condition)
-            card.recoveryRequested.connect(self._roll_npc_recovery)
-            card.sceneToggled.connect(lambda n, on: self._set_in_scene(SCENE_NPC, n, on))
-            card.copyRequested.connect(self._copy_npc)
-            card.pinsChanged.connect(lambda n, refs: self._store_pins(_npc_key(n), refs))
-            card.loadRequested.connect(lambda s, n=name: self._npc_roll(n, s, load=True))
-            card.rollRequested.connect(lambda s, n=name: self._npc_roll(n, s))
-            card.pinPickerRequested.connect(self._open_npc_pin_picker)
-            card.collapsedChanged.connect(self._set_npc_collapsed)
-            card.damageRequested.connect(self._apply_npc_damage)
-            card.minionToggled.connect(self._set_npc_minion)
-            card.summonedToggled.connect(self._set_npc_summoned)
-            card.set_minion_rules(self.minion_rules())
-            card.areaRequested.connect(self._start_card_area)
-            card.impressRequested.connect(self._start_card_impress)
-            card.pins.set_pins(self._pins_for(_npc_key(name), "npc"))
-            # Connected after the initial load, so seeding the strip does not ask
-            # the window to re-measure a grid it is halfway through building.
-            card.pins.widthHintChanged.connect(self._sync_card_widths)
-            entry.card = card
-            self._npc_flow.addWidget(card)
+            if name in drawn:
+                continue
+            group = npc_groups.group_of(shown, name)
+            if group is not None:
+                # The whole squad is drawn where its first member stands in the order.
+                rows = [self._build_npc_card(member, row=True) for member in group.members]
+                drawn.update(group.members)
+                group_card = NPCGroupCard(group, rows)
+                group_card.renameRequested.connect(self._rename_group)
+                group_card.ungroupRequested.connect(self._ungroup)
+                group_card.sceneRequested.connect(self._group_to_scene)
+                self._group_cards[group.id] = group_card
+                self._npc_flow.addWidget(group_card)
+                continue
+            drawn.add(name)
+            self._npc_flow.addWidget(self._build_npc_card(name))
         self._no_npcs.setVisible(not self._npc_state)
         self._sync_card_widths()
         self._refresh_collapse_all()
@@ -3090,6 +3088,43 @@ class GMWindow(QMainWindow):
         # A cast with someone in it is a cast whose sheets will be opened.
         if self._npc_state:
             self._schedule_spare_npc()
+
+    def _build_npc_card(self, name: str, *, row: bool = False) -> NPCCard:
+        """One NPC's card (or a group's row of it), wired to this window."""
+        entry = self._npc_state[name]
+        card = NPCCard(
+            entry.character,
+            entry.summary,
+            self._data,
+            collapsed=entry.collapsed,
+            row=row,
+        )
+        card.openRequested.connect(self._open_npc)
+        card.removeRequested.connect(self._remove_npc)
+        card.deleteRequested.connect(self._delete_npc)
+        card.applyConditionRequested.connect(self._apply_npc_condition)
+        card.removeConditionRequested.connect(self._remove_npc_condition)
+        card.recoveryRequested.connect(self._roll_npc_recovery)
+        card.sceneToggled.connect(lambda n, on: self._set_in_scene(SCENE_NPC, n, on))
+        card.copyRequested.connect(self._copy_npc)
+        card.pinsChanged.connect(lambda n, refs: self._store_pins(_npc_key(n), refs))
+        card.loadRequested.connect(lambda s, n=name: self._npc_roll(n, s, load=True))
+        card.rollRequested.connect(lambda s, n=name: self._npc_roll(n, s))
+        card.pinPickerRequested.connect(self._open_npc_pin_picker)
+        card.collapsedChanged.connect(self._set_npc_collapsed)
+        card.damageRequested.connect(self._apply_npc_damage)
+        card.minionToggled.connect(self._set_npc_minion)
+        card.summonedToggled.connect(self._set_npc_summoned)
+        card.set_minion_rules(self.minion_rules())
+        card.areaRequested.connect(self._start_card_area)
+        card.impressRequested.connect(self._start_card_impress)
+        card.pins.set_pins(self._pins_for(_npc_key(name), "npc"))
+        # Connected after the initial load, so seeding the strip does not ask
+        # the window to re-measure a grid it is halfway through building.
+        card.pins.widthHintChanged.connect(self._sync_card_widths)
+        card.leaveGroupRequested.connect(self._leave_group)
+        entry.card = card
+        return card
 
     def _ordered_npcs(self) -> list[str]:
         """The cast in render order: the GM's own arrangement, and nothing else.
@@ -3113,8 +3148,135 @@ class GMWindow(QMainWindow):
         always had, unchanged below.
         """
         kind, _, source = ref.partition(":")
+        if kind == GROUP_KIND and source in self._group_cards:
+            # A whole group moves as one, keeping its rows' order.
+            self._reorder_npcs(self._group_cards[source].members, index)
+            return
         if kind == SCENE_NPC and source in self._npc_state:
+            # A group's row dropped *between* cards has left its group.
+            if npc_groups.group_of(self._npc_groups, source) is not None:
+                self._npc_groups = npc_groups.leave(self._npc_groups, source)
+                self._persist_groups()
             self._reorder_npc(source, index)
+
+    def _board_blocks(self) -> list[list[str]]:
+        """The board as it is laid out: one list of file names per card, a group's
+        members together, in flow order."""
+        blocks: list[list[str]] = []
+        for index in range(self._npc_flow.count()):
+            item = self._npc_flow.itemAt(index)
+            widget = item.widget() if item is not None else None
+            if isinstance(widget, NPCGroupCard):
+                blocks.append(widget.members)
+            elif isinstance(widget, NPCCard):
+                blocks.append([widget.name_key])
+        return blocks
+
+    def _reorder_npcs(self, names: list[str], target_index: int) -> None:
+        """Move *names* together to the dropped slot *target_index* among the board's
+        cards (counted the way :meth:`_reorder_npc` always has: without the mover)."""
+        moving = [n for n in names if n in self._npc_state]
+        if not moving:
+            return
+        blocks = [[n for n in block if n not in moving] for block in self._board_blocks()]
+        blocks = [block for block in blocks if block]
+        blocks.insert(max(0, min(target_index, len(blocks))), moving)
+        laid = [n for block in blocks for n in block]
+        self._manual_order = laid + [n for n in self._ordered_npcs() if n not in laid]
+        self._refresh_npcs()
+
+    # -- groups --------------------------------------------------------------
+
+    def _persist_groups(self) -> None:
+        storage.set_gm_npc_groups(npc_groups.groups_to_raw(self._npc_groups))
+
+    def _can_merge_npcs(self, ref: str, widget: object) -> bool:
+        """Whether dropping *ref* onto *widget* combines them: an NPC card or a group's
+        onto another NPC card or group."""
+        kind = ref.partition(":")[0]
+        return kind in (SCENE_NPC, GROUP_KIND) and isinstance(widget, (NPCCard, NPCGroupCard))
+
+    def _merge_npcs(self, ref: str, widget: object) -> None:
+        """A card (or a whole group) was dropped onto another: they become one group.
+
+        Onto a loose card, the two make a new group named after the target ("Thug 2"
+        and "Thug 5" make "Thug"); onto a grouped creature or a group, the movers join
+        it. Dropping something onto itself, or onto its own group, does nothing.
+        """
+        kind, _, source = ref.partition(":")
+        if kind == GROUP_KIND:
+            card = self._group_cards.get(source)
+            moving = card.members if card is not None else []
+        else:
+            moving = [source] if source in self._npc_state else []
+        if not moving:
+            return
+        if isinstance(widget, NPCGroupCard):
+            groups = npc_groups.join(
+                self._npc_groups, moving, widget.group_id, target_is_group=True
+            )
+            anchor = widget.members[0]
+        elif isinstance(widget, NPCCard):
+            target = widget.name_key
+            entry = self._npc_state.get(target)
+            name = npc_groups.base_name(entry.summary.name) if entry is not None else ""
+            groups = npc_groups.join(self._npc_groups, moving, target, name=name)
+            anchor = target
+        else:
+            return
+        if groups == self._npc_groups:
+            return
+        self._npc_groups = groups
+        self._persist_groups()
+        # The movers stand with the group in the board's order, so it draws as one.
+        order = [n for n in self._ordered_npcs() if n not in moving]
+        at = order.index(anchor) + 1 if anchor in order else len(order)
+        self._manual_order = order[:at] + moving + order[at:]
+        self._refresh_npcs()
+
+    def _leave_group(self, name: str) -> None:
+        """A row's "Leave the group": a loose card again, right after its old group."""
+        if npc_groups.group_of(self._npc_groups, name) is None:
+            return
+        self._npc_groups = npc_groups.leave(self._npc_groups, name)
+        self._persist_groups()
+        self._refresh_npcs()
+
+    def _ungroup(self, group_id: str) -> None:
+        """The group's "Ungroup": every member a loose card again, where they stood."""
+        self._npc_groups = npc_groups.dissolve(self._npc_groups, group_id)
+        self._persist_groups()
+        self._refresh_npcs()
+
+    def _rename_group(self, group_id: str) -> None:
+        """The group's "Rename group…"."""
+        group = next((g for g in self._npc_groups if g.id == group_id), None)
+        if group is None:
+            return
+        name, ok = QInputDialog.getText(self, "Rename group", "Group name:", text=group.name)
+        if not ok or not name.strip():
+            return
+        self._npc_groups = npc_groups.rename(self._npc_groups, group_id, name)
+        self._persist_groups()
+        self._refresh_npcs()
+
+    def _group_to_scene(self, group_id: str, on: bool) -> None:
+        """Put every member of a group on the Scene, or take every one off."""
+        card = self._group_cards.get(group_id)
+        if card is None:
+            return
+        for member in card.members:
+            self._set_in_scene(SCENE_NPC, member, on)
+
+    def _group_npcs(self, members: list[str], name: str) -> None:
+        """Record *members* (two or more, just made) as a new group called *name*."""
+        if len(members) < 2:
+            return
+        groups = self._npc_groups
+        for member in members[1:]:
+            groups = npc_groups.join(groups, [member], members[0], name=name)
+        self._npc_groups = groups
+        self._persist_groups()
 
     def _reorder_npc(self, name: str, target_index: int) -> None:
         """Move an NPC to a dropped slot in the GM's arrangement of the cast.
@@ -3126,12 +3288,7 @@ class GMWindow(QMainWindow):
         was the right rule while this grid *was* the turn order. That rule lives on
         the Scene, in :meth:`_drop_on_scene`, where the ordering it protects is.
         """
-        if name not in self._npc_state:
-            return
-        order = [n for n in self._ordered_npcs() if n != name]
-        order.insert(max(0, min(target_index, len(order))), name)
-        self._manual_order = order
-        self._refresh_npcs()
+        self._reorder_npcs([name], target_index)
 
     def _create_npc(self) -> None:
         """Write a new NPC: an editable, simplified sheet that saves into the cast."""
@@ -3171,8 +3328,29 @@ class GMWindow(QMainWindow):
             image_path=npc_icons.store_icon(entered.icon),
         )
         npc.minion = entered.minion
-        path = library.save_character(npc, directory=self._npc_dir())
-        self._register_npc(path)
+        if entered.count <= 1:
+            path = library.save_character(npc, directory=self._npc_dir())
+            self._register_npc(path)
+            return
+        self._make_squad(npc, entered.count)
+
+    def _make_squad(self, npc: Character, count: int) -> None:
+        """Save *count* copies of *npc* as a squad: "Thug 1…N", grouped on the board.
+
+        Every file is written before the cast changes, and the cast and the board
+        change once — not *count* times over, each a full rebuild. Not put on the
+        Scene: the GM brings a squad in when the fight reaches it.
+        """
+        taken = {entry.summary.name for entry in self._npc_state.values()}
+        names = npc_groups.numbered_names(library.display_name(npc), count, taken)
+        files: list[str] = []
+        for name in names:
+            copy = Character.from_dict(npc.to_dict())
+            copy.profile["hero_name"] = name
+            files.append(library.save_character(copy, directory=self._npc_dir()).name)
+        self._set_npc_paths([*self._state.npc_paths, *files])
+        self._group_npcs(files, npc_groups.base_name(names[0]))
+        self._refresh_npcs()
 
     def _add_existing_npc(self) -> None:
         """Bring an NPC written for another session into this one."""
@@ -3224,6 +3402,13 @@ class GMWindow(QMainWindow):
         if self._collapsed_cards.get(_npc_key(name)):
             self._collapsed_cards[_npc_key(path.name)] = True
             storage.set_gm_collapsed_cards(self._collapsed_cards)
+        # A copy of one of a squad is one more of that squad.
+        if npc_groups.group_of(self._npc_groups, name) is not None:
+            self._npc_groups = npc_groups.join(self._npc_groups, [path.name], name)
+            self._persist_groups()
+            if name in self._manual_order:
+                at = self._manual_order.index(name) + 1
+                self._manual_order[at:at] = [path.name]
         self._register_npc(path)
 
     def _open_npc(self, name: str) -> None:
@@ -3478,6 +3663,10 @@ class GMWindow(QMainWindow):
         self._forget_pins(_npc_key(name))
         if self._collapsed_cards.pop(_npc_key(name), None) is not None:
             storage.set_gm_collapsed_cards(self._collapsed_cards)
+        # A deleted creature is in no squad any more, in any session.
+        if npc_groups.group_of(self._npc_groups, name) is not None:
+            self._npc_groups = npc_groups.leave(self._npc_groups, name)
+            self._persist_groups()
         self._remove_npc(name)
 
     # -- collapsing a card --------------------------------------------------
@@ -3533,22 +3722,27 @@ class GMWindow(QMainWindow):
         the widest hint still includes a portrait — but with every card shed of its
         portrait at once, the shared width falls with them.
         """
+        npc_cards = [e.card for e in self._npc_state.values() if e.card is not None]
         for container, cards in (
-            (
-                self._npc_container,
-                [e.card for e in self._npc_state.values() if e.card is not None],
-            ),
+            (self._npc_container, npc_cards),
             (self._cards_container, list(self._cards.values())),
         ):
             if not cards:
                 continue
-            body = max(card.body_width_hint() for card in cards)
+            # A group's rows share the board's tile width, but not the loose cards'
+            # body width: a group takes a line of the board to itself.
+            loose = [card for card in cards if not getattr(card, "row", False)]
             strip = max(card.pin_width_hint() for card in cards)
             # How a card gives way to a narrow block is its own business — a player's
             # strip gives up its slack, an NPC's tiles wrap into fewer columns.
             room = self._card_room(container)
-            for card in cards:
-                card.apply_width(body, strip, room)
+            if loose:
+                body = max(card.body_width_hint() for card in loose)
+                for card in loose:
+                    card.apply_width(body, strip, room)
+            if container is self._npc_container:
+                for group_card in self._group_cards.values():
+                    group_card.apply_width(strip, room)
 
     @staticmethod
     def _card_room(container) -> int:

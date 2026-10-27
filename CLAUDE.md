@@ -31,7 +31,10 @@ Both actions land in the history as one table per group (see
 [the actions notes](docs/notes/actions.md)). Any NPC can be made a **minion**: its
 failed saves land their worst, its natural 20 is no critical, and heroes may take 10
 against it. Which of those rules apply is set per session on the GM window's
-Session settings page (see [the minions notes](docs/notes/minions.md)).
+Session settings page (see [the minions notes](docs/notes/minions.md)). NPCs can be
+kept in **groups** — a squad from Quick NPC × N, or cards dropped onto each other —
+drawn as one framed card of rows (see [the NPC groups notes](docs/notes/npc-groups.md)).
+A creature that is down or dead fades on every board.
 
 ## Commands
 
@@ -105,6 +108,7 @@ several of them are the only record of a bug that shaped it.
 | [The session layer](docs/notes/session.md) | GM Mode or online play |
 | [Actions against other characters](docs/notes/actions.md) | Impress, area attacks, `actions.json`, the history's table card, or resolving one check against several targets |
 | [Minions](docs/notes/minions.md) | the minion flag, the Session settings page, or any check resolved against a creature that might be a minion |
+| [NPC groups (squads)](docs/notes/npc-groups.md) | the GM's NPC board, Quick NPC, Copy, or treating several NPCs as one |
 | [The theme layer](docs/notes/theme.md) | writing any colour, size, radius or border |
 | [The table blocks](docs/notes/table-blocks.md) | Abilities, Resistances, Advantages or Skills |
 | [Shared UI utilities and view modes](docs/notes/ui-utilities.md) | adding widgets, or the lock |

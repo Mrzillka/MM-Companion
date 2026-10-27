@@ -225,6 +225,11 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # the shrunk ones are stored, so a fresh workspace and a fresh NPC both start
     # expanded.
     "gm_collapsed": {},
+    # The GM's NPC groups (squads): ``[{"id", "name", "members": [file names]}]``.
+    # Read through :func:`gm_npc_groups`. A board arrangement like ``gm_collapsed``,
+    # kept per GM rather than per session for the same reason: it is a standing
+    # judgement about creatures, and it follows them into every session they are in.
+    "gm_npc_groups": [],
     # Whether every player at the table is on the Scene automatically. On by
     # default because that is what a fight looks like: the players are in it, and
     # a GM who has to add five of them before every scene is doing bookkeeping the
@@ -516,6 +521,24 @@ def set_gm_collapsed_cards(collapsed: dict[str, bool]) -> None:
     nothing — absent means expanded, which is where a card starts.
     """
     update_settings(gm_collapsed={key: True for key, value in collapsed.items() if value})
+
+
+def gm_npc_groups() -> list[dict]:
+    """The GM's NPC groups as stored (see :mod:`~mm_companion.core.npc_groups`).
+
+    Read through here rather than off :func:`load_settings`: a workspace older than
+    this key answers ``None``. Only the shape is checked here; the groups module
+    drops malformed entries when it reads them.
+    """
+    stored = load_settings().get("gm_npc_groups")
+    if not isinstance(stored, list):
+        return []
+    return [item for item in stored if isinstance(item, dict)]
+
+
+def set_gm_npc_groups(groups: list[dict]) -> None:
+    """Record the GM's NPC groups, wholesale (the GM window holds all of them)."""
+    update_settings(gm_npc_groups=list(groups))
 
 
 def gm_scene_auto_players() -> bool:

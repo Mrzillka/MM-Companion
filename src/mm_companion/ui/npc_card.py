@@ -185,6 +185,10 @@ class NPCCard(QFrame):
     minionToggled = Signal(str, bool)
     #: ``(file_name, summoned)`` — the GM tagged this creature as summoned, or untagged it.
     summonedToggled = Signal(str, bool)
+    #: The NPC's file name — take it out of its group (a row's menu only).
+    leaveGroupRequested = Signal(str)
+    #: The creature went down, died, or got up (``rules.defeat_state``'s answer).
+    defeatChanged = Signal(str)
 
     def __init__(
         self,
@@ -194,9 +198,17 @@ class NPCCard(QFrame):
         parent: QWidget | None = None,
         *,
         collapsed: bool = False,
+        row: bool = False,
     ) -> None:
         super().__init__(parent)
-        self.setFrameShape(QFrame.Shape.StyledPanel)
+        #: A **row** of a group card (``ui/npc_group.py``): the same creature, the same
+        #: controls and signals, laid out along one line that wraps — picture and name,
+        #: then the damage row, then the pinned tiles — and never expanded, since a
+        #: squad is what a GM collapses cards for. Its frame is the group's.
+        self.row = row
+        if row:
+            collapsed = True
+        self.setFrameShape(QFrame.Shape.NoFrame if row else QFrame.Shape.StyledPanel)
 
         self._data = data
         self._character = character
@@ -326,9 +338,16 @@ class NPCCard(QFrame):
         buttons_row.addWidget(self._minion_button)
         info.addSpacing(int(theme.metric("space.xs")))
         info.addWidget(self._buttons_host)
-        info.addStretch()
+        if not row:
+            info.addStretch()
         header.addLayout(info, stretch=1)
-        layout.addLayout(header)
+        if row:
+            # The picture and the name are one piece of the row, which wraps as a whole.
+            self._ident = QWidget()
+            self._ident.setLayout(header)
+        else:
+            self._ident = None
+            layout.addLayout(header)
 
         # -- the pinned numbers -------------------------------------------------
         self.pins = PinPanel(data, self, grid=True)
@@ -337,13 +356,18 @@ class NPCCard(QFrame):
         self.pins.loadRequested.connect(self.loadRequested)
         self.pins.rollRequested.connect(self.rollRequested)
         self.pins.pickRequested.connect(lambda: self.pinPickerRequested.emit(self.name_key))
-        layout.addWidget(self.pins)
+        if not row:
+            layout.addWidget(self.pins)
 
         # -- what is on it --------------------------------------------------------
         self._chips = FlowContainer()
         self._chip_flow = FlowLayout(self._chips, spacing=int(theme.metric("space.xs")))
         self._chip_flow.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self._chips)
+        if row:
+            # A row's conditions read under its name, part of who it is right now.
+            info.addWidget(self._chips)
+        else:
+            layout.addWidget(self._chips)
 
         # The two ways to put something on this creature, side by side and in both
         # states: pick a condition by hand, or take a rung of the damage ladder.
@@ -363,7 +387,21 @@ class NPCCard(QFrame):
             lambda index: self.damageRequested.emit(self.name_key, index)
         )
         action_row.addWidget(self._damage, stretch=1)
-        layout.addWidget(self._action_host)
+        if row:
+            # One wrapping line: who, what to do to them, and their numbers. A narrow
+            # group stacks the pieces rather than squeezing them (width adapts).
+            self._row_host = FlowContainer()
+            row_flow = FlowLayout(self._row_host, spacing=spacing)
+            row_flow.setContentsMargins(0, 0, 0, 0)
+            row_flow.addWidget(self._ident)
+            row_flow.addWidget(self._action_host)
+            row_flow.addWidget(self.pins)
+            layout.addWidget(self._row_host)
+            # A row is never opened out, so its caret has nothing to do.
+            self._collapse_button.hide()
+        else:
+            self._row_host = None
+            layout.addWidget(self._action_host)
         layout.addStretch()
 
         #: The widgets only the full card shows.
@@ -462,6 +500,43 @@ class NPCCard(QFrame):
         left, _top, right, _bottom = theme.box("card.margins")
         return max(body, tiles) + left + right + 2 * self.frameWidth()
 
+    def row_width_hint(self, strip: int) -> int:
+        """How wide a row wants to be to keep its pieces on one line, tiles *strip* wide."""
+        spacing = int(theme.metric("space.sm"))
+        ident = int(theme.metric("gm.card.min"))
+        if self._ident is not None:
+            ident = max(ident, self._ident.sizeHint().width())
+        return (
+            ident
+            + spacing
+            + self._action_host.sizeHint().width()
+            + spacing
+            + self._row_tiles_width(strip)
+        )
+
+    def _row_tiles_width(self, strip: int) -> int:
+        """The pinned tiles' width in a row: up to :data:`TILE_COLUMNS` abreast."""
+        gap = int(theme.metric("space.xs"))
+        columns = max(1, min(TILE_COLUMNS, len(self.pins.pins)))
+        return columns * strip + (columns - 1) * gap
+
+    def apply_row_width(self, width: int, strip: int) -> None:
+        """Wear *width* as a row of a group, its tiles *strip* wide.
+
+        The pieces keep their own widths, capped at the row's, and the row's flow
+        wraps whatever does not fit onto the next line — so a narrow group stacks a
+        row's tiles under its name instead of clipping them.
+        """
+        width = max(1, width)
+        if self._ident is not None:
+            # As wide as the name and the Power Level line ask (a "· minion" mark and the
+            # action icons share that line), never wider than the row.
+            ident = max(int(theme.metric("gm.card.min")), self._ident.sizeHint().width())
+            self._ident.setFixedWidth(min(width, ident))
+        self.pins.set_width(strip)
+        self.pins.setFixedWidth(min(width, self._row_tiles_width(strip)))
+        self.setFixedWidth(width)
+
     def apply_width(self, body: int, strip: int, room: int = 0) -> None:
         """Wear *body* and the tile width *strip* — the block's widest, not this
         card's own — shrunk to *room* when the block is narrower than that.
@@ -500,6 +575,8 @@ class NPCCard(QFrame):
         the owner telling the card what it already decided, and echoing that back
         would have the window save what it just read. The caret emits instead.
         """
+        # A row is the short form for good: "Collapse all" and its undoing pass it by.
+        collapsed = collapsed or self.row
         self._collapsed = collapsed
         for widget in self._expanded_only:
             widget.setVisible(not collapsed)
@@ -542,6 +619,7 @@ class NPCCard(QFrame):
         self._defeat = state
         apply_defeat_look(self, state)
         self._show_portrait()
+        self.defeatChanged.emit(state)
 
     # -- hover summary -----------------------------------------------------
 
@@ -746,6 +824,10 @@ class NPCCard(QFrame):
             lambda: self.summonedToggled.emit(self.name_key, not summoned),
         ).setToolTip(SUMMONED_HINT)
         menu.addAction("Pin a parameter…", lambda: self.pinPickerRequested.emit(self.name_key))
+        if self.row:
+            menu.addAction(
+                "Leave the group", lambda: self.leaveGroupRequested.emit(self.name_key)
+            ).setToolTip("Make this a card of its own again (or drag the row out of the group)")
         menu.addSeparator()
         menu.addAction(
             "Remove from this session",

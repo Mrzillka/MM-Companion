@@ -1045,6 +1045,47 @@ def build(target: str):
             win._apply_npc_damage(names[0], 2)
             win._apply_npc_damage(names[1], 1)
             win._apply_npc_damage(names[1], 1)
+    elif target == "gm-squad":
+        # An NPC group on the GM's board: a four-thug squad from Quick NPC × 4, one
+        # of them down and one dead (dimmed rows, "2 up · 2 down" in the header),
+        # beside a loose card, so the frame can be judged against a normal card.
+        from mm_companion.core import library
+        from mm_companion.core.data_loader import load_game_data
+        from mm_companion.core.npc import quick_npc
+        from mm_companion.ui import npc_icons
+        from mm_companion.ui.gm_window import GMWindow
+
+        data = load_game_data()
+        win = GMWindow(bind="127.0.0.1")
+        ogre = quick_npc(
+            data,
+            name="Ogre",
+            attack=9,
+            effect=9,
+            defence=9,
+            toughness=9,
+            image_path=npc_icons.store_icon(npc_icons.NPC_ICONS[1].id),
+        )
+        win._register_npc(library.save_character(ogre, directory=win._npc_dir()))
+        thug = quick_npc(
+            data,
+            name="Thug",
+            attack=4,
+            effect=4,
+            defence=4,
+            toughness=3,
+            image_path=npc_icons.store_icon(npc_icons.NPC_ICONS[0].id),
+        )
+        thug.minion = True
+        win._make_squad(thug, 4)
+        members = next(iter(win._group_cards.values())).members
+        win._apply_npc_condition(members[1], "incapacitated", None)
+        win._apply_npc_condition(members[3], "dead", None)
+        win.resize(1100, 1100)
+        win.show()
+        _pump(_app())
+        bar = win._scroll.verticalScrollBar()
+        bar.setValue(bar.maximum())
     elif target == "gm-settings":
         # The GM Mode settings page, reached the way a GM reaches it: build the GM
         # window and fire its own Settings ▸ Preferences… handler, so the shot is of
@@ -1669,6 +1710,7 @@ def main(argv: list[str] | None = None) -> int:
             "gm-collapsed",
             "gm-scene",
             "gm-cast",
+            "gm-squad",
             "gm-settings",
             "npc",
             "array-cost",

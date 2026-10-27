@@ -66,7 +66,13 @@ from mm_companion.core import library
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import Condition, GameData
 from mm_companion.core.library import CharacterSummary
-from mm_companion.core.rules import area_capable_builds, can_recover, power_area_uses, recovery_hint
+from mm_companion.core.rules import (
+    MinionRules,
+    area_capable_builds,
+    can_recover,
+    power_area_uses,
+    recovery_hint,
+)
 from mm_companion.core.rules import recovery_check as condition_recovery_check
 from mm_companion.ui import theme
 from mm_companion.ui.card_chips import _ConditionChip, start_card_drag
@@ -95,6 +101,14 @@ COLLAPSED_GLYPH = "▸"
 #: player id are not distinguishable by looking at them, so the drop target
 #: would not know which roster a bare one came from.
 SCENE_KIND = "npc"
+#: The minion toggle's caption, and what the Power Level line adds for one.
+MINION_CAPTION = "Minion"
+MINION_MARK = "minion"
+MINION_HINT = (
+    "A minion is a minor character (thugs, bystanders, a horde): a failed save is its "
+    "worst outcome, its natural 20 is no critical, and heroes may take 10 against it. "
+    "Which of these rules apply is this session's choice (Settings ▸ Session settings)."
+)
 
 
 def _small_button(text: str = "") -> QToolButton:
@@ -158,6 +172,8 @@ class NPCCard(QFrame):
     areaRequested = Signal(str, str)
     #: The NPC's file name — this creature impresses somebody.
     impressRequested = Signal(str)
+    #: ``(file_name, minion)`` — the GM made this creature a minion, or a full NPC again.
+    minionToggled = Signal(str, bool)
 
     def __init__(
         self,
@@ -284,6 +300,15 @@ class NPCCard(QFrame):
         self._area_button.clicked.connect(lambda: self._show_area_menu(self._area_button))
         self._area_button.hide()
         buttons_row.addWidget(self._area_button)
+        self._minion_button = QToolButton()
+        self._minion_button.setText(MINION_CAPTION)
+        self._minion_button.setCheckable(True)
+        self._minion_button.setChecked(character.minion)
+        self._minion_button.setToolTip(MINION_HINT)
+        self._minion_button.toggled.connect(
+            lambda on: self.minionToggled.emit(self.name_key, bool(on))
+        )
+        buttons_row.addWidget(self._minion_button)
         info.addSpacing(int(theme.metric("space.xs")))
         info.addWidget(self._buttons_host)
         info.addStretch()
@@ -332,6 +357,7 @@ class NPCCard(QFrame):
         self._collapsed_only = (self._thumb,)
 
         self._set_portrait(summary.image_path)
+        self.refresh_minion()
         self.set_collapsed(collapsed)
         # A width of its own until the window measures the block and hands every
         # card the widest. A card built for a test, or the first of a fresh grid,
@@ -360,6 +386,33 @@ class NPCCard(QFrame):
     def display_name(self) -> str:
         """The NPC's name, as its summary gives it."""
         return self._summary.name
+
+    # -- minion ------------------------------------------------------------
+
+    def refresh_minion(self) -> None:
+        """Restate everything that says whether this creature is a minion.
+
+        The Power Level line carries the mark, so a collapsed card shows it too; the
+        toggle follows the model without announcing it (the window telling the card
+        what it already decided), and the damage row collapses to a minion's two.
+        """
+        minion = self._character.minion
+        mark = f" · {MINION_MARK}" if minion else ""
+        self._pl_label.setText(f"PL {self._summary.power_level}{mark}")
+        self._pl_label.setToolTip(MINION_HINT if minion else "")
+        self._minion_button.blockSignals(True)
+        self._minion_button.setChecked(minion)
+        self._minion_button.blockSignals(False)
+        self._damage.refresh()
+
+    def set_minion_rules(self, rules: MinionRules) -> None:
+        """The session's minion rules — the damage row's shape depends on them."""
+        self._damage.set_minion_rules(rules)
+
+    @property
+    def damage_row(self) -> DamageRow:
+        """The card's quick-damage control (for the window's tests)."""
+        return self._damage
 
     # -- how wide the card is ----------------------------------------------
 
@@ -645,6 +698,11 @@ class NPCCard(QFrame):
                 )
         if self._data.impress.available or builds:
             menu.addSeparator()
+        minion = self._character.minion
+        menu.addAction(
+            "Make a full NPC" if minion else "Make a minion",
+            lambda: self.minionToggled.emit(self.name_key, not minion),
+        )
         menu.addAction("Pin a parameter…", lambda: self.pinPickerRequested.emit(self.name_key))
         menu.addSeparator()
         menu.addAction(

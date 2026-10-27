@@ -63,6 +63,7 @@ from mm_companion.core.dice import roll_d20
 from mm_companion.core.npc import quick_npc
 from mm_companion.core.rules import (
     KIND_INITIATIVE,
+    MinionRules,
     PinRef,
     RollSpec,
     answer_reading,
@@ -75,19 +76,24 @@ from mm_companion.core.rules import (
     area_key_power_id,
     can_recover,
     condition_changes,
+    critical_rung,
     damage_step_summary,
     damage_steps,
     decrement_condition,
     default_pins,
     find_area_power,
     initiative_modifier,
+    is_minion,
     localize_spec,
+    minion_save_spec,
+    minion_step,
     parse_pins,
     recovery_request,
     recovery_roll,
     recovery_succeeded,
     requested_roll_choices,
     resolve_rung,
+    rung_caption,
 )
 from mm_companion.core.session import client as session_client
 from mm_companion.core.session import discovery, store
@@ -109,7 +115,12 @@ from mm_companion.core.session.protocol import (
     SCENE_DISPOSITIONS,
 )
 from mm_companion.ui import npc_icons, theme
-from mm_companion.ui.action_ui import publish_table_rules
+from mm_companion.ui.action_ui import (
+    TABLE_MOD_ID,
+    TABLE_SESSION_KEY,
+    publish_table_rules,
+    session_minion_rules,
+)
 from mm_companion.ui.area import AREA_ACTION, KIND_AREA_ATTACK
 from mm_companion.ui.area_gm import AreaController
 from mm_companion.ui.block_canvas import BlockCanvas
@@ -192,6 +203,8 @@ AS_WRITTEN_CAPTION = "As written (nobody's number) — or right-click the button
 ANSWERED_MARK = "✓"
 #: Marks a trained-only skill the creature has no training in. It still rolls.
 UNTRAINED_MARK = "⚠"
+#: Marks a minion a critical hit lands on with no save (PDF p197).
+CRITICAL_MARK = "💥 Critical:"
 
 
 @dataclass
@@ -606,6 +619,8 @@ class GMWindow(QMainWindow):
 
         settings_menu = self.menuBar().addMenu("&Settings")
         settings_menu.addAction("Preferences...").triggered.connect(self._open_settings)
+        # The open session's own rules (the minions'), which belong to it alone.
+        settings_menu.addAction("Session settings...").triggered.connect(self.open_session_settings)
 
         view_menu = self.menuBar().addMenu("&View")
         self._block_actions: dict[str, object] = {}
@@ -922,7 +937,26 @@ class GMWindow(QMainWindow):
         menu.setToolTipsVisible(True)
         if not npcs:
             menu.addAction(NO_NPCS_TO_ANSWER).setEnabled(False)
+        rules = self.minion_rules()
         for party in npcs:
+            crit = (
+                critical_rung(spec.ladder.rungs, self._data, rules)
+                if where.critical and party.minion and spec.ladder is not None
+                else None
+            )
+            if crit is not None:
+                # A critical hit on a minion is the worst outcome with no save at all
+                # (PDF p197): offered as what it is, not as a roll.
+                caption = rung_caption(crit, self._data) or "the worst outcome"
+                action = menu.addAction(
+                    f"{party.name} — {CRITICAL_MARK} {caption}, no save",
+                    lambda p=party, r=crit: self._crit_minion(p, r, where),
+                )
+                action.setToolTip("A critical hit on a minion lands its worst, unrolled.")
+                portrait = self._scene_board.portrait(party.ref)
+                if portrait is not None:
+                    action.setIcon(QIcon(portrait))
+                continue
             reading = answer_reading(spec, party.character, self._data)
             text = party.name
             tips = []
@@ -961,10 +995,13 @@ class GMWindow(QMainWindow):
             trait_key="",
             actor=party.name,
         )
+        if party.minion:
+            # Every seat's card then reads the worst rung, which is what lands.
+            rolled = minion_save_spec(rolled, self.minion_rules())
         # Set first: the roll can come back before roll_spec returns (a hosted
         # server answers in-process, and a test's die does not tumble).
         self._answering = _Answering(spec, party, where)
-        if not self._roller.roll_spec(rolled):
+        if not self._roller.roll_spec(rolled, minion=self.rolls_as_minion(party.character)):
             self._answering = None
             return
         if where.seq is not None:
@@ -1000,11 +1037,18 @@ class GMWindow(QMainWindow):
         entry = self._npc_state.get(party.source)
         if entry is None:
             return
-        rung = answer_rung(ladder, int(degree), entry.character, self._data)
+        rung = answer_rung(ladder, int(degree), entry.character, self._data, self.minion_rules())
         if rung is None:
             return
+        self._land_answer(party, rung, answering.where.source, roll.get("seq"))
+
+    def _land_answer(self, party: ImpressParty, rung, source: str, seq: object) -> None:
+        """Put *rung* on an NPC, say so, and hang a ↶ on the card *seq* names."""
+        entry = self._npc_state.get(party.source)
+        if entry is None:
+            return
         before = deepcopy(entry.character.conditions)
-        changes = resolve_rung(entry.character, rung, self._data, source=answering.where.source)
+        changes = resolve_rung(entry.character, rung, self._data, source=source)
         if not changes:
             return
         self.impress_apply(party, list(changes))
@@ -1013,13 +1057,24 @@ class GMWindow(QMainWindow):
             return
         names = self._change_names(changes)
         self._show_notice(f"{party.name}: {names}", theme.color("tint.worse"))
-        seq = roll.get("seq")
         if isinstance(seq, int):
             self._history.set_undo(
                 seq,
                 f"Take {names} back off {party.name}",
                 lambda: self._undo_answer(seq, party, added, removed, names),
             )
+
+    def _crit_minion(self, party: ImpressParty, rung, where: AnswerContext) -> None:
+        """A critical hit on a minion: its worst, with no resistance check (PDF p197).
+
+        Nothing is rolled, so the history gets a line saying what happened, and the
+        ↶ that takes it back hangs on the attack's own card.
+        """
+        caption = rung_caption(rung, self._data) or "the worst outcome"
+        self._post_note(f"{party.name}: critical hit on a minion — {caption}, no save")
+        self._land_answer(party, rung, where.source, where.seq)
+        if where.seq is not None:
+            self._answered.setdefault(where.seq, set()).add(party.name)
 
     def _undo_answer(
         self,
@@ -1186,9 +1241,79 @@ class GMWindow(QMainWindow):
         if self._bridge.in_session and self._bridge.is_gm:
             publish_table_rules(self._bridge)
 
-    def area_roll_attack(self, spec: RollSpec) -> None:
-        """Roll an NPC's attack against the primary on this window's roller."""
-        self._roller.roll_spec(spec)
+    def area_roll_attack(self, spec: RollSpec, attacker: Character | None = None) -> None:
+        """Roll an NPC's attack against the primary on this window's roller.
+
+        A minion *attacker*'s natural 20 is no critical (PDF p25).
+        """
+        self._roller.roll_spec(spec, minion=self.rolls_as_minion(attacker))
+
+    # -- minions -------------------------------------------------------------
+
+    def minion_rules(self) -> MinionRules:
+        """The minion rules the open session plays by (the book's, with none open)."""
+        return session_minion_rules(self._bridge)
+
+    def rolls_as_minion(self, character: Character | None) -> bool:
+        """Whether a roll made as *character* is a minion's, whose natural 20 is no
+        added success — only at a table playing that rule."""
+        return is_minion(character) and self.minion_rules().no_added_success
+
+    def _on_mod_state(self, mod_id: str, key: str, _payload: object) -> None:
+        """The session's shared state moved: restate what reads its minion rules."""
+        if mod_id == TABLE_MOD_ID and key == TABLE_SESSION_KEY:
+            self._apply_minion_rules()
+
+    def _apply_minion_rules(self) -> None:
+        """Tell every card the session's minion rules, and re-push the board.
+
+        The damage row's shape and whether the table sees a minion's badge both depend
+        on them, so a GM who changes the rules sees both follow straight away.
+        """
+        rules = self.minion_rules()
+        for entry in self._npc_state.values():
+            if entry.card is not None:
+                entry.card.set_minion_rules(rules)
+        self._push_scene()
+
+    def _set_npc_minion(self, name: str, minion: bool) -> None:
+        """Make an NPC a minion, or a full NPC again (its card's toggle or menu).
+
+        The flag is the creature's own, saved in its file like any edit, so every copy
+        and every later session sees it. It goes down the road a condition change
+        takes: replayed onto an open sheet (absorbed, so its undo cannot split the two
+        copies apart) or written to the file now.
+        """
+        entry = self._npc_state.get(name)
+        if entry is None or entry.character.minion == minion:
+            return
+        entry.character.minion = minion
+        window = self._window_for(entry.path)
+        if window is not None:
+            with absorbing(window.sheet):
+                window.sheet.character.minion = minion
+                window.sheet.system_info.reseed()
+        else:
+            try:
+                library.save_character(entry.character, path=entry.path)
+            except OSError:
+                pass  # an unwritable workspace is not worth a dialog mid-session
+        if entry.card is not None:
+            entry.card.refresh_minion()
+        self._push_scene()
+        what = "a minion" if minion else "a full NPC"
+        self._show_notice(f"“{entry.summary.name}” is now {what}.", theme.color("accent"))
+
+    def _npc_roll(self, name: str, spec: object, *, load: bool = False) -> None:
+        """A pinned tile on an NPC's card: roll (or load) it as that creature rolls."""
+        if not isinstance(spec, RollSpec):
+            return
+        entry = self._npc_state.get(name)
+        minion = self.rolls_as_minion(entry.character if entry is not None else None)
+        if load:
+            self._roller.load_spec(spec, minion=minion)
+        else:
+            self._roller.roll_spec(spec, minion=minion)
 
     def _request_roll(self, spec: object) -> None:
         """Ask the table to roll something — the Request row's handler.
@@ -1298,6 +1423,9 @@ class GMWindow(QMainWindow):
         # server rather than hosting it here.
         self._bridge.connected.connect(self._on_joined)
         self._bridge.disconnected.connect(self._on_left)
+        # The session's own settings (its minion rules) ride the shared state.
+        self._bridge.modStateChanged.connect(self._on_mod_state)
+        self._bridge.stopped.connect(self._apply_minion_rules)
 
     # -- hosting -----------------------------------------------------------
 
@@ -1615,6 +1743,8 @@ class GMWindow(QMainWindow):
             "label": roll.get("label", ""),
             # Local-only, as everywhere: it carries the chain this card offers.
             "spec": roll.get("spec"),
+            "routine": bool(roll.get("routine")),
+            "minion": bool(roll.get("minion")),
         }
         self._history.add_roll(record)
         # A save an NPC answered off the history: what failing did goes on it.
@@ -2541,6 +2671,10 @@ class GMWindow(QMainWindow):
                     "name": npc.summary.name,
                     "disposition": entry.disposition,
                 }
+                # The GM's own board always shows it; the wire only when the session
+                # lets the players see it (see _push_scene).
+                if npc.character.minion:
+                    item["minion"] = True
                 conditions = [c.to_dict() for c in npc.character.conditions]
             else:
                 if entry.source not in self._cards:
@@ -2595,13 +2729,19 @@ class GMWindow(QMainWindow):
         """
         entries = self._scene_payload()
         order = [e.ref for e in self._scene]
-        signature = (entries, order, self._bridge.in_session)
+        shown = self.minion_rules().show_players
+        signature = (entries, order, self._bridge.in_session, shown)
         if signature != self._pushed_scene:
             self._pushed_scene = deepcopy(signature)
             self._scene_board.set_manual_order(order)
             self._scene_board.set_scene(entries)
             if self._bridge.in_session:
-                self._bridge.set_scene(entries, {e.ref: e.wire_source() for e in self._scene})
+                wire = (
+                    entries
+                    if shown
+                    else [{k: v for k, v in e.items() if k != "minion"} for e in entries]
+                )
+                self._bridge.set_scene(wire, {e.ref: e.wire_source() for e in self._scene})
             self._warn_if_scene_is_truncated(entries)
         # Both of these live outside the guard, because neither is about the payload.
         #
@@ -2905,11 +3045,13 @@ class GMWindow(QMainWindow):
             card.sceneToggled.connect(lambda n, on: self._set_in_scene(SCENE_NPC, n, on))
             card.copyRequested.connect(self._copy_npc)
             card.pinsChanged.connect(lambda n, refs: self._store_pins(_npc_key(n), refs))
-            card.loadRequested.connect(self._roller.load_spec)
-            card.rollRequested.connect(self._roller.roll_spec)
+            card.loadRequested.connect(lambda s, n=name: self._npc_roll(n, s, load=True))
+            card.rollRequested.connect(lambda s, n=name: self._npc_roll(n, s))
             card.pinPickerRequested.connect(self._open_npc_pin_picker)
             card.collapsedChanged.connect(self._set_npc_collapsed)
             card.damageRequested.connect(self._apply_npc_damage)
+            card.minionToggled.connect(self._set_npc_minion)
+            card.set_minion_rules(self.minion_rules())
             card.areaRequested.connect(self._start_card_area)
             card.impressRequested.connect(self._start_card_impress)
             card.pins.set_pins(self._pins_for(_npc_key(name), "npc"))
@@ -3010,6 +3152,7 @@ class GMWindow(QMainWindow):
             # A bare workspace filename, shared by every creature with this icon.
             image_path=npc_icons.store_icon(entered.icon),
         )
+        npc.minion = entered.minion
         path = library.save_character(npc, directory=self._npc_dir())
         self._register_npc(path)
 
@@ -3200,12 +3343,15 @@ class GMWindow(QMainWindow):
             else:
                 self._roller.roll_spec(payload)
         elif topic == ROLL_REQUESTED and isinstance(payload, RollSpec):
-            self._roller.roll_spec(payload)
+            # Rolled as the sheet's creature, so a minion's natural 20 is no critical.
+            sheet = window.sheet.character if window is not None else None
+            self._roller.roll_spec(payload, minion=self.rolls_as_minion(sheet))
         elif topic == AREA_REQUESTED and isinstance(payload, str) and window is not None:
             # Not a die: the NPC uses a power on an area, and the GM picks who is in it.
             self._start_npc_area(window, payload)
         elif topic == LOAD_REQUESTED and isinstance(payload, RollSpec):
-            self._roller.load_spec(payload)
+            sheet = window.sheet.character if window is not None else None
+            self._roller.load_spec(payload, minion=self.rolls_as_minion(sheet))
         elif topic == BONUS_REQUESTED and type(payload) is int and payload > 0:
             self._roller.add_bonus(payload)
         elif topic == NOTE_REQUESTED and isinstance(payload, str) and payload:
@@ -3588,6 +3734,9 @@ class GMWindow(QMainWindow):
         step = next((s for s in steps if s.index == step_index), None)
         if step is None:
             return
+        if entry.character.minion:
+            # A minion stops at the ceiling: no rung walks it on to Dying.
+            step = minion_step(step, self._data, self.minion_rules())
         # Read *before* the apply: the summary resolves escalation against the
         # creature's current state, so asking afterwards would describe what the
         # next click would do rather than what this one just did.
@@ -3715,9 +3864,28 @@ class GMWindow(QMainWindow):
         way the sheet's opener does it, and kept referenced so it is not collected
         the moment this method returns.
         """
-        from mm_companion.ui.settings import GMPage, SettingsWindow
+        from mm_companion.ui.settings import GMPage
 
-        window = SettingsWindow(page=GMPage.title)
+        self._show_settings(GMPage.title)
+
+    def open_session_settings(self) -> None:
+        """Open the Settings window on the Session page (Settings ▸ Session settings)."""
+        from mm_companion.ui.settings.session_page import SESSION_PAGE_TITLE
+
+        self._show_settings(SESSION_PAGE_TITLE)
+
+    def _show_settings(self, page: str) -> None:
+        """The Settings window, landing on *page*, with this window's Session page.
+
+        The Session page is built bound to this window's session, which is why only
+        this window offers it: a sheet's Preferences has no session to set rules for.
+        """
+        from mm_companion.ui.settings import SessionPage, SettingsWindow
+
+        bridge = self._bridge
+        window = SettingsWindow(
+            page=page, extra_pages=(lambda parent: SessionPage(parent, bridge=bridge),)
+        )
         self._settings_window = window
         window.show()
 

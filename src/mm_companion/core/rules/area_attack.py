@@ -44,6 +44,7 @@ from .area import (
     evasion_negates,
 )
 from .defenses import damage_negated, penetrating_ranks, toughness_defense
+from .minions import BOOK_MINION_RULES, MinionRules, is_minion, minion_rung
 from .powers_cost import effect_resistance_dc_base, effect_size_rank_shift
 from .powers_terms import (
     effect_area_rank,
@@ -1187,12 +1188,14 @@ def area_effect_rung(
     game_data: GameData,
     char: Character | None = None,
     rank: int | None = None,
+    rules: MinionRules = BOOK_MINION_RULES,
 ) -> ResistanceOutcome | None:
     """The rung of *effect*'s ladder a save of *degree* lands on (a made one: its Hit).
 
     Given the creature that saved, a Damage area is first measured against its
     Toughness defences (:mod:`.defenses`) at *rank* — the rank it resisted, halved by a
-    made Dodge (the area's own rank when not given).
+    made Dodge (the area's own rank when not given). A **minion** that failed lands
+    where the session's *rules* say (:func:`~.minions.minion_rung`).
     """
 
     base = _base(game_data, effect.effect_id)
@@ -1206,6 +1209,15 @@ def area_effect_rung(
             degree=degree,
         ):
             return None
+    if is_minion(char):
+        return minion_rung(
+            base.resistance_outcomes,
+            degree,
+            base.resistance_success,
+            game_data,
+            minion=True,
+            rules=rules,
+        )
     return outcome_rung(base.resistance_outcomes, degree, base.resistance_success)
 
 

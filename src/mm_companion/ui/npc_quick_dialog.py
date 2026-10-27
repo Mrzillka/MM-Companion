@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -130,6 +131,8 @@ class QuickNPC:
     #: The bonus it rolls Initiative with. Not one of the preset's six: a preset sets
     #: what a Power Level caps, and nothing caps how quick a mook is off the mark.
     initiative: int = 0
+    #: Whether it is made a minion (PDF p25) — which most quick NPCs are.
+    minion: bool = False
 
 
 class QuickNPCDialog(QDialog):
@@ -180,6 +183,15 @@ class QuickNPCDialog(QDialog):
         pl_caption = QLabel("Power Level:")
         pl_caption.setFont(font)
         form.addRow(pl_caption, self._power_level)
+        # A mook is usually a minion; remembered for the next one this run, since a GM
+        # making a batch of them makes them all the same kind.
+        self._minion = QCheckBox("Minion")
+        self._minion.setToolTip(
+            "A minor character the rules make easier to defeat: a failed save is its "
+            "worst outcome, and heroes may take 10 against it."
+        )
+        self._minion.setChecked(bool(_memory.get("minion", False)))
+        form.addRow("", self._minion)
         top.addLayout(form, stretch=1)
         layout.addLayout(top)
 
@@ -459,6 +471,7 @@ class QuickNPCDialog(QDialog):
         _memory["power_level"] = self._power_level.value()
         _memory["preset"] = self._preset
         _memory["initiative"] = self._initiative.value()
+        _memory["minion"] = self._minion.isChecked()
         if self._icon_picked:
             _memory["icon"] = self._icon
         else:
@@ -472,5 +485,6 @@ class QuickNPCDialog(QDialog):
             power_level=self._power_level.value(),
             icon=self._icon,
             initiative=self._initiative.value(),
+            minion=self._minion.isChecked(),
             **{key: spin.value() for key, spin in self._spins.items()},
         )

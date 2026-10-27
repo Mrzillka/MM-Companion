@@ -16,6 +16,12 @@ from dataclasses import dataclass
 
 D20_SIDES = 20
 
+#: The die a **routine check** assumes instead of rolling (PDF p17): take 10. It is
+#: never a natural 1 or 20, so a routine check scores no added success or failure.
+#: Against a minion any check may be routine (PDF p25), which is what the roller's
+#: take-10 and the minion rules' routine DCs are for.
+ROUTINE_DIE = 10
+
 
 @dataclass(frozen=True)
 class CheckResult:
@@ -89,6 +95,7 @@ def resolve_check(
     roll: int | None = None,
     rng: random.Random | None = None,
     natural: bool = True,
+    added_success: bool = True,
 ) -> CheckResult:
     """Resolve ``d20 + modifier`` against ``dc``.
 
@@ -103,12 +110,16 @@ def resolve_check(
 
     ``natural`` is false for a die that did not come up as it reads — a re-roll's
     lifted 1-10 (:func:`reroll_d20`) — which is never a natural 1 or 20.
+
+    ``added_success`` false is a **minion's** roll (PDF p25): its natural 20 is
+    graded as a 20 but adds no degree and is no critical. Its natural 1 still costs a
+    degree — the rule takes away the minion's luck, not its bad luck.
     """
 
     die = roll if roll is not None else roll_d20(rng)
     total = die + modifier
     margin = total - dc
-    critical = natural and die in (1, D20_SIDES)
+    critical = natural and (die == 1 or (die == D20_SIDES and added_success))
 
     if not graded:
         return CheckResult(die, modifier, total, dc, 1 if margin >= 0 else -1, critical)
@@ -139,7 +150,7 @@ class GroupResult:
 
 
 def resolve_group(
-    lines: list[tuple[int, int]],
+    lines: list[tuple[int, int]] | list[tuple[int, int, bool]],
     *,
     lead_modifier: int | None = None,
     dc: int | None = None,
@@ -149,7 +160,9 @@ def resolve_group(
     """Roll one check against several resistances, the way an Impress or an area effect is.
 
     Each of *lines* is ``(modifier, dc_offset)`` — a target's resistance and an
-    adjustment to the DC against that target alone. The DC is either fixed (*dc*) or
+    adjustment to the DC against that target alone — or ``(modifier, dc_offset,
+    minion)``, whose third says that line is a minion's, which scores no added success
+    on a natural 20 (see :func:`resolve_check`). The DC is either fixed (*dc*) or
     **opposed**: with a *lead_modifier* the lead check is rolled first and its total is
     the DC, raised by *critical_bonus* on a natural 20 (an added degree of success —
     the caller says how many points that is, so this module stays free of content).
@@ -165,5 +178,10 @@ def resolve_group(
         lead_die = roll_d20(rng)
         lead_total = lead_die + lead_modifier
         base = lead_total + (critical_bonus if lead_die == D20_SIDES else 0)
-    results = tuple(resolve_check(modifier, base + offset, rng=rng) for modifier, offset in lines)
+    results = tuple(
+        resolve_check(
+            line[0], base + line[1], rng=rng, added_success=not (len(line) > 2 and line[2])
+        )
+        for line in lines
+    )
     return GroupResult(lead_die, lead_total, results)

@@ -113,7 +113,7 @@ def stages(*rounds: list[int]):
         degrees = queue.pop(0)
         results = tuple(
             CheckResult(10, modifier, 10 + modifier, (dc or 0) + offset, degree, False)
-            for (modifier, offset), degree in zip(lines, degrees, strict=False)
+            for (modifier, offset, *_minion), degree in zip(lines, degrees, strict=False)
         )
         return GroupResult(None, None, results)
 
@@ -1014,7 +1014,7 @@ def test_an_npcs_area_healing_takes_conditions_off_everyone_in_it(
     assert area._resolve.text() == "🎲 Heal"
     area._resolve.click()
     ((check,),) = seen
-    assert check == (6, 10)  # the effect's rank against DC 10
+    assert check[:2] == (6, 10)  # the effect's rank against DC 10
     assert hurt.conditions == []
     assert "removed Hit, Dazed" in area.result_text(area._rows[0].party.ref)
     area.close()
@@ -1054,8 +1054,8 @@ def test_a_heavy_weapons_hit_primary_resists_the_whole_rank(
     area.set_hit(True)
     area._resolve.click()
     dodges, saves = seen
-    assert [dc for _m, dc in dodges] == [17]  # only the one not hit dodges, vs 10 + 7
-    assert sorted(dc for _m, dc in saves) == [17, 20]  # the hit one resists all 10 ranks
+    assert [dc for _m, dc, *_minion in dodges] == [17]  # only the one not hit dodges, vs 10 + 7
+    assert sorted(dc for _m, dc, *_minion in saves) == [17, 20]  # the hit one resists all 10 ranks
     area.close()
 
 
@@ -1078,7 +1078,9 @@ def test_the_gm_answers_a_request_as_one_of_their_npcs(
     _thug, mook, _sheet = _cast(window, data)
     window._npc_state[mook].character.resistances["TOUGHNESS"] = 6
     rolled: list[RollSpec] = []
-    monkeypatch.setattr(window._roller, "roll_spec", lambda spec: rolled.append(spec) or True)
+    monkeypatch.setattr(
+        window._roller, "roll_spec", lambda spec, **_kw: rolled.append(spec) or True
+    )
     save = RollSpec(
         label="Toughness vs. Burst",
         dc=18,
@@ -1147,7 +1149,7 @@ def _answer_as_npc(window: GMWindow, spec: RollSpec, party, degree: int, monkeyp
     from mm_companion.ui.roll_history import AnswerContext
 
     rolled: list[RollSpec] = []
-    monkeypatch.setattr(window._roller, "roll_spec", lambda s: rolled.append(s) or True)
+    monkeypatch.setattr(window._roller, "roll_spec", lambda s, **_kw: rolled.append(s) or True)
     window._roll_as(spec, party, AnswerContext(seq=3))
     (sent,) = rolled
     record = {

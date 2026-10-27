@@ -26,6 +26,7 @@ from dataclasses import dataclass, field, replace
 from ..character import Character
 from ..data_loader import ActionModifier, GameData, Impression, ResistanceOutcome
 from .derived import all_advantage_selections, own_skill_rows
+from .minions import BOOK_MINION_RULES, MinionRules, minion_rung
 from .rolls import (
     KIND_BEST_OF,
     KIND_IMPRESS,
@@ -345,9 +346,23 @@ def impress_spec(
     return spec
 
 
-def impress_rung(impression: Impression, degree: int | None) -> ResistanceOutcome | None:
-    """The rung of *impression* a resistance check of *degree* lands on."""
+def impress_rung(
+    impression: Impression,
+    degree: int | None,
+    game_data: GameData | None = None,
+    *,
+    minion: bool = False,
+    rules: MinionRules = BOOK_MINION_RULES,
+) -> ResistanceOutcome | None:
+    """The rung of *impression* a resistance check of *degree* lands on.
 
+    A *minion* that failed "suffers the most severe of its conditions" (PDF p201) when
+    the session plays that rule — see :func:`~.minions.minion_rung`, which needs
+    *game_data* for the ceiling it stops at.
+    """
+
+    if minion and game_data is not None:
+        return minion_rung(impression.outcomes, degree, None, game_data, minion=True, rules=rules)
     return outcome_rung(impression.outcomes, degree)
 
 

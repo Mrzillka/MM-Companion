@@ -524,6 +524,13 @@ A trait roll clicked in the GM's history — a request card, or a save chip unde
   Request-mode Impress is a group of one, and its card is where everyone finds the
   Resist button.
 
+## Minions
+
+A minion target changes three things here. Its failed save is the worst rung, an
+Impress against it is routine at +5, and a critical hit on it as an area's primary
+needs no save. Its own rolls also score no added success. All of it is switched by
+the session's rules. See [the minions notes](minions.md).
+
 ## Not done yet
 
 These are in [the debts](debts.md):

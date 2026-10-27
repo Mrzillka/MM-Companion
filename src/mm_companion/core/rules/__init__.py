@@ -65,6 +65,7 @@ from .equipment import *  # noqa: F401,F403
 from .extra_effort import *  # noqa: F401,F403
 from .impress import *  # noqa: F401,F403
 from .improvised import *  # noqa: F401,F403
+from .minions import *  # noqa: F401,F403
 from .movement import *  # noqa: F401,F403
 from .pins import *  # noqa: F401,F403
 from .platforms import *  # noqa: F401,F403

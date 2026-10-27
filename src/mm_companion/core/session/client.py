@@ -429,10 +429,13 @@ class SessionClient:
         hidden: bool = False,
         spec: dict | None = None,
         reroll: bool = False,
+        routine: bool = False,
+        minion: bool = False,
     ) -> bool:
         """Ask the server to roll. The result comes back as :data:`EVENT_ROLL`.
 
-        ``reroll`` asks for a lucky re-roll, whose die never comes up under 11.
+        ``reroll`` asks for a lucky re-roll, whose die never comes up under 11;
+        ``routine`` for a routine check (take 10); ``minion`` rolls as a minion.
         """
         return self.send(
             RollRequest(
@@ -443,6 +446,8 @@ class SessionClient:
                 hidden=hidden,
                 spec=spec,
                 reroll=reroll,
+                routine=routine,
+                minion=minion,
             )
         )
 

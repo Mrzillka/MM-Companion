@@ -30,7 +30,7 @@ two methods. :mod:`mm_companion.ui.action_run` does the rolling and the asking.
 from __future__ import annotations
 
 import html
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from PySide6.QtCore import QObject
@@ -41,9 +41,11 @@ from mm_companion.core.data_loader import GameData
 from mm_companion.core.powers import Power
 from mm_companion.core.rules import (
     AREA_MODE_REQUEST,
+    BOOK_MINION_RULES,
     KIND_POWER_CHECK,
     AreaAttempt,
     AreaEffect,
+    MinionRules,
     RollSpec,
     area_ask_dodge_spec,
     area_ask_save_spec,
@@ -57,6 +59,7 @@ from mm_companion.core.rules import (
     area_request_specs,
     area_stage_rank,
     area_title,
+    minion_save_spec,
     power_area_use,
     power_area_uses,
     resolve_rung,
@@ -72,6 +75,8 @@ from mm_companion.ui.session_bridge import SessionBridge
 
 #: What the GM's history button says.
 RESOLVE_CAPTION = "Resolve Area Attack"
+#: A degree past any ladder's last rung: what a critical hit on a minion lands at.
+WORST_DEGREE = -99
 
 
 class AreaHost(Protocol):
@@ -92,8 +97,11 @@ class AreaHost(Protocol):
     def action_add_card(self, card: ActionCard) -> None:
         """Put the GM's reminder card in their history."""
 
-    def area_roll_attack(self, spec: RollSpec) -> None:
-        """Roll an NPC's attack against the primary on the GM's roller."""
+    def area_roll_attack(self, spec: RollSpec, attacker=None) -> None:
+        """Roll an NPC's attack against the primary on the GM's roller (as *attacker*)."""
+
+    def minion_rules(self) -> MinionRules:
+        """The minion rules the open session plays by."""
 
     def action_remove(self, party: ImpressParty, changes: list[tuple[str, str | None]]) -> bool:
         """Take conditions off one party; ``False`` if that could not be delivered."""
@@ -134,6 +142,9 @@ class _Declared:
     card: ActionCard | None
     run: ActionRun
     attack: tuple[int, int] | None = None
+    #: Whether that attack was a critical hit — a natural 20 that counted, not a
+    #: minion's (PDF p25) nor a routine 10.
+    attack_critical: bool = False
     window: AreaWindow | None = None
     builds: list[Power] = field(default_factory=list)
     resolving: _Resolving | None = None
@@ -398,6 +409,7 @@ class AreaController(QObject):
             from_card=declared.from_card,
             parent=self._parent_window,
         )
+        window.set_minion_rules(self._rules())
         if declared.attack is not None:
             window.set_attack(*declared.attack)
         declared.window = window
@@ -434,7 +446,7 @@ class AreaController(QObject):
         """The window asked for the attack: rolled for an NPC, asked of a player."""
         declared.source = source
         if declared.source.kind != PARTY_PLAYER:
-            self._host.area_roll_attack(spec)
+            self._host.area_roll_attack(spec, declared.source.character)
             return
         if not declared.run.ask(declared.source, spec, None, lambda _a, r, d=declared: None):
             self._host.impress_notice(
@@ -495,6 +507,12 @@ class AreaController(QObject):
             return
         attack = (total_of(roll), int(roll.get("die", 0)))
         declared.attack = attack
+        declared.attack_critical = bool(
+            attack[1] == 20
+            and roll.get("critical", True)
+            and not roll.get("minion")
+            and not roll.get("routine")
+        )
         self._describe(declared)
         if declared.window is not None:
             declared.window.set_attack(*attack, reroll=bool(roll.get("reroll")))
@@ -561,6 +579,7 @@ class AreaController(QObject):
                     adjust=target.adjust,
                 ),
                 title=plan.title,
+                minion=self._minion_rolls(target.party),
             )
             for target in dodging
         ]
@@ -690,8 +709,18 @@ class AreaController(QObject):
         plan = resolving.plan
         lines: list[dict] = []
         about: list[tuple[AreaTarget, AreaEffect]] = []
+        rules = self._rules()
         for target in plan.targets:
             if target.party.kind == PARTY_PLAYER:
+                continue
+            if (
+                target.primary
+                and target.party.minion
+                and declared.attack_critical
+                and rules.crit_auto_fails
+            ):
+                # A critical hit on a minion: the worst, with no save (PDF p197).
+                self._crit_minion(declared, target)
                 continue
             saves = area_npc_save_specs(
                 plan.use,
@@ -707,12 +736,43 @@ class AreaController(QObject):
                 self._land(declared, target, "nothing to resist", "")
                 continue
             for effect, spec in saves:
-                lines.append(group_line(target.party.name, spec, title=plan.title))
+                if target.party.minion:
+                    spec = minion_save_spec(spec, rules)
+                lines.append(
+                    group_line(
+                        target.party.name,
+                        spec,
+                        title=plan.title,
+                        minion=self._minion_rolls(target.party),
+                    )
+                )
                 about.append((target, effect))
         if lines:
             declared.run.roll_group(
                 lines, list(about), lambda pairs, d=declared: self._npc_saved(d, pairs)
             )
+
+    def _rules(self) -> MinionRules:
+        """The session's minion rules — the book's for a host that cannot say."""
+        reader = getattr(self._host, "minion_rules", None)
+        return reader() if callable(reader) else BOOK_MINION_RULES
+
+    def _minion_rolls(self, party: ImpressParty) -> bool:
+        """Whether *party*'s rolls are a minion's: its natural 20 no added success."""
+        return party.minion and self._rules().no_added_success
+
+    def _crit_minion(self, declared: _Declared, target: AreaTarget) -> None:
+        """Land every effect's worst on a minion primary a critical hit struck, unrolled."""
+        resolving = declared.resolving
+        if resolving is None:
+            return
+        captions = []
+        for effect in resolving.plan.use.effects:
+            caption = self._apply(declared, target, effect, {"degree": WORST_DEGREE}, crit=True)
+            if caption:
+                captions.append(caption)
+        text = "; ".join(captions) if captions else "nothing to resist"
+        self._land(declared, target, f"critical hit, no save — {text}", "tint.worse")
 
     def _npc_saved(self, declared: _Declared, pairs: list[tuple[object, dict]]) -> None:
         """Put each failed save's rung on its NPC."""
@@ -813,9 +873,19 @@ class AreaController(QObject):
     # -- landing ---------------------------------------------------------------------------
 
     def _apply(
-        self, declared: _Declared, target: AreaTarget, effect: AreaEffect, record: dict
+        self,
+        declared: _Declared,
+        target: AreaTarget,
+        effect: AreaEffect,
+        record: dict,
+        *,
+        crit: bool = False,
     ) -> str:
-        """Put the rung a save landed on onto its creature; what it did, in words."""
+        """Put the rung a save landed on onto its creature; what it did, in words.
+
+        *crit* is a critical hit on a minion, which lands the worst rung whether or not
+        the session plays the worst-degree rule (it is a rule of its own).
+        """
         degree = record.get("degree")
         # Escalation reads the target's current conditions; with no sheet to read yet
         # (a player whose snapshot has not arrived) it reads none.
@@ -826,12 +896,14 @@ class AreaController(QObject):
         resisted = (
             dc - effect.dc_base if isinstance(dc, int) and isinstance(effect.dc_base, int) else None
         )
+        rules = self._rules()
         rung = area_effect_rung(
             effect,
             None if degree is None else int(degree),
             self._data,
             target.party.character,
             resisted,
+            rules=replace(rules, worst_degree=True) if crit else rules,
         )
         if rung is None:
             return ""

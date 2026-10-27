@@ -68,7 +68,7 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.core import storage
-from mm_companion.core.dice import CheckResult, reroll_d20, resolve_check, roll_d20
+from mm_companion.core.dice import ROUTINE_DIE, CheckResult, reroll_d20, resolve_check, roll_d20
 from mm_companion.core.rules import RollSpec
 from mm_companion.core.session.model import KIND_NOTE, KIND_REQUEST, KIND_ROLL
 from mm_companion.ui import theme
@@ -129,6 +129,14 @@ NOT_SENT = "The roll could not be sent to the session."
 # same guard: a loaded chip arms the die, so the panel has to be obvious about it.
 CHIP_PREFIX = "🎲 Rolling: "
 IDLE_PROMPT = "Click the die to roll."
+
+#: The roller's take-10 box (PDF p17): a routine check, rolled as a 10.
+ROUTINE_LABEL = "Routine (take 10)"
+ROUTINE_HINT = (
+    "Take 10 instead of rolling: the check counts as a 10 on the die, never a natural "
+    "1 or 20. For a check made under no pressure, and for any attack or interaction "
+    "against a minion. It unticks after one roll."
+)
 
 
 def d20_pixmap(ratio: float = 1.0, size: int | None = None) -> QPixmap:
@@ -265,13 +273,16 @@ def local_record(
     result: CheckResult | None,
     *,
     label: str = "",
+    routine: bool = False,
 ) -> dict:
     """A roll this app made on its own, in the shape a session record has.
 
     So the shared history's line builders (``roll_headline``) and the notification
-    (``toast_widgets``) read it exactly as they read one off the wire.
+    (``toast_widgets``) read it exactly as they read one off the wire. *routine* is a
+    routine check (take 10), which the line names instead of a d20.
     """
     return {
+        "routine": routine,
         "kind": KIND_ROLL,
         "player_name": "You",
         "label": label,
@@ -309,6 +320,8 @@ class RollCard(QFrame):
         label: str = "",
         spec: object = None,
         reroll: bool = False,
+        routine: bool = False,
+        minion: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -324,7 +337,7 @@ class RollCard(QFrame):
 
         # The same number line the shared history's card prints — degree and all, on
         # one line (see roll_headline).
-        headline = roll_headline(local_record(die, bonus, penalty, dc, result))
+        headline = roll_headline(local_record(die, bonus, penalty, dc, result, routine=routine))
         # What was rolled leads, the way the shared history's card names the player —
         # a private history of bare numbers is unreadable a few rolls later.
         shown = reroll_label(label, reroll)
@@ -351,6 +364,7 @@ class RollCard(QFrame):
             # roller is usually running both sides — so never assume the sheet in
             # front of us is the target's.
             localize=False,
+            added_success=not minion,
         ):
             info.addWidget(widget)
 
@@ -457,6 +471,8 @@ class DiceRollerPanel(ReflowBox, QWidget):
         # that was *loaded* is sticky: it survives the roll so the sliders can be
         # nudged and the die thrown again.
         self._spec: RollSpec | None = None
+        # Whether the loaded spec is a minion's (see :meth:`load_spec`).
+        self._spec_minion = False
         # ...but one that arrived through :meth:`roll_spec` is not — see
         # :meth:`_settle_spec`.
         self._transient = False
@@ -719,6 +735,14 @@ class DiceRollerPanel(ReflowBox, QWidget):
         if self._hidden_option:
             grid.addWidget(self._hidden_check, row, 0, 1, 3)
             row += 1
+
+        # Take 10 (PDF p17): for a check made under no pressure, and for any attack or
+        # interaction against a minion (p25). One roll's worth — it unticks once the
+        # roll is made, so it is never left on for the next one against a villain.
+        self._routine_check = QCheckBox(ROUTINE_LABEL)
+        self._routine_check.setToolTip(ROUTINE_HINT)
+        grid.addWidget(self._routine_check, row, 0, 1, 3)
+        row += 1
 
         self._build_request_row(grid, row)
         self._build_action_row(grid, row + 1)
@@ -1077,6 +1101,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
             self._dc_check,
             self._dc_spin,
             self._hidden_check,
+            self._routine_check,
             self._request_combo,
             self._request_dc,
             self._request_button,
@@ -1199,8 +1224,12 @@ class DiceRollerPanel(ReflowBox, QWidget):
         if spec is not None:
             self.rollRequested.emit(spec)
 
-    def load_spec(self, spec: RollSpec | None) -> None:
+    def load_spec(self, spec: RollSpec | None, *, minion: bool = False) -> None:
         """Load *spec* as the thing this panel rolls, or ``None`` to go back to manual.
+
+        *minion* says the trait is a minion's, so a natural 20 on it is no added
+        success (PDF p25). Only the GM's window rolls as anybody else, so only it
+        passes one; it goes with the spec and is forgotten with it.
 
         Sticky on purpose: a *loaded* chip stays after the roll so the sliders can be
         adjusted and the die thrown again for the same trait. That is what a single
@@ -1225,6 +1254,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._transient = False
         had_own_dc = self._spec is not None and self._spec.dc is not None
         self._spec = spec
+        self._spec_minion = spec is not None and minion
         if spec is not None and spec.dc is not None:
             self._dc_check.setChecked(True)
             self._dc_spin.setValue(spec.dc)
@@ -1278,9 +1308,9 @@ class DiceRollerPanel(ReflowBox, QWidget):
             min(self._bonus_spin.maximum(), self._bonus_spin.value() + amount)
         )
 
-    def roll_spec(self, spec: RollSpec | None) -> bool:
+    def roll_spec(self, spec: RollSpec | None, *, minion: bool = False) -> bool:
         """Load *spec*, roll it at once, and let it go again. ``False`` if a die is
-        already tumbling.
+        already tumbling. *minion* is :meth:`load_spec`'s.
 
         The one public way in for the sheet: a double-clicked stat line, a power's
         🎲, or a follow-up chip on a history card all land here.
@@ -1296,10 +1326,26 @@ class DiceRollerPanel(ReflowBox, QWidget):
         """
         if self._rolling:
             return False
-        self.load_spec(spec)
+        self.load_spec(spec, minion=minion)
         self._transient = spec is not None
         self._start_roll()
         return True
+
+    def _routine(self) -> bool:
+        """Whether the roll in flight is a routine check — the last roll's, on a reroll."""
+        if self._rerolling and self._last_roll is not None:
+            return bool(self._last_roll.get("routine"))
+        return self._routine_check.isChecked()
+
+    def _as_minion(self) -> bool:
+        """Whether the roll in flight is a minion's — the last roll's, on a reroll."""
+        if self._rerolling and self._last_roll is not None:
+            return bool(self._last_roll.get("minion"))
+        return self._spec_minion
+
+    def _spend_routine(self) -> None:
+        """A routine check is one roll's worth: untick it once that roll is made."""
+        self._routine_check.setChecked(False)
 
     def _settle_spec(self) -> None:
         """Drop a spec that was only loaded to be rolled, now that it has been.
@@ -1371,6 +1417,9 @@ class DiceRollerPanel(ReflowBox, QWidget):
         """
         if self._rolling or self._last_roll is None:
             return False
+        if self._last_roll.get("routine"):
+            # Nothing was rolled, so there is no die to be lucky with.
+            return False
         self._rerolling = True
         self._start_roll()
         return True
@@ -1393,6 +1442,8 @@ class DiceRollerPanel(ReflowBox, QWidget):
                 "hidden": hidden,
                 "label": self._roll_label(),
                 "spec": self._spec,
+                "routine": self._routine_check.isChecked(),
+                "minion": self._spec_minion,
             }
         self._rolling = True
         self._die_button.setEnabled(False)
@@ -1433,6 +1484,8 @@ class DiceRollerPanel(ReflowBox, QWidget):
             # its card. The server echoes it back on the record.
             spec=None if self._rolled_spec() is None else self._rolled_spec().to_dict(),
             reroll=self._rerolling,
+            routine=self._routine(),
+            minion=self._as_minion(),
         )
         if not sent:
             self._abandon_roll(NOT_SENT)
@@ -1491,19 +1544,28 @@ class DiceRollerPanel(ReflowBox, QWidget):
         """Resolve the roll locally and report it, ending any tumble in progress."""
         self._rolling = False  # stops the _tick_roll chain from rescheduling
 
+        routine, minion = self._routine(), self._as_minion()
         self._commit_last_roll()
         bonus, penalty, dc, _hidden = self._roll_parameters()
-        die, natural = reroll_d20() if self._rerolling else (roll_d20(), True)
+        if routine:
+            die, natural = ROUTINE_DIE, False
+        else:
+            die, natural = reroll_d20() if self._rerolling else (roll_d20(), True)
         self._face.setText(str(die))
 
         modifier = bonus - penalty
-        result = resolve_check(modifier, dc, roll=die, natural=natural) if dc is not None else None
+        result = (
+            resolve_check(modifier, dc, roll=die, natural=natural, added_success=not minion)
+            if dc is not None
+            else None
+        )
         self._update_readout(
             die,
             modifier,
             dc,
             None if result is None else result.degree,
             bool(result is not None and result.critical),
+            routine=routine,
         )
         self.localRoll.emit(
             {
@@ -1515,6 +1577,8 @@ class DiceRollerPanel(ReflowBox, QWidget):
                 "label": self._roll_label(),
                 "spec": self._rolled_spec(),
                 "reroll": self._rerolling,
+                "routine": routine,
+                "minion": minion,
             }
         )
         self._unlock_inputs()
@@ -1522,6 +1586,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._rerolling = False
         self._settle_spec()
         self._spend_extras()
+        self._spend_routine()
 
     def _commit_last_roll(self) -> None:
         """The roll in flight has a result, so it is now the one Reroll throws."""
@@ -1549,6 +1614,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
             None if degree is None else int(degree),
             bool(roll.get("critical")),
             hidden=bool(roll.get("hidden")),
+            routine=bool(roll.get("routine")),
         )
         self._unlock_inputs()
         # The die has settled — a paired history panel can now show this own roll.
@@ -1561,6 +1627,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._rerolling = False
         self._settle_spec()
         self._spend_extras()
+        self._spend_routine()
 
     def _abandon_roll(self, message: str) -> None:
         """Give up on a session roll that never came back.
@@ -1621,6 +1688,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
         critical: bool = False,
         *,
         hidden: bool = False,
+        routine: bool = False,
     ) -> None:
         self._showing_result = True
         total = die + modifier
@@ -1632,10 +1700,11 @@ class DiceRollerPanel(ReflowBox, QWidget):
                 f"<span style='color:{theme.color('accent.dice')}'>"
                 f"{escape_rich_text(label)}</span><br>"
             )
+        made = "routine" if routine else "d20"
         html += (
             f"<span style='font-size:{theme.font_size('size.roll-readout')}pt'>"
             f"<b>{total}</b></span> "
-            f"<span style='color:{muted}'>(d20 {die} {modifier:+d})</span>"
+            f"<span style='color:{muted}'>({made} {die} {modifier:+d})</span>"
         )
         if dc is not None:
             html += f" vs DC {dc}"
@@ -1953,6 +2022,8 @@ class LocalRollHistory(QWidget):
             label=str(roll.get("label", "")),
             spec=roll.get("spec"),
             reroll=bool(roll.get("reroll")),
+            routine=bool(roll.get("routine")),
+            minion=bool(roll.get("minion")),
         )
         card.set_save_state(self._saved_keys, self._quick_room)
         card.saveToggled.connect(self.saveToggled)
@@ -1968,6 +2039,7 @@ class LocalRollHistory(QWidget):
             roll["dc"],
             roll["result"],
             label=str(roll.get("label", "")),
+            routine=bool(roll.get("routine")),
         )
         announce_entry(record, self)
 

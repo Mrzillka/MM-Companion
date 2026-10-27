@@ -49,8 +49,10 @@ from mm_companion.core.powers import Power
 from mm_companion.core.rules import (
     AREA_MODE_REQUEST,
     AREA_MODE_RESOLVE,
+    BOOK_MINION_RULES,
     AreaAttempt,
     AreaUse,
+    MinionRules,
     RollSpec,
     area_attack_spec,
     area_capable_builds,
@@ -66,6 +68,7 @@ from mm_companion.core.rules import (
     find_area_power,
     power_area_use,
     power_area_uses,
+    routine_total,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.action_ui import (
@@ -534,6 +537,8 @@ class AreaWindow(ActionWindow):
         self._attack: tuple[int, int] | None = None
         self._attack_rerolled = False
         self._asked_attack = False
+        #: The session's minion rules: an attack on a minion primary may be routine.
+        self._minion_rules = BOOK_MINION_RULES
 
         setup = QWidget()
         form = QFormLayout(setup)
@@ -619,6 +624,8 @@ class AreaWindow(ActionWindow):
         self._hit.toggled.connect(lambda _on: self.sync())
         self._roll_attack.clicked.connect(self._emit_attack)
         mode_group.buttonToggled.connect(lambda _button, on: on and self.sync())
+        # A minion primary a routine attack hits is hit before anything is rolled.
+        self._judge_hit()
         self.sync()
 
     def make_row(self, party, cells: list[QWidget]) -> ActionRow:
@@ -849,13 +856,45 @@ class AreaWindow(ActionWindow):
         self._judge_hit()
         self.sync()
 
+    def set_minion_rules(self, rules: MinionRules) -> None:
+        """The session's minion rules, which decide whether a routine attack counts."""
+        self._minion_rules = rules
+        self._judge_hit()
+        self.sync()
+
+    def routine_attack(self) -> int | None:
+        """The attack's routine result against a minion primary, or ``None``.
+
+        A non-minion may attack a minion as a routine check (PDF p25): 10 plus the
+        attack, the GM's adjustment in. ``None`` when there is no attack check, the
+        primary is not a minion, the attacker is one, or the session plays without it.
+        """
+        use = self.attempt.use
+        row = self._row(self.primary_ref())
+        if use.attack is None or row is None or not self._minion_rules.routine_attacks:
+            return None
+        if not row.party.minion or self._source.minion:
+            return None
+        return routine_total(use.attack) + self._attack_adjust.value()
+
     def _judge_hit(self) -> None:
-        """Tick Hit from the attack's total, the GM's adjustment in, against the Defense."""
+        """Tick Hit from the attack's total, the GM's adjustment in, against the Defense.
+
+        Against a minion the routine result counts too: the attacker would have taken
+        10 had the roll been worse, so a hit either way is a hit — and one the routine
+        result makes needs no roll at all.
+        """
         dc = self._defense_dc()
-        if self._attack is None or dc is None:
+        if dc is None:
+            return
+        routine = self.routine_attack()
+        if self._attack is None:
+            if routine is not None and routine >= dc and not self._hit_by_hand:
+                self._hit.setChecked(True)
             return
         self._hit_by_hand = False
-        self._hit.setChecked(self._attack[0] + self._attack_adjust.value() >= dc)
+        rolled = self._attack[0] + self._attack_adjust.value()
+        self._hit.setChecked(rolled >= dc or (routine is not None and routine >= dc))
 
     def _defense_dc(self) -> int | None:
         row = self._row(self.primary_ref())
@@ -941,9 +980,19 @@ class AreaWindow(ActionWindow):
             # Nothing to add: the combo reads "aimed at a point", or Hit is already ticked.
             self._attack_note.setText("")
         elif self._attack is None:
-            waiting = f" — waiting for {self._source.name}'s roll" if self._asked_attack else ""
-            self._attack_note.setText(f"Attack {_signed(use.attack)}, not rolled yet{waiting}.")
-            self._attack_note.setStyleSheet(muted_style(italic=True))
+            routine = self.routine_attack()
+            dc = self._defense_dc()
+            if routine is not None and dc is not None and routine >= dc:
+                # A minion primary a routine attack hits: nothing needs rolling.
+                self._attack_note.setText(
+                    f"Routine attack {routine} vs. Defense DC {dc} hits the minion — "
+                    "no roll needed."
+                )
+                self._attack_note.setStyleSheet(tinted_style("tint.better", bold=False))
+            else:
+                waiting = f" — waiting for {self._source.name}'s roll" if self._asked_attack else ""
+                self._attack_note.setText(f"Attack {_signed(use.attack)}, not rolled yet{waiting}.")
+                self._attack_note.setStyleSheet(muted_style(italic=True))
         else:
             total, die = self._attack
             adjust = self._attack_adjust.value()

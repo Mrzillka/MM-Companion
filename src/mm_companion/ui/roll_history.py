@@ -71,12 +71,16 @@ class AnswerContext:
 
     ``seq`` is the card's own (a request's, or the roll a follow-up chip hangs off);
     ``source`` is who provoked it — an impression's ``{source}``; ``provoking`` is the
-    spec of the roll the chip follows, ``None`` on a request card.
+    spec of the roll the chip follows, ``None`` on a request card. ``critical`` says
+    that roll was a **critical hit** — an attack's natural 20 that counted, not a
+    minion's and not a routine 10 — which a minion answering it takes with no save at
+    all (PDF p197).
     """
 
     seq: int | None = None
     source: str = ""
     provoking: RollSpec | None = None
+    critical: bool = False
 
 
 def roll_button(
@@ -317,6 +321,7 @@ def chain_widgets(
     localize: bool = True,
     total: int | None = None,
     on_plain: Callable[[RollSpec], None] | None = None,
+    added_success: bool = True,
 ) -> list[QWidget]:
     """What a rolled :class:`RollSpec` adds under its history card: the chain.
 
@@ -340,7 +345,8 @@ def chain_widgets(
 
     Accepts the spec as a :class:`RollSpec` or as the plain dict it arrives as.
     ``total`` is the roll's total, which an *opposed* follow-up (resisting an
-    impression) takes as its DC.
+    impression) takes as its DC. ``added_success`` is false for a minion's roll (the
+    record's ``minion``), whose natural 20 raises no follow-up's DC.
 
     ``localize`` is what decides whether the follow-up arrives with the reader's own
     resistance filled in (:func:`~mm_companion.core.rules.localize_spec`, applied
@@ -355,7 +361,9 @@ def chain_widgets(
         return []
     widgets: list[QWidget] = []
     # Usually one; a Linked power's single attack lands a save per effect, each its own.
-    for follow_up in follow_ups_for_result(resolved, die, degree, load_game_data(), total):
+    for follow_up in follow_ups_for_result(
+        resolved, die, degree, load_game_data(), total, added_success=added_success
+    ):
         if not localize:
             follow_up = replace(follow_up, trait_key="")
         widgets.append(
@@ -484,7 +492,9 @@ def roll_headline(roll: dict) -> str:
     die = int(roll.get("die", 0))
     modifier = int(roll.get("bonus", 0)) - int(roll.get("penalty", 0))
     muted = theme.color("text.muted.rich")
-    breakdown = f"<span style='color:{muted}'>(d20 {die} {modifier:+d})</span>"
+    # A routine check rolled nothing: say so, rather than show a 10 that never came up.
+    made = "routine" if roll.get("routine") else "d20"
+    breakdown = f"<span style='color:{muted}'>({made} {die} {modifier:+d})</span>"
     headline = f"<b>{die + modifier}</b> {breakdown}"
     dc = roll.get("dc")
     if dc is not None:
@@ -819,6 +829,7 @@ class SessionRollCard(HistoryCard):
             on_follow_up=self.rollFollowUp.emit,
             localize=not own,
             on_plain=self.rollPlain.emit,
+            added_success=not roll.get("minion"),
         ):
             info.addWidget(widget)
 
@@ -906,8 +917,11 @@ def _table_cell(roll: dict, row: str) -> str:
         mark = "✓" if degree > 0 else "✗" * max(1, min(3, abs(degree)))
         colour = theme.color("tint.better" if degree > 0 else "tint.worse")
         text += f" <span style='color:{colour}'>{mark}</span>"
-    if die in (1, 20):
-        muted = theme.color("text.muted.rich")
+    muted = theme.color("text.muted.rich")
+    if roll.get("routine"):
+        text += f" <span style='color:{muted}'>(routine)</span>"
+    elif die == 1 or (die == 20 and not roll.get("minion")):
+        # A minion's 20 is no added success (PDF p25), so it is not called out.
         text += f" <span style='color:{muted}'>(nat {die})</span>"
     return text
 
@@ -955,8 +969,22 @@ def answer_context(roll: dict) -> AnswerContext:
             source = provoking.actor
         elif provoking.kind == KIND_IMPRESS and provoking.targets:
             source = provoking.targets[0]
+    # A critical *hit*: an attack whose natural 20 counted. An opposed check's 20 (an
+    # impression) and an area's Dodge are not attacks, so neither is one.
+    critical = bool(
+        provoking is not None
+        and int(roll.get("die", 0) or 0) == 20
+        and roll.get("critical")
+        and not roll.get("minion")
+        and not roll.get("routine")
+        and not provoking.follow_up_always
+        and not any(f.dc_from_total for f in provoking.follow_ups())
+    )
     return AnswerContext(
-        seq=seq if isinstance(seq, int) else None, source=source, provoking=provoking
+        seq=seq if isinstance(seq, int) else None,
+        source=source,
+        provoking=provoking,
+        critical=critical,
     )
 
 

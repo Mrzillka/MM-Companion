@@ -1744,8 +1744,8 @@ def test_a_roll_clicked_on_an_npc_sheet_lands_on_the_gm_roller(
     (sheet,) = window._npc_windows.values()
     rolled: list[object] = []
     loaded: list[object] = []
-    monkeypatch.setattr(window._roller, "roll_spec", rolled.append)
-    monkeypatch.setattr(window._roller, "load_spec", loaded.append)
+    monkeypatch.setattr(window._roller, "roll_spec", lambda s, **_kw: rolled.append(s))
+    monkeypatch.setattr(window._roller, "load_spec", lambda s, **_kw: loaded.append(s))
 
     spec = ability_roll(sheet.sheet.character, load_game_data(), "AGL")
     sheet.sheet.bus.publish_request("roll-requested", spec)

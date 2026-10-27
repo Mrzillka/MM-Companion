@@ -57,6 +57,23 @@ notes](actions.md) for the shape they would plug into.
   larger makes every attack an area" (PDF p58) is the free area switch the player
   flips, not a gate the app checks.
 
+## The minion rules left out
+
+Minions are in (see [the minions notes](minions.md)). These rules about them are not:
+
+- **Takedown** (PDF p95). Downing a minion grants a free attack on another; at rank 2
+  that target need not be adjacent. It wants the attack to know its target, which no
+  single-target attack here does yet.
+- **Menaces** (PDF p25): bonus reactions per turn, and spending a commanded minion in
+  place of a plot complication. There is no turn economy for either to hang off.
+- **Assess** (PDF p86) counts a group of identical minions as one opponent. Nothing
+  rolls Assess against a group yet.
+- **Summoned and advantage minions as creatures.** A Summon's or a Minion advantage's
+  build is still a build, not a creature on the board. Sending one to the GM window
+  should set `minion` on it unless the Summon is Heroic.
+- **A minion's 20 against another minion** is suppressed too, since a roll does not know
+  its target when it is thrown.
+
 ## End of turn does one thing so far
 
 A creature's card on the GM's board has an **End turn** item. All it does today is

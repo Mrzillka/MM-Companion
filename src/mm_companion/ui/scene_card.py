@@ -43,7 +43,7 @@ from mm_companion.ui.card_chips import (
 )
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.sections.conditions import condition_display_name, condition_tooltip
-from mm_companion.ui.widgets import discard_widget
+from mm_companion.ui.widgets import discard_widget, muted_style
 
 #: How wide one card's column is, so a row of them lines up in the flow. Stated
 #: rather than measured, unlike a GM card (whose ``body_width_hint`` is), and
@@ -85,6 +85,16 @@ GM_DISPOSITIONS: tuple[str, ...] = (
 def entry_ref(entry: dict) -> str:
     """The opaque handle a scene entry answers to."""
     return str(entry.get("ref", ""))
+
+
+#: What a minion's scene card says under its name (protocol v18's ``minion``).
+MINION_BADGE = "Minion"
+
+
+def entry_minion(entry: dict) -> bool:
+    """Whether this entry is a minion — only ever said when it is, and when the GM's
+    session lets the table see it."""
+    return entry.get("minion") is True
 
 
 def entry_disposition(entry: dict) -> str:
@@ -214,6 +224,7 @@ class SceneCard(QFrame):
         #: What this creature is to the table; :meth:`set_entry` reads it off the
         #: wire and :meth:`_restyle` paints the edge with it.
         self._disposition = DISPOSITION_ENEMY
+        self._minion = False
 
         self._data = data
         self._gm = gm
@@ -293,6 +304,18 @@ class SceneCard(QFrame):
         header.addWidget(self._badge)
         layout.addLayout(header)
 
+        # A minion is a minor character the rules make easier to defeat (PDF p25): a
+        # hero may take 10 against it and a failed save is its worst. A word rather
+        # than a colour, for the reason "(you)" is one. Only ever hidden here — the
+        # card may not have a parent yet — and set_entry decides.
+        self._minion_label = QLabel(MINION_BADGE)
+        self._minion_label.setStyleSheet(muted_style(italic=True))
+        minion_font = self._minion_label.font()
+        minion_font.setPointSizeF(theme.font_size("size.terms"))
+        self._minion_label.setFont(minion_font)
+        self._minion_label.hide()
+        layout.addWidget(self._minion_label)
+
         self._chips = FlowContainer()
         self._chip_flow = FlowLayout(self._chips)
         layout.addWidget(self._chips)
@@ -365,6 +388,8 @@ class SceneCard(QFrame):
         self._turn_label.setText("" if self._turn is None else str(self._turn))
         self._turn_label.setVisible(self._turn is not None)
         self._disposition = entry_disposition(entry)
+        self._minion = entry_minion(entry)
+        self._minion_label.setVisible(self._minion)
         self._restyle()
         # A player's entry carries their id; an NPC's carries nothing that says
         # what it stands for, which is the whole point of an opaque ref.
@@ -399,6 +424,11 @@ class SceneCard(QFrame):
     def turn(self) -> int | None:
         """This entry's place in the turn order, or ``None``."""
         return self._turn
+
+    @property
+    def minion(self) -> bool:
+        """Whether this entry said it is a minion."""
+        return self._minion
 
     def condition_chips(self) -> list[_ConditionChip]:
         """The chips themselves, in order."""
@@ -460,6 +490,8 @@ class SceneCard(QFrame):
         pointer sits over a condition chip is answering a question nobody asked.
         """
         parts = [f"{name} (you)" if self._own else name, DISPOSITION_LABELS[self._disposition]]
+        if self._minion:
+            parts.append(MINION_BADGE)
         if self._turn is not None:
             parts.append(f"Turn {self._turn}")
         if self._initiative is not None:

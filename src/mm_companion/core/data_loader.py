@@ -1565,6 +1565,21 @@ class DamageDefenses:
 
 
 @dataclass(frozen=True)
+class MinionSystem:
+    """The two numbers the minion rules need (``system.json``'s ``minions``, PDF p25).
+
+    ``impress_bonus`` is what a hero gains on a routine Impress check against minions
+    (PDF p201). ``ceiling`` is the condition a minion's failed saves stop at: escalation
+    never carries one past it, so a thug who fails again stays Incapacitated rather
+    than walking the Dying ladder (the GM marks it dead by hand). Which of the rules
+    are *on* is not here — that is the session's, :class:`~.rules.minions.MinionRules`.
+    """
+
+    impress_bonus: int = 5
+    ceiling: str = "incapacitated"
+
+
+@dataclass(frozen=True)
 class SystemRules:
     """System-level rule references (from ``system.json``).
 
@@ -1600,6 +1615,8 @@ class SystemRules:
     damage_defenses: DamageDefenses = field(default_factory=DamageDefenses)
     #: The presets and cap pairs the GM's Quick NPC dialog builds a creature from.
     quick_npc: QuickNPCRules = field(default_factory=QuickNPCRules)
+    #: The minion rules' numbers (see :class:`MinionSystem`).
+    minions: MinionSystem = field(default_factory=MinionSystem)
 
 
 # --- Measurements & movement: the rank ↔ real-world conversion tables, the
@@ -4083,6 +4100,18 @@ def _parse_system(raw: dict) -> SystemRules:
             for d in sys.get("derived_traits", [])
         ),
         quick_npc=_parse_quick_npc(sys.get("quick_npc"), defaults.quick_npc),
+        minions=_parse_minions(sys.get("minions"), defaults.minions),
+    )
+
+
+def _parse_minions(raw: object, default: MinionSystem) -> MinionSystem:
+    """Parse ``system.json``'s ``minions`` block; a missing key keeps *default*'s."""
+
+    if not isinstance(raw, dict):
+        return default
+    return MinionSystem(
+        impress_bonus=int(raw.get("impressBonus", default.impress_bonus)),
+        ceiling=str(raw.get("ceiling", default.ceiling)),
     )
 
 

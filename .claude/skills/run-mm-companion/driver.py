@@ -1086,6 +1086,40 @@ def build(target: str):
         _pump(_app())
         bar = win._scroll.verticalScrollBar()
         bar.setValue(bar.maximum())
+    elif target == "gm-aimed":
+        # An aimed attack waiting in the GM's history: a player's Blast at a Thug, its
+        # die in, with the Accept / Decline card the GM answers it from.
+        from mm_companion.core import library
+        from mm_companion.core.character import Character
+        from mm_companion.core.data_loader import load_game_data
+        from mm_companion.core.npc import quick_npc
+        from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
+        from mm_companion.core.rules import power_rolls, targetable_attack
+        from mm_companion.ui.attack_targets import AttackDeclaration, aimed_spec
+        from mm_companion.ui.gm_window import SCENE_NPC, GMWindow
+
+        data = load_game_data()
+        win = GMWindow(bind="127.0.0.1")
+        thug = quick_npc(data, name="Thug", attack=4, effect=4, defence=4, toughness=3)
+        path = library.save_character(thug, directory=win._npc_dir())
+        win._register_npc(path)
+        win._set_in_scene(SCENE_NPC, path.name, True)
+        hero = Character.new_default(data)
+        blast = PowerEffectInstance("damage", rank=8)
+        blast.extras.append(ModifierSelection("ranged", config={"from": "close"}))
+        spec = next(
+            s
+            for s in power_rolls(Power(name="Blast", effects=[blast]), hero, data)
+            if targetable_attack(s)
+        )
+        ref = win._scene_entry_for(SCENE_NPC, path.name).ref
+        aimed = aimed_spec(spec, "a1", "Thug", "Ana")
+        win._attack.declare("p1", AttackDeclaration("a1", ref, "Thug", aimed, "Ana").to_dict())
+        win._attack.take_roll(
+            {"kind": "roll", "die": 14, "bonus": 6, "penalty": 0, "spec": aimed.to_dict()}
+        )
+        win.resize(1100, 800)
+        win.show()
     elif target == "gm-settings":
         # The GM Mode settings page, reached the way a GM reaches it: build the GM
         # window and fire its own Settings ▸ Preferences… handler, so the shot is of
@@ -1711,6 +1745,7 @@ def main(argv: list[str] | None = None) -> int:
             "gm-scene",
             "gm-cast",
             "gm-squad",
+            "gm-aimed",
             "gm-settings",
             "npc",
             "array-cost",

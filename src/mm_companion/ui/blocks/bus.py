@@ -163,6 +163,10 @@ BONUS_REQUESTED = "bonus-requested"
 #: it opens the window that aims the area. Its own topic so nothing that serves
 #: ``roll-requested`` (a mod's roller included) is ever handed one and rolls a +0 d20.
 AREA_REQUESTED = "area-requested"
+#: Roll an attack *at* someone: the payload is ``(RollSpec, SceneTarget)``, from an
+#: attack line's right-click (``ui/attack_targets.py``). Its own topic for the area
+#: line's reason: the roller declares it to the GM as well as throwing the die.
+ATTACK_REQUESTED = "attack-requested"
 #: A recovery check came back made: take its condition off. The payload is
 #: ``(condition_id, parameter)``. Raised by the roller, which knows the result, and
 #: served by the Conditions block, which owns the change — a roll is not an edit.
@@ -213,7 +217,14 @@ QUIET_REQUESTS = frozenset(
 #: an NPC sheet has none, and a roll clicked on one belongs in the GM window's — as
 #: does an NPC's area, which the GM resolves.
 OUTWARD_REQUESTS = frozenset(
-    {ROLL_REQUESTED, LOAD_REQUESTED, BONUS_REQUESTED, NOTE_REQUESTED, AREA_REQUESTED}
+    {
+        ROLL_REQUESTED,
+        LOAD_REQUESTED,
+        BONUS_REQUESTED,
+        NOTE_REQUESTED,
+        AREA_REQUESTED,
+        ATTACK_REQUESTED,
+    }
 )
 
 Handler = Callable[[], None]

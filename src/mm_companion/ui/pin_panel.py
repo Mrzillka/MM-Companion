@@ -318,12 +318,23 @@ class PinChip(QFrame):
             self.loadRequested.emit(self._value.spec)
         event.accept()
 
-    def contextMenuEvent(self, event) -> None:  # noqa: N802 (Qt override)
+    def build_menu(self) -> QMenu:
+        """The tile's right-click menu: whatever its panel adds (an attack's targets),
+        then Remove."""
         menu = QMenu(self)
+        panel = self.parent()
+        while panel is not None and not isinstance(panel, PinPanel):
+            panel = panel.parent()
+        extend = getattr(panel, "extend_menu", None)
+        if callable(extend) and self._value.spec is not None and extend(menu, self._value.spec):
+            menu.addSeparator()
         menu.addAction(
             f"Remove {self._value.label}", lambda: self.removeRequested.emit(self._index)
         )
-        menu.exec(event.globalPos())
+        return menu
+
+    def contextMenuEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        self.build_menu().exec(event.globalPos())
 
 
 class PinPanel(QWidget):
@@ -355,6 +366,10 @@ class PinPanel(QWidget):
         #: header rather than a strip down its side. See :meth:`_build_grid`.
         self._grid = grid
         self._max_visible: int | None = None
+        #: ``(menu, spec) -> bool``: what an owner adds at the top of a tile's
+        #: right-click menu — the NPC card's "Attack a target" — and whether it added
+        #: anything. ``None``: the tile's menu is just Remove.
+        self.extend_menu = None
         self._indicator = DropIndicator(self)
         if grid:
             self._build_grid()

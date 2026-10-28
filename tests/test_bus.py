@@ -19,6 +19,7 @@ from mm_companion.ui.blocks import block_descriptors
 from mm_companion.ui.blocks.bus import (
     ABILITY_CHANGED,
     AREA_REQUESTED,
+    ATTACK_REQUESTED,
     BONUS_REQUESTED,
     BUILD_CHANGED,
     CAPS_CHANGED,
@@ -60,6 +61,7 @@ REQUEST_TOPICS = {
     HERO_POINT_REQUESTED,
     BONUS_REQUESTED,
     AREA_REQUESTED,
+    ATTACK_REQUESTED,
     RECOVERY_REQUESTED,
     USE_SPENT,
 }

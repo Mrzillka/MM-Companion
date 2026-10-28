@@ -257,6 +257,8 @@ class EquipmentSection(HeldRebuild, TitledSection):
     rollRequested = Signal(object)
     #: An item's area line was pressed — use it on an area. Carries the build's id.
     areaRequested = Signal(str)
+    #: ``(RollSpec, SceneTarget)`` — an attack line aimed at a creature on the Scene.
+    targetRequested = Signal(object)
     #: A GM asked for one of an item's rolls on (or off) the card beside this sheet.
     pinRequested = Signal(object)  # PinRef
     unpinRequested = Signal(object)  # PinRef
@@ -977,6 +979,7 @@ class EquipmentSection(HeldRebuild, TitledSection):
             simple=self._simple,
         )
         footer.rollRequested.connect(self.rollRequested)
+        footer.targetRequested.connect(self.targetRequested)
         footer.areaRequested.connect(self.areaRequested)
         footer.pinRequested.connect(self.pinRequested)
         footer.unpinRequested.connect(self.unpinRequested)

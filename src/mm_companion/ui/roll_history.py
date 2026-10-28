@@ -1194,9 +1194,17 @@ class ActionCard(HistoryCard):
     """
 
     actionRequested = Signal(str)
+    #: The action id — the card's second button (an aimed attack's Decline).
+    secondRequested = Signal(str)
 
     def __init__(
-        self, action_id: str, text: str, button: str, parent: QWidget | None = None
+        self,
+        action_id: str,
+        text: str,
+        button: str,
+        parent: QWidget | None = None,
+        *,
+        second: str = "",
     ) -> None:
         super().__init__(None, parent)
         self.action_id = action_id
@@ -1208,7 +1216,19 @@ class ActionCard(HistoryCard):
         self.button = QPushButton(button)
         self.button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.button.clicked.connect(lambda: self.actionRequested.emit(self.action_id))
-        info.addWidget(self.button)
+        #: An optional second choice beside the first (Accept / Decline), or ``None``.
+        self.second_button: QPushButton | None = None
+        if second:
+            buttons = QHBoxLayout()
+            buttons.setContentsMargins(0, 0, 0, 0)
+            buttons.addWidget(self.button)
+            self.second_button = QPushButton(second)
+            self.second_button.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.second_button.clicked.connect(lambda: self.secondRequested.emit(self.action_id))
+            buttons.addWidget(self.second_button)
+            info.addLayout(buttons)
+        else:
+            info.addWidget(self.button)
         self._status = QLabel()
         self._status.setWordWrap(True)
         self._status.setStyleSheet(muted_style(italic=True))
@@ -1240,6 +1260,8 @@ class ActionCard(HistoryCard):
         """The action is settled: say how, and take the button away."""
         self.pending = False
         self.button.hide()
+        if self.second_button is not None:
+            self.second_button.hide()
         self._status.setText(text)
         self._status.show()
 

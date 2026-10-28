@@ -52,6 +52,8 @@ class NPCGroupCard(QFrame):
     ungroupRequested = Signal(str)
     #: ``(group id, on)`` — put every member on the Scene, or take every one off.
     sceneRequested = Signal(str, bool)
+    #: The group's id — its members combine their attacks on one target (PDF p201).
+    teamAttackRequested = Signal(str)
 
     def __init__(self, group: NPCGroup, rows: list[NPCCard], parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -128,6 +130,10 @@ class NPCGroupCard(QFrame):
     def build_menu(self) -> QMenu:
         """The group's menu (the ⋯ button and a right-click on the header)."""
         menu = QMenu(self)
+        menu.addAction(
+            "Team attack…", lambda: self.teamAttackRequested.emit(self.group_id)
+        ).setToolTip("Combine the members' attacks on one target")
+        menu.addSeparator()
         menu.addAction("Rename group…", lambda: self.renameRequested.emit(self.group_id))
         menu.addSeparator()
         menu.addAction(

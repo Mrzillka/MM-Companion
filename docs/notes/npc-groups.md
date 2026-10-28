@@ -58,7 +58,7 @@ resists as a group yet (see "Group rolls" below).
 
 ## Not done
 
-- **Group rolls.** A group does not roll as one. The book's team check, group check
-  and Team Attack (PDF p18, p201) would hang off these groups first (GM-only), with
-  the core written so player teams can use it later.
+- **Team attack** is done (see [the actions notes](actions.md#team-attack)). The
+  book's **team check** and **group check** (PDF p18) are not: they would hang off these
+  groups the same way, with the core written so player teams can use it later.
 - A second GM seat does not see the first one's groups (they are per GM).

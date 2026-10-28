@@ -172,6 +172,7 @@ from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.session_bridge import SessionBridge, last_session, set_active_session
 from mm_companion.ui.session_dialogs import HostOptions
 from mm_companion.ui.session_portrait import encode_scene_portrait, shrink_portrait
+from mm_companion.ui.team_attack import TeamAttackWindow
 from mm_companion.ui.toasts import ToastCard, ToastStack
 from mm_companion.ui.undo import absorbing
 from mm_companion.ui.widgets import (
@@ -3141,6 +3142,7 @@ class GMWindow(QMainWindow):
                 group_card.renameRequested.connect(self._rename_group)
                 group_card.ungroupRequested.connect(self._ungroup)
                 group_card.sceneRequested.connect(self._group_to_scene)
+                group_card.teamAttackRequested.connect(self._team_attack)
                 self._group_cards[group.id] = group_card
                 self._npc_flow.addWidget(group_card)
                 continue
@@ -3339,6 +3341,37 @@ class GMWindow(QMainWindow):
             return
         for member in card.members:
             self._set_in_scene(SCENE_NPC, member, on)
+
+    def _team_attack(self, group_id: str) -> TeamAttackWindow | None:
+        """A group's "Team attack…": its members combine their attacks on one target."""
+        card = self._group_cards.get(group_id)
+        group = next((g for g in self._npc_groups if g.id == group_id), None)
+        if card is None or group is None:
+            return None
+        members = [self._npc_party(name) for name in card.members if name in self._npc_state]
+        skip = {
+            entry.ref
+            for name in card.members
+            if (entry := self._scene_entry_for(SCENE_NPC, name)) is not None
+        }
+        targets = [t for t in self._aim_targets() if t.ref not in skip]
+        window: TeamAttackWindow | None = None
+
+        def run(chosen, target_ref: str, adjust: int) -> str:
+            return self._attack.team_attack(
+                chosen,
+                target_ref,
+                adjust=adjust,
+                title=f"Team attack: {group.name}",
+                on_rolled=lambda lines, summary: window.show_rolls(lines, summary),
+                on_done=lambda text: window.show_done(text),
+            )
+
+        window = TeamAttackWindow(self._data, group.name, members, targets, run, parent=self)
+        window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self._team_window = window
+        window.show()
+        return window
 
     def _group_npcs(self, members: list[str], name: str) -> None:
         """Record *members* (two or more, just made) as a new group called *name*."""

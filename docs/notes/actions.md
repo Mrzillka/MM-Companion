@@ -560,6 +560,31 @@ click**: it rolls, as it always did. Its **right click** lists the Scene's creat
   (`routine_attacks`); a critical on one lands its worst with no save
   (`critical_answer`, Impervious respected); its failed save is the worst rung.
 
+## Team attack
+
+A group of NPCs combines its attacks on one target (PDF p201). From an NPC group's ⋯
+menu (`ui/npc_group.py`), **Team attack…** opens `ui/team_attack.py`'s window: the target
+(off the Scene, the group's own members left out), the attack the members share
+(`rules.team_attack_options`, keyed by power or item name and attack index, so a squad's
+copies line up), who joins in (a member who is down starts unticked), and one adjustment
+for every check.
+
+- The rules are `core/rules/team_attack.py` and the numbers `system.json`'s `teamAttack`:
+  same effect and resistance, ranks within `rankSpread`; the hits' largest rank is the
+  primary; the others' total degrees reach a step (+2 at one, +5 at three — the book
+  skips two, so two reads as one); any critical among the hits adds `criticalBonus` once;
+  misses count for nothing; an effect with no attack check hits for one degree.
+- On a rank tie the primary is the hit with the **fewest** degrees: the primary's own
+  degrees count for nothing, so that reading counts the most of the team's. The book is
+  silent; this is a call.
+- `AttackController.team_attack` rolls every check as **one server group** against the
+  target's Defense (one table in the history), judges each with `judge_attack` (a minion's
+  20 adds nothing; against a minion target the routine result counts), and then resolves
+  the target's one save at the raised rank (`team_save_spec`, ladder rank raised too, so
+  Impervious is measured against it) on the aimed-attack road: an NPC's rolled at once at
+  the GM roller's adjustment, a player asked. A critical on a minion target lands its
+  worst unrolled.
+
 ## Not done yet
 
 These are in [the debts](debts.md):

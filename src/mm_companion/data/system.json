@@ -12,7 +12,16 @@
       "impressBonus": 5,
       "ceiling": "incapacitated"
     },
-    "_defeat": "The conditions that take a creature out of the fight, for how its card looks: down (Incapacitated; Dying includes it) dims it, dead dims it further. Dead outranks down.",
+    "_teamAttack": "Team Attack (PDF p201). Attacks combine when they share an effect and a resistance and their ranks are within rankSpread. The hits' largest rank is the primary; the other hits' total degrees of success raise its rank by the bonus of the highest step reached (the book names one degree, +2, and three, +5; two reads as one). An attack with no attack check counts one degree. Any critical among them adds criticalBonus once.",
+    "teamAttack": {
+      "rankSpread": 5,
+      "steps": [
+        { "degrees": 1, "bonus": 2 },
+        { "degrees": 3, "bonus": 5 }
+      ],
+      "criticalBonus": 5
+    },
+    "_defeat":"The conditions that take a creature out of the fight, for how its card looks: down (Incapacitated; Dying includes it) dims it, dead dims it further. Dead outranks down.",
     "defeat": {
       "down": ["incapacitated"],
       "dead": ["dead"]

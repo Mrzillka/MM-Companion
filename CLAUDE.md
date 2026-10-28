@@ -37,6 +37,7 @@ drawn as one framed card of rows (see [the NPC groups notes](docs/notes/npc-grou
 A creature that is down or dead fades on every board. Any attack can be **aimed**:
 right-click it, pick a creature off the Scene, and the GM accepts it and the app judges
 the hit and lands the save (see [the actions notes](docs/notes/actions.md#aimed-attacks)).
+A group can make a **team attack**: its members combine their attacks on one target.
 
 ## Commands
 

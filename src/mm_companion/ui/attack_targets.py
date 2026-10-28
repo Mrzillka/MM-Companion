@@ -146,6 +146,25 @@ def add_target_actions(
     return True
 
 
+def targets_for(widget) -> list[SceneTarget] | None:
+    """Who an attack line on *widget* may be aimed at.
+
+    A window that knows better says so through an ``aim_targets`` callable — the GM's
+    NPC sheet, whose targets are the GM's own Scene (offline too) less the creature
+    itself. Anywhere else it is the live session's Scene, or ``None`` without one.
+    """
+
+    current = widget
+    while current is not None:
+        provider = getattr(current, "aim_targets", None)
+        if callable(provider):
+            return provider()
+        current = current.parentWidget()
+    from mm_companion.ui.session_bridge import active_session
+
+    return session_targets(active_session())
+
+
 def session_targets(bridge, *, skip_ref: str = "") -> list[SceneTarget] | None:
     """The targets on *bridge*'s Scene, or ``None`` when there is no session."""
 

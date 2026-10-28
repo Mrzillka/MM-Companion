@@ -7,7 +7,7 @@ row, its conditions, its menu, its drag) works exactly as on a loose card, and t
 window wires both through one road.
 
 The header names the squad, counts it, and says how many are still up — a row is
-dimmed while its creature is down (``ui/defeat_look.py``). Its ⋯ menu renames the
+dimmed while its creature is down (``ui/defeat_look.py``). Its ☰ menu renames the
 group, puts all of it on the Scene or takes it off, and ungroups it. Dragging the header
 moves the whole group; dragging a row out of it takes that creature out (see
 ``GMWindow._drop_on_npcs``), and dropping a card on another makes or grows a group
@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMenu,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -31,11 +30,13 @@ from mm_companion.core.npc_groups import NPCGroup
 from mm_companion.core.rules import DEFEAT_NONE
 from mm_companion.ui import theme
 from mm_companion.ui.card_chips import start_card_drag
-from mm_companion.ui.npc_card import DRAG_THRESHOLD, NPCCard
+from mm_companion.ui.npc_card import DRAG_THRESHOLD, NPCCard, _small_button
 from mm_companion.ui.widgets import muted_style
 
 #: What a group's dragged header carries: ``"npcgroup:<group id>"``.
 GROUP_KIND = "npcgroup"
+#: The header's menu button.
+MENU_GLYPH = "☰"
 
 
 def group_ref(group_id: str) -> str:
@@ -82,10 +83,11 @@ class NPCGroupCard(QFrame):
         self._status = QLabel()
         self._status.setStyleSheet(muted_style())
         header.addWidget(self._status, stretch=1)
-        self._menu_button = QToolButton()
-        self._menu_button.setText("⋯")
-        self._menu_button.setAutoRaise(True)
-        self._menu_button.setToolTip("Rename, put on the Scene, or ungroup")
+        # The same square as every small control on a GM card, so it reads as one.
+        self._menu_button = _small_button(MENU_GLYPH)
+        self._menu_button.setToolTip(
+            "Team attack, team or group check, rename, put on the Scene, or ungroup"
+        )
         self._menu_button.clicked.connect(
             lambda: self.build_menu().exec(
                 self._menu_button.mapToGlobal(self._menu_button.rect().bottomLeft())
@@ -131,7 +133,7 @@ class NPCGroupCard(QFrame):
         self._status.setText(f"{count - down} up · {down} down" if down else "")
 
     def build_menu(self) -> QMenu:
-        """The group's menu (the ⋯ button and a right-click on the header)."""
+        """The group's menu (the ☰ button and a right-click on the header)."""
         menu = QMenu(self)
         menu.addAction(
             "Team attack…", lambda: self.teamAttackRequested.emit(self.group_id)

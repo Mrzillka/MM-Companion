@@ -1,6 +1,6 @@
 """The GM's team check and group check for an NPC group (PDF p18).
 
-Opened from an NPC group's ⋯ menu (``ui/npc_group.py``). Both pick one trait — an
+Opened from an NPC group's ☰ menu (``ui/npc_group.py``). Both pick one trait — an
 ability, a resistance, a skill or initiative, the same list the roller's Request row
 offers (``rules.requested_roll_choices``) — and each member rolls it at their own
 number (``localize_spec``), with one situational adjustment on every roll:
@@ -36,8 +36,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from shiboken6 import isValid
 
 from mm_companion.core.data_loader import GameData
+from mm_companion.core.dice import degrees
 from mm_companion.core.rules import (
     DEFEAT_NONE,
     GroupCheckMember,
@@ -54,6 +56,7 @@ from mm_companion.ui.action_run import ActionRun, group_line, total_of
 from mm_companion.ui.action_ui import ADJUST_LIMIT
 from mm_companion.ui.impress import ImpressParty
 from mm_companion.ui.widgets import (
+    grow_to_fit,
     guard_wheel,
     make_signed_spin_box,
     make_spin_box,
@@ -109,7 +112,12 @@ class GroupCheckWindow(QDialog):
         self._post_note = post_note
         self._run: ActionRun | None = None
         self._summary = ""
-        self.setWindowTitle(f"{TITLES[mode]}: {group_name}")
+        self._title = f"{TITLES[mode]}: {group_name}"
+        #: The choices as they stood when Roll was pressed. The rolls come back later,
+        #: maybe after the window has closed, so nothing past roll() reads a widget.
+        self._adjust_value = 0
+        self._leader_dc: int | None = None
+        self.setWindowTitle(self._title)
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -247,9 +255,9 @@ class GroupCheckWindow(QDialog):
         own = localize_spec(spec, member.character, self._data)
         return replace(
             own,
-            modifier=own.modifier + self._adjust.value(),
+            modifier=own.modifier + self._adjust_value,
             trait_key="",
-            title=self.windowTitle(),
+            title=self._title,
             label=f"{member.name}: {own.label}",
         )
 
@@ -287,6 +295,10 @@ class GroupCheckWindow(QDialog):
 
     # -- rolling ------------------------------------------------------------------
 
+    def _inputs(self) -> list[QWidget]:
+        widgets = [self._trait, self._dc, self._dc_check, self._adjust, *self._checks]
+        return widgets + ([self._leader] if self._leader is not None else [])
+
     def roll(self) -> None:
         spec = self.spec()
         if spec is None:
@@ -294,15 +306,28 @@ class GroupCheckWindow(QDialog):
         self._note.setText("Rolling…")
         self._note.setStyleSheet(muted_style(italic=True))
         self._roll.setEnabled(False)
-        for widget in (self._trait, self._dc, self._dc_check, self._adjust, *self._checks):
+        for widget in self._inputs():
             widget.setEnabled(False)
-        if self._leader is not None:
-            self._leader.setEnabled(False)
-        self._run = self._make_run(self.windowTitle())
+        self._adjust_value = self._adjust.value()
+        self._leader_dc = self._dc.value() if self._dc_check.isChecked() else None
+        self._run = self._make_run(self._title)
         if self._mode == MODE_TEAM:
-            self._roll_helpers(spec)
+            went = self._roll_helpers(spec)
         else:
-            self._roll_group(spec)
+            went = self._roll_group(spec)
+        if not went:
+            self._unlock("The rolls did not reach the session — try again.")
+
+    def _unlock(self, reason: str) -> None:
+        """Nothing went out: hand the window back to the GM, saying why."""
+        if not isValid(self):
+            return
+        for widget in self._inputs():
+            widget.setEnabled(True)
+        self._sync()
+        self._note.setText(html.escape(reason))
+        self._note.setStyleSheet(tinted_style("tint.worse", bold=False))
+        grow_to_fit(self)
 
     def _line(self, member: ImpressParty, spec: RollSpec, dc: int | None, bonus: int = 0) -> dict:
         own = self._own(member, spec)
@@ -312,12 +337,12 @@ class GroupCheckWindow(QDialog):
         return group_line(
             member.name,
             own,
-            title=self.windowTitle(),
+            title=self._title,
             dc=dc,
             minion=member.minion and rules.no_added_success,
         )
 
-    def _roll_group(self, spec: RollSpec) -> None:
+    def _roll_group(self, spec: RollSpec) -> bool:
         members = self.ticked()
         dc = self._dc.value()
         lines = [self._line(m, spec, dc) for m in members]
@@ -325,9 +350,13 @@ class GroupCheckWindow(QDialog):
         def rolled(pairs) -> None:
             entries = []
             for member, record in pairs:
-                entries.append(GroupCheckMember(member.name, total_of(record), _added(record)))
-                own = int(record.get("degree") or 0)
-                self._show(member, f"{total_of(record)} — {'✓' if own > 0 else '✗'}")
+                added = _added(record)
+                entries.append(GroupCheckMember(member.name, total_of(record), added))
+                # Each member's own result *before* the natural 20s and 1s, which the
+                # group counts afterwards — so the marks agree with "2 of 4 made".
+                made = degrees(total_of(record) - dc) > 0
+                natural = {1: " (nat 20: +1)", -1: " (nat 1: −1)"}.get(added, "")
+                self._show(member, f"{total_of(record)} — {'✓' if made else '✗'}{natural}")
             result = group_check_result(entries, dc, self._data)
             if result is None:
                 return
@@ -342,29 +371,33 @@ class GroupCheckWindow(QDialog):
                 )
             self._done(f"{self._group_name}'s group check ({spec.label}): {text}.")
 
-        self._run.roll_group(lines, members, rolled)
+        return self._run.roll_group(lines, members, rolled)
 
-    def _roll_helpers(self, spec: RollSpec) -> None:
+    def _roll_helpers(self, spec: RollSpec) -> bool:
         leader = self.leader()
         helpers = [m for m in self.ticked() if m is not leader]
         helper_dc = self._data.system.group_checks.helper_dc
         lines = [self._line(m, spec, helper_dc) for m in helpers]
 
         def helped(pairs) -> None:
-            degrees = []
+            helper_degrees = []
             for member, record in pairs:
                 degree = int(record.get("degree") or 0)
-                degrees.append(degree)
+                helper_degrees.append(degree)
                 self._show(member, f"{total_of(record)} vs DC {helper_dc} — {_degree_text(degree)}")
-            bonus = team_check_bonus(degrees, self._data)
+            bonus = team_check_bonus(helper_degrees, self._data)
             self._summary = f"Helpers add +{bonus}."
-            self._note.setText(html.escape(self._summary + " The leader rolls…"))
-            self._roll_leader(spec, leader, bonus)
+            self._say(html.escape(self._summary + " The leader rolls…"))
+            if not self._roll_leader(spec, leader, bonus):
+                self._done(
+                    f"{self._group_name}'s team check ({spec.label}): helpers +{bonus}; "
+                    f"{leader.name}'s roll did not reach the session."
+                )
 
-        self._run.roll_group(lines, helpers, helped)
+        return self._run.roll_group(lines, helpers, helped)
 
-    def _roll_leader(self, spec: RollSpec, leader: ImpressParty, bonus: int) -> None:
-        dc = self._dc.value() if self._dc_check.isChecked() else None
+    def _roll_leader(self, spec: RollSpec, leader: ImpressParty, bonus: int) -> bool:
+        dc = self._leader_dc
         line = self._line(leader, spec, dc, bonus)
 
         def led(pairs) -> None:
@@ -384,18 +417,25 @@ class GroupCheckWindow(QDialog):
 
         if dc is None:
             line.pop("dc_offset", None)
-            self._run.roll_group([], [], led, lead=line, lead_about=leader)
-        else:
-            self._run.roll_group([line], [leader], led)
+            return self._run.roll_group([], [], led, lead=line, lead_about=leader)
+        return self._run.roll_group([line], [leader], led)
 
     def _show(self, member: ImpressParty, text: str) -> None:
+        if not isValid(self):
+            return  # closed mid-roll: the outcome still reaches the history
         for each, label in zip(self._members, self._results, strict=True):
             if each is member:
                 label.setText(text)
 
+    def _say(self, rich: str) -> None:
+        if isValid(self):
+            self._note.setText(rich)
+            self._note.setStyleSheet("")
+            grow_to_fit(self)
+
     def _done(self, text: str) -> None:
-        self._note.setText(f"<b>{html.escape(text)}</b>")
-        self._note.setStyleSheet("")
+        # The history first: it is what counts, window or no window.
         self._post_note(text)
         if self._run is not None:
             self._run.close()
+        self._say(f"<b>{html.escape(text)}</b>")

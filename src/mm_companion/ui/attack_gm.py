@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
+from mm_companion.core.dice import ROUTINE_DIE
 from mm_companion.core.rules import (
     MinionRules,
     RollSpec,
@@ -71,6 +72,32 @@ from mm_companion.ui.widgets import guard_wheel, make_signed_spin_box
 
 ACCEPT_CAPTION = "Accept"
 DECLINE_CAPTION = "Decline"
+
+
+def save_text(save: RollSpec, record: dict) -> str:
+    """A save as it was rolled, in a few words: "Toughness 12 vs DC 20".
+
+    Named off the rolled spec when the record carries one (the GM may have swapped the
+    resistance), else off *save*; the creature's name and any "vs." tail are dropped.
+    """
+    rolled = RollSpec.from_dict(record.get("spec"))
+    label = (rolled or save).label
+    name = label.partition(": ")[2] if ": " in label else label
+    name = name.partition(" vs")[0].partition(" — ")[0].strip() or "Save"
+    text = f"{name} {total_of(record)}"
+    dc = record.get("dc")
+    return f"{text} vs DC {dc}" if dc is not None else text
+
+
+def roll_text(roll: dict) -> str:
+    """What an attack came to, with how it was made: "20 (d20 14 +6)".
+
+    The breakdown keeps a total of 20 from reading as a natural 20.
+    """
+    die = int(roll.get("die", 0))
+    modifier = int(roll.get("bonus", 0)) - int(roll.get("penalty", 0))
+    made = "routine" if roll.get("routine") else "d20"
+    return f"{die + modifier} ({made} {die} {modifier:+d})"
 
 
 class AttackHost(Protocol):
@@ -253,9 +280,24 @@ class AttackController(QObject):
         aimed.resolving = True
         roll = aimed.roll
         target = self._target(aimed)
-        if target is None or target.character is None:
+        if target is None:
             self._finish(aimed, f"{aimed.declaration.target_name} is not on the Scene any more.")
             return
+        if target.character is None:
+            # A player whose sheet has not reached this table yet: their Defense is
+            # unknown, so the hit cannot be judged. Not over — the GM accepts again
+            # once the sheet is in.
+            waiting = f"{target.name}'s sheet has not reached this table yet"
+            if aimed.card is None:
+                self._finish(aimed, f"Cannot judge the hit: {waiting}.")
+                return
+            aimed.resolving = False
+            aimed.accepted = False
+            aimed.card.set_status(f"{waiting} — Accept again once it has.", button=ACCEPT_CAPTION)
+            aimed.card.button.setEnabled(True)
+            return
+        # Settling now: neither button means anything until it is over.
+        self._lock_card(aimed)
         rules = self._host.minion_rules()
         spec = aimed.declaration.spec
         die = int(roll.get("die", 0))
@@ -279,6 +321,10 @@ class AttackController(QObject):
         how = (
             "routine hit" if verdict.by_routine else ("critical hit" if verdict.critical else "hit")
         )
+        if verdict.by_routine:
+            # The attacker took 10: nothing was rolled, so the die they did throw — a
+            # natural 1's graze included — has no say in the save.
+            die, total = ROUTINE_DIE, routine
         aimed.said.append(f"{how} ({total} vs DC {dc})")
         saves = follow_ups_for_result(
             spec,
@@ -286,7 +332,9 @@ class AttackController(QObject):
             max(verdict.degree, 1),
             self._data,
             total,
-            added_success=not roll.get("minion"),
+            # A 20 raises the save only when it was a critical: not a minion's, and not
+            # a lucky re-roll's lifted die, which the verdict has already told apart.
+            added_success=verdict.critical or die != 20,
         )
         if not saves:
             self._finish(aimed, "; ".join(aimed.said))
@@ -351,18 +399,17 @@ class AttackController(QObject):
             about.append(save)
 
         def landed(pairs) -> None:
-            captions = []
             for save, record in pairs:
                 degree = record.get("degree")
                 if save.ladder is None or degree is None:
                     continue
                 rung = answer_rung(save.ladder, int(degree), target.character, self._data, rules)
-                captions.append(self._land(aimed, target, rung) if rung is not None else "")
-            said = [c for c in captions if c]
-            aimed.said.append("; ".join(said) if said else "resisted")
+                caption = self._land(aimed, target, rung) if rung is not None else ""
+                aimed.said.append(f"{save_text(save, record)}: {caption or 'resisted'}")
             self._finish(aimed, "; ".join(aimed.said))
 
-        aimed.run.roll_group(lines, about, landed)
+        if not aimed.run.roll_group(lines, about, landed):
+            self._finish(aimed, "The saves did not reach the session — nothing rolled.")
 
     def _ask_player(self, aimed, target, queue: list[RollSpec]) -> None:
         """Ask a player for each save in turn, landing each as it comes back."""
@@ -380,7 +427,7 @@ class AttackController(QObject):
                 rung = answer_rung(save.ladder, int(degree), target.character, self._data, rules)
                 if rung is not None:
                     caption = self._land(aimed, target, rung)
-            aimed.said.append(caption or "resisted")
+            aimed.said.append(f"{save_text(save, record)}: {caption or 'resisted'}")
             if caption:
                 aimed.run.tell(target, f"{aimed.declaration.spec.label}: {caption}")
             self._ask_player(aimed, target, queue)
@@ -431,7 +478,8 @@ class AttackController(QObject):
             f"<b>{html.escape(decl.target_name)}</b> ({html.escape(decl.spec.label)})"
         )
         if aimed.roll is not None:
-            text += f" — rolled <b>{total_of(aimed.roll)}</b>"
+            total, _space, breakdown = roll_text(aimed.roll).partition(" ")
+            text += f" — rolled <b>{total}</b> {html.escape(breakdown)}"
         aimed.card.set_text(text)
         if aimed.accepted:
             return
@@ -439,6 +487,16 @@ class AttackController(QObject):
             aimed.card.set_status("Waiting for the roll…")
         else:
             aimed.card.set_status("Accept to judge the hit and roll the save.")
+
+    @staticmethod
+    def _lock_card(aimed: _Aimed) -> None:
+        """Grey out Accept and Decline while the attack settles."""
+        card = aimed.card
+        if card is None:
+            return
+        card.button.setEnabled(False)
+        if card.second_button is not None:
+            card.second_button.setEnabled(False)
 
     def _finish(self, aimed: _Aimed, text: str, *, notice: bool = True) -> None:
         aimed.done = True
@@ -463,7 +521,7 @@ class AttackController(QObject):
         *,
         adjust: int = 0,
         title: str = "",
-        on_rolled: Callable[[list[tuple[str, str]], str], None] | None = None,
+        on_rolled: Callable[[list[tuple[ImpressParty, str]], str], None] | None = None,
         on_done: Callable[[str], None] | None = None,
     ) -> str:
         """Run a team attack (PDF p201): *members* each bring an attack at one target.
@@ -493,31 +551,36 @@ class AttackController(QObject):
         aimed = self._make(declaration, lead_party)
         aimed.accepted = aimed.resolving = True
         aimed.on_done = on_done
-        rolling = [(p, o) for p, o in members if o.attack is not None]
+        # By position among *members*, never by name: two creatures may share one.
+        rolling = [i for i, (_p, o) in enumerate(members) if o.attack is not None]
         lines = [
             group_line(
-                party.name,
-                replace(option.attack, modifier=option.attack.modifier + adjust),
+                members[i][0].name,
+                # The save is this window's to resolve, once, at the combined rank — so
+                # the lines carry none, and no card in the history offers one.
+                replace(
+                    members[i][1].attack,
+                    modifier=members[i][1].attack.modifier + adjust,
+                    follow_up=None,
+                    also=(),
+                ),
                 title=title,
                 dc=dc,
-                minion=party.minion and rules.no_added_success,
+                minion=members[i][0].minion and rules.no_added_success,
             )
-            for party, option in rolling
+            for i in rolling
         ]
 
         def rolled(pairs) -> None:
-            by_name = {
-                party.name: record
-                for (party, _o), (_about, record) in zip(rolling, pairs, strict=False)
-            }
+            by_index = {i: record for i, (_about, record) in zip(rolling, pairs, strict=False)}
             entries: list[TeamEntry] = []
-            shown: list[tuple[str, str]] = []
-            for party, option in members:
-                record = by_name.get(party.name)
+            shown: list[tuple[ImpressParty, str]] = []
+            for index, (party, option) in enumerate(members):
+                record = by_index.get(index)
                 if record is None:
                     # No attack check: it hits, counting one degree (PDF p201).
                     entries.append(TeamEntry(party.name, option.rank, True, 1))
-                    shown.append((party.name, "hits (no attack check)"))
+                    shown.append((party, "hits (no attack check)"))
                     continue
                 die = int(record.get("die", 0))
                 modifier = int(record.get("bonus", 0)) - int(record.get("penalty", 0))
@@ -537,7 +600,7 @@ class AttackController(QObject):
                     TeamEntry(party.name, option.rank, verdict.hit, degree, verdict.critical)
                 )
                 mark = "critical hit" if verdict.critical else ("hit" if verdict.hit else "missed")
-                shown.append((party.name, f"{total_of(record)} vs DC {dc}: {mark}"))
+                shown.append((party, f"{total_of(record)} vs DC {dc}: {mark}"))
             result = combine_team_attack(entries, self._data)
             if not result.any_hit:
                 if on_rolled is not None:
@@ -569,10 +632,13 @@ class AttackController(QObject):
                 return
             self._ask_player(aimed, target, [save])
 
-        if lines:
-            aimed.run.roll_group(lines, [p for p, _o in rolling], rolled)
-        else:
+        if not lines:
             rolled([])
+        elif not aimed.run.roll_group(lines, [members[i][0] for i in rolling], rolled):
+            # Nothing went out (a notice says so): the window may try again.
+            aimed.on_done = None
+            self._finish(aimed, "The attack rolls did not reach the session.", notice=False)
+            return "The attack rolls did not reach the session."
         return ""
 
 

@@ -343,3 +343,123 @@ def test_the_declaration_survives_the_wire(data) -> None:
     assert back is not None and back.spec.follow_up is not None
     assert back.spec.targets == ("Thug",) and back.spec.action_id == "a1"
     assert KIND_ATTACK == "attack"
+
+
+# -- review fixes (2026-10-28) -------------------------------------------------------------
+
+
+def test_a_lucky_reroll_of_20_is_no_critical(window: GMWindow, data, monkeypatch) -> None:
+    """A re-roll's lifted 20 is not natural: a hit, but its save's DC is not raised."""
+    thug = _npc(window, "Thug")
+    calls: list = []
+    monkeypatch.setattr(action_run, "resolve_group", _staged([1], calls))
+    aimed, spec = _declare(window, data, thug)
+    window._attack.take_roll(_roll(spec, 20, 20, critical=False, reroll=True))
+    window._attack.accept("a1")
+    assert calls[0][0][1] == spec.follow_up.dc
+    assert "critical" not in aimed.card.status()
+
+
+def test_a_natural_20_still_raises_the_save(window: GMWindow, data, monkeypatch) -> None:
+    thug = _npc(window, "Thug")
+    calls: list = []
+    monkeypatch.setattr(action_run, "resolve_group", _staged([1], calls))
+    _aimed, spec = _declare(window, data, thug)
+    window._attack.take_roll(_roll(spec, 20, 20))
+    window._attack.accept("a1")
+    bonus = data.system.critical_effect_bonus
+    assert calls[0][0][1] == spec.follow_up.dc + bonus
+
+
+def test_a_routine_hit_after_a_natural_1_is_no_graze(window: GMWindow, data, monkeypatch) -> None:
+    """The attacker took 10: the natural 1 they rolled gives the minion no +5 to resist."""
+    mook = _npc(window, "Mook", minion=True)
+    calls: list = []
+    monkeypatch.setattr(action_run, "resolve_group", _staged([1], calls))
+    plain, _ = _declare_line_modifier(window, data, mook)
+    _aimed, spec = _declare(window, data, mook)
+    dc = defense_class(window._npc_state[mook].character, data)
+    window._attack.take_roll(_roll(spec, 1, dc - 10))
+    window._attack.accept("a1")
+    assert calls[0][0][0] == plain
+
+
+def test_the_card_names_the_die_and_the_save(window: GMWindow, data, monkeypatch) -> None:
+    thug = _npc(window, "Thug")
+    monkeypatch.setattr(action_run, "resolve_group", _staged([-1], []))
+    aimed, spec = _declare(window, data, thug)
+    window._attack.take_roll(_roll(spec, 14, 6))
+    assert "d20 14 +6" in aimed.card.text()  # a total of 20, not a natural 20
+    window._attack.accept("a1")
+    assert "vs DC" in aimed.card.status()  # the save that was rolled, not only its rung
+
+
+def test_accept_waits_for_a_players_sheet(window: GMWindow, data, monkeypatch) -> None:
+    from mm_companion.ui.impress import PARTY_PLAYER, ImpressParty
+
+    thug = _npc(window, "Thug")
+    aimed, spec = _declare(window, data, thug)
+    sheetless = ImpressParty(_ref(window, thug), "Bea", PARTY_PLAYER, "p2", None)
+    monkeypatch.setattr(window._attack, "_target", lambda _a: sheetless)
+    window._attack.take_roll(_roll(spec, 15, 20))
+    window._attack.accept("a1")
+    assert not aimed.done and "has not reached" in aimed.card.status()
+    assert aimed.card.button.isEnabled()  # the GM may accept again once it has
+
+
+def test_saves_that_never_left_settle_the_card(window: GMWindow, data, monkeypatch) -> None:
+    thug = _npc(window, "Thug")
+    monkeypatch.setattr(action_run.ActionRun, "roll_group", lambda *a, **k: False)
+    aimed, spec = _declare(window, data, thug)
+    window._attack.take_roll(_roll(spec, 15, 20))
+    window._attack.accept("a1")
+    assert aimed.done and "did not reach" in aimed.card.status()
+
+
+def test_an_aimed_roll_offers_no_second_save(data) -> None:
+    """Its save is the GM's to resolve: the history puts the roll in the attack's table,
+    with no button to answer the save a second time."""
+    from mm_companion.ui.roll_history import _provokes, action_table_key
+
+    spec = _attack_spec(data)
+    plain = _roll(spec, 15, 6)
+    aimed = _roll(aimed_spec(spec, "a1", "Thug", "Ana"), 15, 6)
+    assert _provokes(plain)
+    assert not _provokes(aimed) and action_table_key(aimed) == "a1"
+
+
+def test_an_npc_sheet_aims_off_the_gms_scene_without_itself(window: GMWindow, data) -> None:
+    from PySide6.QtWidgets import QWidget
+
+    from mm_companion.ui.attack_targets import targets_for
+
+    brute = _npc(window, "Brute")
+    _npc(window, "Thug")
+
+    class _Sheet(QWidget):
+        path = window._npc_state[brute].path
+
+    sheet = _Sheet()
+    sheet.aim_targets = lambda: window._aim_targets_for_window(sheet)
+    line = QWidget(sheet)
+    names = [t.name for t in targets_for(line)]  # offline, and never the Brute itself
+    assert names == ["Thug"]
+
+
+def test_a_tumbling_die_declares_nothing(qapp, data, monkeypatch) -> None:
+    from mm_companion.ui.character_sheet import CharacterSheet
+    from mm_companion.ui.sections import dice as dice_section
+
+    sent: list = []
+
+    class _Bridge:
+        def send_action_request(self, kind, action_id, payload):
+            sent.append(kind)
+            return True
+
+    monkeypatch.setattr(dice_section, "live_session", lambda: _Bridge())
+    sheet = CharacterSheet(data)
+    panel = sheet.dice.view.panel
+    monkeypatch.setattr(type(panel), "rolling", property(lambda self: True))
+    sheet.dice.aim_attack((_attack_spec(data), SceneTarget("r2", "Thug")))
+    assert sent == []  # no die, so no card waiting on one at the GM's

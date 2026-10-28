@@ -16,9 +16,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..dice import resolve_check
-from .rolls import KIND_AREA, RollSpec
+from .rolls import KIND_AREA, KIND_IMPRESS, RollSpec
 
-__all__ = ["AttackVerdict", "judge_attack", "targetable_attack"]
+__all__ = ["AttackVerdict", "aimed_attack", "judge_attack", "targetable_attack"]
 
 
 def targetable_attack(spec: RollSpec) -> bool:
@@ -27,6 +27,22 @@ def targetable_attack(spec: RollSpec) -> bool:
     """
 
     return spec.follow_up is not None and not spec.rolled_by_target and spec.kind != KIND_AREA
+
+
+def aimed_attack(spec: RollSpec | None) -> bool:
+    """Whether *spec* is an attack already aimed at a target: tied to its declaration by
+    an action id and naming whom it is at.
+
+    Its save is the GM's app's to resolve (``ui/attack_gm.py``), so nothing should offer
+    the save a second time. An impression's check asked of a player has an action id
+    and a follow-up too, but its resist *is* answered off the card; it is no attack.
+    """
+
+    if spec is None or not spec.action_id or not spec.targets or not targetable_attack(spec):
+        return False
+    if spec.kind == KIND_IMPRESS or spec.follow_up_always:
+        return False
+    return not any(f.dc_from_total for f in spec.follow_ups())
 
 
 @dataclass(frozen=True)

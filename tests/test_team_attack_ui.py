@@ -216,3 +216,71 @@ def test_one_attacker_is_not_a_team(window: GMWindow, monkeypatch) -> None:
     team.set_member(1, False)
     assert not team._roll.isEnabled()
     assert "two attackers" in team._note.text()
+
+
+# -- review fixes (2026-10-28) -------------------------------------------------------------
+
+
+def test_two_attackers_with_one_name_keep_their_own_rolls(window: GMWindow, monkeypatch) -> None:
+    """Rolls are matched to attackers by place, not by name, which two creatures can share."""
+    from dataclasses import replace
+
+    group_id = _squad(window, monkeypatch, 2)
+    brute = _target(window)
+    option = _attack_option(window, group_id)
+    members = [
+        (replace(window._npc_party(name), name="Thug"), option)
+        for name in window._group_cards[group_id].members
+    ]
+    die = _exactly_one_degree(window, group_id, brute)
+    monkeypatch.setattr(action_run, "resolve_group", _Dice([die, 1], save_degree=1))
+    shown: list = []
+    ref = window._scene_entry_for(SCENE_NPC, brute).ref
+    window._attack.team_attack(members, ref, on_rolled=lambda lines, _s: shown.extend(lines))
+    assert [text.rsplit(": ", 1)[1] for _p, text in shown] == ["hit", "missed"]
+
+
+def test_the_attack_lines_offer_no_save_of_their_own(window: GMWindow, monkeypatch) -> None:
+    from mm_companion.core.rules import RollSpec
+
+    group_id = _squad(window, monkeypatch)
+    brute = _target(window)
+    held: dict = {}
+    monkeypatch.setattr(
+        action_run.ActionRun,
+        "roll_group",
+        lambda self, lines, about, finish, **_kw: held.update(lines=lines) or True,
+    )
+    _open(window, group_id, brute).roll()
+    assert all(RollSpec.from_dict(line["spec"]).follow_up is None for line in held["lines"])
+
+
+def test_closing_the_window_mid_attack_is_harmless(window: GMWindow, monkeypatch, qapp) -> None:
+    from PySide6.QtCore import QCoreApplication, QEvent
+
+    group_id = _squad(window, monkeypatch)
+    brute = _target(window)
+    held: dict = {}
+
+    def hold(self, lines, about, finish, **_kw):
+        held.update(about=about, lines=lines, finish=finish)
+        return True
+
+    monkeypatch.setattr(action_run.ActionRun, "roll_group", hold)
+    team = _open(window, group_id, brute)
+    team.roll()
+    team.close()  # deleted on close
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    records = [{"die": 2, "bonus": 0, "penalty": 0, "critical": False} for _ in held["lines"]]
+    held["finish"](
+        list(zip(held["about"], records, strict=True))
+    )  # every attack missed: must not raise
+
+
+def test_rolls_that_never_left_leave_the_window_usable(window: GMWindow, monkeypatch) -> None:
+    group_id = _squad(window, monkeypatch)
+    brute = _target(window)
+    monkeypatch.setattr(action_run.ActionRun, "roll_group", lambda *a, **k: False)
+    team = _open(window, group_id, brute)
+    team.roll()
+    assert team._roll.isEnabled() and "did not reach" in team._note.text()

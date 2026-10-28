@@ -185,3 +185,53 @@ def test_a_downed_member_starts_left_out(window: GMWindow, monkeypatch) -> None:
     window._apply_npc_condition(members[0], "incapacitated", None)
     check = window._group_check(group_id, MODE_GROUP)
     assert [c.isChecked() for c in check._checks] == [False, True, True]
+
+
+# -- review fixes (2026-10-28) -------------------------------------------------------------
+
+
+def test_each_mark_agrees_with_the_count(window: GMWindow, monkeypatch) -> None:
+    """A member's ✓ / ✗ is their own total against the DC, before the natural 20s and 1s
+    the group counts afterwards — so it reads the same as "0 of 3 made"."""
+    group_id = _squad(window, monkeypatch)
+    will = _will(window, group_id)
+    notes: list[str] = []
+    check = _open(window, group_id, MODE_GROUP, notes, monkeypatch)
+    check.set_dc(20 + will + 1)
+    monkeypatch.setattr(action_run, "resolve_group", _Dice([20, 19, 18]))
+    check.roll()
+    first = check._results[0].text()
+    assert "✗" in first and "nat 20" in first
+    assert "0 of 3" in notes[0]
+
+
+def test_closed_mid_roll_still_posts_the_outcome(window: GMWindow, monkeypatch, qapp) -> None:
+    from PySide6.QtCore import QCoreApplication, QEvent
+
+    group_id = _squad(window, monkeypatch)
+    notes: list[str] = []
+    check = _open(window, group_id, MODE_GROUP, notes, monkeypatch)
+    check.set_dc(15)
+    held: dict = {}
+
+    def hold(self, lines, about, finish, **_kw):
+        held.update(about=about, lines=lines, finish=finish)
+        return True
+
+    monkeypatch.setattr(action_run.ActionRun, "roll_group", hold)
+    check.roll()
+    check.close()  # deleted on close
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    records = [{"die": 12, "bonus": 5, "penalty": 0, "critical": False} for _ in held["lines"]]
+    held["finish"](list(zip(held["about"], records, strict=True)))  # must not raise
+    assert notes and "group check" in notes[0]
+
+
+def test_rolls_that_never_left_hand_the_window_back(window: GMWindow, monkeypatch) -> None:
+    group_id = _squad(window, monkeypatch)
+    notes: list[str] = []
+    check = _open(window, group_id, MODE_GROUP, notes, monkeypatch)
+    monkeypatch.setattr(action_run.ActionRun, "roll_group", lambda *a, **k: False)
+    check.roll()
+    assert check._roll.isEnabled() and "did not reach" in check._note.text()
+    assert notes == []

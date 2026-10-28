@@ -364,7 +364,9 @@ class RollCard(QFrame):
             # roller is usually running both sides — so never assume the sheet in
             # front of us is the target's.
             localize=False,
-            added_success=not minion,
+            # A minion's 20 adds nothing, and nor does a lucky re-roll's: its die is
+            # lifted, never a natural 20 (nor a routine 10, which is never 20).
+            added_success=not minion and not reroll,
         ):
             info.addWidget(widget)
 
@@ -1330,6 +1332,11 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._transient = spec is not None
         self._start_roll()
         return True
+
+    @property
+    def rolling(self) -> bool:
+        """Whether a die is tumbling now — :meth:`roll_spec` would refuse another."""
+        return self._rolling
 
     def _routine(self) -> bool:
         """Whether the roll in flight is a routine check — the last roll's, on a reroll."""

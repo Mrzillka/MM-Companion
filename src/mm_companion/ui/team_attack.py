@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from shiboken6 import isValid
 
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.rules import (
@@ -38,7 +39,13 @@ from mm_companion.core.rules import (
 from mm_companion.ui.action_ui import ADJUST_LIMIT
 from mm_companion.ui.attack_targets import SceneTarget
 from mm_companion.ui.impress import ImpressParty
-from mm_companion.ui.widgets import guard_wheel, make_signed_spin_box, muted_style, tinted_style
+from mm_companion.ui.widgets import (
+    grow_to_fit,
+    guard_wheel,
+    make_signed_spin_box,
+    muted_style,
+    tinted_style,
+)
 
 #: ``(members, target ref, adjust) -> why it could not start ("" when it did)``.
 Runner = Callable[[list[tuple[ImpressParty, TeamOption]], str, int], str]
@@ -189,24 +196,34 @@ class TeamAttackWindow(QDialog):
         if reason:
             self._note.setText(html.escape(reason))
             self._note.setStyleSheet(tinted_style("tint.worse", bold=False))
+            grow_to_fit(self)
             return
         self._roll.setEnabled(False)
         for widget in (self._target, self._attack, self._adjust, *self._checks):
             widget.setEnabled(False)
 
-    def show_rolls(self, lines: list[tuple[str, str]], summary: str) -> None:
-        """Each attacker's roll beside their name, and what the team came to."""
-        said = dict(lines)
+    def show_rolls(self, lines: list[tuple[ImpressParty, str]], summary: str) -> None:
+        """Each attacker's roll beside them, and what the team came to.
+
+        Matched by the member itself, not its name: two creatures may share one. Does
+        nothing once the window is gone — the attack carries on without it.
+        """
+        if not isValid(self):
+            return
         for member, label in zip(self._members, self._results, strict=True):
-            label.setText(said.get(member.name, ""))
+            label.setText(next((text for who, text in lines if who is member), ""))
         self._summary = summary
         self._note.setText(html.escape(summary))
         self._note.setStyleSheet("")
+        grow_to_fit(self)
 
     def show_done(self, text: str) -> None:
-        """What the attack did, under what the team came to."""
+        """What the attack did, under what the team came to (if the window is still up)."""
+        if not isValid(self):
+            return
         summary = getattr(self, "_summary", "")
         target = self._target.currentText()
         outcome = f"<b>{html.escape(target)}: {html.escape(text)}</b>"
         self._note.setText(f"{html.escape(summary)}<br>{outcome}" if summary else outcome)
         self._note.setStyleSheet("")
+        grow_to_fit(self)

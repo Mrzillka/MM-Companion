@@ -39,7 +39,7 @@ resists as a group yet (see "Group rolls" below).
 ## How a group is drawn
 
 - `ui/npc_group.py` `NPCGroupCard`: a frame with a header (name, ×N, "2 up · 2 down"
-  from `defeat_state`, ⋯ menu: Rename, Put all on / Take all off the Scene, Ungroup) and
+  from `defeat_state`, ☰ menu: Rename, Put all on / Take all off the Scene, Ungroup) and
   one **row** per member.
 - A row is an ordinary `NPCCard` built with `row=True`, not a second widget: the same
   signals, menus, tiles, damage row and defeat look, wired by the one

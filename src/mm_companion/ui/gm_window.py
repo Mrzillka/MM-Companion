@@ -1278,6 +1278,18 @@ class GMWindow(QMainWindow):
         entry = self._scene_entry_for(SCENE_NPC, name)
         return self._aim_targets(entry.ref if entry is not None else "")
 
+    def _npc_name_for_window(self, window) -> str:
+        """The cast entry an NPC sheet shows, by its file — ``""`` for one not in it."""
+        path = Path(window.path) if window is not None and window.path else None
+        if path is None:
+            return ""
+        return next((n for n, e in self._npc_state.items() if e.path == path), "")
+
+    def _aim_targets_for_window(self, window) -> list[SceneTarget]:
+        """The targets an NPC sheet's attack may be aimed at: the Scene, less itself."""
+        name = self._npc_name_for_window(window)
+        return self._aim_targets_for(name) if name else self._aim_targets()
+
     def _aim_from_card(self, name: str, payload: object) -> None:
         """An NPC card's pinned attack tile was aimed at someone."""
         entry = self._npc_state.get(name)
@@ -1296,8 +1308,7 @@ class GMWindow(QMainWindow):
         spec, target = payload
         if not isinstance(spec, RollSpec) or not isinstance(target, SceneTarget):
             return
-        path = Path(window.path) if window is not None and window.path else None
-        name = next((n for n, e in self._npc_state.items() if e.path == path), "")
+        name = self._npc_name_for_window(window)
         if name:
             source = self._npc_party(name)
         else:
@@ -3374,6 +3385,8 @@ class GMWindow(QMainWindow):
         window = TeamAttackWindow(self._data, group.name, members, targets, run, parent=self)
         window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self._team_window = window
+        # Deleted on close: let go of it then, rather than hold a dead handle.
+        window.destroyed.connect(lambda _=None, w=window: self._forget_window("_team_window", w))
         window.show()
         return window
 
@@ -3408,8 +3421,14 @@ class GMWindow(QMainWindow):
         )
         window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self._check_window = window
+        window.destroyed.connect(lambda _=None, w=window: self._forget_window("_check_window", w))
         window.show()
         return window
+
+    def _forget_window(self, attribute: str, window: QWidget) -> None:
+        """Drop the handle on a closed group window — unless a newer one holds it."""
+        if getattr(self, attribute, None) is window:
+            setattr(self, attribute, None)
 
     def _group_npcs(self, members: list[str], name: str) -> None:
         """Record *members* (two or more, just made) as a new group called *name*."""
@@ -3577,6 +3596,9 @@ class GMWindow(QMainWindow):
         """Show an NPC sheet and keep it alive, watching for saves and its close."""
         key = id(window)
         self._npc_windows[key] = window
+        # Its attack lines aim off this window's own Scene, offline too, and never at
+        # the creature itself (``attack_targets.targets_for``).
+        window.aim_targets = lambda w=window: self._aim_targets_for_window(w)
         window.requestUnserved.connect(
             lambda topic, payload, w=window: self._on_npc_request(topic, payload, w)
         )

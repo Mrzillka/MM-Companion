@@ -97,3 +97,12 @@ def test_groups_are_plain_data() -> None:
         "name": "Thug",
         "members": ["a.json"],
     }
+
+
+def test_a_malformed_member_list_is_skipped() -> None:
+    raw = [
+        {"id": "a", "name": "x", "members": None},
+        {"id": "b", "name": "y", "members": "Thug 1"},
+        {"id": "c", "name": "z", "members": ["t1.json", "t2.json"]},
+    ]
+    assert [g.id for g in groups_from_raw(raw)] == ["c"]

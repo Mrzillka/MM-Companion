@@ -164,6 +164,10 @@ class DiceSection(QGroupBox):
         if bridge is None:
             self.perform_roll(spec)
             return
+        if self.view.panel.rolling:
+            # The roller would refuse the die, and a declaration sent without one would
+            # leave the GM a card waiting on a roll that never comes.
+            return
         name = library.display_name(self._character)
         action_id = new_action_id()
         aimed = aimed_spec(spec, action_id, target.name, name)

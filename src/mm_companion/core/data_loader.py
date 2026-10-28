@@ -1580,6 +1580,34 @@ class MinionSystem:
 
 
 @dataclass(frozen=True)
+class TeamAttackRules:
+    """The Team Attack's numbers (``system.json``'s ``teamAttack``, PDF p201).
+
+    ``steps`` are ``(degrees, bonus)`` pairs, lowest first: the other hits' total
+    degrees of success reach a step, and the primary attack's rank gains its bonus.
+    ``rank_spread`` is how far apart the combined attacks' ranks may be;
+    ``critical_bonus`` what any critical among them adds, once.
+    """
+
+    rank_spread: int = 5
+    steps: tuple[tuple[int, int], ...] = ((1, 2), (3, 5))
+    critical_bonus: int = 5
+
+
+@dataclass(frozen=True)
+class GroupCheckRules:
+    """Team and group checks' numbers (``system.json``'s ``teamCheck`` and
+    ``groupCheck``, PDF p18)."""
+
+    #: The DC a team check's helpers roll against.
+    helper_dc: int = 10
+    #: What each of their degrees of success adds to the leader's check.
+    bonus_per_degree: int = 1
+    #: The share of a group check's members who must succeed for all to.
+    success_share: float = 0.5
+
+
+@dataclass(frozen=True)
 class DefeatSystem:
     """Which conditions mean a creature is out of the fight (``system.json``'s ``defeat``).
 
@@ -1633,6 +1661,10 @@ class SystemRules:
     minions: MinionSystem = field(default_factory=MinionSystem)
     #: The conditions that take a creature out of the fight (see :class:`DefeatSystem`).
     defeat: DefeatSystem = field(default_factory=DefeatSystem)
+    #: How several attacks combine into one (see :class:`TeamAttackRules`).
+    team_attack: TeamAttackRules = field(default_factory=TeamAttackRules)
+    #: Team and group checks (see :class:`GroupCheckRules`).
+    group_checks: GroupCheckRules = field(default_factory=GroupCheckRules)
 
 
 # --- Measurements & movement: the rank ↔ real-world conversion tables, the
@@ -4118,6 +4150,43 @@ def _parse_system(raw: dict) -> SystemRules:
         quick_npc=_parse_quick_npc(sys.get("quick_npc"), defaults.quick_npc),
         minions=_parse_minions(sys.get("minions"), defaults.minions),
         defeat=_parse_defeat(sys.get("defeat"), defaults.defeat),
+        team_attack=_parse_team_attack(sys.get("teamAttack"), defaults.team_attack),
+        group_checks=_parse_group_checks(
+            sys.get("teamCheck"), sys.get("groupCheck"), defaults.group_checks
+        ),
+    )
+
+
+def _parse_group_checks(team: object, group: object, default: GroupCheckRules) -> GroupCheckRules:
+    """Parse ``teamCheck`` and ``groupCheck``; a missing key keeps *default*'s."""
+
+    team = team if isinstance(team, dict) else {}
+    group = group if isinstance(group, dict) else {}
+    return GroupCheckRules(
+        helper_dc=int(team.get("helperDc", default.helper_dc)),
+        bonus_per_degree=int(team.get("bonusPerDegree", default.bonus_per_degree)),
+        success_share=float(group.get("successShare", default.success_share)),
+    )
+
+
+def _parse_team_attack(raw: object, default: TeamAttackRules) -> TeamAttackRules:
+    """Parse ``system.json``'s ``teamAttack`` block; a missing key keeps *default*'s."""
+
+    if not isinstance(raw, dict):
+        return default
+    steps = default.steps
+    raw_steps = raw.get("steps")
+    if isinstance(raw_steps, list):
+        parsed = sorted(
+            (int(s["degrees"]), int(s["bonus"]))
+            for s in raw_steps
+            if isinstance(s, dict) and "degrees" in s and "bonus" in s
+        )
+        steps = tuple(parsed) or default.steps
+    return TeamAttackRules(
+        rank_spread=int(raw.get("rankSpread", default.rank_spread)),
+        steps=steps,
+        critical_bonus=int(raw.get("criticalBonus", default.critical_bonus)),
     )
 
 

@@ -39,7 +39,7 @@ resists as a group yet (see "Group rolls" below).
 ## How a group is drawn
 
 - `ui/npc_group.py` `NPCGroupCard`: a frame with a header (name, ×N, "2 up · 2 down"
-  from `defeat_state`, ⋯ menu: Rename, Put all on / Take all off the Scene, Ungroup) and
+  from `defeat_state`, ☰ menu: Rename, Put all on / Take all off the Scene, Ungroup) and
   one **row** per member.
 - A row is an ordinary `NPCCard` built with `row=True`, not a second widget: the same
   signals, menus, tiles, damage row and defeat look, wired by the one
@@ -58,7 +58,8 @@ resists as a group yet (see "Group rolls" below).
 
 ## Not done
 
-- **Group rolls.** A group does not roll as one. The book's team check, group check
-  and Team Attack (PDF p18, p201) would hang off these groups first (GM-only), with
-  the core written so player teams can use it later.
+- **Group rolls for players.** Team attack, team check and group check are built for
+  NPC groups (see [the actions notes](actions.md#team-attack)). The rules modules
+  (`team_attack.py`, `group_checks.py`) take plain entries, so a players' team can use
+  them; what is missing is a way to gather players' rolls into one.
 - A second GM seat does not see the first one's groups (they are per GM).

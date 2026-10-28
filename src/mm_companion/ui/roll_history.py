@@ -41,6 +41,7 @@ from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.rules import (
     KIND_IMPRESS,
     RollSpec,
+    aimed_attack,
     follow_ups_for_result,
     outcome_is_failure,
     resistance_outcome,
@@ -829,7 +830,7 @@ class SessionRollCard(HistoryCard):
             on_follow_up=self.rollFollowUp.emit,
             localize=not own,
             on_plain=self.rollPlain.emit,
-            added_success=not roll.get("minion"),
+            added_success=_counts_twenty(roll),
         ):
             info.addWidget(widget)
 
@@ -934,7 +935,17 @@ def _provokes(roll: dict) -> bool:
     roll like that keeps its ordinary card.
     """
     spec = RollSpec.from_dict(roll.get("spec"))
-    return spec is not None and spec.follow_up is not None
+    # An aimed attack's save is the GM's app's to resolve: its roll joins the attack's
+    # table, where no button offers the save a second time.
+    return spec is not None and spec.follow_up is not None and not aimed_attack(spec)
+
+
+def _counts_twenty(roll: dict) -> bool:
+    """Whether a 20 on *roll* may raise a save's DC: not a minion's (PDF p25), and not a
+    lucky re-roll's lifted die or a routine 10 — the record's ``critical`` says which."""
+    if int(roll.get("die", 0) or 0) != 20:
+        return True
+    return bool(roll.get("critical")) and not roll.get("minion")
 
 
 def action_table_key(roll: dict) -> str:

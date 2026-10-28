@@ -638,6 +638,26 @@ def discard_widget(widget: QWidget) -> None:
     widget.deleteLater()
 
 
+def grow_to_fit(window: QWidget) -> None:
+    """Make a small window tall enough for its text again, after a label grew.
+
+    A word-wrapped label's height depends on its width, which a layout's minimum
+    size does not account for — so a dialog whose result line gains a line squeezes
+    the rows above it instead of growing. Taller only, never wider or shorter: a
+    window the GM has sized stays as wide as they left it.
+    """
+    layout = window.layout()
+    if layout is None:
+        return
+    layout.activate()
+    if layout.hasHeightForWidth():
+        need = layout.totalHeightForWidth(window.width())
+    else:
+        need = layout.totalSizeHint().height()
+    if window.height() < need:
+        window.resize(window.width(), need)
+
+
 def resurface(window: QWidget) -> None:
     """Bring an already-open window back to the front, wherever the user left it.
 

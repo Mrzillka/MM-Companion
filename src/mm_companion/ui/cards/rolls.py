@@ -19,10 +19,9 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core.rules import KIND_AREA, PinRef, RollSpec, targetable_attack
 from mm_companion.ui import theme
-from mm_companion.ui.attack_targets import add_target_actions, session_targets
+from mm_companion.ui.attack_targets import add_target_actions, targets_for
 from mm_companion.ui.cards.card import card_ancestors_of, hand_back_highlight
 from mm_companion.ui.sections.stat_table import PinMenuState
-from mm_companion.ui.session_bridge import active_session
 from mm_companion.ui.widgets import tinted_style
 
 
@@ -297,7 +296,7 @@ class RollsFooter(QWidget):
             added = add_target_actions(
                 menu,
                 spec,
-                session_targets(active_session()),
+                targets_for(row),
                 lambda s, t: self.targetRequested.emit((s, t)),
             )
         if self._pins.enabled and self._pin_ref is not None and spec.kind != KIND_AREA:

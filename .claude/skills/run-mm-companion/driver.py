@@ -1086,6 +1086,46 @@ def build(target: str):
         _pump(_app())
         bar = win._scroll.verticalScrollBar()
         bar.setValue(bar.maximum())
+    elif target == "gm-team":
+        # A squad's Team Attack window, rolled for real off the air: each thug's check
+        # beside its name, what they combined to, and the Brute's save.
+        from mm_companion.core import library
+        from mm_companion.core.data_loader import load_game_data
+        from mm_companion.core.npc import quick_npc
+        from mm_companion.ui.gm_window import SCENE_NPC, GMWindow
+
+        data = load_game_data()
+        gm = GMWindow(bind="127.0.0.1")
+        brute = quick_npc(data, name="Brute", attack=6, effect=6, defence=4, toughness=6)
+        path = library.save_character(brute, directory=gm._npc_dir())
+        gm._register_npc(path)
+        gm._set_in_scene(SCENE_NPC, path.name, True)
+        thug = quick_npc(data, name="Thug", attack=6, effect=5, defence=4, toughness=3)
+        thug.minion = True
+        gm._make_squad(thug, 4)
+        group_id = next(iter(gm._group_cards))
+        gm._apply_npc_condition(gm._group_cards[group_id].members[3], "incapacitated", None)
+        gm.show()
+        win = gm._team_attack(group_id)
+        win._gm_owner = gm  # keep the GM window alive for the shot
+        win.roll()
+    elif target in ("gm-team-check", "gm-group-check"):
+        # A squad's team check (or group check) of Will, rolled for real off the air.
+        from mm_companion.core.data_loader import load_game_data
+        from mm_companion.core.npc import quick_npc
+        from mm_companion.ui.gm_window import GMWindow
+
+        data = load_game_data()
+        gm = GMWindow(bind="127.0.0.1")
+        thug = quick_npc(data, name="Thug", attack=6, effect=5, defence=4, toughness=3)
+        gm._make_squad(thug, 4)
+        group_id = next(iter(gm._group_cards))
+        gm.show()
+        win = gm._group_check(group_id, "team" if target == "gm-team-check" else "group")
+        win._gm_owner = gm  # keep the GM window alive for the shot
+        win.set_trait("WILL")
+        win.set_dc(12)
+        win.roll()
     elif target == "gm-aimed":
         # An aimed attack waiting in the GM's history: a player's Blast at a Thug, its
         # die in, with the Accept / Decline card the GM answers it from.
@@ -1746,6 +1786,9 @@ def main(argv: list[str] | None = None) -> int:
             "gm-cast",
             "gm-squad",
             "gm-aimed",
+            "gm-team",
+            "gm-team-check",
+            "gm-group-check",
             "gm-settings",
             "npc",
             "array-cost",

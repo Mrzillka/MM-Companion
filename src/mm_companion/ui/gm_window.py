@@ -117,6 +117,7 @@ from mm_companion.core.session.protocol import (
     SCENE_DISPOSITIONS,
 )
 from mm_companion.ui import npc_icons, theme
+from mm_companion.ui.action_run import ActionRun
 from mm_companion.ui.action_ui import (
     TABLE_MOD_ID,
     TABLE_SESSION_KEY,
@@ -149,12 +150,14 @@ from mm_companion.ui.compact import CompactController
 from mm_companion.ui.connection_indicator import install_connection_indicator
 from mm_companion.ui.dice_roller import DiceRollerView
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
+from mm_companion.ui.group_check import GroupCheckWindow
 from mm_companion.ui.impress import (
     IMPRESS_ACTION,
     KIND_IMPRESS,
     PARTY_NPC,
     PARTY_PLAYER,
     ImpressParty,
+    new_action_id,
 )
 from mm_companion.ui.impress_gm import ImpressController
 from mm_companion.ui.npc_card import NPCCard
@@ -172,6 +175,7 @@ from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.session_bridge import SessionBridge, last_session, set_active_session
 from mm_companion.ui.session_dialogs import HostOptions
 from mm_companion.ui.session_portrait import encode_scene_portrait, shrink_portrait
+from mm_companion.ui.team_attack import TeamAttackWindow
 from mm_companion.ui.toasts import ToastCard, ToastStack
 from mm_companion.ui.undo import absorbing
 from mm_companion.ui.widgets import (
@@ -1274,6 +1278,18 @@ class GMWindow(QMainWindow):
         entry = self._scene_entry_for(SCENE_NPC, name)
         return self._aim_targets(entry.ref if entry is not None else "")
 
+    def _npc_name_for_window(self, window) -> str:
+        """The cast entry an NPC sheet shows, by its file — ``""`` for one not in it."""
+        path = Path(window.path) if window is not None and window.path else None
+        if path is None:
+            return ""
+        return next((n for n, e in self._npc_state.items() if e.path == path), "")
+
+    def _aim_targets_for_window(self, window) -> list[SceneTarget]:
+        """The targets an NPC sheet's attack may be aimed at: the Scene, less itself."""
+        name = self._npc_name_for_window(window)
+        return self._aim_targets_for(name) if name else self._aim_targets()
+
     def _aim_from_card(self, name: str, payload: object) -> None:
         """An NPC card's pinned attack tile was aimed at someone."""
         entry = self._npc_state.get(name)
@@ -1292,8 +1308,7 @@ class GMWindow(QMainWindow):
         spec, target = payload
         if not isinstance(spec, RollSpec) or not isinstance(target, SceneTarget):
             return
-        path = Path(window.path) if window is not None and window.path else None
-        name = next((n for n, e in self._npc_state.items() if e.path == path), "")
+        name = self._npc_name_for_window(window)
         if name:
             source = self._npc_party(name)
         else:
@@ -3141,6 +3156,8 @@ class GMWindow(QMainWindow):
                 group_card.renameRequested.connect(self._rename_group)
                 group_card.ungroupRequested.connect(self._ungroup)
                 group_card.sceneRequested.connect(self._group_to_scene)
+                group_card.teamAttackRequested.connect(self._team_attack)
+                group_card.checkRequested.connect(self._group_check)
                 self._group_cards[group.id] = group_card
                 self._npc_flow.addWidget(group_card)
                 continue
@@ -3340,6 +3357,79 @@ class GMWindow(QMainWindow):
         for member in card.members:
             self._set_in_scene(SCENE_NPC, member, on)
 
+    def _team_attack(self, group_id: str) -> TeamAttackWindow | None:
+        """A group's "Team attack…": its members combine their attacks on one target."""
+        card = self._group_cards.get(group_id)
+        group = next((g for g in self._npc_groups if g.id == group_id), None)
+        if card is None or group is None:
+            return None
+        members = [self._npc_party(name) for name in card.members if name in self._npc_state]
+        skip = {
+            entry.ref
+            for name in card.members
+            if (entry := self._scene_entry_for(SCENE_NPC, name)) is not None
+        }
+        targets = [t for t in self._aim_targets() if t.ref not in skip]
+        window: TeamAttackWindow | None = None
+
+        def run(chosen, target_ref: str, adjust: int) -> str:
+            return self._attack.team_attack(
+                chosen,
+                target_ref,
+                adjust=adjust,
+                title=f"Team attack: {group.name}",
+                on_rolled=lambda lines, summary: window.show_rolls(lines, summary),
+                on_done=lambda text: window.show_done(text),
+            )
+
+        window = TeamAttackWindow(self._data, group.name, members, targets, run, parent=self)
+        window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self._team_window = window
+        # Deleted on close: let go of it then, rather than hold a dead handle.
+        window.destroyed.connect(lambda _=None, w=window: self._forget_window("_team_window", w))
+        window.show()
+        return window
+
+    def _group_check(self, group_id: str, mode: str) -> GroupCheckWindow | None:
+        """A group's "Team check…" or "Group check…" (PDF p18)."""
+        card = self._group_cards.get(group_id)
+        group = next((g for g in self._npc_groups if g.id == group_id), None)
+        if card is None or group is None:
+            return None
+        members = [self._npc_party(name) for name in card.members if name in self._npc_state]
+
+        def make_run(title: str) -> ActionRun:
+            return ActionRun(
+                self._data,
+                self._bridge,
+                self,
+                new_action_id(),
+                title=title,
+                asker="The GM",
+                parent=self,
+            )
+
+        window = GroupCheckWindow(
+            self._data,
+            mode,
+            group.name,
+            members,
+            make_run,
+            minion_rules=self.minion_rules,
+            post_note=self._post_note,
+            parent=self,
+        )
+        window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self._check_window = window
+        window.destroyed.connect(lambda _=None, w=window: self._forget_window("_check_window", w))
+        window.show()
+        return window
+
+    def _forget_window(self, attribute: str, window: QWidget) -> None:
+        """Drop the handle on a closed group window — unless a newer one holds it."""
+        if getattr(self, attribute, None) is window:
+            setattr(self, attribute, None)
+
     def _group_npcs(self, members: list[str], name: str) -> None:
         """Record *members* (two or more, just made) as a new group called *name*."""
         if len(members) < 2:
@@ -3506,6 +3596,9 @@ class GMWindow(QMainWindow):
         """Show an NPC sheet and keep it alive, watching for saves and its close."""
         key = id(window)
         self._npc_windows[key] = window
+        # Its attack lines aim off this window's own Scene, offline too, and never at
+        # the creature itself (``attack_targets.targets_for``).
+        window.aim_targets = lambda w=window: self._aim_targets_for_window(w)
         window.requestUnserved.connect(
             lambda topic, payload, w=window: self._on_npc_request(topic, payload, w)
         )

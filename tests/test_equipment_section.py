@@ -25,10 +25,12 @@ from mm_companion.core.rules import (
     apply_platform,
     attach_accessory,
     build_item_from_entry,
+    item_effective_build,
     item_ep_cost,
     item_superseded,
     new_platform,
     platform_rules_category,
+    power_rolls,
     resolve_pin,
 )
 from mm_companion.ui.cards import DraggableCard, NodeList, RollLine, RollsFooter
@@ -40,6 +42,7 @@ from mm_companion.ui.sections.equipment import (
     EquipmentSection,
 )
 from mm_companion.ui.sections.equipment_picker import EquipmentPickerDialog, cost_text
+from mm_companion.ui.sections.stat_table import PIN_ACTION_TEXT, UNPIN_ACTION_TEXT
 
 
 @pytest.fixture(scope="module")
@@ -517,8 +520,12 @@ def test_no_pin_menu_without_a_card_beside_the_sheet(qapp, data) -> None:
     section.pinRequested.connect(asked.append)
 
     footer = _card(section, char.equipment[0]).findChild(RollsFooter)
-    footer._show_pin_menu(footer, footer.rect().center(), 0)  # must not raise or emit
+    spec = power_rolls(item_effective_build(char.equipment[0], data), char, data)[0]
+    # The sword's attack line still offers its targets, but nothing to pin.
+    menu = footer.build_menu(footer, 0, spec)
+    texts = [a.text() for a in menu.actions()] if menu is not None else []
 
+    assert PIN_ACTION_TEXT not in texts and UNPIN_ACTION_TEXT not in texts
     assert asked == []
 
 

@@ -69,7 +69,10 @@ def groups_from_raw(raw: object) -> list[NPCGroup]:
     for item in raw:
         if not isinstance(item, dict):
             continue
-        members = [m for m in item.get("members", []) if isinstance(m, str) and m and m not in seen]
+        raw_members = item.get("members")
+        if not isinstance(raw_members, list):
+            continue  # null, a string, a number: nothing to read a squad from
+        members = [m for m in raw_members if isinstance(m, str) and m and m not in seen]
         members = list(dict.fromkeys(members))
         if len(members) < 2:
             continue

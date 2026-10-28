@@ -559,6 +559,76 @@ click**: it rolls, as it always did. Its **right click** lists the Scene's creat
 - **Minions:** a non-minion's attack on a minion hits on the routine result too
   (`routine_attacks`); a critical on one lands its worst with no save
   (`critical_answer`, Impervious respected); its failed save is the worst rung.
+- **The save is offered once.** An aimed roll joins its attack's table in the history
+  (`rules.aimed_attack` makes `_provokes` false), so no card carries a save button
+  beside the GM's Accept — answering both used to land the damage twice. A team
+  attack's lines carry no follow-up for the same reason.
+- **Which die the save reads.** A hit the routine result made reads `ROUTINE_DIE`, so
+  a natural 1 rolled anyway is no graze; a 20 raises the save only when the verdict
+  called it critical, which a lucky re-roll's lifted 20 is not. The history's chips
+  read the record's `critical` the same way (`_counts_twenty`).
+- **Things that do not go through.** A player's die still tumbling: nothing is
+  declared. A target whose sheet has not reached the GM: Accept is offered again
+  rather than the attack settled. Saves the session would not take: the card settles
+  saying so. The result names each save rolled ("Toughness 12 vs DC 20: Hit").
+- **The GM's NPC sheet** aims off the GM's own Scene, offline too, never at itself: the
+  window carries an `aim_targets` callable that `attack_targets.targets_for` finds
+  walking up from the roll line; everywhere else it is the live session's Scene.
+
+## Team attack
+
+A group of NPCs combines its attacks on one target (PDF p201). From an NPC group's ☰
+menu (`ui/npc_group.py`), **Team attack…** opens `ui/team_attack.py`'s window: the target
+(off the Scene, the group's own members left out), the attack the members share
+(`rules.team_attack_options`, keyed by power or item name and attack index, so a squad's
+copies line up), who joins in (a member who is down starts unticked), and one adjustment
+for every check.
+
+- The rules are `core/rules/team_attack.py` and the numbers `system.json`'s `teamAttack`:
+  same effect and resistance, ranks within `rankSpread`; the hits' largest rank is the
+  primary; the others' total degrees reach a step (+2 at one, +5 at three — the book
+  skips two, so two reads as one); any critical among the hits adds `criticalBonus` once;
+  misses count for nothing; an effect with no attack check hits for one degree.
+- On a rank tie the primary is the hit with the **fewest** degrees: the primary's own
+  degrees count for nothing, so that reading counts the most of the team's. The book is
+  silent; this is a call.
+- `AttackController.team_attack` rolls every check as **one server group** against the
+  target's Defense (one table in the history), judges each with `judge_attack` (a minion's
+  20 adds nothing; against a minion target the routine result counts), and then resolves
+  the target's one save at the raised rank (`team_save_spec`, ladder rank raised too, so
+  Impervious is measured against it) on the aimed-attack road: an NPC's rolled at once at
+  the GM roller's adjustment, a player asked. A critical on a minion target lands its
+  worst unrolled.
+- Each roll is matched to its attacker **by position**, never by name: two creatures in
+  one group may share a name.
+
+## Team checks and group checks
+
+Two more of a group's ☰ menu items (PDF p18), one window (`ui/group_check.py`,
+`GroupCheckWindow`, `MODE_TEAM` / `MODE_GROUP`). The check is any trait the roller's
+Request row offers (`rules.requested_roll_choices`), rolled at each member's own number
+(`localize_spec`; an untrained skill is marked ⚠ but still rolls), with one adjustment on
+every roll. A member who is down starts unticked. Nothing lands — the outcome is posted
+to the history as a line.
+
+- **Team check:** the helpers roll against `teamCheck.helperDc` (10) as one server
+  group; their degrees of success (failures add nothing) times `bonusPerDegree` become
+  the leader's bonus (`team_check_bonus`); then the leader rolls, against a DC when the
+  GM ticks one, or as a bare lead roll when not.
+- **Group check:** everyone rolls against the DC as one group. `group_check_result`: if at
+  least `groupCheck.successShare` (half) succeed, the group lands on the lowest degree of
+  success among them; then the natural 20s (a minion's does not count) and 1s are summed
+  and move that degree along the no-zero ladder (`shift_degree`). A failing group lands on
+  its **least severe failure** — the book does not say; this is the mirror reading.
+  Each member's ✓ / ✗ in the window is their own total against the DC, before the
+  natural 20s and 1s, so the marks agree with "2 of 4 made"; a natural is noted beside it.
+
+**Both windows (and Team Attack's) outlive a close.** They are deleted on close, but the
+rolls they sent come back later, so nothing after Roll reads a widget (the choices are
+taken when Roll is pressed), every write to one checks `shiboken6.isValid`, and the
+outcome goes to the history first. Rolls the session would not take hand the window
+back, Roll enabled again. A result that wraps onto more lines grows the window
+(`widgets.grow_to_fit`) rather than squeezing the rows above it.
 
 ## Not done yet
 

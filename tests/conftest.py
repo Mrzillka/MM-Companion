@@ -12,10 +12,37 @@ never accumulate across the session.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import threading
 from dataclasses import dataclass
+from pathlib import Path
+
+
+def _offscreen_platform() -> str:
+    """Qt's offscreen platform on the one 1280x1024 screen ``qt/screens.json`` describes.
+
+    The path is relative because Qt splits the platform string on ``:``, which an
+    absolute Windows path's drive letter would cut in half (Qt crashes on it). Qt
+    reads it when the QApplication is made, from the directory pytest runs in.
+    """
+    try:
+        config = os.path.relpath(Path(__file__).parent / "qt" / "screens.json")
+    except ValueError:  # pragma: no cover - working directory on another drive
+        return "offscreen"
+    return f"offscreen:configfile={Path(config).as_posix()}"
+
+
+# The same Qt on every machine, set before anything below imports PySide6. The
+# offscreen platform has no window manager, so no window appears on the developer's
+# desktop and none is clamped to the size of their monitor; the screen it pretends
+# to have is the one CI's xvfb used to. Its font database reads only QT_QPA_FONTDIR,
+# which holds the DejaVu files CI's runner used to get from its system — so every
+# text width a test measures is the same here as on CI. Set QT_QPA_PLATFORM yourself
+# to watch a test run on a real platform; the pins then mostly stop applying.
+os.environ.setdefault("QT_QPA_PLATFORM", _offscreen_platform())
+os.environ.setdefault("QT_QPA_FONTDIR", str(Path(__file__).parent / "qt" / "fonts"))
 
 import pytest
 from PySide6.QtCore import QEvent, Qt
@@ -183,6 +210,18 @@ def _close_top_level_widgets():
     app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
+def _git_for_windows_openssl() -> str | None:
+    """The openssl Git for Windows ships, which a Windows box rarely has on PATH."""
+    git = shutil.which("git")
+    if git is None:
+        return None
+    root = Path(git).resolve().parent.parent  # …/Git/cmd/git.exe or …/Git/mingw64/bin/git.exe
+    for candidate in (root / "usr/bin/openssl.exe", root.parent / "usr/bin/openssl.exe"):
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
 @pytest.fixture(scope="session")
 def tls_cert(tmp_path_factory):
     """A throwaway self-signed certificate for ``localhost``.
@@ -191,7 +230,7 @@ def tls_cert(tmp_path_factory):
     liability, and a checked-in certificate expires. Skips where openssl is not
     installed; CI has it.
     """
-    openssl = shutil.which("openssl")
+    openssl = shutil.which("openssl") or _git_for_windows_openssl()
     if openssl is None:  # pragma: no cover - depends on the machine
         pytest.skip("openssl is not installed")
     directory = tmp_path_factory.mktemp("relay-tls")

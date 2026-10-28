@@ -71,6 +71,10 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP", "B"]
 
+[tool.ruff.lint.per-file-ignores]
+# Pins the Qt platform and fonts in the environment before PySide6 is imported.
+"tests/conftest.py" = ["E402"]
+
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]

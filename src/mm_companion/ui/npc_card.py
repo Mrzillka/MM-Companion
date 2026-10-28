@@ -66,12 +66,21 @@ from mm_companion.core import library
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import Condition, GameData
 from mm_companion.core.library import CharacterSummary
-from mm_companion.core.rules import area_capable_builds, can_recover, power_area_uses, recovery_hint
+from mm_companion.core.rules import (
+    DEFEAT_NONE,
+    MinionRules,
+    area_capable_builds,
+    can_recover,
+    character_defeat_state,
+    power_area_uses,
+    recovery_hint,
+)
 from mm_companion.core.rules import recovery_check as condition_recovery_check
 from mm_companion.ui import theme
 from mm_companion.ui.card_chips import _ConditionChip, start_card_drag
 from mm_companion.ui.card_summary import PortraitButton, character_summary_html
 from mm_companion.ui.damage_row import DamageRow
+from mm_companion.ui.defeat_look import apply_defeat_look, defeated_pixmap
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.pin_panel import PinPanel
 from mm_companion.ui.sections.conditions import (
@@ -95,6 +104,20 @@ COLLAPSED_GLYPH = "▸"
 #: player id are not distinguishable by looking at them, so the drop target
 #: would not know which roster a bare one came from.
 SCENE_KIND = "npc"
+#: The minion toggle's caption, and what the Power Level line adds for one.
+MINION_CAPTION = "Minion"
+MINION_MARK = "minion"
+#: What the Power Level line adds for a creature the GM tagged as summoned.
+SUMMONED_MARK = "summoned"
+SUMMONED_HINT = (
+    "Summoned: a creature called up by a power, an advantage or a spell. Only a tag "
+    "for now — the table sees it on the Scene."
+)
+MINION_HINT = (
+    "A minion is a minor character (thugs, bystanders, a horde): a failed save is its "
+    "worst outcome, its natural 20 is no critical, and heroes may take 10 against it. "
+    "Which of these rules apply is this session's choice (Settings ▸ Session settings)."
+)
 
 
 def _small_button(text: str = "") -> QToolButton:
@@ -158,6 +181,14 @@ class NPCCard(QFrame):
     areaRequested = Signal(str, str)
     #: The NPC's file name — this creature impresses somebody.
     impressRequested = Signal(str)
+    #: ``(file_name, minion)`` — the GM made this creature a minion, or a full NPC again.
+    minionToggled = Signal(str, bool)
+    #: ``(file_name, summoned)`` — the GM tagged this creature as summoned, or untagged it.
+    summonedToggled = Signal(str, bool)
+    #: The NPC's file name — take it out of its group (a row's menu only).
+    leaveGroupRequested = Signal(str)
+    #: The creature went down, died, or got up (``rules.defeat_state``'s answer).
+    defeatChanged = Signal(str)
 
     def __init__(
         self,
@@ -167,9 +198,17 @@ class NPCCard(QFrame):
         parent: QWidget | None = None,
         *,
         collapsed: bool = False,
+        row: bool = False,
     ) -> None:
         super().__init__(parent)
-        self.setFrameShape(QFrame.Shape.StyledPanel)
+        #: A **row** of a group card (``ui/npc_group.py``): the same creature, the same
+        #: controls and signals, laid out along one line that wraps — picture and name,
+        #: then the damage row, then the pinned tiles — and never expanded, since a
+        #: squad is what a GM collapses cards for. Its frame is the group's.
+        self.row = row
+        if row:
+            collapsed = True
+        self.setFrameShape(QFrame.Shape.NoFrame if row else QFrame.Shape.StyledPanel)
 
         self._data = data
         self._character = character
@@ -183,6 +222,10 @@ class NPCCard(QFrame):
         #: no 👁 — but the right-click menu is a different question in each state.
         self._in_scene = False
         self._collapsed = collapsed
+        #: Out of the fight or not (see :meth:`_refresh_defeat`), and the picture as
+        #: loaded, kept so a creature that gets up again shows it in colour.
+        self._defeat = DEFEAT_NONE
+        self._portrait_pixmap: QPixmap | None = None
 
         layout = QVBoxLayout(self)
         margins = theme.box("card.margins")
@@ -284,11 +327,27 @@ class NPCCard(QFrame):
         self._area_button.clicked.connect(lambda: self._show_area_menu(self._area_button))
         self._area_button.hide()
         buttons_row.addWidget(self._area_button)
+        self._minion_button = QToolButton()
+        self._minion_button.setText(MINION_CAPTION)
+        self._minion_button.setCheckable(True)
+        self._minion_button.setChecked(character.minion)
+        self._minion_button.setToolTip(MINION_HINT)
+        self._minion_button.toggled.connect(
+            lambda on: self.minionToggled.emit(self.name_key, bool(on))
+        )
+        buttons_row.addWidget(self._minion_button)
         info.addSpacing(int(theme.metric("space.xs")))
         info.addWidget(self._buttons_host)
-        info.addStretch()
+        if not row:
+            info.addStretch()
         header.addLayout(info, stretch=1)
-        layout.addLayout(header)
+        if row:
+            # The picture and the name are one piece of the row, which wraps as a whole.
+            self._ident = QWidget()
+            self._ident.setLayout(header)
+        else:
+            self._ident = None
+            layout.addLayout(header)
 
         # -- the pinned numbers -------------------------------------------------
         self.pins = PinPanel(data, self, grid=True)
@@ -297,13 +356,18 @@ class NPCCard(QFrame):
         self.pins.loadRequested.connect(self.loadRequested)
         self.pins.rollRequested.connect(self.rollRequested)
         self.pins.pickRequested.connect(lambda: self.pinPickerRequested.emit(self.name_key))
-        layout.addWidget(self.pins)
+        if not row:
+            layout.addWidget(self.pins)
 
         # -- what is on it --------------------------------------------------------
         self._chips = FlowContainer()
         self._chip_flow = FlowLayout(self._chips, spacing=int(theme.metric("space.xs")))
         self._chip_flow.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self._chips)
+        if row:
+            # A row's conditions read under its name, part of who it is right now.
+            info.addWidget(self._chips)
+        else:
+            layout.addWidget(self._chips)
 
         # The two ways to put something on this creature, side by side and in both
         # states: pick a condition by hand, or take a rung of the damage ladder.
@@ -323,7 +387,21 @@ class NPCCard(QFrame):
             lambda index: self.damageRequested.emit(self.name_key, index)
         )
         action_row.addWidget(self._damage, stretch=1)
-        layout.addWidget(self._action_host)
+        if row:
+            # One wrapping line: who, what to do to them, and their numbers. A narrow
+            # group stacks the pieces rather than squeezing them (width adapts).
+            self._row_host = FlowContainer()
+            row_flow = FlowLayout(self._row_host, spacing=spacing)
+            row_flow.setContentsMargins(0, 0, 0, 0)
+            row_flow.addWidget(self._ident)
+            row_flow.addWidget(self._action_host)
+            row_flow.addWidget(self.pins)
+            layout.addWidget(self._row_host)
+            # A row is never opened out, so its caret has nothing to do.
+            self._collapse_button.hide()
+        else:
+            self._row_host = None
+            layout.addWidget(self._action_host)
         layout.addStretch()
 
         #: The widgets only the full card shows.
@@ -332,6 +410,7 @@ class NPCCard(QFrame):
         self._collapsed_only = (self._thumb,)
 
         self._set_portrait(summary.image_path)
+        self.refresh_minion()
         self.set_collapsed(collapsed)
         # A width of its own until the window measures the block and hands every
         # card the widest. A card built for a test, or the first of a fresh grid,
@@ -360,6 +439,35 @@ class NPCCard(QFrame):
     def display_name(self) -> str:
         """The NPC's name, as its summary gives it."""
         return self._summary.name
+
+    # -- minion ------------------------------------------------------------
+
+    def refresh_minion(self) -> None:
+        """Restate everything that says whether this creature is a minion.
+
+        The Power Level line carries the mark, so a collapsed card shows it too; the
+        toggle follows the model without announcing it (the window telling the card
+        what it already decided), and the damage row collapses to a minion's two.
+        """
+        minion = self._character.minion
+        summoned = self._character.summoned
+        tags = [(MINION_MARK, MINION_HINT, minion), (SUMMONED_MARK, SUMMONED_HINT, summoned)]
+        mark = "".join(f" · {m}" for m, _hint, on in tags if on)
+        self._pl_label.setText(f"PL {self._summary.power_level}{mark}")
+        self._pl_label.setToolTip("\n\n".join(hint for _m, hint, on in tags if on))
+        self._minion_button.blockSignals(True)
+        self._minion_button.setChecked(minion)
+        self._minion_button.blockSignals(False)
+        self._damage.refresh()
+
+    def set_minion_rules(self, rules: MinionRules) -> None:
+        """The session's minion rules — the damage row's shape depends on them."""
+        self._damage.set_minion_rules(rules)
+
+    @property
+    def damage_row(self) -> DamageRow:
+        """The card's quick-damage control (for the window's tests)."""
+        return self._damage
 
     # -- how wide the card is ----------------------------------------------
 
@@ -391,6 +499,43 @@ class NPCCard(QFrame):
         tiles = TILE_COLUMNS * tile + (TILE_COLUMNS - 1) * gap
         left, _top, right, _bottom = theme.box("card.margins")
         return max(body, tiles) + left + right + 2 * self.frameWidth()
+
+    def row_width_hint(self, strip: int) -> int:
+        """How wide a row wants to be to keep its pieces on one line, tiles *strip* wide."""
+        spacing = int(theme.metric("space.sm"))
+        ident = int(theme.metric("gm.card.min"))
+        if self._ident is not None:
+            ident = max(ident, self._ident.sizeHint().width())
+        return (
+            ident
+            + spacing
+            + self._action_host.sizeHint().width()
+            + spacing
+            + self._row_tiles_width(strip)
+        )
+
+    def _row_tiles_width(self, strip: int) -> int:
+        """The pinned tiles' width in a row: up to :data:`TILE_COLUMNS` abreast."""
+        gap = int(theme.metric("space.xs"))
+        columns = max(1, min(TILE_COLUMNS, len(self.pins.pins)))
+        return columns * strip + (columns - 1) * gap
+
+    def apply_row_width(self, width: int, strip: int) -> None:
+        """Wear *width* as a row of a group, its tiles *strip* wide.
+
+        The pieces keep their own widths, capped at the row's, and the row's flow
+        wraps whatever does not fit onto the next line — so a narrow group stacks a
+        row's tiles under its name instead of clipping them.
+        """
+        width = max(1, width)
+        if self._ident is not None:
+            # As wide as the name and the Power Level line ask (a "· minion" mark and the
+            # action icons share that line), never wider than the row.
+            ident = max(int(theme.metric("gm.card.min")), self._ident.sizeHint().width())
+            self._ident.setFixedWidth(min(width, ident))
+        self.pins.set_width(strip)
+        self.pins.setFixedWidth(min(width, self._row_tiles_width(strip)))
+        self.setFixedWidth(width)
 
     def apply_width(self, body: int, strip: int, room: int = 0) -> None:
         """Wear *body* and the tile width *strip* — the block's widest, not this
@@ -430,6 +575,8 @@ class NPCCard(QFrame):
         the owner telling the card what it already decided, and echoing that back
         would have the window save what it just read. The caret emits instead.
         """
+        # A row is the short form for good: "Collapse all" and its undoing pass it by.
+        collapsed = collapsed or self.row
         self._collapsed = collapsed
         for widget in self._expanded_only:
             widget.setVisible(not collapsed)
@@ -450,9 +597,29 @@ class NPCCard(QFrame):
     def _set_portrait(self, image_path: str | None) -> None:
         """Show the NPC's picture on both sizes (a local file, so it resolves normally)."""
         resolved = library.resolve_image_path(image_path)
-        pixmap = QPixmap(resolved) if resolved else None
+        self._portrait_pixmap = QPixmap(resolved) if resolved else None
+        self._show_portrait()
+
+    def _show_portrait(self) -> None:
+        """Put the picture up as the creature now is: grey once it is down or dead."""
+        pixmap = defeated_pixmap(self._portrait_pixmap, self._defeat)
         self._portrait.set_image(pixmap)
         self._thumb.set_image(pixmap)
+
+    @property
+    def defeat(self) -> str:
+        """Whether the creature is out of the fight (``rules.defeat_state``'s answer)."""
+        return self._defeat
+
+    def _refresh_defeat(self) -> None:
+        """Fade the card, and grey its picture, while the creature is down or dead."""
+        state = character_defeat_state(self._character, self._data)
+        if state == self._defeat:
+            return
+        self._defeat = state
+        apply_defeat_look(self, state)
+        self._show_portrait()
+        self.defeatChanged.emit(state)
 
     # -- hover summary -----------------------------------------------------
 
@@ -505,6 +672,7 @@ class NPCCard(QFrame):
         self._damage.refresh()
         self._sync_area_button()
         self._refresh_tooltip()
+        self._refresh_defeat()
 
     def condition_names(self) -> list[str]:
         """The chip captions, in order — the readable form of the NPC's conditions."""
@@ -645,7 +813,21 @@ class NPCCard(QFrame):
                 )
         if self._data.impress.available or builds:
             menu.addSeparator()
+        minion = self._character.minion
+        menu.addAction(
+            "Make a full NPC" if minion else "Make a minion",
+            lambda: self.minionToggled.emit(self.name_key, not minion),
+        )
+        summoned = self._character.summoned
+        menu.addAction(
+            "Untag as summoned" if summoned else "Tag as summoned",
+            lambda: self.summonedToggled.emit(self.name_key, not summoned),
+        ).setToolTip(SUMMONED_HINT)
         menu.addAction("Pin a parameter…", lambda: self.pinPickerRequested.emit(self.name_key))
+        if self.row:
+            menu.addAction(
+                "Leave the group", lambda: self.leaveGroupRequested.emit(self.name_key)
+            ).setToolTip("Make this a card of its own again (or drag the row out of the group)")
         menu.addSeparator()
         menu.addAction(
             "Remove from this session",

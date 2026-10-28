@@ -23,6 +23,7 @@ from __future__ import annotations
 from PySide6.QtCore import QEvent, QSignalBlocker, QSize, Qt, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QGroupBox,
@@ -81,6 +82,19 @@ from mm_companion.ui.widgets import (
 )
 
 HERO_POINT_PIPS = 5
+#: The NPC sheet's minion box.
+MINION_CHECK_LABEL = "Minion"
+MINION_CHECK_HINT = (
+    "A minion is a minor character (thugs, bystanders, a horde): a failed save is its "
+    "worst outcome, its natural 20 is no critical, and heroes may take 10 against it. "
+    "Which of these rules apply is the session's choice, in the GM window's "
+    "Settings ▸ Session settings."
+)
+SUMMONED_CHECK_LABEL = "Summoned"
+SUMMONED_CHECK_HINT = (
+    "A creature called up by a power, an advantage or a spell. Only a tag for now: "
+    "its card and its Scene card say so."
+)
 INITIATIVE_TIP = f"Agility (or an Alternate Initiative ability) plus advantages\n{ROLL_TOOLTIP}"
 REACH_TIP = (
     "How far this character can make close attacks — their size's own reach, plus "
@@ -639,12 +653,30 @@ class SystemInfoSection(QGroupBox):
             "budgeted, so its Power Level is read from what it can do, not what it costs."
         )
         self._estimated_pl.hide()
+        # Beside it on an NPC sheet, the GM's judgement of what the creature is: a
+        # minion (PDF p25) is a minor character the rules make easier to defeat.
+        # Hidden, never shown here: set_npc_mode does that once the row is parented.
+        self._minion_check = QCheckBox(MINION_CHECK_LABEL)
+        self._minion_check.setToolTip(MINION_CHECK_HINT)
+        self._minion_check.setChecked(self._character.minion)
+        self._minion_check.toggled.connect(self._on_minion_toggled)
+        self._minion_check.hide()
+        # And the GM's "summoned" tag: a label for now, nothing reads it as a rule.
+        self._summoned_check = QCheckBox(SUMMONED_CHECK_LABEL)
+        self._summoned_check.setToolTip(SUMMONED_CHECK_HINT)
+        self._summoned_check.setChecked(self._character.summoned)
+        self._summoned_check.toggled.connect(self._on_summoned_toggled)
+        self._summoned_check.hide()
         row.addWidget(self._pool_current)
         row.addWidget(self._pool_separator)
         row.addWidget(self._power_points)
         row.addWidget(self._estimated_pl)
+        row.addWidget(self._minion_check)
+        row.addWidget(self._summoned_check)
         row.addStretch()
         self._editable.append(self._power_points)
+        self._editable.append(self._minion_check)
+        self._editable.append(self._summoned_check)
         self._points_row = container
         return container
 
@@ -803,6 +835,28 @@ class SystemInfoSection(QGroupBox):
         self._link_pl_pp(edited="power_level")
         self.changed.emit()
         self._emit_edited()
+
+    def _on_minion_toggled(self, on: bool) -> None:
+        """The GM made this NPC a minion, or a full NPC again — an ordinary edit."""
+        self._character.minion = bool(on)
+        self.changed.emit()
+        self._emit_edited()
+
+    def _on_summoned_toggled(self, on: bool) -> None:
+        """The GM tagged this NPC as summoned, or untagged it — an ordinary edit."""
+        self._character.summoned = bool(on)
+        self.changed.emit()
+        self._emit_edited()
+
+    @property
+    def summoned_check(self) -> QCheckBox:
+        """The NPC sheet's Summoned box (for the tests)."""
+        return self._summoned_check
+
+    @property
+    def minion_check(self) -> QCheckBox:
+        """The NPC sheet's Minion box (for the tests)."""
+        return self._minion_check
 
     def _on_power_points_changed(self, value: int) -> None:
         self._character.characteristics["power_points"] = value
@@ -1137,6 +1191,12 @@ class SystemInfoSection(QGroupBox):
             if self._size_combo.findText(size) >= 0:
                 self._size_combo.setCurrentText(size)
             del blocker
+            blocker = QSignalBlocker(self._minion_check)
+            self._minion_check.setChecked(self._character.minion)
+            del blocker
+            blocker = QSignalBlocker(self._summoned_check)
+            self._summoned_check.setChecked(self._character.summoned)
+            del blocker
             # set_value is silent by design, so the "spent/gained" baseline has to be
             # moved by hand — otherwise the next pip click writes a note about a jump
             # the player never made.
@@ -1229,6 +1289,9 @@ class SystemInfoSection(QGroupBox):
         for widget in (self._pool_current, self._pool_separator, self._power_points):
             widget.setVisible(not npc)
         self._estimated_pl.setVisible(npc)
+        # A player character is never a minion, so the box is the NPC sheet's alone.
+        self._minion_check.setVisible(npc)
+        self._summoned_check.setVisible(npc)
         label = self._form.labelForField(self._points_row)
         if isinstance(label, QLabel):
             label.setText("Estimated PL:" if npc else "Power Points:")

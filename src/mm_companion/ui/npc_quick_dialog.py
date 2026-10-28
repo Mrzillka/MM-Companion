@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -96,6 +97,9 @@ PORTRAIT_SIZE = 96
 #: preset). Process memory on purpose, not a setting (see the module docstring).
 _memory: dict[str, object] = {}
 
+#: The most creatures one Quick NPC makes at once — a squad, not an army.
+SQUAD_MAX = 20
+
 #: What a preset's button says when its numbers have been edited by hand since it
 #: was applied — the button is still lit, so it has to stop claiming they are its.
 EDITED_MARK = " *"
@@ -130,6 +134,11 @@ class QuickNPC:
     #: The bonus it rolls Initiative with. Not one of the preset's six: a preset sets
     #: what a Power Level caps, and nothing caps how quick a mook is off the mark.
     initiative: int = 0
+    #: Whether it is made a minion (PDF p25) — which most quick NPCs are.
+    minion: bool = False
+    #: How many to make. More than one is a **squad**: numbered "Thug 1…N", the same
+    #: numbers each, and grouped on the GM's board.
+    count: int = 1
 
 
 class QuickNPCDialog(QDialog):
@@ -180,6 +189,23 @@ class QuickNPCDialog(QDialog):
         pl_caption = QLabel("Power Level:")
         pl_caption.setFont(font)
         form.addRow(pl_caption, self._power_level)
+        # A mook is usually a minion; remembered for the next one this run, since a GM
+        # making a batch of them makes them all the same kind.
+        self._minion = QCheckBox("Minion")
+        self._minion.setToolTip(
+            "A minor character the rules make easier to defeat: a failed save is its "
+            "worst outcome, and heroes may take 10 against it."
+        )
+        self._minion.setChecked(bool(_memory.get("minion", False)))
+        form.addRow("", self._minion)
+        # A squad in one go: N copies, numbered, grouped on the board. Remembered for
+        # the next dialog this run like the rest, since squads come in batches too.
+        self._count = make_spin_box(1, SQUAD_MAX, value=int(_memory.get("count", 1)))
+        self._count.setToolTip(
+            "How many to make. More than one makes a squad: “Thug 1”, “Thug 2”… with "
+            "these same numbers, grouped together on your board."
+        )
+        form.addRow("Make:", self._count)
         top.addLayout(form, stretch=1)
         layout.addLayout(top)
 
@@ -459,6 +485,8 @@ class QuickNPCDialog(QDialog):
         _memory["power_level"] = self._power_level.value()
         _memory["preset"] = self._preset
         _memory["initiative"] = self._initiative.value()
+        _memory["minion"] = self._minion.isChecked()
+        _memory["count"] = self._count.value()
         if self._icon_picked:
             _memory["icon"] = self._icon
         else:
@@ -472,5 +500,7 @@ class QuickNPCDialog(QDialog):
             power_level=self._power_level.value(),
             icon=self._icon,
             initiative=self._initiative.value(),
+            minion=self._minion.isChecked(),
+            count=self._count.value(),
             **{key: spin.value() for key, spin in self._spins.items()},
         )

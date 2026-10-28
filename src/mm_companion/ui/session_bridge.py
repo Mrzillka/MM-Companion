@@ -286,6 +286,8 @@ class SessionBridge(QObject):
         hidden: bool = False,
         spec: dict | None = None,
         reroll: bool = False,
+        routine: bool = False,
+        minion: bool = False,
     ) -> bool:
         """Put one roll to the session, whichever end of it this app is on.
 
@@ -300,7 +302,9 @@ class SessionBridge(QObject):
         description of the roll (a serialized
         :class:`~mm_companion.core.rules.RollSpec`), which travels so that the
         *other* seats can act on it — see ``docs/mm-session-architecture.md``.
-        ``reroll`` asks the server for a lucky re-roll (a die of 11-20).
+        ``reroll`` asks the server for a lucky re-roll (a die of 11-20). ``routine``
+        takes 10 instead of rolling, and ``minion`` rolls as a minion, whose natural
+        20 is no added success (both protocol v18).
         """
         if self._server is not None:
             self._server.roll(
@@ -311,6 +315,8 @@ class SessionBridge(QObject):
                 hidden=hidden,
                 spec=spec,
                 reroll=reroll,
+                routine=routine,
+                minion=minion,
             )
             return True
         if self._client is not None:
@@ -322,6 +328,8 @@ class SessionBridge(QObject):
                 hidden=hidden,
                 spec=spec,
                 reroll=reroll,
+                routine=routine,
+                minion=minion,
             )
         return False
 

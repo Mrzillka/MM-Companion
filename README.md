@@ -250,8 +250,9 @@ and a troubleshooting table are in the [networking guide](docs/mm-session-networ
 
 Next up:
 
-- **Minions** — minions as creatures at the table, not only builds: summoned and
-  advantage-granted minions the GM can run, damage and dismiss.
+- **Summoned minions** — a Summon's or a Minion advantage's build sent to the GM
+  window as a creature at the table, to run, damage and dismiss. (Any NPC can already
+  be made a minion, with the minion rules set per session.)
 - **Ranks & Measures** — the rank / measurement table as a tool: convert distance,
   mass, time and volume both ways, and work out the rank of a feat.
 - **Actions** — the combat maneuvers on the sheet (All-out Attack, Defensive Attack,

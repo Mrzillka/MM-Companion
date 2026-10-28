@@ -141,6 +141,8 @@
     "group.margins": [6, 4, 6, 6],
     "group.margins.off": [4, 2, 4, 3],
     "opacity.inactive": 0.5,
+    "opacity.down": 0.55,
+    "opacity.dead": 0.3,
 
     "column.stat.spin": 80,
     "column.skill.name": 100,

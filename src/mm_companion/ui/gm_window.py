@@ -46,6 +46,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMainWindow,
     QMenu,
@@ -56,13 +57,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from mm_companion.core import library, storage
+from mm_companion.core import library, npc_groups, storage
 from mm_companion.core.character import AppliedCondition, Character
 from mm_companion.core.data_loader import GameData, load_game_data
 from mm_companion.core.dice import roll_d20
 from mm_companion.core.npc import quick_npc
+from mm_companion.core.npc_groups import NPCGroup
 from mm_companion.core.rules import (
     KIND_INITIATIVE,
+    MinionRules,
     PinRef,
     RollSpec,
     answer_reading,
@@ -75,19 +78,24 @@ from mm_companion.core.rules import (
     area_key_power_id,
     can_recover,
     condition_changes,
+    critical_answer,
     damage_step_summary,
     damage_steps,
     decrement_condition,
     default_pins,
     find_area_power,
     initiative_modifier,
+    is_minion,
     localize_spec,
+    minion_save_spec,
+    minion_step,
     parse_pins,
     recovery_request,
     recovery_roll,
     recovery_succeeded,
     requested_roll_choices,
     resolve_rung,
+    rung_caption,
 )
 from mm_companion.core.session import client as session_client
 from mm_companion.core.session import discovery, store
@@ -109,7 +117,12 @@ from mm_companion.core.session.protocol import (
     SCENE_DISPOSITIONS,
 )
 from mm_companion.ui import npc_icons, theme
-from mm_companion.ui.action_ui import publish_table_rules
+from mm_companion.ui.action_ui import (
+    TABLE_MOD_ID,
+    TABLE_SESSION_KEY,
+    publish_table_rules,
+    session_minion_rules,
+)
 from mm_companion.ui.area import AREA_ACTION, KIND_AREA_ATTACK
 from mm_companion.ui.area_gm import AreaController
 from mm_companion.ui.block_canvas import BlockCanvas
@@ -142,6 +155,7 @@ from mm_companion.ui.impress import (
 )
 from mm_companion.ui.impress_gm import ImpressController
 from mm_companion.ui.npc_card import NPCCard
+from mm_companion.ui.npc_group import GROUP_KIND, NPCGroupCard
 from mm_companion.ui.npc_quick_dialog import QuickNPCDialog
 from mm_companion.ui.npc_window import NPCWindow
 from mm_companion.ui.pin_picker import PinPickerDialog
@@ -192,6 +206,8 @@ AS_WRITTEN_CAPTION = "As written (nobody's number) — or right-click the button
 ANSWERED_MARK = "✓"
 #: Marks a trained-only skill the creature has no training in. It still rolls.
 UNTRAINED_MARK = "⚠"
+#: Marks a minion a critical hit lands on with no save (PDF p197).
+CRITICAL_MARK = "💥 Critical:"
 
 
 @dataclass
@@ -245,7 +261,7 @@ def _is_npc_ref(ref: str) -> bool:
     """Whether a dragged reference is an NPC's card — the only thing the cast can
     be reordered by. A player dragged here is not a thing that can be done, and a
     scene card carries an opaque ref that names no creature this grid holds."""
-    return ref.partition(":")[0] == SCENE_NPC
+    return ref.partition(":")[0] in (SCENE_NPC, GROUP_KIND)
 
 
 def _default_disposition(kind: str) -> str:
@@ -426,6 +442,10 @@ class GMWindow(QMainWindow):
         self._pins: dict[str, list[PinRef]] = _load_pins()
         # Which cards the GM has shrunk, by the same key as the pins above.
         self._collapsed_cards: dict[str, bool] = storage.gm_collapsed_cards()
+        #: The GM's NPC groups (squads), by file name — see core.npc_groups.
+        self._npc_groups: list[NPCGroup] = npc_groups.groups_from_raw(storage.gm_npc_groups())
+        #: The group cards on the board now, by group id.
+        self._group_cards: dict[str, NPCGroupCard] = {}
         # Pin pickers open on a card, keyed the same way, kept referenced while up.
         self._pin_pickers: dict[str, PinPickerDialog] = {}
         # Sheets opened from a card, so a change to that card's strip can be pushed
@@ -606,6 +626,8 @@ class GMWindow(QMainWindow):
 
         settings_menu = self.menuBar().addMenu("&Settings")
         settings_menu.addAction("Preferences...").triggered.connect(self._open_settings)
+        # The open session's own rules (the minions'), which belong to it alone.
+        settings_menu.addAction("Session settings...").triggered.connect(self.open_session_settings)
 
         view_menu = self.menuBar().addMenu("&View")
         self._block_actions: dict[str, object] = {}
@@ -815,9 +837,13 @@ class GMWindow(QMainWindow):
         # by the card being dragged. Only an NPC's card, and *visibly* only that:
         # it used to light up green for a player or a scene card and then drop them
         # on the floor, which reads as a broken gesture rather than a refused one.
-        self._npc_container = CardDropFlow("gmNpcFlow", accepts=_is_npc_ref)
+        self._npc_container = CardDropFlow(
+            "gmNpcFlow", accepts=_is_npc_ref, merges=self._can_merge_npcs
+        )
         self._npc_flow = self._npc_container.flow
         self._npc_container.dropped.connect(self._drop_on_npcs)
+        # Dropped onto the middle of another card: the two become a group.
+        self._npc_container.merged.connect(self._merge_npcs)
         self._npc_container.widthChanged.connect(self._sync_card_widths)
         layout.addWidget(self._npc_container)
         layout.addStretch()
@@ -922,7 +948,26 @@ class GMWindow(QMainWindow):
         menu.setToolTipsVisible(True)
         if not npcs:
             menu.addAction(NO_NPCS_TO_ANSWER).setEnabled(False)
+        rules = self.minion_rules()
         for party in npcs:
+            crit = (
+                critical_answer(spec.ladder, party.character, self._data, rules)
+                if where.critical and party.minion and spec.ladder is not None
+                else None
+            )
+            if crit is not None:
+                # A critical hit on a minion is the worst outcome with no save at all
+                # (PDF p197): offered as what it is, not as a roll.
+                caption = rung_caption(crit, self._data) or "the worst outcome"
+                action = menu.addAction(
+                    f"{party.name} — {CRITICAL_MARK} {caption}, no save",
+                    lambda p=party, r=crit: self._crit_minion(p, r, where),
+                )
+                action.setToolTip("A critical hit on a minion lands its worst, unrolled.")
+                portrait = self._scene_board.portrait(party.ref)
+                if portrait is not None:
+                    action.setIcon(QIcon(portrait))
+                continue
             reading = answer_reading(spec, party.character, self._data)
             text = party.name
             tips = []
@@ -961,10 +1006,13 @@ class GMWindow(QMainWindow):
             trait_key="",
             actor=party.name,
         )
+        if party.minion:
+            # Every seat's card then reads the worst rung, which is what lands.
+            rolled = minion_save_spec(rolled, self.minion_rules())
         # Set first: the roll can come back before roll_spec returns (a hosted
         # server answers in-process, and a test's die does not tumble).
         self._answering = _Answering(spec, party, where)
-        if not self._roller.roll_spec(rolled):
+        if not self._roller.roll_spec(rolled, minion=self.rolls_as_minion(party.character)):
             self._answering = None
             return
         if where.seq is not None:
@@ -1000,11 +1048,18 @@ class GMWindow(QMainWindow):
         entry = self._npc_state.get(party.source)
         if entry is None:
             return
-        rung = answer_rung(ladder, int(degree), entry.character, self._data)
+        rung = answer_rung(ladder, int(degree), entry.character, self._data, self.minion_rules())
         if rung is None:
             return
+        self._land_answer(party, rung, answering.where.source, roll.get("seq"))
+
+    def _land_answer(self, party: ImpressParty, rung, source: str, seq: object) -> None:
+        """Put *rung* on an NPC, say so, and hang a ↶ on the card *seq* names."""
+        entry = self._npc_state.get(party.source)
+        if entry is None:
+            return
         before = deepcopy(entry.character.conditions)
-        changes = resolve_rung(entry.character, rung, self._data, source=answering.where.source)
+        changes = resolve_rung(entry.character, rung, self._data, source=source)
         if not changes:
             return
         self.impress_apply(party, list(changes))
@@ -1013,13 +1068,24 @@ class GMWindow(QMainWindow):
             return
         names = self._change_names(changes)
         self._show_notice(f"{party.name}: {names}", theme.color("tint.worse"))
-        seq = roll.get("seq")
         if isinstance(seq, int):
             self._history.set_undo(
                 seq,
                 f"Take {names} back off {party.name}",
                 lambda: self._undo_answer(seq, party, added, removed, names),
             )
+
+    def _crit_minion(self, party: ImpressParty, rung, where: AnswerContext) -> None:
+        """A critical hit on a minion: its worst, with no resistance check (PDF p197).
+
+        Nothing is rolled, so the history gets a line saying what happened, and the
+        ↶ that takes it back hangs on the attack's own card.
+        """
+        caption = rung_caption(rung, self._data) or "the worst outcome"
+        self._post_note(f"{party.name}: critical hit on a minion — {caption}, no save")
+        self._land_answer(party, rung, where.source, where.seq)
+        if where.seq is not None:
+            self._answered.setdefault(where.seq, set()).add(party.name)
 
     def _undo_answer(
         self,
@@ -1186,9 +1252,94 @@ class GMWindow(QMainWindow):
         if self._bridge.in_session and self._bridge.is_gm:
             publish_table_rules(self._bridge)
 
-    def area_roll_attack(self, spec: RollSpec) -> None:
-        """Roll an NPC's attack against the primary on this window's roller."""
-        self._roller.roll_spec(spec)
+    def area_roll_attack(self, spec: RollSpec, attacker: Character | None = None) -> None:
+        """Roll an NPC's attack against the primary on this window's roller.
+
+        A minion *attacker*'s natural 20 is no critical (PDF p25).
+        """
+        self._roller.roll_spec(spec, minion=self.rolls_as_minion(attacker))
+
+    # -- minions -------------------------------------------------------------
+
+    def minion_rules(self) -> MinionRules:
+        """The minion rules the open session plays by (the book's, with none open)."""
+        return session_minion_rules(self._bridge)
+
+    def rolls_as_minion(self, character: Character | None) -> bool:
+        """Whether a roll made as *character* is a minion's, whose natural 20 is no
+        added success — only at a table playing that rule."""
+        return is_minion(character) and self.minion_rules().no_added_success
+
+    def _on_mod_state(self, mod_id: str, key: str, _payload: object) -> None:
+        """The session's shared state moved: restate what reads its minion rules."""
+        if mod_id == TABLE_MOD_ID and key == TABLE_SESSION_KEY:
+            self._apply_minion_rules()
+
+    def _apply_minion_rules(self) -> None:
+        """Tell every card the session's minion rules, and re-push the board.
+
+        The damage row's shape and whether the table sees a minion's badge both depend
+        on them, so a GM who changes the rules sees both follow straight away.
+        """
+        rules = self.minion_rules()
+        for entry in self._npc_state.values():
+            if entry.card is not None:
+                entry.card.set_minion_rules(rules)
+        self._push_scene()
+
+    def _set_npc_minion(self, name: str, minion: bool) -> None:
+        """Make an NPC a minion, or a full NPC again (its card's toggle or menu).
+
+        The flag is the creature's own, saved in its file like any edit, so every copy
+        and every later session sees it. It goes down the road a condition change
+        takes: replayed onto an open sheet (absorbed, so its undo cannot split the two
+        copies apart) or written to the file now.
+        """
+        what = "a minion" if minion else "a full NPC"
+        self._set_npc_flag(name, "minion", minion, what)
+
+    def _set_npc_summoned(self, name: str, summoned: bool) -> None:
+        """Tag an NPC as summoned, or take the tag off (its card's menu)."""
+        what = "tagged as summoned" if summoned else "no longer tagged as summoned"
+        self._set_npc_flag(name, "summoned", summoned, what)
+
+    def _set_npc_flag(self, name: str, attribute: str, value: bool, what: str) -> None:
+        """Set one of an NPC's own flags (``minion``, ``summoned``) from its card.
+
+        The flag is the creature's own, saved in its file like any edit, so every copy
+        and every later session sees it. It goes down the road a condition change
+        takes: replayed onto an open sheet (absorbed, so its undo cannot split the two
+        copies apart) or written to the file now.
+        """
+        entry = self._npc_state.get(name)
+        if entry is None or getattr(entry.character, attribute) == value:
+            return
+        setattr(entry.character, attribute, value)
+        window = self._window_for(entry.path)
+        if window is not None:
+            with absorbing(window.sheet):
+                setattr(window.sheet.character, attribute, value)
+                window.sheet.system_info.reseed()
+        else:
+            try:
+                library.save_character(entry.character, path=entry.path)
+            except OSError:
+                pass  # an unwritable workspace is not worth a dialog mid-session
+        if entry.card is not None:
+            entry.card.refresh_minion()
+        self._push_scene()
+        self._show_notice(f"“{entry.summary.name}” is now {what}.", theme.color("accent"))
+
+    def _npc_roll(self, name: str, spec: object, *, load: bool = False) -> None:
+        """A pinned tile on an NPC's card: roll (or load) it as that creature rolls."""
+        if not isinstance(spec, RollSpec):
+            return
+        entry = self._npc_state.get(name)
+        minion = self.rolls_as_minion(entry.character if entry is not None else None)
+        if load:
+            self._roller.load_spec(spec, minion=minion)
+        else:
+            self._roller.roll_spec(spec, minion=minion)
 
     def _request_roll(self, spec: object) -> None:
         """Ask the table to roll something — the Request row's handler.
@@ -1298,6 +1449,9 @@ class GMWindow(QMainWindow):
         # server rather than hosting it here.
         self._bridge.connected.connect(self._on_joined)
         self._bridge.disconnected.connect(self._on_left)
+        # The session's own settings (its minion rules) ride the shared state.
+        self._bridge.modStateChanged.connect(self._on_mod_state)
+        self._bridge.stopped.connect(self._apply_minion_rules)
 
     # -- hosting -----------------------------------------------------------
 
@@ -1615,6 +1769,8 @@ class GMWindow(QMainWindow):
             "label": roll.get("label", ""),
             # Local-only, as everywhere: it carries the chain this card offers.
             "spec": roll.get("spec"),
+            "routine": bool(roll.get("routine")),
+            "minion": bool(roll.get("minion")),
         }
         self._history.add_roll(record)
         # A save an NPC answered off the history: what failing did goes on it.
@@ -2541,6 +2697,12 @@ class GMWindow(QMainWindow):
                     "name": npc.summary.name,
                     "disposition": entry.disposition,
                 }
+                # The GM's own board always shows it; the wire only when the session
+                # lets the players see it (see _push_scene).
+                if npc.character.minion:
+                    item["minion"] = True
+                if npc.character.summoned:
+                    item["summoned"] = True
                 conditions = [c.to_dict() for c in npc.character.conditions]
             else:
                 if entry.source not in self._cards:
@@ -2595,13 +2757,19 @@ class GMWindow(QMainWindow):
         """
         entries = self._scene_payload()
         order = [e.ref for e in self._scene]
-        signature = (entries, order, self._bridge.in_session)
+        shown = self.minion_rules().show_players
+        signature = (entries, order, self._bridge.in_session, shown)
         if signature != self._pushed_scene:
             self._pushed_scene = deepcopy(signature)
             self._scene_board.set_manual_order(order)
             self._scene_board.set_scene(entries)
             if self._bridge.in_session:
-                self._bridge.set_scene(entries, {e.ref: e.wire_source() for e in self._scene})
+                wire = (
+                    entries
+                    if shown
+                    else [{k: v for k, v in e.items() if k != "minion"} for e in entries]
+                )
+                self._bridge.set_scene(wire, {e.ref: e.wire_source() for e in self._scene})
             self._warn_if_scene_is_truncated(entries)
         # Both of these live outside the guard, because neither is about the payload.
         #
@@ -2888,36 +3056,26 @@ class GMWindow(QMainWindow):
         self._manual_order = [n for n in self._manual_order if n in self._npc_state]
         self._manual_order += [n for n in self._npc_state if n not in self._manual_order]
 
+        self._group_cards = {}
+        shown = npc_groups.shown_groups(self._npc_groups, self._npc_state)
+        drawn: set[str] = set()
         for name in self._ordered_npcs():
-            entry = self._npc_state[name]
-            card = NPCCard(
-                entry.character,
-                entry.summary,
-                self._data,
-                collapsed=entry.collapsed,
-            )
-            card.openRequested.connect(self._open_npc)
-            card.removeRequested.connect(self._remove_npc)
-            card.deleteRequested.connect(self._delete_npc)
-            card.applyConditionRequested.connect(self._apply_npc_condition)
-            card.removeConditionRequested.connect(self._remove_npc_condition)
-            card.recoveryRequested.connect(self._roll_npc_recovery)
-            card.sceneToggled.connect(lambda n, on: self._set_in_scene(SCENE_NPC, n, on))
-            card.copyRequested.connect(self._copy_npc)
-            card.pinsChanged.connect(lambda n, refs: self._store_pins(_npc_key(n), refs))
-            card.loadRequested.connect(self._roller.load_spec)
-            card.rollRequested.connect(self._roller.roll_spec)
-            card.pinPickerRequested.connect(self._open_npc_pin_picker)
-            card.collapsedChanged.connect(self._set_npc_collapsed)
-            card.damageRequested.connect(self._apply_npc_damage)
-            card.areaRequested.connect(self._start_card_area)
-            card.impressRequested.connect(self._start_card_impress)
-            card.pins.set_pins(self._pins_for(_npc_key(name), "npc"))
-            # Connected after the initial load, so seeding the strip does not ask
-            # the window to re-measure a grid it is halfway through building.
-            card.pins.widthHintChanged.connect(self._sync_card_widths)
-            entry.card = card
-            self._npc_flow.addWidget(card)
+            if name in drawn:
+                continue
+            group = npc_groups.group_of(shown, name)
+            if group is not None:
+                # The whole squad is drawn where its first member stands in the order.
+                rows = [self._build_npc_card(member, row=True) for member in group.members]
+                drawn.update(group.members)
+                group_card = NPCGroupCard(group, rows)
+                group_card.renameRequested.connect(self._rename_group)
+                group_card.ungroupRequested.connect(self._ungroup)
+                group_card.sceneRequested.connect(self._group_to_scene)
+                self._group_cards[group.id] = group_card
+                self._npc_flow.addWidget(group_card)
+                continue
+            drawn.add(name)
+            self._npc_flow.addWidget(self._build_npc_card(name))
         self._no_npcs.setVisible(not self._npc_state)
         self._sync_card_widths()
         self._refresh_collapse_all()
@@ -2930,6 +3088,43 @@ class GMWindow(QMainWindow):
         # A cast with someone in it is a cast whose sheets will be opened.
         if self._npc_state:
             self._schedule_spare_npc()
+
+    def _build_npc_card(self, name: str, *, row: bool = False) -> NPCCard:
+        """One NPC's card (or a group's row of it), wired to this window."""
+        entry = self._npc_state[name]
+        card = NPCCard(
+            entry.character,
+            entry.summary,
+            self._data,
+            collapsed=entry.collapsed,
+            row=row,
+        )
+        card.openRequested.connect(self._open_npc)
+        card.removeRequested.connect(self._remove_npc)
+        card.deleteRequested.connect(self._delete_npc)
+        card.applyConditionRequested.connect(self._apply_npc_condition)
+        card.removeConditionRequested.connect(self._remove_npc_condition)
+        card.recoveryRequested.connect(self._roll_npc_recovery)
+        card.sceneToggled.connect(lambda n, on: self._set_in_scene(SCENE_NPC, n, on))
+        card.copyRequested.connect(self._copy_npc)
+        card.pinsChanged.connect(lambda n, refs: self._store_pins(_npc_key(n), refs))
+        card.loadRequested.connect(lambda s, n=name: self._npc_roll(n, s, load=True))
+        card.rollRequested.connect(lambda s, n=name: self._npc_roll(n, s))
+        card.pinPickerRequested.connect(self._open_npc_pin_picker)
+        card.collapsedChanged.connect(self._set_npc_collapsed)
+        card.damageRequested.connect(self._apply_npc_damage)
+        card.minionToggled.connect(self._set_npc_minion)
+        card.summonedToggled.connect(self._set_npc_summoned)
+        card.set_minion_rules(self.minion_rules())
+        card.areaRequested.connect(self._start_card_area)
+        card.impressRequested.connect(self._start_card_impress)
+        card.pins.set_pins(self._pins_for(_npc_key(name), "npc"))
+        # Connected after the initial load, so seeding the strip does not ask
+        # the window to re-measure a grid it is halfway through building.
+        card.pins.widthHintChanged.connect(self._sync_card_widths)
+        card.leaveGroupRequested.connect(self._leave_group)
+        entry.card = card
+        return card
 
     def _ordered_npcs(self) -> list[str]:
         """The cast in render order: the GM's own arrangement, and nothing else.
@@ -2953,8 +3148,135 @@ class GMWindow(QMainWindow):
         always had, unchanged below.
         """
         kind, _, source = ref.partition(":")
+        if kind == GROUP_KIND and source in self._group_cards:
+            # A whole group moves as one, keeping its rows' order.
+            self._reorder_npcs(self._group_cards[source].members, index)
+            return
         if kind == SCENE_NPC and source in self._npc_state:
+            # A group's row dropped *between* cards has left its group.
+            if npc_groups.group_of(self._npc_groups, source) is not None:
+                self._npc_groups = npc_groups.leave(self._npc_groups, source)
+                self._persist_groups()
             self._reorder_npc(source, index)
+
+    def _board_blocks(self) -> list[list[str]]:
+        """The board as it is laid out: one list of file names per card, a group's
+        members together, in flow order."""
+        blocks: list[list[str]] = []
+        for index in range(self._npc_flow.count()):
+            item = self._npc_flow.itemAt(index)
+            widget = item.widget() if item is not None else None
+            if isinstance(widget, NPCGroupCard):
+                blocks.append(widget.members)
+            elif isinstance(widget, NPCCard):
+                blocks.append([widget.name_key])
+        return blocks
+
+    def _reorder_npcs(self, names: list[str], target_index: int) -> None:
+        """Move *names* together to the dropped slot *target_index* among the board's
+        cards (counted the way :meth:`_reorder_npc` always has: without the mover)."""
+        moving = [n for n in names if n in self._npc_state]
+        if not moving:
+            return
+        blocks = [[n for n in block if n not in moving] for block in self._board_blocks()]
+        blocks = [block for block in blocks if block]
+        blocks.insert(max(0, min(target_index, len(blocks))), moving)
+        laid = [n for block in blocks for n in block]
+        self._manual_order = laid + [n for n in self._ordered_npcs() if n not in laid]
+        self._refresh_npcs()
+
+    # -- groups --------------------------------------------------------------
+
+    def _persist_groups(self) -> None:
+        storage.set_gm_npc_groups(npc_groups.groups_to_raw(self._npc_groups))
+
+    def _can_merge_npcs(self, ref: str, widget: object) -> bool:
+        """Whether dropping *ref* onto *widget* combines them: an NPC card or a group's
+        onto another NPC card or group."""
+        kind = ref.partition(":")[0]
+        return kind in (SCENE_NPC, GROUP_KIND) and isinstance(widget, (NPCCard, NPCGroupCard))
+
+    def _merge_npcs(self, ref: str, widget: object) -> None:
+        """A card (or a whole group) was dropped onto another: they become one group.
+
+        Onto a loose card, the two make a new group named after the target ("Thug 2"
+        and "Thug 5" make "Thug"); onto a grouped creature or a group, the movers join
+        it. Dropping something onto itself, or onto its own group, does nothing.
+        """
+        kind, _, source = ref.partition(":")
+        if kind == GROUP_KIND:
+            card = self._group_cards.get(source)
+            moving = card.members if card is not None else []
+        else:
+            moving = [source] if source in self._npc_state else []
+        if not moving:
+            return
+        if isinstance(widget, NPCGroupCard):
+            groups = npc_groups.join(
+                self._npc_groups, moving, widget.group_id, target_is_group=True
+            )
+            anchor = widget.members[0]
+        elif isinstance(widget, NPCCard):
+            target = widget.name_key
+            entry = self._npc_state.get(target)
+            name = npc_groups.base_name(entry.summary.name) if entry is not None else ""
+            groups = npc_groups.join(self._npc_groups, moving, target, name=name)
+            anchor = target
+        else:
+            return
+        if groups == self._npc_groups:
+            return
+        self._npc_groups = groups
+        self._persist_groups()
+        # The movers stand with the group in the board's order, so it draws as one.
+        order = [n for n in self._ordered_npcs() if n not in moving]
+        at = order.index(anchor) + 1 if anchor in order else len(order)
+        self._manual_order = order[:at] + moving + order[at:]
+        self._refresh_npcs()
+
+    def _leave_group(self, name: str) -> None:
+        """A row's "Leave the group": a loose card again, right after its old group."""
+        if npc_groups.group_of(self._npc_groups, name) is None:
+            return
+        self._npc_groups = npc_groups.leave(self._npc_groups, name)
+        self._persist_groups()
+        self._refresh_npcs()
+
+    def _ungroup(self, group_id: str) -> None:
+        """The group's "Ungroup": every member a loose card again, where they stood."""
+        self._npc_groups = npc_groups.dissolve(self._npc_groups, group_id)
+        self._persist_groups()
+        self._refresh_npcs()
+
+    def _rename_group(self, group_id: str) -> None:
+        """The group's "Rename group…"."""
+        group = next((g for g in self._npc_groups if g.id == group_id), None)
+        if group is None:
+            return
+        name, ok = QInputDialog.getText(self, "Rename group", "Group name:", text=group.name)
+        if not ok or not name.strip():
+            return
+        self._npc_groups = npc_groups.rename(self._npc_groups, group_id, name)
+        self._persist_groups()
+        self._refresh_npcs()
+
+    def _group_to_scene(self, group_id: str, on: bool) -> None:
+        """Put every member of a group on the Scene, or take every one off."""
+        card = self._group_cards.get(group_id)
+        if card is None:
+            return
+        for member in card.members:
+            self._set_in_scene(SCENE_NPC, member, on)
+
+    def _group_npcs(self, members: list[str], name: str) -> None:
+        """Record *members* (two or more, just made) as a new group called *name*."""
+        if len(members) < 2:
+            return
+        groups = self._npc_groups
+        for member in members[1:]:
+            groups = npc_groups.join(groups, [member], members[0], name=name)
+        self._npc_groups = groups
+        self._persist_groups()
 
     def _reorder_npc(self, name: str, target_index: int) -> None:
         """Move an NPC to a dropped slot in the GM's arrangement of the cast.
@@ -2966,12 +3288,7 @@ class GMWindow(QMainWindow):
         was the right rule while this grid *was* the turn order. That rule lives on
         the Scene, in :meth:`_drop_on_scene`, where the ordering it protects is.
         """
-        if name not in self._npc_state:
-            return
-        order = [n for n in self._ordered_npcs() if n != name]
-        order.insert(max(0, min(target_index, len(order))), name)
-        self._manual_order = order
-        self._refresh_npcs()
+        self._reorder_npcs([name], target_index)
 
     def _create_npc(self) -> None:
         """Write a new NPC: an editable, simplified sheet that saves into the cast."""
@@ -3010,8 +3327,30 @@ class GMWindow(QMainWindow):
             # A bare workspace filename, shared by every creature with this icon.
             image_path=npc_icons.store_icon(entered.icon),
         )
-        path = library.save_character(npc, directory=self._npc_dir())
-        self._register_npc(path)
+        npc.minion = entered.minion
+        if entered.count <= 1:
+            path = library.save_character(npc, directory=self._npc_dir())
+            self._register_npc(path)
+            return
+        self._make_squad(npc, entered.count)
+
+    def _make_squad(self, npc: Character, count: int) -> None:
+        """Save *count* copies of *npc* as a squad: "Thug 1…N", grouped on the board.
+
+        Every file is written before the cast changes, and the cast and the board
+        change once — not *count* times over, each a full rebuild. Not put on the
+        Scene: the GM brings a squad in when the fight reaches it.
+        """
+        taken = {entry.summary.name for entry in self._npc_state.values()}
+        names = npc_groups.numbered_names(library.display_name(npc), count, taken)
+        files: list[str] = []
+        for name in names:
+            copy = Character.from_dict(npc.to_dict())
+            copy.profile["hero_name"] = name
+            files.append(library.save_character(copy, directory=self._npc_dir()).name)
+        self._set_npc_paths([*self._state.npc_paths, *files])
+        self._group_npcs(files, npc_groups.base_name(names[0]))
+        self._refresh_npcs()
 
     def _add_existing_npc(self) -> None:
         """Bring an NPC written for another session into this one."""
@@ -3063,6 +3402,13 @@ class GMWindow(QMainWindow):
         if self._collapsed_cards.get(_npc_key(name)):
             self._collapsed_cards[_npc_key(path.name)] = True
             storage.set_gm_collapsed_cards(self._collapsed_cards)
+        # A copy of one of a squad is one more of that squad.
+        if npc_groups.group_of(self._npc_groups, name) is not None:
+            self._npc_groups = npc_groups.join(self._npc_groups, [path.name], name)
+            self._persist_groups()
+            if name in self._manual_order:
+                at = self._manual_order.index(name) + 1
+                self._manual_order[at:at] = [path.name]
         self._register_npc(path)
 
     def _open_npc(self, name: str) -> None:
@@ -3200,12 +3546,15 @@ class GMWindow(QMainWindow):
             else:
                 self._roller.roll_spec(payload)
         elif topic == ROLL_REQUESTED and isinstance(payload, RollSpec):
-            self._roller.roll_spec(payload)
+            # Rolled as the sheet's creature, so a minion's natural 20 is no critical.
+            sheet = window.sheet.character if window is not None else None
+            self._roller.roll_spec(payload, minion=self.rolls_as_minion(sheet))
         elif topic == AREA_REQUESTED and isinstance(payload, str) and window is not None:
             # Not a die: the NPC uses a power on an area, and the GM picks who is in it.
             self._start_npc_area(window, payload)
         elif topic == LOAD_REQUESTED and isinstance(payload, RollSpec):
-            self._roller.load_spec(payload)
+            sheet = window.sheet.character if window is not None else None
+            self._roller.load_spec(payload, minion=self.rolls_as_minion(sheet))
         elif topic == BONUS_REQUESTED and type(payload) is int and payload > 0:
             self._roller.add_bonus(payload)
         elif topic == NOTE_REQUESTED and isinstance(payload, str) and payload:
@@ -3314,6 +3663,10 @@ class GMWindow(QMainWindow):
         self._forget_pins(_npc_key(name))
         if self._collapsed_cards.pop(_npc_key(name), None) is not None:
             storage.set_gm_collapsed_cards(self._collapsed_cards)
+        # A deleted creature is in no squad any more, in any session.
+        if npc_groups.group_of(self._npc_groups, name) is not None:
+            self._npc_groups = npc_groups.leave(self._npc_groups, name)
+            self._persist_groups()
         self._remove_npc(name)
 
     # -- collapsing a card --------------------------------------------------
@@ -3369,22 +3722,27 @@ class GMWindow(QMainWindow):
         the widest hint still includes a portrait — but with every card shed of its
         portrait at once, the shared width falls with them.
         """
+        npc_cards = [e.card for e in self._npc_state.values() if e.card is not None]
         for container, cards in (
-            (
-                self._npc_container,
-                [e.card for e in self._npc_state.values() if e.card is not None],
-            ),
+            (self._npc_container, npc_cards),
             (self._cards_container, list(self._cards.values())),
         ):
             if not cards:
                 continue
-            body = max(card.body_width_hint() for card in cards)
+            # A group's rows share the board's tile width, but not the loose cards'
+            # body width: a group takes a line of the board to itself.
+            loose = [card for card in cards if not getattr(card, "row", False)]
             strip = max(card.pin_width_hint() for card in cards)
             # How a card gives way to a narrow block is its own business — a player's
             # strip gives up its slack, an NPC's tiles wrap into fewer columns.
             room = self._card_room(container)
-            for card in cards:
-                card.apply_width(body, strip, room)
+            if loose:
+                body = max(card.body_width_hint() for card in loose)
+                for card in loose:
+                    card.apply_width(body, strip, room)
+            if container is self._npc_container:
+                for group_card in self._group_cards.values():
+                    group_card.apply_width(strip, room)
 
     @staticmethod
     def _card_room(container) -> int:
@@ -3588,6 +3946,9 @@ class GMWindow(QMainWindow):
         step = next((s for s in steps if s.index == step_index), None)
         if step is None:
             return
+        if entry.character.minion:
+            # A minion stops at the ceiling: no rung walks it on to Dying.
+            step = minion_step(step, self._data, self.minion_rules())
         # Read *before* the apply: the summary resolves escalation against the
         # creature's current state, so asking afterwards would describe what the
         # next click would do rather than what this one just did.
@@ -3715,9 +4076,28 @@ class GMWindow(QMainWindow):
         way the sheet's opener does it, and kept referenced so it is not collected
         the moment this method returns.
         """
-        from mm_companion.ui.settings import GMPage, SettingsWindow
+        from mm_companion.ui.settings import GMPage
 
-        window = SettingsWindow(page=GMPage.title)
+        self._show_settings(GMPage.title)
+
+    def open_session_settings(self) -> None:
+        """Open the Settings window on the Session page (Settings ▸ Session settings)."""
+        from mm_companion.ui.settings.session_page import SESSION_PAGE_TITLE
+
+        self._show_settings(SESSION_PAGE_TITLE)
+
+    def _show_settings(self, page: str) -> None:
+        """The Settings window, landing on *page*, with this window's Session page.
+
+        The Session page is built bound to this window's session, which is why only
+        this window offers it: a sheet's Preferences has no session to set rules for.
+        """
+        from mm_companion.ui.settings import SessionPage, SettingsWindow
+
+        bridge = self._bridge
+        window = SettingsWindow(
+            page=page, extra_pages=(lambda parent: SessionPage(parent, bridge=bridge),)
+        )
         self._settings_window = window
         window.show()
 

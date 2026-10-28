@@ -197,10 +197,12 @@ def test_the_protocol_version_is_the_one_the_keepalive_needs() -> None:
     server would strip both the same way again. v16 lets one roll provoke several
     follow-ups (``also``), which a v15 server would strip the same way. v17 carries the
     attack's rank and Penetrating ranks on a save's ladder, which a v16 server would strip
-    the same way again. Either way changing this number is a decision about who can still
-    join, so it should not be possible to do by accident.
+    the same way again. v18 adds a roll's ``routine`` (take 10) and ``minion`` flags, which
+    a v17 server would ignore and roll a d20 or score a minion's critical. Either way
+    changing this number is a decision about who can still join, so it should not be
+    possible to do by accident.
     """
-    assert PROTOCOL_VERSION == 17
+    assert PROTOCOL_VERSION == 18
 
 
 def test_every_registered_type_is_reachable_by_tag() -> None:

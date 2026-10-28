@@ -63,6 +63,7 @@ from mm_companion.core.rules import (
     impress_spec,
     impression_allowed,
     impression_outcomes,
+    is_minion,
     modifier_lines,
     modifier_total,
     modifier_value,
@@ -713,6 +714,11 @@ class ImpressParty:
     kind: str
     source: str
     character: Character | None = None
+
+    @property
+    def minion(self) -> bool:
+        """Whether this is a minion (PDF p25). Only an NPC ever is one."""
+        return self.kind == PARTY_NPC and is_minion(self.character)
 
 
 @dataclass(frozen=True)

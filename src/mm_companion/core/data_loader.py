@@ -1565,6 +1565,35 @@ class DamageDefenses:
 
 
 @dataclass(frozen=True)
+class MinionSystem:
+    """The two numbers the minion rules need (``system.json``'s ``minions``, PDF p25).
+
+    ``impress_bonus`` is what a hero gains on a routine Impress check against minions
+    (PDF p201). ``ceiling`` is the condition a minion's failed saves stop at: escalation
+    never carries one past it, so a thug who fails again stays Incapacitated rather
+    than walking the Dying ladder (the GM marks it dead by hand). Which of the rules
+    are *on* is not here — that is the session's, :class:`~.rules.minions.MinionRules`.
+    """
+
+    impress_bonus: int = 5
+    ceiling: str = "incapacitated"
+
+
+@dataclass(frozen=True)
+class DefeatSystem:
+    """Which conditions mean a creature is out of the fight (``system.json``'s ``defeat``).
+
+    ``down`` lists the conditions that put a creature down — Incapacitated, which Dying
+    includes — and ``dead`` the ones it does not get up from. The GM's cards and every
+    seat's Scene dim a creature by them (:func:`~.rules.conditions.defeat_state`); dead
+    outranks down.
+    """
+
+    down: tuple[str, ...] = ("incapacitated",)
+    dead: tuple[str, ...] = ("dead",)
+
+
+@dataclass(frozen=True)
 class SystemRules:
     """System-level rule references (from ``system.json``).
 
@@ -1600,6 +1629,10 @@ class SystemRules:
     damage_defenses: DamageDefenses = field(default_factory=DamageDefenses)
     #: The presets and cap pairs the GM's Quick NPC dialog builds a creature from.
     quick_npc: QuickNPCRules = field(default_factory=QuickNPCRules)
+    #: The minion rules' numbers (see :class:`MinionSystem`).
+    minions: MinionSystem = field(default_factory=MinionSystem)
+    #: The conditions that take a creature out of the fight (see :class:`DefeatSystem`).
+    defeat: DefeatSystem = field(default_factory=DefeatSystem)
 
 
 # --- Measurements & movement: the rank ↔ real-world conversion tables, the
@@ -4083,6 +4116,34 @@ def _parse_system(raw: dict) -> SystemRules:
             for d in sys.get("derived_traits", [])
         ),
         quick_npc=_parse_quick_npc(sys.get("quick_npc"), defaults.quick_npc),
+        minions=_parse_minions(sys.get("minions"), defaults.minions),
+        defeat=_parse_defeat(sys.get("defeat"), defaults.defeat),
+    )
+
+
+def _parse_defeat(raw: object, default: DefeatSystem) -> DefeatSystem:
+    """Parse ``system.json``'s ``defeat`` block; a missing list keeps *default*'s."""
+
+    if not isinstance(raw, dict):
+        return default
+
+    def ids(key: str, fallback: tuple[str, ...]) -> tuple[str, ...]:
+        value = raw.get(key)
+        if not isinstance(value, list):
+            return fallback
+        return tuple(str(v) for v in value if isinstance(v, str) and v)
+
+    return DefeatSystem(down=ids("down", default.down), dead=ids("dead", default.dead))
+
+
+def _parse_minions(raw: object, default: MinionSystem) -> MinionSystem:
+    """Parse ``system.json``'s ``minions`` block; a missing key keeps *default*'s."""
+
+    if not isinstance(raw, dict):
+        return default
+    return MinionSystem(
+        impress_bonus=int(raw.get("impressBonus", default.impress_bonus)),
+        ceiling=str(raw.get("ceiling", default.ceiling)),
     )
 
 

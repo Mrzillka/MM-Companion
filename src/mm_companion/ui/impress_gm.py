@@ -38,8 +38,10 @@ from PySide6.QtWidgets import QWidget
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData, Impression
 from mm_companion.core.rules import (
+    BOOK_MINION_RULES,
     MODE_REQUEST,
     ImpressAttempt,
+    MinionRules,
     RollSpec,
     TraitChoice,
     best_choice,
@@ -48,8 +50,10 @@ from mm_companion.core.rules import (
     impress_rung,
     impress_spec,
     impression_outcomes,
+    minion_save_spec,
     resist_choices,
     resolve_rung,
+    routine_impress_dc,
     rung_caption,
 )
 from mm_companion.ui import theme
@@ -94,6 +98,9 @@ class ImpressHost(Protocol):
 
     def action_remove(self, party: ImpressParty, changes: list[tuple[str, str | None]]) -> bool:
         """Take conditions off one party; ``False`` if that could not be delivered."""
+
+    def minion_rules(self) -> MinionRules:
+        """The minion rules the open session plays by."""
 
 
 @dataclass
@@ -417,6 +424,15 @@ class ImpressController(QObject):
         if action.card is not None:
             action.card.set_text(self._plan_text(plan))
             action.card.set_status("Rolling…", button="Open")
+        if (
+            plan.mode != MODE_REQUEST
+            and plan.targets
+            and all(self._routine_against(plan, t) for t in plan.targets)
+        ):
+            # Every target is a minion a routine check is made against (PDF p201):
+            # there is nothing to roll, so nobody is asked and nothing waits.
+            self._resolve_targets(action, None, None)
+            return
         spec = self._check_spec(plan)
         if plan.source.kind == PARTY_PLAYER:
             asked = run.ask(plan.source, spec, None, lambda _a, r, a=action: self._on_check(a, r))
@@ -427,7 +443,9 @@ class ImpressController(QObject):
             elif action.window is not None:
                 action.window.set_check(f"Waiting for {html.escape(plan.source.name)}'s check…")
             return
-        lead = group_line(plan.source.name, spec, title=plan.title)
+        lead = group_line(
+            plan.source.name, spec, title=plan.title, minion=self._minion_rolls(plan.source)
+        )
         lead.pop("dc_offset", None)
         run.roll_group([], [], lambda pairs, a=action: self._on_check(a, pairs[0][1]), lead=lead)
 
@@ -449,13 +467,68 @@ class ImpressController(QObject):
                 action.window.set_check(f"Check: <b>{total}</b>")
             self._done(action, "Rolled — each target resists from the card.")
             return
-        critical = self._data.system.critical_effect_bonus if die == 20 else 0
-        dc = total + critical
-        if action.window is not None:
-            natural = (
-                f" (natural 20: +{critical})" if critical else (" (natural 1)" if die == 1 else "")
-            )
-            action.window.set_check(f"Check: <b>{total}</b>{natural} — DC <b>{dc}</b> to resist")
+        self._resolve_targets(action, die, total)
+
+    def _rules(self) -> MinionRules:
+        """The session's minion rules — the book's for a host that cannot say."""
+        reader = getattr(self._host, "minion_rules", None)
+        return reader() if callable(reader) else BOOK_MINION_RULES
+
+    def _minion_rolls(self, party: ImpressParty) -> bool:
+        """Whether *party*'s rolls are a minion's: its natural 20 no added success."""
+        return party.minion and self._rules().no_added_success
+
+    def _routine_against(self, plan: ImpressPlan, target: PlannedTarget) -> bool:
+        """Whether *target* resists a routine check rather than the rolled one.
+
+        A non-minion impressing a minion makes the check as a routine one at +5 (PDF
+        p201) — "routine opposition" is the non-minion's, so a minion impressing
+        another minion rolls as anyone does.
+        """
+        return target.party.minion and not plan.source.minion and self._rules().routine_impress
+
+    def _target_dc(self, plan: ImpressPlan, target: PlannedTarget, dc: int | None) -> int:
+        """The DC *target* resists: the rolled one, or a minion's routine one.
+
+        A routine check is the impresser's *choice* (PDF p17): one who has rolled
+        anyway — a mixed group — keeps the better of the roll and the routine result,
+        so a high roll never makes the minions easier to impress than the rest.
+        """
+        routine = routine_impress_dc(plan.check_modifier, self._data, target.dc_offset)
+        if dc is None:
+            return routine
+        if self._routine_against(plan, target):
+            return max(dc + target.dc_offset, routine)
+        return dc + target.dc_offset
+
+    def _resolve_targets(self, action: _Action, die: int | None, total: int | None) -> None:
+        """Roll every target's resistance — against the check's total, or for a minion
+        a routine check's (``die`` and ``total`` are ``None`` when nothing was rolled)."""
+        resolving = action.resolving
+        if resolving is None:
+            return
+        plan = resolving.plan
+        dc: int | None = None
+        if total is not None and die is not None:
+            # A minion's natural 20 is no added success (PDF p25), so no critical bonus.
+            counts = die == 20 and not self._minion_rolls(plan.source)
+            critical = self._data.system.critical_effect_bonus if counts else 0
+            dc = total + critical
+            if action.window is not None:
+                natural = (
+                    f" (natural 20: +{critical})"
+                    if critical
+                    else (" (natural 1)" if die == 1 else "")
+                )
+                note = f"Check: <b>{total}</b>{natural} — DC <b>{dc}</b> to resist"
+                if any(self._routine_against(plan, t) for t in plan.targets):
+                    if dc >= routine_impress_dc(plan.check_modifier, self._data):
+                        note += "; minions too (the roll beat a routine check)"
+                    else:
+                        note += f"; minions resist {self._routine_text(plan)}"
+                action.window.set_check(note)
+        elif action.window is not None:
+            action.window.set_check(f"Routine against minions: {self._routine_text(plan)}")
         if not plan.targets:
             self._done(action, "Rolled.")
             return
@@ -467,7 +540,7 @@ class ImpressController(QObject):
                     self._data,
                     plan.impression,
                     plan.skill.key,
-                    dc + target.dc_offset,
+                    self._target_dc(plan, target, dc),
                     target=target.party.name,
                     action_id=plan.action_id,
                     source=plan.source.name,
@@ -483,6 +556,7 @@ class ImpressController(QObject):
         if not npcs:
             return
         lines = []
+        rules = self._rules()
         for target in npcs:
             resist = target.resist
             spec = RollSpec(
@@ -491,14 +565,28 @@ class ImpressController(QObject):
                 kind=resist.kind if resist is not None else "",
                 outcomes=impression_outcomes(self._data, plan.impression),
             )
+            if target.party.minion:
+                spec = minion_save_spec(spec, rules)
             lines.append(
-                group_line(target.party.name, spec, title=plan.title, dc=dc + target.dc_offset)
+                group_line(
+                    target.party.name,
+                    spec,
+                    title=plan.title,
+                    dc=self._target_dc(plan, target, dc),
+                    minion=self._minion_rolls(target.party),
+                )
             )
         action.run.roll_group(
             lines,
             list(npcs),
             lambda pairs, a=action: [self._land_roll(a, t, r) for t, r in pairs],
         )
+
+    def _routine_text(self, plan: ImpressPlan) -> str:
+        """How a minion's routine DC is made: "10 + 8 + 5 = DC 23"."""
+        bonus = self._data.system.minions.impress_bonus
+        dc = routine_impress_dc(plan.check_modifier, self._data)
+        return f"10 {plan.check_modifier:+d} +{bonus} = DC <b>{dc}</b> (routine)"
 
     # -- landing ---------------------------------------------------------------------
 
@@ -514,7 +602,13 @@ class ImpressController(QObject):
         cells = resolving.cells.setdefault(target.party.name, [])
         cells.append(roll_cell(label, record))
         degree = record.get("degree")
-        rung = impress_rung(plan.impression, None if degree is None else int(degree))
+        rung = impress_rung(
+            plan.impression,
+            None if degree is None else int(degree),
+            self._data,
+            minion=target.party.minion,
+            rules=self._rules(),
+        )
         if rung is None:
             self._land(action, target, "resisted", "tint.better")
             return

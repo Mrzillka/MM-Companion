@@ -129,7 +129,14 @@ from typing import ClassVar
 #: resolving an area applies Impervious, Impenetrable and Penetrating by the book.
 #: Bumped for the v13 reason: a v16 server strips the keys without a word, and an
 #: Impervious NPC would take the Hit the rules say it never felt.
-PROTOCOL_VERSION = 17
+#:
+#: v18 brings **minions** and the **routine check**: ``RollRequest.routine`` (take 10,
+#: no die rolled) and ``RollRequest.minion`` (a natural 20 that is no added success),
+#: both stamped on the record; a group line's ``minion``; and a scene entry's
+#: ``minion`` badge. Bumped for the v13 reason: a v17 server ignores the two request
+#: fields without a word, so a hero taking 10 would roll a d20 after all, and a
+#: minion's natural 20 would land a critical hit the rules say it cannot score.
+PROTOCOL_VERSION = 18
 
 #: Hard cap on one encoded message, including its trailing newline. A character
 #: snapshot is the largest thing that legitimately travels (tens of KB); anything
@@ -311,6 +318,11 @@ class RollRequest(Message):
     ``reroll`` asks for a lucky re-roll: the server rolls a die that cannot come up
     under 11 (:func:`~mm_companion.core.dice.reroll_d20`). The server applies it
     rather than the client, for the reason it rolls at all.
+
+    ``routine`` is a **routine check** (take 10): no die is rolled, and it reads
+    :data:`~mm_companion.core.dice.ROUTINE_DIE`. ``minion`` says the roll is made as a
+    minion, whose natural 20 is no added success (PDF p25). Both are stamped on the
+    record, so every seat reads the same verdict off it (protocol v18).
     """
 
     TYPE: ClassVar[str] = "roll_request"
@@ -322,6 +334,8 @@ class RollRequest(Message):
     hidden: bool = False
     spec: dict | None = None
     reroll: bool = False
+    routine: bool = False
+    minion: bool = False
 
 
 @_register
@@ -1138,6 +1152,8 @@ def sanitize_group_line(raw: object) -> dict | None:
         "dc_offset": _int("dc_offset"),
         "player_id": player_id if isinstance(player_id, str) else "",
         "spec": sanitize_spec(raw.get("spec")),
+        # A minion's line: its natural 20 is no added success (protocol v18).
+        "minion": raw.get("minion") is True,
     }
 
 
@@ -1233,6 +1249,13 @@ def sanitize_scene(raw: object) -> list[dict]:
         disposition = item.get("disposition")
         if isinstance(disposition, str) and disposition in SCENE_DISPOSITIONS:
             entry["disposition"] = disposition
+        # The minion badge (protocol v18): present only when true, which is only when
+        # the GM's session lets players see it.
+        if item.get("minion") is True:
+            entry["minion"] = True
+        # The GM's "summoned" tag: a label, shown on every seat, present only when true.
+        if item.get("summoned") is True:
+            entry["summoned"] = True
         conditions = _sanitize_scene_conditions(item.get("conditions"))
         if conditions:
             entry["conditions"] = conditions

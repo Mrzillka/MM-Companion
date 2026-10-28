@@ -725,6 +725,19 @@ The shape:
   Bumped for the v13 reason: a v16 server strips both keys without a word, so an
   Impervious NPC would take a Hit from an attack it is immune to. **Redeploy the hub**
   with the release that ships it.
+- **Protocol v18 brings minions and the routine check** ([minions](minions.md)).
+  - `RollRequest.routine` (take 10: the server sets the die to `ROUTINE_DIE`, never
+    natural, and drops a reroll) and `RollRequest.minion` (a natural 20 that is no added
+    success) are both stamped on the `RollRecord`.
+  - A group line's `minion` is kept by `sanitize_group_line`.
+  - A scene entry's `minion` badge is whitelisted by `sanitize_scene`, and only when it
+    is true.
+  - A scene entry's `summoned` tag rides the same way (additive, no bump of its own).
+  - Bumped for the v13 reason: a v17 server ignores the request fields without a word,
+    so a hero taking 10 would roll a d20 and a minion's 20 would crit. **Redeploy the
+    hub** with the release.
+  - The session's *rules* for minions need no bump: they ride the shared-state
+    channel as the core app's `"session"` entry.
 - **A join code is version 2, and a public-server session's is 24 characters.**
   Version 1 spelled the relay URL out byte by byte and came to 130 characters for
   a session on the hub. `discovery.encode_join_code` now packs every field as

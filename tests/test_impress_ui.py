@@ -124,7 +124,7 @@ def staged(lead_die: int, lead_total: int, degrees: list[int]):
             return GroupResult(lead_die, lead_total, ())
         results = tuple(
             CheckResult(10, modifier, 10 + modifier, (dc or 0) + offset, degree, False)
-            for (modifier, offset), degree in zip(lines, degrees, strict=False)
+            for (modifier, offset, *_minion), degree in zip(lines, degrees, strict=False)
         )
         return GroupResult(None, None, results)
 

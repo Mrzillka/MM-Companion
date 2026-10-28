@@ -614,6 +614,8 @@ def follow_up_for_result(
     degree: int | None,
     game_data: GameData,
     total: int | None = None,
+    *,
+    added_success: bool = True,
 ) -> RollSpec | None:
     """*spec*'s follow-up as the roll that just happened leaves it, or ``None``.
 
@@ -634,11 +636,15 @@ def follow_up_for_result(
     Deterministic in the die and the degree, which is what lets every client at the
     table compute the same chip from the same broadcast roll without the server
     knowing any of these rules.
+
+    *added_success* false is a **minion's** roll (the record's ``minion``, PDF p25):
+    its natural 20 is no critical hit and raises no DC. Its natural 1 is still a graze.
     """
 
     if not follow_up_offered(spec, degree) or spec.follow_up is None:
         return None
     follow_up = spec.follow_up
+    natural_20 = die == 20 and added_success
     if spec.follow_up_always:
         # An area's save after the Dodge check: no critical, no graze — an area
         # effect makes no attack check (p195) — only the rank a made Dodge halves.
@@ -660,12 +666,12 @@ def follow_up_for_result(
         # No graze rule: a natural 1 here is simply a low total.
         if total is None:
             return replace(follow_up, dc_from_total=False)
-        dc = opposed_dc(total, die, game_data)
+        dc = opposed_dc(total, die if natural_20 or die != 20 else 0, game_data)
         label = follow_up.label
-        if die == 20:
+        if natural_20:
             label = f"{label} — natural 20, DC {dc}"
         return replace(follow_up, dc=dc, dc_from_total=False, label=label)
-    if die == 20:
+    if natural_20:
         bonus = game_data.system.critical_effect_bonus
         if bonus and follow_up.dc is not None:
             raised = follow_up.dc + bonus
@@ -691,6 +697,8 @@ def follow_ups_for_result(
     degree: int | None,
     game_data: GameData,
     total: int | None = None,
+    *,
+    added_success: bool = True,
 ) -> list[RollSpec]:
     """Every roll *spec* provokes, as the roll that just happened leaves each one.
 
@@ -702,7 +710,12 @@ def follow_ups_for_result(
     results = []
     for follow_up in spec.follow_ups():
         one = follow_up_for_result(
-            replace(spec, follow_up=follow_up, also=()), die, degree, game_data, total
+            replace(spec, follow_up=follow_up, also=()),
+            die,
+            degree,
+            game_data,
+            total,
+            added_success=added_success,
         )
         if one is not None:
             results.append(one)

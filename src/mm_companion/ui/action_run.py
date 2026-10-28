@@ -39,12 +39,20 @@ from mm_companion.ui.action_ui import KIND_OUTCOME, KIND_ROLL_ASK, KIND_ROLL_CLO
 Finish = Callable[[list[tuple[object, dict]]], None]
 
 
-def group_line(name: str, spec: RollSpec, *, title: str = "", dc: int | None = None) -> dict:
+def group_line(
+    name: str,
+    spec: RollSpec,
+    *,
+    title: str = "",
+    dc: int | None = None,
+    minion: bool = False,
+) -> dict:
     """One creature's roll as a line of a group: *spec* carries its number.
 
     *dc* is the line's whole DC — it rides as its offset from a group DC of 0, which is
     what lets every creature roll against a DC of its own in one group. ``None`` takes
-    the spec's own.
+    the spec's own. *minion* marks a minion's line, whose natural 20 is no added
+    success (protocol v18).
     """
     modifier = spec.modifier
     label = spec.label if spec.label.startswith(f"{name}: ") else f"{name}: {spec.label}"
@@ -55,6 +63,7 @@ def group_line(name: str, spec: RollSpec, *, title: str = "", dc: int | None = N
         "dc_offset": (spec.dc or 0) if dc is None else dc,
         "player_id": "",
         "spec": replace(spec, targets=(name,), title=title or spec.title).to_dict(),
+        **({"minion": True} if minion else {}),
     }
 
 
@@ -177,7 +186,10 @@ class ActionRun(QObject):
             group = self.group_id()
             with_lead = lead is not None and index == 0
             result = resolve_group(
-                [(line["bonus"] - line["penalty"], line["dc_offset"]) for line in part],
+                [
+                    (line["bonus"] - line["penalty"], line["dc_offset"], bool(line.get("minion")))
+                    for line in part
+                ],
                 lead_modifier=(lead["bonus"] - lead["penalty"]) if with_lead else None,
                 dc=None if with_lead else 0,
                 critical_bonus=self._data.system.critical_effect_bonus,
@@ -188,7 +200,8 @@ class ActionRun(QObject):
                     "die": result.lead_die,
                     "dc": None,
                     "degree": None,
-                    "critical": result.lead_die in (1, 20),
+                    "critical": result.lead_die == 1
+                    or (result.lead_die == 20 and not lead.get("minion")),
                     "group": group,
                 }
                 self._host.impress_show_offline(record)

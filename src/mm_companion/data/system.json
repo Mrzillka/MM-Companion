@@ -7,6 +7,16 @@
     "_criticals": "A natural 20 on an attack is a critical hit: the effect it lands gains criticalEffectBonus to its resistance DC. A natural 1 that still hits is a graze, and the target resists at criticalMissResistanceBonus.",
     "criticalEffectBonus": 5,
     "criticalMissResistanceBonus": 5,
+    "_minions": "Minions (PDF p25). impressBonus is what a routine Impress check against minions gains (PDF p201). ceiling is the condition a minion's failed saves stop at: no escalation carries one past it. Which minion rules apply is the GM's choice per session, not data.",
+    "minions": {
+      "impressBonus": 5,
+      "ceiling": "incapacitated"
+    },
+    "_defeat": "The conditions that take a creature out of the fight, for how its card looks: down (Incapacitated; Dying includes it) dims it, dead dims it further. Dead outranks down.",
+    "defeat": {
+      "down": ["incapacitated"],
+      "dead": ["dead"]
+    },
     "trait_keys": {
       "attack": "ATK",
       "defense": "DEF",

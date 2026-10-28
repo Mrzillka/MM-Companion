@@ -15,6 +15,8 @@ while a character sheet is open beside it is the point, not an accident.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
+
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
@@ -47,7 +49,15 @@ DEFAULT_SIZE = (900, 640)
 class SettingsWindow(QMainWindow):
     """Application settings, one page per area."""
 
-    def __init__(self, parent: QWidget | None = None, *, page: str = "") -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        page: str = "",
+        extra_pages: Sequence[Callable[[QWidget], SettingsPage]] = (),
+    ) -> None:
+        """*extra_pages* are builders of pages only the opener has — the GM window's
+        Session page, bound to its session — listed after :data:`PAGES`."""
         super().__init__(parent)
         self.setWindowTitle("Settings")
         self.resize(*DEFAULT_SIZE)
@@ -61,7 +71,7 @@ class SettingsWindow(QMainWindow):
         self._nav.setFixedWidth(int(theme.metric("column.settings.nav")))
         self._stack = QStackedWidget()
         self._pages: list[SettingsPage] = []
-        for page_class in PAGES:
+        for page_class in (*PAGES, *extra_pages):
             built = page_class(self)
             self._pages.append(built)
             self._nav.addItem(built.title)

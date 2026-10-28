@@ -47,7 +47,9 @@ from mm_companion.core import storage
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.rules import (
+    BOOK_MINION_RULES,
     KIND_BEST_OF,
+    MinionRules,
     RollSpec,
     best_own_rolls,
     localize_spec,
@@ -75,6 +77,10 @@ KIND_OUTCOME = "outcome"
 #: for actions, which the GM publishes and every seat reads.
 TABLE_MOD_ID = "mm-companion.table"
 TABLE_ACTIONS_KEY = "actions"
+#: The session's own settings, which the GM sets on the Session settings page and
+#: which belong to this session alone: stored with it on the server, replayed to every
+#: seat, and forgotten when it is (see :func:`session_minion_rules`).
+TABLE_SESSION_KEY = "session"
 
 
 def signed(value: int) -> str:
@@ -107,6 +113,43 @@ def publish_table_rules(bridge) -> bool:
             {"players_choose": storage.gm_players_choose_actions()},
         )
     )
+
+
+def session_minion_rules(bridge) -> MinionRules:
+    """Which minion rules the open session plays by — the book's when it never said.
+
+    Read off the session's shared state, where the GM's Session settings page
+    published them. They are the *session's*, not the GM's: a new session starts from
+    the book (every rule on), and with no session open there is nothing to read, so
+    the book's rules apply then too.
+    """
+    # In a session, blips included; a hosting server that has stopped still holds the
+    # state it had, and reading that would carry one session's rules past its end.
+    if bridge is None or not getattr(bridge, "in_session", False):
+        return BOOK_MINION_RULES
+    try:
+        entry = bridge.mod_state(TABLE_MOD_ID).get(TABLE_SESSION_KEY, {})
+    except AttributeError:
+        return BOOK_MINION_RULES
+    raw = entry.get("minions") if isinstance(entry, dict) else None
+    return MinionRules.from_dict(raw)
+
+
+def publish_minion_rules(bridge, rules: MinionRules) -> bool:
+    """Store *rules* as the open session's (the GM's Session settings page's Save).
+
+    The rest of the session's settings entry is kept as it is, so a later setting
+    added beside the minion rules is not wiped by saving these.
+    """
+    if bridge is None:
+        return False
+    try:
+        current = bridge.mod_state(TABLE_MOD_ID).get(TABLE_SESSION_KEY, {})
+    except AttributeError:
+        current = {}
+    entry = dict(current) if isinstance(current, dict) else {}
+    entry["minions"] = rules.to_dict()
+    return bool(bridge.set_mod_state(TABLE_MOD_ID, TABLE_SESSION_KEY, entry))
 
 
 def sets_up_own_actions(bridge) -> bool:

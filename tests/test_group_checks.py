@@ -33,7 +33,7 @@ def test_the_degree_ladder_has_no_zero() -> None:
 
 def test_half_succeeding_carries_everyone_at_the_lowest_success(data) -> None:
     members = [
-        GroupCheckMember("A", 25),  # +4 degrees vs 15... margin 10: 3
+        GroupCheckMember("A", 25),  # margin 10: three degrees
         GroupCheckMember("B", 16),  # margin 1: 1
         GroupCheckMember("C", 9),  # margin -6: -2
         GroupCheckMember("D", 12),  # margin -3: -1

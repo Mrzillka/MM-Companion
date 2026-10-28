@@ -117,6 +117,7 @@ from mm_companion.core.session.protocol import (
     SCENE_DISPOSITIONS,
 )
 from mm_companion.ui import npc_icons, theme
+from mm_companion.ui.action_run import ActionRun
 from mm_companion.ui.action_ui import (
     TABLE_MOD_ID,
     TABLE_SESSION_KEY,
@@ -149,12 +150,14 @@ from mm_companion.ui.compact import CompactController
 from mm_companion.ui.connection_indicator import install_connection_indicator
 from mm_companion.ui.dice_roller import DiceRollerView
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
+from mm_companion.ui.group_check import GroupCheckWindow
 from mm_companion.ui.impress import (
     IMPRESS_ACTION,
     KIND_IMPRESS,
     PARTY_NPC,
     PARTY_PLAYER,
     ImpressParty,
+    new_action_id,
 )
 from mm_companion.ui.impress_gm import ImpressController
 from mm_companion.ui.npc_card import NPCCard
@@ -3143,6 +3146,7 @@ class GMWindow(QMainWindow):
                 group_card.ungroupRequested.connect(self._ungroup)
                 group_card.sceneRequested.connect(self._group_to_scene)
                 group_card.teamAttackRequested.connect(self._team_attack)
+                group_card.checkRequested.connect(self._group_check)
                 self._group_cards[group.id] = group_card
                 self._npc_flow.addWidget(group_card)
                 continue
@@ -3370,6 +3374,40 @@ class GMWindow(QMainWindow):
         window = TeamAttackWindow(self._data, group.name, members, targets, run, parent=self)
         window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self._team_window = window
+        window.show()
+        return window
+
+    def _group_check(self, group_id: str, mode: str) -> GroupCheckWindow | None:
+        """A group's "Team check…" or "Group check…" (PDF p18)."""
+        card = self._group_cards.get(group_id)
+        group = next((g for g in self._npc_groups if g.id == group_id), None)
+        if card is None or group is None:
+            return None
+        members = [self._npc_party(name) for name in card.members if name in self._npc_state]
+
+        def make_run(title: str) -> ActionRun:
+            return ActionRun(
+                self._data,
+                self._bridge,
+                self,
+                new_action_id(),
+                title=title,
+                asker="The GM",
+                parent=self,
+            )
+
+        window = GroupCheckWindow(
+            self._data,
+            mode,
+            group.name,
+            members,
+            make_run,
+            minion_rules=self.minion_rules,
+            post_note=self._post_note,
+            parent=self,
+        )
+        window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self._check_window = window
         window.show()
         return window
 

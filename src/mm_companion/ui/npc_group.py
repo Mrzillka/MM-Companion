@@ -54,6 +54,9 @@ class NPCGroupCard(QFrame):
     sceneRequested = Signal(str, bool)
     #: The group's id — its members combine their attacks on one target (PDF p201).
     teamAttackRequested = Signal(str)
+    #: ``(group id, mode)`` — a team check or a group check (PDF p18), by
+    #: ``ui.group_check``'s ``MODE_TEAM`` / ``MODE_GROUP``.
+    checkRequested = Signal(str, str)
 
     def __init__(self, group: NPCGroup, rows: list[NPCCard], parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -133,6 +136,12 @@ class NPCGroupCard(QFrame):
         menu.addAction(
             "Team attack…", lambda: self.teamAttackRequested.emit(self.group_id)
         ).setToolTip("Combine the members' attacks on one target")
+        menu.addAction(
+            "Team check…", lambda: self.checkRequested.emit(self.group_id, "team")
+        ).setToolTip("A leader rolls, helped by the others' checks against DC 10")
+        menu.addAction(
+            "Group check…", lambda: self.checkRequested.emit(self.group_id, "group")
+        ).setToolTip("Everyone rolls; if half succeed, all do")
         menu.addSeparator()
         menu.addAction("Rename group…", lambda: self.renameRequested.emit(self.group_id))
         menu.addSeparator()

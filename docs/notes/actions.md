@@ -585,6 +585,25 @@ for every check.
   the GM roller's adjustment, a player asked. A critical on a minion target lands its
   worst unrolled.
 
+## Team checks and group checks
+
+Two more of a group's ⋯ menu items (PDF p18), one window (`ui/group_check.py`,
+`GroupCheckWindow`, `MODE_TEAM` / `MODE_GROUP`). The check is any trait the roller's
+Request row offers (`rules.requested_roll_choices`), rolled at each member's own number
+(`localize_spec`; an untrained skill is marked ⚠ but still rolls), with one adjustment on
+every roll. A member who is down starts unticked. Nothing lands — the outcome is posted
+to the history as a line.
+
+- **Team check:** the helpers roll against `teamCheck.helperDc` (10) as one server
+  group; their degrees of success (failures add nothing) times `bonusPerDegree` become
+  the leader's bonus (`team_check_bonus`); then the leader rolls, against a DC when the
+  GM ticks one, or as a bare lead roll when not.
+- **Group check:** everyone rolls against the DC as one group. `group_check_result`: if at
+  least `groupCheck.successShare` (half) succeed, the group lands on the lowest degree of
+  success among them; then the natural 20s (a minion's does not count) and 1s are summed
+  and move that degree along the no-zero ladder (`shift_degree`). A failing group lands on
+  its **least severe failure** — the book does not say; this is the mirror reading.
+
 ## Not done yet
 
 These are in [the debts](debts.md):

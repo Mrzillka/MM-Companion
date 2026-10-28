@@ -64,6 +64,7 @@ from .defenses import *  # noqa: F401,F403
 from .derived import *  # noqa: F401,F403
 from .equipment import *  # noqa: F401,F403
 from .extra_effort import *  # noqa: F401,F403
+from .group_checks import *  # noqa: F401,F403
 from .impress import *  # noqa: F401,F403
 from .improvised import *  # noqa: F401,F403
 from .minions import *  # noqa: F401,F403

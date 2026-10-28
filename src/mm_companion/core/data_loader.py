@@ -1595,6 +1595,19 @@ class TeamAttackRules:
 
 
 @dataclass(frozen=True)
+class GroupCheckRules:
+    """Team and group checks' numbers (``system.json``'s ``teamCheck`` and
+    ``groupCheck``, PDF p18)."""
+
+    #: The DC a team check's helpers roll against.
+    helper_dc: int = 10
+    #: What each of their degrees of success adds to the leader's check.
+    bonus_per_degree: int = 1
+    #: The share of a group check's members who must succeed for all to.
+    success_share: float = 0.5
+
+
+@dataclass(frozen=True)
 class DefeatSystem:
     """Which conditions mean a creature is out of the fight (``system.json``'s ``defeat``).
 
@@ -1650,6 +1663,8 @@ class SystemRules:
     defeat: DefeatSystem = field(default_factory=DefeatSystem)
     #: How several attacks combine into one (see :class:`TeamAttackRules`).
     team_attack: TeamAttackRules = field(default_factory=TeamAttackRules)
+    #: Team and group checks (see :class:`GroupCheckRules`).
+    group_checks: GroupCheckRules = field(default_factory=GroupCheckRules)
 
 
 # --- Measurements & movement: the rank ↔ real-world conversion tables, the
@@ -4136,6 +4151,21 @@ def _parse_system(raw: dict) -> SystemRules:
         minions=_parse_minions(sys.get("minions"), defaults.minions),
         defeat=_parse_defeat(sys.get("defeat"), defaults.defeat),
         team_attack=_parse_team_attack(sys.get("teamAttack"), defaults.team_attack),
+        group_checks=_parse_group_checks(
+            sys.get("teamCheck"), sys.get("groupCheck"), defaults.group_checks
+        ),
+    )
+
+
+def _parse_group_checks(team: object, group: object, default: GroupCheckRules) -> GroupCheckRules:
+    """Parse ``teamCheck`` and ``groupCheck``; a missing key keeps *default*'s."""
+
+    team = team if isinstance(team, dict) else {}
+    group = group if isinstance(group, dict) else {}
+    return GroupCheckRules(
+        helper_dc=int(team.get("helperDc", default.helper_dc)),
+        bonus_per_degree=int(team.get("bonusPerDegree", default.bonus_per_degree)),
+        success_share=float(group.get("successShare", default.success_share)),
     )
 
 

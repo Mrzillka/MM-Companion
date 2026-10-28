@@ -1109,6 +1109,23 @@ def build(target: str):
         win = gm._team_attack(group_id)
         win._gm_owner = gm  # keep the GM window alive for the shot
         win.roll()
+    elif target in ("gm-team-check", "gm-group-check"):
+        # A squad's team check (or group check) of Will, rolled for real off the air.
+        from mm_companion.core.data_loader import load_game_data
+        from mm_companion.core.npc import quick_npc
+        from mm_companion.ui.gm_window import GMWindow
+
+        data = load_game_data()
+        gm = GMWindow(bind="127.0.0.1")
+        thug = quick_npc(data, name="Thug", attack=6, effect=5, defence=4, toughness=3)
+        gm._make_squad(thug, 4)
+        group_id = next(iter(gm._group_cards))
+        gm.show()
+        win = gm._group_check(group_id, "team" if target == "gm-team-check" else "group")
+        win._gm_owner = gm  # keep the GM window alive for the shot
+        win.set_trait("WILL")
+        win.set_dc(12)
+        win.roll()
     elif target == "gm-aimed":
         # An aimed attack waiting in the GM's history: a player's Blast at a Thug, its
         # die in, with the Accept / Decline card the GM answers it from.
@@ -1770,6 +1787,8 @@ def main(argv: list[str] | None = None) -> int:
             "gm-squad",
             "gm-aimed",
             "gm-team",
+            "gm-team-check",
+            "gm-group-check",
             "gm-settings",
             "npc",
             "array-cost",

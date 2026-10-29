@@ -38,6 +38,9 @@ dev = [
     "pytest>=8.0",
     "pytest-qt>=4.4",
     "pytest-timeout>=2.3",
+    # Records what each test executes; the affected-tests skill runs only the tests
+    # a change can reach (.claude/skills/affected-tests).
+    "pytest-testmon>=2.1",
     "black>=24.0",
     "ruff>=0.5",
 ]

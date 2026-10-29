@@ -50,3 +50,9 @@ installer/output/
 # reference for rules lookups (see the `rulebook` skill). Copyrighted material,
 # never committed; each developer supplies their own copy.
 reference/
+
+# The affected-tests skill's records: what each test touched (pytest-testmon) and
+# the data files as the last green run saw them. Per machine, rebuilt by --full.
+.testmondata
+.testmondata-*
+.affected-tests/

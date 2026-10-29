@@ -54,14 +54,18 @@ pip install -e ".[dev]"
 - Host a session headless: `python -m mm_companion.server` (or the
   `mm-companion-server` console script; `--help` for options). Run the public
   relay: `python -m mm_companion.relay`. Both are Qt-free and stdlib-only.
-- Run tests: `pytest`
+- Run the tests a change can affect: `python .claude/skills/affected-tests/affected.py`
+  (the `affected-tests` skill) — use this while working.
+- Run all tests (~16 min): `pytest` — required before a feature is called done
+  or merged into `develop`.
 - Run a single test: `pytest tests/core/test_data_loader.py::test_load_game_data_is_cached`
 - Format: `black .` (line length 100)
 - Lint: `ruff check .`
 
-CI runs `ruff check .`, `black --check .`, and `xvfb-run -a pytest` across
-Python 3.10–3.13. GUI tests need a display server; CI provides one via
-`xvfb-run`. Run all three locally before pushing.
+CI runs `ruff check .`, `black --check .`, and `pytest` across Python 3.10–3.13.
+Tests need no display: `tests/conftest.py` puts Qt on its offscreen platform with
+pinned fonts and screen, identically locally and on CI (see
+[the testing notes](docs/notes/testing.md)). Run all three locally before pushing.
 
 ## Architecture: the core / data / ui split
 
@@ -117,6 +121,7 @@ several of them are the only record of a bug that shaped it.
 | [The table blocks](docs/notes/table-blocks.md) | Abilities, Resistances, Advantages or Skills |
 | [Shared UI utilities and view modes](docs/notes/ui-utilities.md) | adding widgets, or the lock |
 | [The mod pipeline](docs/notes/mods.md) | data loading, startup, or a `register_*` seam |
+| [Testing](docs/notes/testing.md) | adding a test file, a `conftest.py`, or changing how tests run |
 | [Accepted debts](docs/notes/debts.md) | picking up agreed work that is not done yet |
 
 Alongside them, `docs/` holds the longer-form documents the notes refer back to:

@@ -100,21 +100,37 @@ that are made. It is the seam the rest of the turn economy should hang off:
 - **There is no turn tracker.** The GM ends each creature's turn by hand; initiative
   order is on the board, but nothing walks it.
 
-## PySide6 is capped below 6.12
+## PySide6 is capped below 6.12, and 6.11.3 is excluded
 
-`pyproject.toml` pins `PySide6>=6.6,<6.12`. The cap went in on 2026-10-10, when
-PySide6 6.12.0 was released and CI — which had passed on unchanged `develop` two days
-before with 6.11.2 — failed on every Python version in two ways:
+`pyproject.toml` pins `PySide6>=6.6,<6.12,!=6.11.3`, so CI and the release builds get
+6.11.2. Two problems, which arrived separately:
 
-- **`tests/test_input_arrow_columns.py`, 32 failures** under the Windows and Fusion
-  styles: a spin box's edit field overlaps its up arrow by one pixel. Those tests guard
-  the fix for arrows that paint but take no clicks (`theme.arrow_columns` measures the
-  style's arrow column so the stylesheet can give it back as padding), so this is
-  likely a real regression for users, not a test artefact.
-- **`Fatal Python error: Aborted` while garbage-collecting** in `test_pinned_panel.py`
-  on 3.10 and 3.11, at a different test each run.
+- **The cap** went in on 2026-10-10, when PySide6 6.12.0 was released and CI failed on
+  every Python version: the arrow-column tests below, and a **`Fatal Python error:
+  Aborted` while garbage-collecting** in `test_pinned_panel.py` on 3.10 and 3.11, at a
+  different test each run. The abort is still unexplained.
+- **The exclusion** went in on 2026-10-29, after `develop`'s CI went red on 2026-10-28:
+  PySide6 6.11.3 had arrived, with the same `test_input_arrow_columns.py` failures (32
+  on CI, 64 on Windows, which has two more styles).
 
-Both reproduce only on 6.12 (a local 6.11.1 passes everything), so the work is: install
-6.12 locally, find what moved the arrow column and what the collector is tearing down
-out of order, fix both, and lift the cap. Until then the release builds stay on 6.11
-too, because they install from the same file.
+**The arrow failures are a Qt bug, not ours.** Qt's "QStyleSheetStyle: Honor
+horizontally aligned QSpinBox buttons" (qtbase `7d02beaf`, in 6.11.3 and 6.12.0)
+rewrote how `SC_SpinBoxEditField` is cut around the buttons. With `NoButtons` it cuts
+at an empty rect at x=0, so **under any stylesheet a button-less spin box gets a text
+field 1px wide**. Every `make_spin_box(buttons=False)` box and every locked spin box is
+like that, so on 6.11.3 a locked sheet shows 31 empty fields, under Classic too. The
+same rewrite also overwrites the content rect's edges, which is why our
+`padding-right` stopped doing anything. Arrows still take clicks on every version.
+
+Qt fixed it in "QStylesheetStyle: fix spinbox padding" (qtbase `6cc8253372`,
+QTBUG-151308), picked to **6.12 only**: 6.12.1 will have it, and no 6.11 will. With
+the fix, a button-less box gets its whole content rect again (so the arrowless
+`padding-right: 0` rule matters again), but a box *with* buttons still has its edit
+field end **on** the arrow's first pixel (`r.setRight(minX)`), whatever padding the
+sheet states.
+
+**To lift the cap:** once PySide6 6.12.1 is out, install it and run
+`tests/test_input_arrow_columns.py`. Expect the two "does not sit under its
+text" tests to fail by exactly that 1px. Loosen them to allow an overlap of at most one
+column, keeping the click test as the real proof. Then chase the garbage-collection
+abort, and move the pin to `>=6.6,<6.13,!=6.11.3,!=6.12.0`.

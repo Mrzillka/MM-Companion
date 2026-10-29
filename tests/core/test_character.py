@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import pytest
+
 from mm_companion.core.character import (
     AdvantageSelection,
     AppliedCondition,
@@ -191,25 +193,26 @@ def test_power_level_for_points_floors_at_the_border() -> None:
     assert power_level_for_points(11 * per_level, data) == 11  # next border → next level
 
 
-def test_reconcile_points_keeps_a_budget_inside_the_band() -> None:
+@pytest.mark.parametrize(
+    "level,budget_levels,extra,expected_levels,expected_extra",
+    [
+        # 160 sits inside PL 10's band (150–164), so it is left untouched.
+        pytest.param(10, 10, 10, 10, 10, id="inside-the-band-is-kept"),
+        # PL raised to 11 while the budget is still PL 10's minimum → snaps up to 165.
+        pytest.param(11, 10, 0, 11, 0, id="below-the-minimum-is-raised"),
+        # PL lowered to 9 while the budget is in PL 11's band → snaps down to PL 9's min.
+        pytest.param(9, 11, 0, 9, 0, id="above-the-band-is-lowered"),
+    ],
+)
+def test_reconcile_points_keeps_the_budget_in_the_levels_band(
+    level, budget_levels, extra, expected_levels, expected_extra
+) -> None:
     data = load_game_data()
     per_level = data.costs.power_level.pp_per_level  # 15
-    # 160 sits inside PL 10's band (150–164), so it is left untouched.
-    assert reconcile_points_to_level(10, 10 * per_level + 10, data) == 10 * per_level + 10
-
-
-def test_reconcile_points_raises_a_budget_below_the_level_minimum() -> None:
-    data = load_game_data()
-    per_level = data.costs.power_level.pp_per_level  # 15
-    # PL raised to 11 while the budget is still PL 10's minimum → snaps up to 165.
-    assert reconcile_points_to_level(11, 10 * per_level, data) == 11 * per_level
-
-
-def test_reconcile_points_lowers_a_budget_from_a_higher_band() -> None:
-    data = load_game_data()
-    per_level = data.costs.power_level.pp_per_level  # 15
-    # PL lowered to 9 while the budget is in PL 11's band → snaps down to PL 9's min.
-    assert reconcile_points_to_level(9, 11 * per_level, data) == 9 * per_level
+    budget = budget_levels * per_level + extra
+    assert reconcile_points_to_level(level, budget, data) == expected_levels * per_level + (
+        expected_extra
+    )
 
 
 # -- homebrew cost overrides ---------------------------------------------------

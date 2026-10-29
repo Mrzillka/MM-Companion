@@ -74,7 +74,10 @@ def _furnished_hero(data) -> Character:
     return char
 
 
-def test_ticking_an_ability_flashes_no_window(qapp, data, watcher) -> None:
+@pytest.mark.parametrize(
+    "section,spins", [("abilities", "_abilities"), ("resistances", "_resistances")]
+)
+def test_ticking_a_trait_flashes_no_window(qapp, data, watcher, section, spins) -> None:
     """The report that started this: a small window on every ability spin step.
 
     The System block redraws its speed rows on ``derived-changed``, and the
@@ -85,20 +88,7 @@ def test_ticking_an_ability_flashes_no_window(qapp, data, watcher) -> None:
     qapp.processEvents()
     watcher.hits.clear()
 
-    for spin in sheet.abilities._abilities.values():
-        spin.setValue(spin.value() + 1)
-        qapp.processEvents()
-
-    assert watcher.hits == []
-
-
-def test_ticking_a_resistance_flashes_no_window(qapp, data, watcher) -> None:
-    sheet = CharacterSheet(data, _furnished_hero(data))
-    sheet.show()
-    qapp.processEvents()
-    watcher.hits.clear()
-
-    for spin in sheet.resistances._resistances.values():
+    for spin in getattr(getattr(sheet, section), spins).values():
         spin.setValue(spin.value() + 1)
         qapp.processEvents()
 

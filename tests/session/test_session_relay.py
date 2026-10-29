@@ -182,15 +182,14 @@ def test_the_plain_scheme_turns_tls_off():
     assert address.url() == "mmrelay+tcp://127.0.0.1:9000/abc"
 
 
-@pytest.mark.parametrize("text", ["", "relay.example.net/abc", "http://relay.example.net/abc"])
+@pytest.mark.parametrize(
+    "text",
+    ["", "relay.example.net/abc", "http://relay.example.net/abc", "mmrelay:///abc"],
+    ids=["empty", "no-scheme", "wrong-scheme", "no-host"],
+)
 def test_something_that_is_not_a_relay_url_is_refused(text):
     with pytest.raises(RelayUrlError):
         parse_relay_url(text)
-
-
-def test_a_relay_url_without_a_host_is_refused():
-    with pytest.raises(RelayUrlError):
-        parse_relay_url("mmrelay:///abc")
 
 
 @pytest.mark.parametrize(

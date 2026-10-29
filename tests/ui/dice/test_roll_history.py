@@ -87,24 +87,18 @@ def text_of(card) -> str:
 # -- grading (pure) ---------------------------------------------------------
 
 
-def test_degree_label_reads_a_single_success() -> None:
-    assert degree_label(1, False, 10) == "Success"
-
-
-def test_degree_label_counts_degrees() -> None:
-    assert degree_label(-2, False, 10) == "Failure (2 degrees)"
-
-
-def test_degree_label_notes_a_natural_twenty() -> None:
-    assert degree_label(4, True, 20) == "Success (4 degrees) — Nat 20!"
-
-
-def test_degree_label_notes_a_natural_one() -> None:
-    assert degree_label(-1, True, 1) == "Failure — Nat 1!"
-
-
-def test_degree_label_is_empty_without_a_grade() -> None:
-    assert degree_label(None, False, 10) == ""
+@pytest.mark.parametrize(
+    "degree,critical,die,expected",
+    [
+        pytest.param(1, False, 10, "Success", id="one-degree"),
+        pytest.param(-2, False, 10, "Failure (2 degrees)", id="counts-degrees"),
+        pytest.param(4, True, 20, "Success (4 degrees) — Nat 20!", id="nat-20"),
+        pytest.param(-1, True, 1, "Failure — Nat 1!", id="nat-1"),
+        pytest.param(None, False, 10, "", id="no-grade-no-label"),
+    ],
+)
+def test_degree_label_reads_the_grade(degree, critical, die, expected) -> None:
+    assert degree_label(degree, critical, die) == expected
 
 
 def test_roll_parameters_are_what_a_quick_roll_needs() -> None:

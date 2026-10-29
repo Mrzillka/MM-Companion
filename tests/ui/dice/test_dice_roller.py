@@ -60,29 +60,18 @@ def hosting(qapp: QApplication) -> SessionBridge:
 # -- degree_text (pure) ------------------------------------------------------
 
 
-def test_degree_text_reports_a_single_success() -> None:
-    result = resolve_check(5, 15, roll=10)  # total 15 at the DC → +1 degree
-    assert degree_text(result) == "Success"
-
-
-def test_degree_text_counts_multiple_degrees() -> None:
-    result = resolve_check(5, 10, roll=10)  # total 15 vs DC 10 → +2 degrees
-    assert degree_text(result) == "Success (2 degrees)"
-
-
-def test_degree_text_reports_failure() -> None:
-    result = resolve_check(0, 15, roll=10)  # total 10 vs DC 15 → -1 degree
-    assert degree_text(result) == "Failure"
-
-
-def test_degree_text_notes_a_natural_twenty() -> None:
-    result = resolve_check(5, 15, roll=20)  # nat 20 adds a degree
-    assert degree_text(result) == "Success (4 degrees) — Nat 20!"
-
-
-def test_degree_text_notes_a_natural_one() -> None:
-    result = resolve_check(20, 20, roll=1)  # nat 1 drags a hit to a miss
-    assert degree_text(result) == "Failure — Nat 1!"
+@pytest.mark.parametrize(
+    "bonus,dc,roll,expected",
+    [
+        pytest.param(5, 15, 10, "Success", id="15-at-the-dc-one-degree"),
+        pytest.param(5, 10, 10, "Success (2 degrees)", id="15-vs-10-two-degrees"),
+        pytest.param(0, 15, 10, "Failure", id="10-vs-15-one-degree-down"),
+        pytest.param(5, 15, 20, "Success (4 degrees) — Nat 20!", id="nat-20-adds-a-degree"),
+        pytest.param(20, 20, 1, "Failure — Nat 1!", id="nat-1-drags-a-hit-to-a-miss"),
+    ],
+)
+def test_degree_text_reads_the_result(bonus: int, dc: int, roll: int, expected: str) -> None:
+    assert degree_text(resolve_check(bonus, dc, roll=roll)) == expected
 
 
 def test_degree_text_is_empty_without_a_dc() -> None:

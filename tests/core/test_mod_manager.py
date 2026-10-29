@@ -158,34 +158,19 @@ def test_import_mod_folder_copies_valid_folder(_home: Path, tmp_path: Path) -> N
     assert (dest / "extra.txt").read_text(encoding="utf-8") == "hi"
 
 
-def test_import_mod_folder_rejects_missing_manifest(tmp_path: Path) -> None:
-    source = tmp_path / "empty"
+@pytest.mark.parametrize(
+    "manifest",
+    [None, {"name": "x"}, {"id": "base"}, {"id": "dup"}],
+    ids=["no-manifest", "no-id", "reserved-id", "already-installed"],
+)
+def test_import_mod_folder_refuses_a_folder_it_cannot_install(
+    _home: Path, tmp_path: Path, manifest: dict | None
+) -> None:
+    _write_mod(_home, {"id": "dup"})  # what "already-installed" collides with
+    source = tmp_path / "source"
     source.mkdir()
-    with pytest.raises(mods.ModImportError):
-        mods.import_mod_folder(source)
-
-
-def test_import_mod_folder_rejects_missing_id(tmp_path: Path) -> None:
-    source = tmp_path / "noid"
-    source.mkdir()
-    (source / mods.MANIFEST_FILENAME).write_text(json.dumps({"name": "x"}), encoding="utf-8")
-    with pytest.raises(mods.ModImportError):
-        mods.import_mod_folder(source)
-
-
-def test_import_mod_folder_rejects_reserved_id(tmp_path: Path) -> None:
-    source = tmp_path / "base"
-    source.mkdir()
-    (source / mods.MANIFEST_FILENAME).write_text(json.dumps({"id": "base"}), encoding="utf-8")
-    with pytest.raises(mods.ModImportError):
-        mods.import_mod_folder(source)
-
-
-def test_import_mod_folder_rejects_duplicate(_home: Path, tmp_path: Path) -> None:
-    _write_mod(_home, {"id": "dup"})
-    source = tmp_path / "dup-src"
-    source.mkdir()
-    (source / mods.MANIFEST_FILENAME).write_text(json.dumps({"id": "dup"}), encoding="utf-8")
+    if manifest is not None:
+        (source / mods.MANIFEST_FILENAME).write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(mods.ModImportError):
         mods.import_mod_folder(source)
 

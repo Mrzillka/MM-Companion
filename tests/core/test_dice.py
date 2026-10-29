@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import random
 
+import pytest
+
 from mm_companion.core.dice import degrees, resolve_check, roll_d20
 
 
@@ -38,26 +40,28 @@ def test_routine_check_uses_ten() -> None:
     assert result.success  # 18 vs 15
 
 
-def test_natural_twenty_flips_a_one_degree_failure_to_success() -> None:
-    # 20 + 0 = 20 vs DC 21 is a 1-degree failure; the nat 20 lifts it to success.
-    result = resolve_check(0, 21, roll=20)
+@pytest.mark.parametrize(
+    "bonus,dc,roll,degree",
+    [
+        # 20 + 0 = 20 vs DC 21 is a 1-degree failure; the nat 20 lifts it to success.
+        pytest.param(0, 21, 20, 1, id="nat-20-lifts-a-failure"),
+        # 1 + 20 = 21 vs 20 is a 1-degree success; the nat 1 drags it to a failure.
+        pytest.param(20, 20, 1, -1, id="nat-1-drags-a-success"),
+    ],
+)
+def test_a_natural_20_or_1_flips_a_one_degree_result_across_the_zero_gap(
+    bonus: int, dc: int, roll: int, degree: int
+) -> None:
+    result = resolve_check(bonus, dc, roll=roll)
     assert result.critical
-    assert result.degree == 1  # -1 failure stepped up across the zero gap to +1
-    assert result.success
+    assert result.degree == degree  # +-1 stepped across the zero gap, never to 0
+    assert result.success is (degree > 0)
 
 
 def test_natural_twenty_adds_a_degree_to_a_hit() -> None:
     crit = resolve_check(5, 15, roll=20)  # 25 vs 15, margin 10 -> 3 degrees
     assert crit.degree == 4  # +1 for the natural 20
     assert crit.critical
-
-
-def test_natural_one_flips_a_one_degree_success_to_failure() -> None:
-    # 1 + 20 = 21 vs 20 is a 1-degree success; the nat 1 drags it to a failure.
-    result = resolve_check(20, 20, roll=1)
-    assert result.critical
-    assert result.degree == -1  # +1 success stepped down across the zero gap to -1
-    assert not result.success
 
 
 def test_ungraded_check_ignores_crit_adjustment() -> None:

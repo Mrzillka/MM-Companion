@@ -9,10 +9,9 @@ resulting ``Character.equipment``.
 from __future__ import annotations
 
 import pytest
-from PySide6.QtWidgets import QApplication, QDialog, QLabel, QPushButton
+from PySide6.QtWidgets import QDialog, QLabel, QPushButton
 
 from mm_companion.core.character import AdvantageSelection, Character
-from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.equipment import (
     PLATFORM_INSTALLATION,
     PLATFORM_VEHICLE,
@@ -43,16 +42,6 @@ from mm_companion.ui.sections.equipment import (
 )
 from mm_companion.ui.sections.equipment_picker import EquipmentPickerDialog, cost_text
 from mm_companion.ui.sections.stat_table import PIN_ACTION_TEXT, UNPIN_ACTION_TEXT
-
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(scope="module")
-def data():
-    return load_game_data()
 
 
 def _hero(data, *catalog_ids: str) -> Character:

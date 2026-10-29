@@ -27,11 +27,6 @@ from mm_companion.ui.main_window import MainWindow
 BUNDLED = ["classic", "slate-dark", "parchment-light", "crimson-gold"]
 
 
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
 @pytest.fixture
 def dressed(qapp: QApplication):
     """Render under one preset, and hand the application look back afterwards."""

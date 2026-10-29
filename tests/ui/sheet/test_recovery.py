@@ -8,12 +8,8 @@ coming off) with one, since the round trip runs over the block bus.
 
 from __future__ import annotations
 
-import pytest
-from PySide6.QtWidgets import QApplication
-
 import mm_companion.ui.dice_roller as roller_module
 from mm_companion.core.character import AppliedCondition, Character
-from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.rules import (
     KIND_ABILITY,
     RollSpec,
@@ -27,11 +23,6 @@ from mm_companion.core.rules import (
     recovery_succeeded,
 )
 from mm_companion.core.session.protocol import sanitize_spec
-
-
-@pytest.fixture(scope="module")
-def data():
-    return load_game_data()
 
 
 def _applied(char: Character, condition_id: str) -> AppliedCondition:
@@ -138,11 +129,6 @@ def test_the_condition_survives_the_wire(data) -> None:
 
 
 # -- the sheet: chip, roller, condition gone ---------------------------------------
-
-
-@pytest.fixture
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
 
 
 def _roll(sheet, die: int) -> None:

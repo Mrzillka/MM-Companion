@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from mm_companion.core.character import Character
-from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.rules import (
     DEFEAT_DEAD,
     DEFEAT_DOWN,
@@ -14,11 +13,6 @@ from mm_companion.core.rules import (
     character_defeat_state,
     defeat_state,
 )
-
-
-@pytest.fixture(scope="module")
-def data():
-    return load_game_data()
 
 
 def test_a_fresh_creature_is_in_the_fight(data) -> None:

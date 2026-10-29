@@ -35,11 +35,6 @@ PAYLOAD = b"not really an installer" * 1000
 PAYLOAD_SHA = hashlib.sha256(PAYLOAD).hexdigest()
 
 
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
 @pytest.fixture(autouse=True)
 def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path))

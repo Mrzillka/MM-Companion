@@ -20,12 +20,6 @@ from mm_companion.ui import theme
 from mm_companion.ui.block_sizes import BOUNDS, RecommendedSize, load_block_sizes
 from mm_companion.ui.character_sheet import CharacterSheet
 
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
 SHEET_BLOCKS = {
     "base_info",
     "system_info",

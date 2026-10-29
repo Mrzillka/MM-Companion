@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import pytest
 from PySide6.QtWidgets import (
-    QApplication,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -17,26 +16,11 @@ from PySide6.QtWidgets import (
     QSpinBox,
 )
 
-from mm_companion.core import storage
-from mm_companion.ui import svg_assets, theme
+from mm_companion.ui import svg_assets
 from mm_companion.ui.settings.color_row import ColorRow, is_valid_color_value
 from mm_companion.ui.settings.token_editor import TokenEditor
 from mm_companion.ui.theme.loader import available_themes
 from mm_companion.ui.theme.tokens import Chrome, Theme
-
-
-@pytest.fixture(scope="module")
-def qapp():
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def isolated_workspace(tmp_path, monkeypatch):
-    monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path))
-    theme.reset()
-    yield tmp_path
-    theme.reset()
-
 
 SAMPLE = Theme(
     id="sample",

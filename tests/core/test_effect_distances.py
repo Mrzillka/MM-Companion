@@ -11,14 +11,8 @@ from __future__ import annotations
 import pytest
 
 from mm_companion.core.character import Character
-from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import ModifierSelection, PowerEffectInstance
 from mm_companion.core.rules import effect_stat_rows
-
-
-@pytest.fixture(scope="module")
-def data():
-    return load_game_data()
 
 
 def _rows(effect, data, char=None) -> dict[str, str]:

@@ -50,11 +50,6 @@ STYLED = ["slate-dark", "parchment-light", "crimson-gold"]
 MIN_LABEL_CONTRAST = tokens.MIN_CONTRAST
 
 
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
 @pytest.fixture
 def toolbar(qapp: QApplication):
     """A Notes block under one preset, laid out but never on screen.

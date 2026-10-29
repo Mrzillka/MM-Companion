@@ -32,11 +32,6 @@ from mm_companion.ui.block_sizes import RecommendedSize
 from mm_companion.ui.grid_view import GridSplitter, RowStack
 
 
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
 @pytest.fixture
 def canvas(qapp: QApplication) -> BlockCanvas:
     """Four plain blocks in four rows, with no character sheet involved."""

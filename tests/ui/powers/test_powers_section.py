@@ -50,11 +50,6 @@ from mm_companion.ui.sections.powers import (
 )
 
 
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
 def _sheet_with(*names: str) -> tuple[CharacterSheet, Character]:
     data = load_game_data()
     char = Character.new_default(data)

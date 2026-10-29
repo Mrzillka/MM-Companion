@@ -60,14 +60,9 @@ from mm_companion.core.session.protocol import (
 )
 from mm_companion.core.session.server import SessionServer
 
+pytestmark = pytest.mark.usefixtures("workspace")
+
 TIMEOUT = 5.0
-
-
-@pytest.fixture(autouse=True)
-def _home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path))
-    storage.ensure_workspace()
-    return tmp_path
 
 
 # --------------------------------------------------------------------------

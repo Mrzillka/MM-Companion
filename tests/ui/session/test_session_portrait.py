@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication
 
@@ -28,11 +27,6 @@ from mm_companion.ui.session_portrait import (
     encode_portrait,
     portrait_to_tempfile,
 )
-
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
 
 
 def a_portrait_file(tmp_path: Path, size: int = 800) -> str:

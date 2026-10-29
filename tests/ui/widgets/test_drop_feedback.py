@@ -7,15 +7,10 @@ awkward to fabricate and which would test Qt more than this module.
 from __future__ import annotations
 
 import pytest
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QWidget
 
 from mm_companion.ui import theme
 from mm_companion.ui.drop_feedback import DropFeedback, clear_all
-
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

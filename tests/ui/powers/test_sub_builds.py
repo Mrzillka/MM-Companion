@@ -10,8 +10,7 @@ from __future__ import annotations
 
 import json
 
-import pytest
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QLabel
 
 from mm_companion.core.character import AdvantageSelection, Character
 from mm_companion.core.data_loader import load_game_data
@@ -28,11 +27,6 @@ from mm_companion.core.rules import (
     sub_build_characters,
 )
 from mm_companion.ui.power_constructor import PowerConstructorWindow
-
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
 
 
 def _summoner(rank: int = 6) -> tuple[Character, Power]:

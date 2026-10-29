@@ -8,12 +8,9 @@ whoever's sheet is being asked about.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 
-from mm_companion.core import storage
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.rules import (
@@ -31,22 +28,7 @@ from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.roll_history import RequestCard
 from mm_companion.ui.session_bridge import SessionBridge, set_active_session
 
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(scope="module")
-def data():
-    return load_game_data()
-
-
-@pytest.fixture(autouse=True)
-def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path))
-    storage.ensure_workspace()
-    return tmp_path
+pytestmark = pytest.mark.usefixtures("workspace")
 
 
 @pytest.fixture(autouse=True)

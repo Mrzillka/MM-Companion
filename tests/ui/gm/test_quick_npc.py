@@ -210,13 +210,6 @@ def dialog(qapp):
     made.deleteLater()
 
 
-@pytest.fixture(scope="module")
-def qapp():
-    from PySide6.QtWidgets import QApplication
-
-    return QApplication.instance() or QApplication([])
-
-
 def test_a_first_dialog_opens_on_pl_10_balanced(dialog) -> None:
     entered = dialog.value()
     assert entered.power_level == 10

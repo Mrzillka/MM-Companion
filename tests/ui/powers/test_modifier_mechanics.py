@@ -9,10 +9,7 @@ shortens, the per-location extras that are bought in ranks).
 
 from __future__ import annotations
 
-import pytest
-
 from mm_companion.core.character import Character
-from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
 from mm_companion.core.rules import (
     CATEGORY_DAMAGE,
@@ -30,11 +27,6 @@ from mm_companion.core.rules import (
     power_rolls,
     toughness_defense,
 )
-
-
-@pytest.fixture(scope="module")
-def data():
-    return load_game_data()
 
 
 def _protected(data, rank: int, *extras: str, band: tuple[int, int] = (0, 0)) -> Character:

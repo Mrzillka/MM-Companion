@@ -17,11 +17,6 @@ from mm_companion.ui.settings.theme_page import ThemePage
 from mm_companion.ui.theme import loader
 
 
-@pytest.fixture(scope="module")
-def qapp():
-    return QApplication.instance() or QApplication([])
-
-
 @pytest.fixture(autouse=True)
 def isolated_workspace(tmp_path, monkeypatch, qapp):
     monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path))

@@ -266,11 +266,6 @@ def test_legacy_condition_list_still_loads() -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
 def test_section_renders_a_chip_per_applied_condition(qapp: QApplication) -> None:
     data = load_game_data()
     char = Character()

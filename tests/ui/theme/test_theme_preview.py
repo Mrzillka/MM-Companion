@@ -8,25 +8,9 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-import pytest
-from PySide6.QtWidgets import QApplication
-
 from mm_companion.core import storage
 from mm_companion.ui import block_sizes, theme
 from mm_companion.ui.theme import loader
-
-
-@pytest.fixture(scope="module")
-def qapp():
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def isolated_workspace(tmp_path, monkeypatch):
-    monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path))
-    theme.reset()
-    yield tmp_path
-    theme.reset()
 
 
 def draft_of(theme_id: str, **changes):

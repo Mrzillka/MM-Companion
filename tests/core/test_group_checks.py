@@ -2,20 +2,12 @@
 
 from __future__ import annotations
 
-import pytest
-
-from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.rules import (
     GroupCheckMember,
     group_check_result,
     shift_degree,
     team_check_bonus,
 )
-
-
-@pytest.fixture(scope="module")
-def data():
-    return load_game_data()
 
 
 def test_helpers_add_their_degrees_of_success(data) -> None:

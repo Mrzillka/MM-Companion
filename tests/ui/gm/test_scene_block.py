@@ -8,14 +8,11 @@ which creatures end up on the board and what the eye does.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from PySide6.QtCore import QMimeData, QPointF, Qt
 from PySide6.QtGui import QDropEvent
 from PySide6.QtWidgets import QApplication, QLabel
 
-from mm_companion.core import storage
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.session.model import new_session
@@ -33,21 +30,11 @@ from mm_companion.ui.scene_card import order_scene
 from mm_companion.ui.sections import SceneSection
 from mm_companion.ui.session_bridge import SessionBridge, set_active_session
 
+pytestmark = pytest.mark.usefixtures("workspace")
+
 NOVA = {"ref": "p1", "name": "Nova", "player_id": "p1", "initiative": 22}
 ROOK = {"ref": "p2", "name": "Rook", "player_id": "p2"}
 GOON = {"ref": "n1", "name": "Goon", "initiative": 14, "conditions": [{"id": "dazed"}]}
-
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path))
-    storage.ensure_workspace()
-    return tmp_path
 
 
 @pytest.fixture(autouse=True)

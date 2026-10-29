@@ -32,11 +32,6 @@ from mm_companion.ui import theme
 from mm_companion.ui.character_sheet import CharacterSheet
 
 
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
 @pytest.fixture
 def sheet(qapp: QApplication):
     """A laid-out sheet under the real application stylesheet.

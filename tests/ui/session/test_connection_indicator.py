@@ -8,13 +8,10 @@ install — a corner widget nobody put in the menu bar helps no one.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QApplication, QWidget
 
-from mm_companion.core import storage
 from mm_companion.core.session import client as session_client
 from mm_companion.core.session import server as session_server
 from mm_companion.core.session.discovery import METHOD_RELAY, Reachability
@@ -34,17 +31,7 @@ from mm_companion.ui.connection_indicator import (
     ConnectionIndicator,
 )
 
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path))
-    storage.ensure_workspace()
-    return tmp_path
+pytestmark = pytest.mark.usefixtures("workspace")
 
 
 class FakeBridge(QWidget):

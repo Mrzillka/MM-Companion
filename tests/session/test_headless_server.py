@@ -10,7 +10,6 @@ prompt.
 from __future__ import annotations
 
 import threading
-from pathlib import Path
 
 import pytest
 
@@ -21,12 +20,7 @@ from mm_companion.core.session.relay import RelayTransport
 from mm_companion.core.session.server import SessionServer
 from mm_companion.server import cli
 
-
-@pytest.fixture(autouse=True)
-def _home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path))
-    storage.ensure_workspace()
-    return tmp_path
+pytestmark = pytest.mark.usefixtures("workspace")
 
 
 def _args(*argv: str):

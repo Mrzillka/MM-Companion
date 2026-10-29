@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 
 from mm_companion.core.character import Character
-from mm_companion.core.data_loader import GameData, load_game_data
+from mm_companion.core.data_loader import GameData
 from mm_companion.core.npc import quick_npc
 from mm_companion.core.rules import (
     MISSING_VALUE,
@@ -37,11 +37,6 @@ from mm_companion.core.rules import (
     resolve_pins,
 )
 from mm_companion.core.storage import DEFAULT_SETTINGS
-
-
-@pytest.fixture(scope="module")
-def data() -> GameData:
-    return load_game_data()
 
 
 @pytest.fixture

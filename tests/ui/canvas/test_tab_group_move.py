@@ -25,11 +25,6 @@ from mm_companion.ui.block_sizes import RecommendedSize
 from mm_companion.ui.tab_group import TabGroupFrame
 
 
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
 @pytest.fixture
 def canvas(qapp: QApplication) -> BlockCanvas:
     """Four blocks: c and d merged into one cell, a and b in rows of their own."""

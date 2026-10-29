@@ -19,11 +19,6 @@ from mm_companion.ui.roll_history import RollHistoryPanel
 from mm_companion.ui.toasts import ToastCard, ToastStack, notify_window, roll_toaster
 
 
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
 @pytest.fixture
 def live_toasts():
     """Let notifications through for this test (the suite suppresses them)."""

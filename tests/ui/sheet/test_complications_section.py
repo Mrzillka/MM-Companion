@@ -2,17 +2,11 @@
 
 from __future__ import annotations
 
-import pytest
 from PySide6.QtWidgets import QApplication
 
 from mm_companion.core.character import Character, Complication
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.ui.sections.complications import ComplicationsSection
-
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
 
 
 def _section(complications: list[Complication] | None = None) -> ComplicationsSection:

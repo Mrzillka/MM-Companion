@@ -22,11 +22,6 @@ from mm_companion.ui import svg_assets, theme
 from mm_companion.ui.theme import loader
 
 
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
 @pytest.fixture(autouse=True)
 def isolated_workspace(tmp_path, monkeypatch):
     monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path))

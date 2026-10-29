@@ -7,14 +7,11 @@ and the roll reaching the table under a name.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 
-from mm_companion.core import storage
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import Power, PowerEffectInstance
@@ -37,17 +34,7 @@ from mm_companion.ui.sections.skills import COL_TOTAL as SKILL_TOTAL
 from mm_companion.ui.sections.stat_table import COL_NAME, COL_TOTAL, ROLL_ROLE
 from mm_companion.ui.session_bridge import SessionBridge, set_active_session
 
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path))
-    storage.ensure_workspace()
-    return tmp_path
+pytestmark = pytest.mark.usefixtures("workspace")
 
 
 @pytest.fixture(autouse=True)

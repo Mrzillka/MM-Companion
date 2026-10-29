@@ -12,7 +12,7 @@ import random
 import pytest
 
 from mm_companion.core.character import AdvantageSelection, Character
-from mm_companion.core.data_loader import ResistanceOutcome, load_game_data
+from mm_companion.core.data_loader import ResistanceOutcome
 from mm_companion.core.dice import resolve_group
 from mm_companion.core.rules import (
     KIND_BEST_OF,
@@ -39,11 +39,6 @@ from mm_companion.core.rules import (
     resist_choices,
     resolve_rung,
 )
-
-
-@pytest.fixture(scope="module")
-def data():
-    return load_game_data()
 
 
 @pytest.fixture

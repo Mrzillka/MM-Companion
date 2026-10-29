@@ -13,7 +13,6 @@ from dataclasses import replace
 import pytest
 
 from mm_companion.core.character import Character
-from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
 from mm_companion.core.rules import (
     KIND_POWER_SAVE,
@@ -30,11 +29,6 @@ from mm_companion.core.rules import (
     structure_header,
 )
 from mm_companion.core.session.protocol import sanitize_spec
-
-
-@pytest.fixture(scope="module")
-def data():
-    return load_game_data()
 
 
 @pytest.fixture

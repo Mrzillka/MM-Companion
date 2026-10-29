@@ -73,17 +73,7 @@ from mm_companion.ui.session_dialogs import (
 )
 from mm_companion.ui.start_window import StartWindow
 
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path))
-    storage.ensure_workspace()
-    return tmp_path
+pytestmark = pytest.mark.usefixtures("workspace")
 
 
 @pytest.fixture(autouse=True)

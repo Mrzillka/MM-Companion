@@ -32,11 +32,6 @@ from mm_companion.ui.blocks import (
 from mm_companion.ui.character_sheet import CharacterSheet
 
 
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
 @pytest.fixture(autouse=True)
 def _home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path))

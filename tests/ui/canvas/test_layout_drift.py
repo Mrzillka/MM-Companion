@@ -20,11 +20,6 @@ from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.grid_view import GridSplitter
 
 
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
 @pytest.fixture
 def sheet(qapp: QApplication):
     built = CharacterSheet(load_game_data())

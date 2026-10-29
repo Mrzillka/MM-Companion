@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from mm_companion.core.character import AdvantageSelection, Character
-from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
 from mm_companion.core.rules import (
     KIND_AREA,
@@ -52,11 +51,6 @@ from mm_companion.core.rules import (
 )
 from mm_companion.core.rules.equipment import build_item_from_entry
 from mm_companion.core.session.protocol import sanitize_mod_payload, sanitize_spec
-
-
-@pytest.fixture(scope="module")
-def data():
-    return load_game_data()
 
 
 def _area(rank: int = 8, **config) -> PowerEffectInstance:

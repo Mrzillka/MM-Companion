@@ -17,7 +17,6 @@ GM assumed.
 from __future__ import annotations
 
 import time
-from pathlib import Path
 
 import pytest
 from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMessageBox
@@ -51,17 +50,7 @@ from mm_companion.ui.session_player import ConditionReceiver, SnapshotPusher, sn
 from mm_companion.ui.start_window import StartWindow
 from mm_companion.ui.undo import UndoController
 
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path))
-    storage.ensure_workspace()
-    return tmp_path
+pytestmark = pytest.mark.usefixtures("workspace")
 
 
 @pytest.fixture(autouse=True)

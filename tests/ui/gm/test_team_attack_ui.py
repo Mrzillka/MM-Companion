@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from PySide6.QtWidgets import QApplication, QDialog
 
-from mm_companion.core import library, storage
+from mm_companion.core import library
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.dice import CheckResult, GroupResult
 from mm_companion.core.npc import quick_npc
@@ -17,17 +15,7 @@ from mm_companion.ui.gm_window import SCENE_NPC, GMWindow
 from mm_companion.ui.npc_quick_dialog import QuickNPC, QuickNPCDialog
 from mm_companion.ui.session_bridge import set_active_session
 
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path))
-    storage.ensure_workspace()
-    return tmp_path
+pytestmark = pytest.mark.usefixtures("workspace")
 
 
 @pytest.fixture(autouse=True)

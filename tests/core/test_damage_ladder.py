@@ -8,15 +8,12 @@ from __future__ import annotations
 
 import dataclasses
 
-import pytest
-
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import (
     Effect,
     GameData,
     ResistanceOutcome,
     SystemRules,
-    load_game_data,
 )
 from mm_companion.core.rules import (
     apply_condition,
@@ -25,11 +22,6 @@ from mm_companion.core.rules import (
     damage_steps,
     resolve_damage_step,
 )
-
-
-@pytest.fixture(scope="module")
-def data() -> GameData:
-    return load_game_data()
 
 
 def _ids(char: Character) -> list[str]:

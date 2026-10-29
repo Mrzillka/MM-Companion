@@ -18,11 +18,7 @@ from __future__ import annotations
 
 import json
 
-import pytest
-from PySide6.QtWidgets import QApplication
-
 from mm_companion.core.character import AdvantageSelection, Character
-from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import (
     STRUCTURE_ARRAY,
     Power,
@@ -32,16 +28,6 @@ from mm_companion.core.powers import (
 from mm_companion.core.rules import build_item_from_entry, resistance_total
 from mm_companion.ui.blocks import block_descriptors
 from mm_companion.ui.character_sheet import CharacterSheet
-
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(scope="module")
-def data():
-    return load_game_data()
 
 
 def _furnished(data) -> Character:

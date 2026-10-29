@@ -9,8 +9,6 @@ exactly as it was.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from PySide6.QtCore import QEvent, QObject, QPoint, Qt
 from PySide6.QtGui import QPalette
@@ -45,22 +43,6 @@ from mm_companion.ui.simple.views import (
     SystemView,
     skill_rows,
 )
-
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(scope="module")
-def data():
-    return load_game_data()
-
-
-@pytest.fixture(autouse=True)
-def _home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path))
-    return tmp_path
 
 
 def _hero(data) -> Character:

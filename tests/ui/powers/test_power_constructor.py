@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import html
 
-import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QLabel, QWidget
 
@@ -31,11 +30,6 @@ from mm_companion.core.rules import (
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.power_constructor import PowerConstructorWindow
 from mm_companion.ui.power_constructor.canvas import MODE_ARRAY_DYNAMIC
-
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
 
 
 def _pl10_character() -> Character:

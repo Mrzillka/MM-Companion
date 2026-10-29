@@ -15,7 +15,6 @@ import threading
 import pytest
 
 from mm_companion.core.character import AdvantageSelection, Character
-from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import Power, PowerEffectInstance
 from mm_companion.core.rules import (
     build_item_from_entry,
@@ -26,11 +25,6 @@ from mm_companion.core.rules import (
     trait_bonuses,
     trait_contributions,
 )
-
-
-@pytest.fixture(scope="module")
-def data():
-    return load_game_data()
 
 
 @pytest.fixture

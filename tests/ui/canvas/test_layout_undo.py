@@ -19,11 +19,6 @@ from mm_companion.ui.main_window import MainWindow
 from mm_companion.ui.undo import UndoController
 
 
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
 @pytest.fixture
 def sheet(qapp: QApplication) -> CharacterSheet:
     built = CharacterSheet(load_game_data())

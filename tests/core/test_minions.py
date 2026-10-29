@@ -6,10 +6,8 @@ proven in ``test_minions_ui.py``.
 
 from __future__ import annotations
 
-import pytest
-
 from mm_companion.core.character import Character
-from mm_companion.core.data_loader import ResistanceOutcome, load_game_data
+from mm_companion.core.data_loader import ResistanceOutcome
 from mm_companion.core.dice import ROUTINE_DIE, resolve_check, resolve_group
 from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
 from mm_companion.core.rules import (
@@ -40,11 +38,6 @@ from mm_companion.core.session.protocol import (
     sanitize_scene,
 )
 from mm_companion.core.session.server import SessionServer
-
-
-@pytest.fixture(scope="module")
-def data():
-    return load_game_data()
 
 
 def damage_ladder(data) -> tuple[tuple[ResistanceOutcome, ...], ResistanceOutcome | None]:

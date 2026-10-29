@@ -12,11 +12,6 @@ from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.wheel_guard import _WheelGuard
 
 
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
 def _sheet_in_page() -> tuple[CharacterSheet, QScrollArea]:
     """A sheet and its own page scroll area.
 

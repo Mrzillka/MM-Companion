@@ -30,11 +30,6 @@ from mm_companion.ui.drop_feedback import DropFeedback
 from mm_companion.ui.layout_undo import LayoutHistory
 
 
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
 @pytest.fixture
 def canvas(qapp: QApplication) -> BlockCanvas:
     """Four plain blocks: ``a`` and ``b`` sharing a row, then ``c`` and ``d``."""

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt
 from PySide6.QtGui import QDropEvent, QFont, QFontMetrics
 from PySide6.QtWidgets import QApplication, QMenu, QTableWidgetItem
@@ -18,11 +17,6 @@ from mm_companion.ui.sections.row_table import (
     remove_contributor,
     wrapping_column_width,
 )
-
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
 
 
 def _table(rows: int = 3, *, fit_width: bool = False) -> AutoHeightTable:

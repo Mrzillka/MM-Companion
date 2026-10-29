@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 from PySide6.QtWidgets import QApplication, QDialog, QLineEdit, QSpinBox
 
 from mm_companion.core.character import AdvantageSelection, Character
@@ -16,11 +15,6 @@ from mm_companion.ui.sections.advantages import (
     AdvantagesSection,
     name_max_width,
 )
-
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
 
 
 def _section(selections: list[AdvantageSelection]) -> AdvantagesSection:

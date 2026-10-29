@@ -6,8 +6,6 @@ Offscreen Qt. The rules themselves are proven headless in ``test_minions.py``.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QApplication
@@ -43,28 +41,13 @@ from mm_companion.ui.scene_card import SceneCard
 from mm_companion.ui.session_bridge import set_active_session
 from mm_companion.ui.settings import SessionPage, SettingsWindow
 
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path))
-    storage.ensure_workspace()
-    return tmp_path
+pytestmark = pytest.mark.usefixtures("workspace")
 
 
 @pytest.fixture(autouse=True)
 def _clear_active_session():
     yield
     set_active_session(None)
-
-
-@pytest.fixture
-def data():
-    return load_game_data()
 
 
 @pytest.fixture

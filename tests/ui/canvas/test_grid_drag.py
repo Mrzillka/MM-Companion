@@ -29,11 +29,6 @@ from mm_companion.core.data_loader import load_game_data
 from mm_companion.ui.character_sheet import CharacterSheet
 
 
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
 @pytest.fixture
 def sheet(qapp: QApplication) -> CharacterSheet:
     built = CharacterSheet(load_game_data())

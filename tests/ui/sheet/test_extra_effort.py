@@ -52,11 +52,6 @@ from mm_companion.ui.sections import powers as powers_module
 from mm_companion.ui.sections.powers import _DraggableCard
 
 
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
 def _hero() -> tuple[Character, Power]:
     """A character with one pushable power — a Blast 6."""
     data = load_game_data()

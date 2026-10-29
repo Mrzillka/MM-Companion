@@ -17,11 +17,6 @@ from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.pinned import DEFAULT_EXTENT, PinSlot
 
 
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
 @pytest.fixture
 def make_sheet(qapp: QApplication):
     """Laid-out character sheets with an **empty** strip (see test_block_canvas).

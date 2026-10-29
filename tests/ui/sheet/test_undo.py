@@ -9,7 +9,6 @@ model is ``test_character_restore.py``, and what it does to the widgets is
 
 from __future__ import annotations
 
-import pytest
 from PySide6.QtWidgets import QApplication
 
 from mm_companion.core.character import Character
@@ -18,11 +17,6 @@ from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstan
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.sections.powers import _DraggableCard
 from mm_companion.ui.undo import UndoController, absorbing
-
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
 
 
 def _sheet_and_undo(character: Character | None = None) -> tuple[CharacterSheet, UndoController]:

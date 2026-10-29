@@ -27,12 +27,6 @@ from mm_companion.ui.sections.row_table import SHED_HYSTERESIS, columns_to_shed
 from mm_companion.ui.sections.stat_table import COL_ABBR, COL_NAME, COL_RANK, COL_TOTAL
 from mm_companion.ui.widgets import FORM_WRAP_WIDTH, wraps_form_rows
 
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
 # name, abbreviation, rank, total — the shape of the two stat tables.
 WIDTHS = [110, 40, 80, 50]
 

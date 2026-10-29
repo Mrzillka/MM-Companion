@@ -26,11 +26,6 @@ from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstan
 from mm_companion.ui.character_sheet import CharacterSheet
 
 
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
 def _settle(times: int = 6) -> None:
     for _ in range(times):
         QApplication.processEvents()

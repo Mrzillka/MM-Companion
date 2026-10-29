@@ -6,7 +6,6 @@ implementation, since the whole point of the feature is that the arithmetic is t
 
 from __future__ import annotations
 
-import pytest
 from PySide6.QtWidgets import QApplication, QPushButton
 
 from mm_companion.core.character import AdvantageSelection, Character
@@ -21,11 +20,6 @@ from mm_companion.core.rules import (
     prepared_effect_ranks,
 )
 from mm_companion.ui.power_constructor import PowerConstructorWindow
-
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
 
 
 def _improviser() -> Character:

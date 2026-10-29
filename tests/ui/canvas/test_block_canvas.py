@@ -12,11 +12,6 @@ from mm_companion.ui.block_canvas import SCHEMA_VERSION
 from mm_companion.ui.character_sheet import CharacterSheet
 
 
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
 @pytest.fixture
 def make_sheet(qapp: QApplication):
     """Build laid-out character sheets without ever creating on-screen windows.

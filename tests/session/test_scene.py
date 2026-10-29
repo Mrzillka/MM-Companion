@@ -12,11 +12,8 @@ from the board.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
-from mm_companion.core import storage
 from mm_companion.core.session import store
 from mm_companion.core.session.client import EVENT_PONG, EVENT_SCENE, EVENT_SCENE_PORTRAIT
 from mm_companion.core.session.model import SessionState, new_session
@@ -24,6 +21,8 @@ from mm_companion.core.session.protocol import MAX_SCENE_PORTRAIT_CHARS
 from mm_companion.core.session.server import EVENT_SCENE as SERVER_EVENT_SCENE
 from tests.session import test_session_server as harness
 from tests.session.test_session_server import Events, gm_connect, wait_for
+
+pytestmark = pytest.mark.usefixtures("workspace")
 
 # The loopback harness lives with the server tests; a scene test wants the same
 # sockets and the same waiting. Bound rather than imported because a fixture that
@@ -33,13 +32,6 @@ connect = harness.connect
 
 THUG = {"ref": "e1", "name": "Thug", "initiative": 14}
 BOSS = {"ref": "e2", "name": "Boss"}
-
-
-@pytest.fixture(autouse=True)
-def _home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path))
-    storage.ensure_workspace()
-    return tmp_path
 
 
 # --------------------------------------------------------------------------

@@ -14,7 +14,6 @@ would say the same thing again says nothing, and a redraw keeps the cards it has
 from __future__ import annotations
 
 from dataclasses import replace
-from pathlib import Path
 
 import pytest
 from PySide6.QtWidgets import QApplication
@@ -27,21 +26,11 @@ from mm_companion.ui.gm_window import SCENE_NPC, GMWindow
 from mm_companion.ui.scene_board import SceneBoard
 from mm_companion.ui.session_bridge import set_active_session
 
+pytestmark = pytest.mark.usefixtures("workspace")
+
 GOON = {"ref": "n1", "name": "Goon", "initiative": 14}
 THUG = {"ref": "n2", "name": "Thug"}
 BOSS = {"ref": "n3", "name": "Boss", "initiative": 20}
-
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path))
-    storage.ensure_workspace()
-    return tmp_path
 
 
 @pytest.fixture(autouse=True)

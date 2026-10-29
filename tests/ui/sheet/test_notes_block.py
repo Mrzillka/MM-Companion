@@ -21,11 +21,6 @@ from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.notes.events import note_events
 
 
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
 @pytest.fixture
 def make_sheet(qapp: QApplication):
     """Laid-out sheets with no on-screen window (see tests/ui/canvas/test_block_canvas.py)."""

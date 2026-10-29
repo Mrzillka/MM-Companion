@@ -9,10 +9,8 @@ rather than a side effect of Save.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QMessageBox
 
 from mm_companion.core import storage
 from mm_companion.core.rules import (
@@ -27,17 +25,7 @@ from mm_companion.core.storage import DEFAULT_SETTINGS
 from mm_companion.ui.pin_picker import PIN_ROLE
 from mm_companion.ui.settings.gm_page import GMPage
 
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, qapp) -> Path:
-    monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path))
-    storage.ensure_workspace()
-    return tmp_path
+pytestmark = pytest.mark.usefixtures("workspace")
 
 
 @pytest.fixture

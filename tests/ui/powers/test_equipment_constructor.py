@@ -12,11 +12,9 @@ contract an edit honours — is here too, since the two halves are one feature.
 
 from __future__ import annotations
 
-import pytest
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QMessageBox
 
 from mm_companion.core.character import AdvantageSelection, Character
-from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.equipment import EquipmentItem
 from mm_companion.core.powers import ModifierSelection
 from mm_companion.core.rules import (
@@ -28,16 +26,6 @@ from mm_companion.core.rules import (
 )
 from mm_companion.ui.power_constructor import PowerConstructorWindow
 from mm_companion.ui.sections.equipment import EquipmentSection
-
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(scope="module")
-def data():
-    return load_game_data()
 
 
 def _hero(data, *catalog_ids: str) -> Character:

@@ -13,15 +13,9 @@ tested is the arm/confirm state machine, not Qt's press handling.
 from __future__ import annotations
 
 import pytest
-from PySide6.QtWidgets import QApplication
 
 from mm_companion.ui import theme
 from mm_companion.ui.widgets import CONFIRM_ARM_MS, ConfirmButton
-
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

@@ -23,11 +23,6 @@ from mm_companion.ui.sections.powers import _DraggableCard
 from mm_companion.ui.sections.system_info import HeroPointsWidget, hero_point_note
 
 
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
 def test_ability_spin_writes_to_model(qapp: QApplication) -> None:
     sheet = CharacterSheet(load_game_data())
     sheet.abilities._abilities["STR"].setValue(4)

@@ -17,8 +17,6 @@ The tumble is zeroed (``ROLL_DURATION_MS``) wherever a test would otherwise wait
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QBoxLayout, QLabel, QPushButton
@@ -40,18 +38,7 @@ from mm_companion.ui.roll_history import (
 )
 from mm_companion.ui.session_bridge import SessionBridge, set_active_session
 
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Point settings at an empty temp dir so quick rolls start empty."""
-    monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path))
-    storage.ensure_workspace()
-    return tmp_path
+pytestmark = pytest.mark.usefixtures("workspace")
 
 
 @pytest.fixture(autouse=True)

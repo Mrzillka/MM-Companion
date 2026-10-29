@@ -8,7 +8,6 @@ the old value after a Ctrl+Z.
 
 from __future__ import annotations
 
-import pytest
 from PySide6.QtWidgets import QApplication
 
 from mm_companion.core.character import (
@@ -22,11 +21,6 @@ from mm_companion.core.powers import Power, PowerEffectInstance
 from mm_companion.ui.blocks.bus import EDITED, NOTIFICATIONS, RESEED_TOPICS, SignalBus
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.sections.powers import _DraggableCard
-
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
 
 
 def test_reseed_restates_every_block_from_a_model_changed_underneath_it(

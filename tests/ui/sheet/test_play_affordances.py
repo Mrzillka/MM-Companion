@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import pytest
-from PySide6.QtWidgets import QApplication, QGridLayout
+from PySide6.QtWidgets import QGridLayout
 
 from mm_companion.core.character import AdvantageSelection, Character
-from mm_companion.core.data_loader import load_game_data
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.roll_click import RollChip
 from mm_companion.ui.sections.dice import DiceSection
@@ -18,16 +16,6 @@ from mm_companion.ui.sections.skills import (
     SkillsSection,
 )
 from mm_companion.ui.sections.stat_table import ROLL_ROLE
-
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(scope="module")
-def data():
-    return load_game_data()
 
 
 def _untrained_cell(section: SkillsSection, name: str) -> str:

@@ -12,7 +12,6 @@ The page is reached by wheeling somewhere that is not a scrolling block.
 
 from __future__ import annotations
 
-import pytest
 from PySide6.QtCore import QPoint, QPointF, Qt
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtWidgets import (
@@ -25,11 +24,6 @@ from PySide6.QtWidgets import (
 
 from mm_companion.ui.block_frame import InnerScroll
 from mm_companion.ui.wheel_guard import guard_wheel, has_scroll_range
-
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
 
 
 def _wheel(delta: int) -> QWheelEvent:

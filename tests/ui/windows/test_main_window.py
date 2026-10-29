@@ -16,17 +16,6 @@ from mm_companion.ui.main_window import MainWindow
 from mm_companion.ui.npc_window import NPCWindow
 
 
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def _home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path))
-    return tmp_path
-
-
 def test_new_window_starts_clean(qapp: QApplication) -> None:
     win = MainWindow(locked=False)
     assert win._dirty is False

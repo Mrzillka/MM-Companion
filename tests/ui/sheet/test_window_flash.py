@@ -18,24 +18,13 @@ from __future__ import annotations
 
 import pytest
 from PySide6.QtCore import QEvent, QObject
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QWidget
 
 from mm_companion.core.character import AdvantageSelection, Character
-from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import Power, PowerEffectInstance
 from mm_companion.core.rules.equipment import build_item_from_entry
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.damage_row import DamageRow
-
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(scope="module")
-def data():
-    return load_game_data()
 
 
 class ParentlessShowWatcher(QObject):

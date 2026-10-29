@@ -43,6 +43,7 @@ os.environ.setdefault("QT_QPA_FONTDIR", str(Path(__file__).parent / "qt" / "font
 import pytest
 
 from mm_companion.core import storage
+from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.session.relay import RELAY_SCHEME_PLAIN
 from mm_companion.relay import RelayServer
 
@@ -88,6 +89,22 @@ def _isolated_workspace(tmp_path, monkeypatch):
     """
     monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path / "workspace"))
     yield
+
+
+@pytest.fixture
+def workspace():
+    """The throwaway workspace with its folders made, for a test that writes into them.
+
+    Opt in with ``pytestmark = pytest.mark.usefixtures("workspace")``, or request it
+    to get the :class:`~mm_companion.core.storage.Workspace` back.
+    """
+    return storage.ensure_workspace()
+
+
+@pytest.fixture
+def data():
+    """The game's content. Cached by the loader, so asking for it per test is free."""
+    return load_game_data()
 
 
 def _git_for_windows_openssl() -> str | None:

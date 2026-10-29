@@ -46,11 +46,6 @@ SEARCH_FLOOR = 60
 MEASURED_EXEMPT = {"dice", "scene", "notes"}
 
 
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
 @pytest.fixture
 def sheet(qapp: QApplication) -> CharacterSheet:
     """A laid-out sheet. Function-scoped, and it has to be: ``conftest``'s autouse

@@ -11,11 +11,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-import pytest
-
 from mm_companion.core import storage
 from mm_companion.core.character import AppliedCondition, Character
-from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
 from mm_companion.core.rules import (
     CATEGORY_AREA,
@@ -37,11 +34,6 @@ from mm_companion.core.rules import (
     resolve_rung,
 )
 from mm_companion.core.session.protocol import sanitize_spec
-
-
-@pytest.fixture(scope="module")
-def data():
-    return load_game_data()
 
 
 def _damage_ladder(data) -> SpecLadder:

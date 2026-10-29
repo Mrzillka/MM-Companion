@@ -8,7 +8,6 @@ code/options). The seams themselves are covered in ``test_mod_manager.py``.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 from PySide6.QtCore import Qt
@@ -16,17 +15,6 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from mm_companion.core import mods, storage
 from mm_companion.ui.mods_window import ModsWindow
-
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(autouse=True)
-def _home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path))
-    return tmp_path
 
 
 def _write_mod(manifest: dict) -> None:

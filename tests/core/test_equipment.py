@@ -18,7 +18,6 @@ import pytest
 
 from mm_companion.core import storage
 from mm_companion.core.character import AdvantageSelection, Character
-from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.equipment import (
     PER_RANK_COST_KINDS,
     PLATFORM_INSTALLATION,
@@ -92,11 +91,6 @@ from mm_companion.core.rules import (
     vehicle_trait_rows,
     worn_items,
 )
-
-
-@pytest.fixture
-def data():
-    return load_game_data()
 
 
 @pytest.fixture

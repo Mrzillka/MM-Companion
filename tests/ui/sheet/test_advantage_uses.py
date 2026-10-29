@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import pytest
 from PySide6.QtCore import QEvent
 from PySide6.QtWidgets import QApplication
 
 from mm_companion.core.character import AdvantageSelection, Character
-from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.rules import (
     advantage_uses,
     advantage_uses_left,
@@ -19,16 +17,6 @@ from mm_companion.core.rules import (
 from mm_companion.ui.advantage_uses import UsePips, advantage_use_note
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.sections.advantages import COL_USES
-
-
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture(scope="module")
-def data():
-    return load_game_data()
 
 
 def _settle(qapp: QApplication, sheet=None) -> None:

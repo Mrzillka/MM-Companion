@@ -26,11 +26,6 @@ from mm_companion.ui.sections.skills import (
 from mm_companion.ui.sections.stat_table import ROLL_ROLE
 
 
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
 def _section(character: Character | None = None) -> SkillsSection:
     data = load_game_data()
     return SkillsSection(data, character or Character.new_default(data))

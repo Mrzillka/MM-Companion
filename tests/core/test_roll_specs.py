@@ -10,7 +10,6 @@ from __future__ import annotations
 import pytest
 
 from mm_companion.core.character import AppliedCondition, Character
-from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
 from mm_companion.core.rules import (
     KIND_ABILITY,
@@ -36,11 +35,6 @@ from mm_companion.core.rules import (
     skill_roll,
     skill_row_label,
 )
-
-
-@pytest.fixture(scope="module")
-def data():
-    return load_game_data()
 
 
 @pytest.fixture

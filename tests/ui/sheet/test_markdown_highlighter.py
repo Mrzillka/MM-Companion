@@ -25,11 +25,6 @@ fenced = 1
 """
 
 
-@pytest.fixture(scope="module")
-def qapp() -> QApplication:
-    return QApplication.instance() or QApplication([])
-
-
 @pytest.fixture
 def editor(qapp: QApplication):
     widget = NoteEditor()

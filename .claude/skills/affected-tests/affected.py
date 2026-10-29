@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -223,9 +224,13 @@ def _select(changed: list[str], texts: dict[str, str]):
 
 
 def _pytest(args: list[str]) -> int:
-    command = [sys.executable, "-m", "pytest", *args]
+    # affected_tests_order.py, beside this file, keeps the tests in file order.
+    command = [sys.executable, "-m", "pytest", "-p", "affected_tests_order", *args]
     print("\n$ " + " ".join(command[2:]), flush=True)
-    return subprocess.run(command, cwd=ROOT).returncode
+    env = dict(os.environ)
+    here = str(Path(__file__).resolve().parent)
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [here, env.get("PYTHONPATH")]))
+    return subprocess.run(command, cwd=ROOT, env=env).returncode
 
 
 def main() -> int:

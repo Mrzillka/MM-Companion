@@ -133,15 +133,16 @@ def test_a_copy_is_a_minion_too(window: GMWindow) -> None:
     assert copies and all(e.character.minion for e in copies)
 
 
-def test_the_npc_sheet_has_an_undoable_minion_box(qapp) -> None:
+@pytest.mark.parametrize("flag", ["minion", "summoned"])
+def test_the_npc_sheet_has_an_undoable_box_for_the_flag(qapp, flag: str) -> None:
     window = NPCWindow()
     try:
-        box = window.sheet.system_info.minion_check
+        box = getattr(window.sheet.system_info, f"{flag}_check")
         assert box.isVisibleTo(window)
         box.click()
-        assert window.sheet.character.minion
+        assert getattr(window.sheet.character, flag)
         window.sheet.undo.undo()
-        assert not window.sheet.character.minion and not box.isChecked()
+        assert not getattr(window.sheet.character, flag) and not box.isChecked()
     finally:
         window._dirty = False
         window.close()
@@ -662,17 +663,3 @@ def test_the_wire_keeps_the_summoned_tag() -> None:
     assert entry.get("summoned") is True
     (plain,) = sanitize_scene([{"ref": "abc", "name": "Imp", "summoned": "yes"}])
     assert "summoned" not in plain
-
-
-def test_the_npc_sheet_has_an_undoable_summoned_box(qapp) -> None:
-    window = NPCWindow()
-    try:
-        box = window.sheet.system_info.summoned_check
-        assert box.isVisibleTo(window)
-        box.click()
-        assert window.sheet.character.summoned
-        window.sheet.undo.undo()
-        assert not window.sheet.character.summoned and not box.isChecked()
-    finally:
-        window._dirty = False
-        window.close()

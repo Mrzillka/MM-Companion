@@ -464,18 +464,6 @@ def test_a_reachable_session_reads_as_success(qapp: QApplication, window: GMWind
     assert gm_window_module.theme.color("tint.better") in window._status_label.styleSheet()
 
 
-def test_the_two_outcomes_do_not_look_alike(qapp: QApplication, window: GMWindow) -> None:
-    start_hosting(qapp, window, canned())
-    lan_status = (window._status_label.text(), window._status_label.styleSheet())
-    window.stop_hosting()
-    start_hosting(
-        qapp,
-        window,
-        canned(host="203.0.113.7", external_ip="203.0.113.7", mapping=FakeMapping()),
-    )
-    assert (window._status_label.text(), window._status_label.styleSheet()) != lan_status
-
-
 def test_advice_from_an_earlier_host_does_not_linger(qapp: QApplication, window: GMWindow) -> None:
     start_hosting(qapp, window, canned(advice=(discovery.ADVICE_CGNAT,)))
     window.stop_hosting()
@@ -1981,34 +1969,21 @@ def test_removing_an_npc_condition_matches_on_the_parameter(window: GMWindow) ->
     assert remaining == [("impaired", "Dodge")]
 
 
-def test_copying_an_npc_names_it_goon_2(window: GMWindow) -> None:
+def test_copying_an_npc_numbers_the_copy_off_its_base(window: GMWindow) -> None:
+    """Each copy sees the ones before it, and a copy of a copy counts from the base."""
     path = write_npc("Goon")
     window._register_npc(path)
 
     window._copy_npc(path.name)
-
     assert sorted(npc_names(window)) == ["Goon", "Goon-2"]
     # The copy is its own file in the session's cast.
     assert "goon-2.json" in window._state.npc_paths
 
-
-def test_copying_twice_walks_up_the_numbers(window: GMWindow) -> None:
-    path = write_npc("Goon")
-    window._register_npc(path)
-
     window._copy_npc("goon.json")
-    window._copy_npc("goon.json")
-
     assert sorted(npc_names(window)) == ["Goon", "Goon-2", "Goon-3"]
-
-
-def test_copying_a_numbered_npc_keeps_the_base(window: GMWindow) -> None:
-    window._register_npc(write_npc("Goon"))
-    window._copy_npc("goon.json")  # -> Goon-2
 
     window._copy_npc("goon-2.json")  # base is "Goon", not "Goon-2"
-
-    assert sorted(npc_names(window)) == ["Goon", "Goon-2", "Goon-3"]
+    assert sorted(npc_names(window)) == ["Goon", "Goon-2", "Goon-3", "Goon-4"]
 
 
 def test_next_copy_name_is_base_aware() -> None:
@@ -3698,13 +3673,6 @@ def test_a_players_initiative_is_ignored_while_they_are_off_the_board(
     assert window._player_initiative == {}
 
 
-def test_players_join_the_board_by_themselves_by_default(window: GMWindow) -> None:
-    window._show_roster([{"player_id": "p1", "display_name": "Alex", "connected": True}])
-
-    assert [(e.kind, e.source) for e in window._scene] == [(SCENE_PLAYER, "p1")]
-    assert not window._cards["p1"]._scene_eye.isVisibleTo(window._cards["p1"])
-
-
 def test_with_the_preference_off_a_player_waits_for_the_eye(window: GMWindow) -> None:
     storage.set_gm_scene_auto_players(False)
 
@@ -3741,20 +3709,6 @@ def test_a_new_scene_clears_the_board_and_every_initiative(
 
     assert window._scene == []
     assert window._npc_state[goon].initiative is None
-
-
-def test_a_new_scene_keeps_the_players_when_they_join_by_themselves(
-    window: GMWindow, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Clearing them would be undone by the next roster anyway, and a button that
-    visibly does not do what it says is worse than one that does less."""
-    (goon,) = _npc_files(window, "Goon")
-    window._set_in_scene(SCENE_NPC, goon, True)
-    window._show_roster([{"player_id": "p1", "display_name": "Alex", "connected": True}])
-
-    window._new_scene()
-
-    assert [(e.kind, e.source) for e in window._scene] == [(SCENE_PLAYER, "p1")]
 
 
 def test_a_new_scene_takes_two_clicks_and_opens_no_dialog(
@@ -4285,12 +4239,14 @@ def test_an_offline_seat_is_not_put_on_the_board(qapp: QApplication, window: GMW
 
 
 def test_a_seat_that_connects_is_put_on_the_board(qapp: QApplication, window: GMWindow) -> None:
+    """By itself, by default — so its card has no eye to put it there by hand."""
     start_hosting(qapp, window, canned())
     window._show_roster(roster({"display_name": "Aria", "connected": False}))
 
     window._show_roster(roster({"display_name": "Aria"}))
 
     assert [(e.kind, e.source) for e in window._scene] == [(SCENE_PLAYER, "p0")]
+    assert not window._cards["p0"]._scene_eye.isVisibleTo(window._cards["p0"])
 
 
 def test_a_seat_that_disconnects_stays_on_the_board(qapp: QApplication, window: GMWindow) -> None:
@@ -4315,7 +4271,12 @@ def test_a_seat_the_gm_took_off_stays_off_until_it_reconnects(
 
 
 def test_a_new_scene_seats_only_the_connected_players(qapp: QApplication, window: GMWindow) -> None:
+    """It clears the creatures but keeps the players who join by themselves: clearing
+    them would be undone by the next roster anyway, and a button that visibly does
+    not do what it says is worse than one that does less."""
     start_hosting(qapp, window, canned())
+    (goon,) = _npc_files(window, "Goon")
+    window._set_in_scene(SCENE_NPC, goon, True)
     window._show_roster(roster({"display_name": "Aria"}, {"display_name": "Bram"}))
     window._show_roster(
         roster({"display_name": "Aria"}, {"display_name": "Bram", "connected": False})

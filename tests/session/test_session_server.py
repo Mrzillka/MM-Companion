@@ -148,6 +148,12 @@ def connect(request: pytest.FixtureRequest):
         )
         client.connect(timeout=TIMEOUT)
         clients.append(client)
+        # The client has its welcome, but the server only counts the seat as
+        # welcomed once that send returns — on purpose, so nothing can reach a
+        # player ahead of their welcome. Until then a GM command to this player
+        # reports False, which is how test_remove_condition_reaches_the_player
+        # failed on CI. Wait out that gap so tests start from a finished join.
+        wait_for(lambda: client.player_id in srv._welcomed, message="the join to finish")
         return client, events
 
     yield make

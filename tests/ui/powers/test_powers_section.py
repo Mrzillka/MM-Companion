@@ -1145,7 +1145,7 @@ def test_a_notch_picked_on_the_card_survives_a_save_and_a_reopen(
 ) -> None:
     """The reported bug, end to end: dial to Large, save, open the file again.
 
-    The two halves are tested apart (the flag round-trips in ``tests/test_powers.py``,
+    The two halves are tested apart (the flag round-trips in ``tests/core/test_powers.py``,
     the gesture is above), and this is the one that says the user's actual sequence
     works — the sheet writes what the card is showing.
     """

@@ -1846,7 +1846,7 @@ def test_reduced_trait_discounts_by_what_the_lowered_trait_cost(qapp: QApplicati
 
 # Cross-power relationships (Independent / Array / Linked between whole powers) are no
 # longer set in the constructor — they're built on the character sheet by dragging one
-# power card onto another (see tests/test_powers_section.py). The constructor's own mode
+# power card onto another (see tests/ui/powers/test_powers_section.py). The constructor's own mode
 # bar (structure of a single power's effects) is covered elsewhere in this module.
 
 

@@ -20,7 +20,7 @@ resists as a group yet (see "Group rolls" below).
   when two of its members are in *that* cast (`shown_groups`), and leaves the stored
   group alone otherwise.
 - All the operations (`join`, `leave`, `dissolve`, `rename`, `numbered_names`,
-  `base_name`) are pure and return new lists; `tests/test_npc_groups.py` covers them.
+  `base_name`) are pure and return new lists; `tests/core/test_npc_groups.py` covers them.
 
 ## How groups are made
 

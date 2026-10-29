@@ -289,8 +289,8 @@ paper the dots are drawn but are not a control.
 
 ## Tests
 
-`tests/test_simple_layout.py` (the presets and the roll-chip split, pure) and
-`tests/test_simple_sheet.py` (borrowing and giving back, the lock, every play control on
+`tests/ui/simple/test_simple_layout.py` (the presets and the roll-chip split, pure) and
+`tests/ui/simple/test_simple_sheet.py` (borrowing and giving back, the lock, every play control on
 the page, undo, the bus, compact mode, the floated windows, NPCs, no window flash,
 reflow, and printing: palette, page breaks, the copy leaving the sheet alone).
 Screenshot it with `driver.py simple-sheet` / `simple-sheet-custom` /

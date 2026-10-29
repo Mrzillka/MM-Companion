@@ -1,7 +1,7 @@
 """The damage ladder: rungs as steps, escalation, and the order they apply in.
 
 Headless — this is the rules layer, so none of it needs a display. The UI that
-offers these steps as buttons is exercised in ``tests/test_gm_window.py``.
+offers these steps as buttons is exercised in ``tests/ui/gm/test_gm_window.py``.
 """
 
 from __future__ import annotations

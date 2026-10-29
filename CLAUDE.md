@@ -55,7 +55,7 @@ pip install -e ".[dev]"
   `mm-companion-server` console script; `--help` for options). Run the public
   relay: `python -m mm_companion.relay`. Both are Qt-free and stdlib-only.
 - Run tests: `pytest`
-- Run a single test: `pytest tests/test_data_loader.py::test_load_game_data_is_cached`
+- Run a single test: `pytest tests/core/test_data_loader.py::test_load_game_data_is_cached`
 - Format: `black .` (line length 100)
 - Lint: `ruff check .`
 
@@ -153,7 +153,7 @@ notes file that owns it.
   a top-level window, so showing one flashes a real window on screen and is slow to
   realize. Add it to a layout before setting its visibility, only ever `hide()` in a
   constructor that may run before parenting, and shed it with `discard_widget`, which
-  hides before it unparents. This has bitten twice; `tests/test_window_flash.py`
+  hides before it unparents. This has bitten twice; `tests/ui/sheet/test_window_flash.py`
   watches for it.
 - **Width adapts; height scrolls.** The page is a user-resizable grid: any block
   can be dragged to any size, past the point where its content fits. Across, a

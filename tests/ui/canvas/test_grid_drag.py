@@ -1,6 +1,6 @@
 """Dragging a divider with real mouse events, end to end.
 
-`tests/test_grid_resize.py` drives the *model* — it calls ``setSizes`` and
+`tests/ui/canvas/test_grid_resize.py` drives the *model* — it calls ``setSizes`` and
 ``_on_dragged`` directly, which is how it can state what a resize means without a
 window. That left the gesture itself completely untested, and both halves of it
 shipped broken:

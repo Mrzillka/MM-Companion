@@ -111,7 +111,7 @@ constructor).
 
 ```bash
 pytest                          # full suite (GUI tests included)
-pytest tests/test_ui_wiring.py  # a fast UI-wiring slice (~3.4s, 18 tests)
+pytest tests/ui/sheet/test_ui_wiring.py  # a fast UI-wiring slice (~3.4s, 18 tests)
 ```
 
 On headless Linux, prefix with `xvfb-run -a`. CI runs `ruff check .`,

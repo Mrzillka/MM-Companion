@@ -106,7 +106,7 @@ that are made. It is the seam the rest of the turn economy should hang off:
 PySide6 6.12.0 was released and CI — which had passed on unchanged `develop` two days
 before with 6.11.2 — failed on every Python version in two ways:
 
-- **`tests/test_input_arrow_columns.py`, 32 failures** under the Windows and Fusion
+- **`tests/ui/widgets/test_input_arrow_columns.py`, 32 failures** under the Windows and Fusion
   styles: a spin box's edit field overlaps its up arrow by one pixel. Those tests guard
   the fix for arrows that paint but take no clicks (`theme.arrow_columns` measures the
   style's arrow column so the stylesheet can give it back as padding), so this is

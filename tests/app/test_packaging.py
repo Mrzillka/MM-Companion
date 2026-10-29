@@ -20,7 +20,7 @@ import ast
 import re
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 PYPROJECT = ROOT / "pyproject.toml"
 SPEC = ROOT / "installer" / "mm_companion.spec"
 PACKAGE = ROOT / "src" / "mm_companion"

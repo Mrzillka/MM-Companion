@@ -324,7 +324,7 @@ class EquipmentSection(HeldRebuild, TitledSection):
         # locked: toggling the lock resized the block while the window stayed put,
         # and the content clipped. Wrapping puts the unlocked minimum back under the
         # locked one (one button, not three), which is what makes the width
-        # lock-invariant — see tests/test_lock_geometry.py.
+        # lock-invariant — see tests/ui/canvas/test_lock_geometry.py.
         self._buttons = FlowContainer()
         button_row = FlowLayout(self._buttons, spacing=6)
         button_row.setContentsMargins(0, 0, 0, 0)

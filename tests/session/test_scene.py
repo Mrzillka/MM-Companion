@@ -22,8 +22,8 @@ from mm_companion.core.session.client import EVENT_PONG, EVENT_SCENE, EVENT_SCEN
 from mm_companion.core.session.model import SessionState, new_session
 from mm_companion.core.session.protocol import MAX_SCENE_PORTRAIT_CHARS
 from mm_companion.core.session.server import EVENT_SCENE as SERVER_EVENT_SCENE
-from tests import test_session_server as harness
-from tests.test_session_server import Events, gm_connect, wait_for
+from tests.session import test_session_server as harness
+from tests.session.test_session_server import Events, gm_connect, wait_for
 
 # The loopback harness lives with the server tests; a scene test wants the same
 # sockets and the same waiting. Bound rather than imported because a fixture that

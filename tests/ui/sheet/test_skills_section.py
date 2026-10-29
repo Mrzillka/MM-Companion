@@ -483,7 +483,7 @@ def test_the_block_asks_for_a_panel_floor_rather_than_a_comfortable_one(
     frame hands the section the larger of the viewport and that number, so the table
     never got narrow enough to shed a column and what would not fit was simply cut
     off. ``_panel_floor_width`` is the narrowest a panel knows how to *reach*, and it
-    may move with neither the data nor the **lock** (see ``tests/test_lock_geometry.py``
+    may move with neither the data nor the **lock** (see ``tests/ui/canvas/test_lock_geometry.py``
     for the rule that a lock toggle may change a block's height but never its width).
     """
     data = load_game_data()

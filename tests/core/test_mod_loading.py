@@ -20,7 +20,7 @@ from mm_companion.core.data_loader import clear_game_data_cache, load_game_data
 from mm_companion.core.powers import PowerEffectInstance
 from mm_companion.core.rules.powers_terms import READOUT_KINDS, effect_readout_rows
 
-SAMPLE_MODS = Path(__file__).resolve().parents[1] / "docs" / "sample-mods"
+SAMPLE_MODS = Path(__file__).resolve().parents[2] / "docs" / "sample-mods"
 
 
 @pytest.fixture(autouse=True)

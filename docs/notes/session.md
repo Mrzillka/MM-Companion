@@ -780,7 +780,7 @@ The shape:
   headless-testable** (Qt only in `ui/`), **no new dependencies** (PySide6 + the
   stdlib), and **nothing new under `data/`** — the session layer is MIT code, not
   OGL content. Verify with the fast, window-free files (`tests/test_session_*.py`,
-  `tests/test_headless_server.py`); the GUI ones need `QT_QPA_PLATFORM=offscreen`.
+  `tests/session/test_headless_server.py`); the GUI ones need `QT_QPA_PLATFORM=offscreen`.
 
 ## Notices float over the window
 

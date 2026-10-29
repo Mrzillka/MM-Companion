@@ -63,7 +63,7 @@ Power Points  ──buy──>  ranks of the Equipment advantage
 Neither total is ever a term in the other. An item's price never reaches
 `power_points_spent`, and an advantage rank never pays for gear. This is easy to break
 silently — nothing raises, the build total is just wrong — so both totals are asserted
-in `tests/test_equipment.py`.
+in `tests/core/test_equipment.py`.
 
 ### The Removable discount
 
@@ -210,7 +210,7 @@ that item's bonus adds on top of the winner instead of competing with it, and it
 is badged the way a custom modifier is.
 
 Because powers keep summing among themselves, **no existing sheet's numbers moved** when
-this landed. `tests/test_derived_stats.py` is the guard and passes unedited.
+this landed. `tests/core/test_derived_stats.py` is the guard and passes unedited.
 
 ---
 
@@ -410,7 +410,7 @@ beside the Power Level one.
 
 `docs/sample-mods/field-kit` is the worked example: an Ablative Vest in the stock armor
 category, an Ablative Weave effect behind it, and the `partial_bonus` applier that makes
-the weave grant half its rank. It is exercised end-to-end by `tests/test_mod_loading.py`,
+the weave grant half its rank. It is exercised end-to-end by `tests/core/test_mod_loading.py`,
 including the untrusted case — the vest still merges, is still priced and still worn, and
 simply grants nothing.
 

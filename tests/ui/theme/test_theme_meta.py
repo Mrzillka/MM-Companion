@@ -14,7 +14,7 @@ import pytest
 from mm_companion.ui.theme import loader, token_meta
 
 META = token_meta.token_meta()
-SRC = Path(__file__).resolve().parents[1] / "src" / "mm_companion"
+SRC = Path(__file__).resolve().parents[3] / "src" / "mm_companion"
 
 
 # -- labels ---------------------------------------------------------------------

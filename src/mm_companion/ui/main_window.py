@@ -276,7 +276,7 @@ class MainWindow(QMainWindow):
             install_connection_indicator(self)
 
         # Before the undo pair rather than between it and the lock: the three glyphs
-        # at the end of the bar are one cluster (tests/test_main_window.py).
+        # at the end of the bar are one cluster (tests/ui/windows/test_main_window.py).
         self._build_simple_toggle(menu_bar)
         self._build_undo_actions(menu_bar)
 

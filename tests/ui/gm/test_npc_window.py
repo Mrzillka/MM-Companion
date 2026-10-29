@@ -250,7 +250,7 @@ def test_rolling_on_an_npc_sheet_goes_out_to_whoever_opened_it(npc: NPCWindow) -
     """With no roller of its own, a roll must not vanish into a void.
 
     It leaves through ``requestUnserved`` — the GM window connects that to its own
-    roller (tests/test_gm_window.py). A player's sheet, which has a roller, sends
+    roller (tests/ui/gm/test_gm_window.py). A player's sheet, which has a roller, sends
     nothing out.
     """
     from mm_companion.core.rules import ability_roll

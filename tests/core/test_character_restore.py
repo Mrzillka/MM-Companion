@@ -1,6 +1,6 @@
 """``Character.restore`` — putting an earlier build back without moving anything else.
 
-The model half of undo (the controller is ``tests/test_undo.py``). Two promises are
+The model half of undo (the controller is ``tests/ui/sheet/test_undo.py``). Two promises are
 under test, and both are the kind that fail silently:
 
 * the *containers* survive, because a block may hold a reference to one of them

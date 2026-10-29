@@ -2,7 +2,7 @@
 
 The merge and split gestures are driven through the canvas's own seams rather
 than through synthetic mouse events — the same bargain
-``tests/test_block_canvas.py`` strikes, and for the same reason: the arrangement
+``tests/ui/canvas/test_block_canvas.py`` strikes, and for the same reason: the arrangement
 model is what has to be right, and a real drag adds nothing but flakiness.
 """
 
@@ -28,7 +28,7 @@ def qapp() -> QApplication:
 
 @pytest.fixture
 def make_sheet(qapp: QApplication):
-    """Laid-out sheets with no on-screen window (see tests/test_block_canvas.py)."""
+    """Laid-out sheets with no on-screen window (see tests/ui/canvas/test_block_canvas.py)."""
     sheets: list[CharacterSheet] = []
 
     def _make(character: Character | None = None) -> CharacterSheet:

@@ -16,6 +16,7 @@ from mm_companion.ui.sections.skills import (
     SkillsSection,
 )
 from mm_companion.ui.sections.stat_table import ROLL_ROLE
+from tests.ui.helpers import real_double_click
 
 
 def _untrained_cell(section: SkillsSection, name: str) -> str:
@@ -77,6 +78,23 @@ def test_initiative_is_a_roll_chip_on_the_edit_sheet(qapp, data) -> None:
     assert chip.content is sheet.system_info._initiative
     # The tooltip lives on the chip, since its label is transparent to the mouse.
     assert "double-click" in chip.toolTip()
+
+
+def test_double_clicking_initiative_rolls_it_and_leaves_the_chip_empty(
+    qapp, data, instant_die
+) -> None:
+    """The readout goes through the same click helper as the simple sheet's stat boxes,
+    so the release ending a real double-click must not load the chip straight back."""
+    sheet = CharacterSheet(data, Character.new_default(data))
+    sheet.set_locked(True)
+    sheet.show()
+    qapp.processEvents()
+
+    real_double_click(qapp, sheet.system_info._initiative)
+    qapp.processEvents()
+
+    assert "Initiative" in sheet.dice.panel._readout.text()
+    assert sheet.dice.panel.current_spec() is None
 
 
 def test_initiative_is_dressed_as_a_roll_on_the_simple_sheet(qapp, data) -> None:

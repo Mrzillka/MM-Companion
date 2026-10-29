@@ -43,6 +43,7 @@ from mm_companion.ui.simple.views import (
     SystemView,
     skill_rows,
 )
+from tests.ui.helpers import real_double_click
 
 
 def _hero(data) -> Character:
@@ -97,11 +98,12 @@ def _texts(widget: QWidget) -> list[str]:
 
 def test_every_block_is_on_the_standard_sheet(qapp, data) -> None:
     """Every one — bar a portrait never loaded, whose room goes to the name beside it,
-    and the Scene, which has nothing to show outside a session."""
+    and the Scene, which has nothing to show outside a session (and so stays home)."""
     sheet = _simple(qapp, data)
 
     expected = set(sheet.block_keys()) - {"character_image", "scene"}
     assert sorted(sheet.simple_sheet.shown_keys()) == sorted(expected)
+    assert not sheet.block_frame("scene").is_lent()
 
 
 def test_a_loaded_portrait_is_on_the_sheet(qapp, data, tmp_path) -> None:
@@ -317,28 +319,6 @@ def test_a_failed_toughness_save_lands_its_rung(qapp, data) -> None:
     assert view._chips.count() == len(sheet.character.conditions)
 
 
-def test_a_double_click_on_a_stat_box_rolls_it(qapp, data) -> None:
-    sheet = _simple(qapp, data)
-    rolled = []
-    sheet.abilities.rollRequested.connect(rolled.append)
-    box = sheet.simple_sheet.view("abilities").boxes["STR"]
-
-    QTest.mouseDClick(box, Qt.MouseButton.LeftButton, pos=QPoint(5, 5))
-
-    assert rolled and rolled[0].modifier == 4
-
-
-def test_a_roll_from_the_simple_sheet_lands_in_the_borrowed_roller(qapp, data) -> None:
-    """The roller on the page is the Dice block itself, so the bus reaches it as ever."""
-    sheet = _simple(qapp, data)
-    assert sheet.simple_sheet.box("dice").body is sheet.dice
-    box = sheet.simple_sheet.view("abilities").boxes["STR"]
-
-    QTest.mouseDClick(box, Qt.MouseButton.LeftButton, pos=QPoint(5, 5))
-
-    assert "Strength" in sheet.dice.panel._readout.text()
-
-
 def test_the_views_follow_an_edit_made_elsewhere(qapp, data) -> None:
     """A GM's command, an undo — anything that moves the model — reaches the page."""
     sheet = _simple(qapp, data)
@@ -367,23 +347,6 @@ def test_undo_reaches_the_simple_sheet(qapp, data) -> None:
 
 
 # -- presets -------------------------------------------------------------------------
-
-
-def test_custom_follows_the_edit_sheets_arrangement(qapp, data) -> None:
-    sheet = CharacterSheet(data, _hero(data))
-    sheet.show()
-    _settle(qapp)
-    sheet.hide_block("complications")
-    sheet.set_simple_preset("custom")
-    sheet.set_simple(True)
-    _settle(qapp, sheet)
-
-    assert "complications" not in sheet.simple_sheet.shown_keys()
-    page = sheet.arrangement()["page"]
-    assert (
-        lt.keys(sheet.simple_sheet.layout_model().page)[0]
-        == lt.keys(lt.from_dict(page, set(sheet.block_keys())))[0]
-    )
 
 
 def test_standard_shows_a_block_the_edit_sheet_has_closed(qapp, data) -> None:
@@ -512,7 +475,7 @@ def test_a_pdf_can_be_written(qapp, data, tmp_path) -> None:
 
     result = export_pdf(sheet, path)
 
-    assert result.pages >= 1
+    assert not result.failed and result.pages >= 1
     assert path.read_bytes().startswith(b"%PDF")
 
 
@@ -688,13 +651,14 @@ def test_the_speed_line_flips_its_units(qapp, data) -> None:
     assert "km" in view.speed.text()
 
 
-def test_the_custom_preset_settles_rather_than_rebuilding_itself(qapp, data) -> None:
+@pytest.mark.parametrize("preset", ["standard", "custom"])
+def test_the_simple_sheet_does_not_redraw_itself_while_idle(qapp, data, preset) -> None:
     """Custom reads the canvas's arrangement and rebuilds when it changes; reading it
     must not count as a change, or the page would rebuild itself every turn."""
     sheet = CharacterSheet(data, _hero(data))
     sheet.show()
     _settle(qapp)
-    sheet.set_simple_preset("custom")
+    sheet.set_simple_preset(preset)
     sheet.set_simple(True)
     _settle(qapp, sheet)
     rebuilds: list[int] = []
@@ -706,7 +670,7 @@ def test_the_custom_preset_settles_rather_than_rebuilding_itself(qapp, data) -> 
     assert rebuilds == []
 
 
-def test_reopening_a_closed_block_reaches_the_custom_preset(qapp, data) -> None:
+def test_custom_follows_the_edit_sheet_and_a_reopened_block_reaches_it(qapp, data) -> None:
     sheet = CharacterSheet(data, _hero(data))
     sheet.show()
     _settle(qapp)
@@ -715,6 +679,11 @@ def test_reopening_a_closed_block_reaches_the_custom_preset(qapp, data) -> None:
     sheet.set_simple(True)
     _settle(qapp, sheet)
     assert "complications" not in sheet.simple_sheet.shown_keys()
+    page = sheet.arrangement()["page"]
+    assert (
+        lt.keys(sheet.simple_sheet.layout_model().page)[0]
+        == lt.keys(lt.from_dict(page, set(sheet.block_keys())))[0]
+    )
 
     sheet.show_block("complications")
     _settle(qapp, sheet)
@@ -766,50 +735,21 @@ def test_a_note_can_be_written_on_the_simple_sheet(qapp, data) -> None:
     assert editor.source.isReadOnly()
 
 
-def _real_double_click(qapp, widget) -> None:
-    """What a real double-click delivers: press, release, double-click, release.
-
-    ``QTest.mouseDClick`` on this platform sends the double-click alone, which is
-    exactly the sequence that hid this bug.
-    """
-    from PySide6.QtCore import QPointF
-    from PySide6.QtGui import QMouseEvent
-
-    local = QPointF(5, 5)
-    button, no_mods = Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier
-    for kind, held in (
-        (QEvent.Type.MouseButtonPress, button),
-        (QEvent.Type.MouseButtonRelease, Qt.MouseButton.NoButton),
-        (QEvent.Type.MouseButtonDblClick, button),
-        (QEvent.Type.MouseButtonRelease, Qt.MouseButton.NoButton),
-    ):
-        global_pos = QPointF(widget.mapToGlobal(local.toPoint()))
-        event = QMouseEvent(kind, local, global_pos, button, held, no_mods)
-        QApplication.sendEvent(widget, event)
-        qapp.processEvents()
-
-
-@pytest.fixture
-def instant_die(monkeypatch):
-    from mm_companion.ui import dice_roller
-
-    monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
-    monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 11)
-
-
 def test_a_double_click_rolls_and_leaves_the_chip_empty(qapp, data, instant_die) -> None:
-    """The roll lands on the double-click, and the release that ends the gesture must
-    not load the chip straight back — the roller was left armed with every stat a
-    player double-clicked on the simple sheet."""
+    """The roll lands on the double-click — in the borrowed Dice block, which the bus
+    reaches as ever — and the release that ends the gesture must not load the chip
+    straight back: the roller was left armed with every stat a player double-clicked
+    on the simple sheet."""
     sheet = _simple(qapp, data)
+    assert sheet.simple_sheet.box("dice").body is sheet.dice
     box = sheet.simple_sheet.view("abilities").boxes["STR"]
     rolls: list = []
     sheet.abilities.rollRequested.connect(rolls.append)
 
-    _real_double_click(qapp, box)
+    real_double_click(qapp, box)
     _settle(qapp)
 
-    assert len(rolls) == 1
+    assert len(rolls) == 1 and rolls[0].modifier == 4
     assert "Strength" in sheet.dice.panel._readout.text()
     assert sheet.dice.panel.current_spec() is None
 
@@ -823,20 +763,6 @@ def test_a_single_click_still_loads_the_chip(qapp, data) -> None:
 
     spec = sheet.dice.panel.current_spec()
     assert spec is not None and spec.label == "Strength"
-
-
-def test_the_edit_sheets_initiative_is_cured_too(qapp, data, instant_die) -> None:
-    """The edit sheet's Initiative readout goes through the same click helper."""
-    sheet = CharacterSheet(data, _hero(data))
-    sheet.set_locked(True)
-    sheet.show()
-    _settle(qapp)
-
-    _real_double_click(qapp, sheet.system_info._initiative)
-    _settle(qapp)
-
-    assert "Initiative" in sheet.dice.panel._readout.text()
-    assert sheet.dice.panel.current_spec() is None
 
 
 def test_a_gm_can_pin_from_the_simple_sheet(qapp, data) -> None:
@@ -884,15 +810,7 @@ def test_an_already_pinned_row_offers_unpin(qapp, data) -> None:
     assert unpinned == [PinRef(PIN_ABILITY, "STR")]
 
 
-def test_the_scene_is_left_off_outside_a_session(qapp, data) -> None:
-    sheet = _simple(qapp, data)
-
-    assert "scene" not in sheet.simple_sheet.shown_keys()
-    assert "dice" in sheet.simple_sheet.shown_keys()
-    assert not sheet.block_frame("scene").is_lent()
-
-
-def test_the_scene_comes_onto_the_page_when_a_session_starts(qapp, data) -> None:
+def test_the_scene_comes_onto_the_page_beside_notes_when_a_session_starts(qapp, data) -> None:
     from mm_companion.core.session.model import new_session
     from mm_companion.ui.session_bridge import SessionBridge, set_active_session
 
@@ -904,6 +822,10 @@ def test_the_scene_comes_onto_the_page_when_a_session_starts(qapp, data) -> None
         sheet.sync_session()
         _settle(qapp, sheet)
         assert "scene" in sheet.simple_sheet.shown_keys()
+        # Beside Notes at the foot, not in the strip: it took the roll history's height.
+        model = sheet.simple_sheet.layout_model()
+        assert lt.keys(model.strip) == ["dice"]
+        assert lt.keys(model.page.children[-1]) == ["notes", "scene"]
     finally:
         set_active_session(None)
         bridge.stop()
@@ -925,17 +847,6 @@ def test_a_theme_switch_redraws_the_simple_sheet(qapp, data) -> None:
 
     assert after != before
     assert theme.color("accent") not in after  # crimson's accent, read at redraw
-
-
-def test_the_simple_sheet_does_not_redraw_itself_while_idle(qapp, data) -> None:
-    sheet = _simple(qapp, data)
-    rebuilds: list[int] = []
-    sheet.simple_sheet.rebuilt.connect(lambda: rebuilds.append(1))
-
-    for _ in range(10):
-        qapp.processEvents()
-
-    assert rebuilds == []
 
 
 def test_an_npcs_standard_sheet_leaves_off_what_an_npc_opens_without(qapp, data) -> None:
@@ -1158,12 +1069,6 @@ def test_a_pdf_that_cannot_be_written_says_so(qapp, data, tmp_path) -> None:
     assert result.failed
 
 
-def test_a_written_pdf_is_not_a_failure(qapp, data, tmp_path) -> None:
-    result = export_pdf(CharacterSheet(data, _hero(data)), tmp_path / "ok.pdf")
-
-    assert not result.failed and result.pages >= 1
-
-
 def test_a_print_started_inside_a_print_is_refused(qapp, data, tmp_path, monkeypatch) -> None:
     """Laying the copy out lets queued events run; a second print among them must not
     start on a printer the first is still painting."""
@@ -1250,26 +1155,6 @@ def test_the_print_colours_are_theme_tokens(qapp) -> None:
     palette = paper_palette()
     assert palette.color(QPalette.ColorRole.Window).name() == theme.color("paper.background")
     assert palette.color(QPalette.ColorRole.WindowText).name() == theme.color("paper.ink")
-
-
-def test_the_scene_sits_beside_notes_on_the_standard_page(qapp, data) -> None:
-    from mm_companion.core.session.model import new_session
-    from mm_companion.ui.session_bridge import SessionBridge, set_active_session
-
-    sheet = _simple(qapp, data)
-    bridge = SessionBridge()
-    bridge.host(new_session("Table"), port=0, bind="127.0.0.1")
-    set_active_session(bridge)
-    try:
-        sheet.sync_session()
-        _settle(qapp, sheet)
-        model = sheet.simple_sheet.layout_model()
-        assert lt.keys(model.strip) == ["dice"]
-        assert lt.keys(model.page.children[-1]) == ["notes", "scene"]
-    finally:
-        set_active_session(None)
-        bridge.stop()
-        sheet.sync_session()
 
 
 def test_a_box_in_the_strip_scrolls_inside_itself_rather_than_clipping(qapp) -> None:

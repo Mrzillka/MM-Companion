@@ -102,6 +102,15 @@ def _no_spare_npc_sheets():
     GMWindow.SPARE_NPC_DELAY_MS = original
 
 
+@pytest.fixture
+def instant_die(monkeypatch):
+    """A roll that lands at once, on an 11, so a test can read the roller straight after."""
+    from mm_companion.ui import dice_roller
+
+    monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
+    monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 11)
+
+
 @pytest.fixture(autouse=True)
 def _reset_quick_npc_memory():
     """Start every test from a fresh run's Quick NPC dialog: PL and preset unremembered."""

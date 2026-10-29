@@ -1619,6 +1619,9 @@ def test_allocation_rows_buy_ranks_and_the_rank_follows_them(qapp: QApplication)
     window = PowerConstructorWindow(load_game_data())
     card = window.canvas.add_effect("enhanced_senses")
     assert card._rank.isReadOnly()
+    # The readout counts what is bought; there is no budget to meter it against.
+    label = next(lbl for lbl in card.findChildren(QLabel) if lbl.text().startswith("Allocated"))
+    assert "/" not in label.text()
 
     _add_button(card).click()  # a row buys the first option at its first tier: Accurate, 2
     assert card.instance.config["senses"] == [{"id": "accurate", "tier": 1}]
@@ -2655,14 +2658,6 @@ def test_an_enhanced_traits_rank_follows_its_rows(qapp: QApplication) -> None:
     # And the readout meters nothing, because there is no budget to meter against.
     label = next(lbl for lbl in card.findChildren(QLabel) if lbl.text().startswith("Allocated"))
     assert label.text() == "Allocated 8 ranks"
-
-
-def test_an_allocation_effect_reads_its_rank_off_its_rows(qapp: QApplication) -> None:
-    window = PowerConstructorWindow(load_game_data())
-    card = window.canvas.add_effect("enhanced_senses")
-    assert card._rank.isReadOnly()
-    label = next(lbl for lbl in card.findChildren(QLabel) if lbl.text().startswith("Allocated"))
-    assert "/" not in label.text()
 
 
 def test_a_rank_spin_stops_at_the_advantages_own_ceiling(qapp: QApplication) -> None:

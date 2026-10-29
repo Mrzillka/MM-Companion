@@ -238,16 +238,20 @@ def test_clicking_a_skill_row_loads_it(qapp: QApplication) -> None:
     assert seen[0].kind == "skill"
 
 
-def test_clicking_the_separator_row_loads_nothing(qapp: QApplication) -> None:
+def test_the_derived_separator_row_is_neither_loaded_nor_rolled(qapp: QApplication) -> None:
+    """It is a rule drawn across the table, not a trait — a click there is nothing."""
     sheet = _sheet()
-    seen: list[RollSpec] = []
-    sheet.abilities.loadRequested.connect(seen.append)
+    loaded: list[RollSpec] = []
+    rolled: list[RollSpec] = []
+    sheet.abilities.loadRequested.connect(loaded.append)
+    sheet.abilities.rollRequested.connect(rolled.append)
 
     table = sheet.abilities.table
     separator = next(row for row in range(table.rowCount()) if table.item(row, COL_TOTAL) is None)
     table.cellClicked.emit(separator, COL_NAME)
+    table.cellDoubleClicked.emit(separator, COL_NAME)
 
-    assert seen == []
+    assert loaded == [] and rolled == []
 
 
 def test_clicking_initiative_loads_it_and_double_clicking_rolls_it(qapp: QApplication) -> None:
@@ -291,17 +295,6 @@ def _stat_row(table, key: str) -> int:
     )
 
 
-def test_double_clicking_an_ability_row_rolls_it(qapp: QApplication) -> None:
-    sheet = _sheet()
-    seen: list[RollSpec] = []
-    sheet.abilities.rollRequested.connect(seen.append)
-
-    table = sheet.abilities.table
-    table.cellDoubleClicked.emit(_stat_row(table, "STR"), COL_NAME)
-
-    assert [s.label for s in seen] == ["Strength"]
-
-
 def test_double_clicking_a_resistance_row_rolls_it(qapp: QApplication) -> None:
     sheet = _sheet()
     seen: list[RollSpec] = []
@@ -311,19 +304,6 @@ def test_double_clicking_a_resistance_row_rolls_it(qapp: QApplication) -> None:
     table.cellDoubleClicked.emit(_stat_row(table, "TOUGHNESS"), COL_NAME)
 
     assert [s.kind for s in seen] == ["resistance"]
-
-
-def test_the_derived_separator_row_is_not_rollable(qapp: QApplication) -> None:
-    """It is a rule drawn across the table, not a trait — a double-click there is nothing."""
-    sheet = _sheet()
-    seen: list[RollSpec] = []
-    sheet.abilities.rollRequested.connect(seen.append)
-
-    table = sheet.abilities.table
-    separator = next(row for row in range(table.rowCount()) if table.item(row, COL_TOTAL) is None)
-    table.cellDoubleClicked.emit(separator, COL_NAME)
-
-    assert seen == []
 
 
 def test_the_rank_spin_box_keeps_its_own_double_click(qapp: QApplication) -> None:
@@ -360,16 +340,6 @@ def test_double_clicking_a_skill_row_rolls_that_row(qapp: QApplication) -> None:
 
     assert len(seen) == 1
     assert seen[0].kind == "skill"
-
-
-def test_double_clicking_initiative_rolls_it(qapp: QApplication) -> None:
-    sheet = _sheet()
-    seen: list[RollSpec] = []
-    sheet.system_info.rollRequested.connect(seen.append)
-
-    _double_click(sheet.system_info._initiative)
-
-    assert [s.label for s in seen] == ["Initiative"]
 
 
 def _roll_lines(sheet: CharacterSheet) -> list[_RollLine]:

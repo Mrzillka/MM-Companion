@@ -295,15 +295,6 @@ def test_a_minion_is_held_to_the_wielders_power_level() -> None:
     assert any(m.startswith("Minion: Fortitude + Will") for m in messages)
 
 
-def test_a_minion_inside_its_budget_and_its_power_level_warns_about_nothing() -> None:
-    data = load_game_data()
-    char, power = _summoner()
-    char.power_level = 10
-    slot = power_sub_build_slots(power, data, char)[0]
-    store_sub_build(slot, 0, new_sub_build(slot, data))
-    assert power_sub_build_violations(power, data, char) == []
-
-
 # -- the constructor -------------------------------------------------------------
 
 

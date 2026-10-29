@@ -48,7 +48,11 @@ a full ~18 min that rebuilds the records.
    - **Any other file → the tests that name it.** A sample mod → the tests that
      mention `sample-mods`.
 3. The extras run first (`--testmon-noselect`, which runs them and records them),
-   then `--testmon` runs the Python-affected tests.
+   then `--testmon` runs the Python-affected tests. Both run in **file order**, the
+   order plain `pytest` and CI use: `affected_tests_order.py` (a pytest plugin the
+   script loads) undoes testmon's habit of sorting tests by duration, which once
+   made three order-sensitive geometry tests fail here and nowhere else. Don't run
+   `pytest --testmon` by hand for the same reason.
 
 **No records yet** (fresh clone, deleted `.testmondata`, first use) → full run,
 which builds them. Recording costs coverage overhead, so that run is slower than a

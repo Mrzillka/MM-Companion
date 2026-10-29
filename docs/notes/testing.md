@@ -31,6 +31,22 @@ as `from tests.session.test_session_server import wait_for` — `test_scene.py` 
   sheet, a fresh Quick NPC memory, and the teardown that deletes leftover
   top-level windows. Its docstrings say why each one exists.
 
+**Use the shared fixtures; don't copy them into a test file.** Until 2026-10-29, 76
+files defined their own `qapp`, 30 their own `data` and 31 a workspace fixture that
+only repeated the root's — removed in one sweep. What there is:
+
+| Fixture | From | Gives |
+| --- | --- | --- |
+| `qapp` | pytest-qt | the one `QApplication` |
+| `data` | root conftest | `load_game_data()` (cached, so free per test) |
+| `workspace` | root conftest | the throwaway workspace **with its folders made**; opt a whole file in with `pytestmark = pytest.mark.usefixtures("workspace")` |
+| `tls_cert`, `relay_box` | root conftest | a localhost certificate; a plaintext relay on loopback |
+| `instant_die` | `tests/ui/conftest.py` | a roll that lands at once, on an 11 |
+
+A plain helper (not a fixture) that more than one UI file drives widgets with lives
+in `tests/ui/helpers.py` — `real_double_click`, the press–release–double-click–release
+sequence `QTest.mouseDClick` does not send.
+
 ## Every machine runs the same Qt
 
 Before anything imports PySide6, the root conftest sets — unless you already set

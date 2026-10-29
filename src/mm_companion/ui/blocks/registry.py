@@ -391,7 +391,7 @@ _BASE_BLOCKS = [
         "notes",
         "Notes",
         # The class itself, not ``_notes_factory("notes")``: a base descriptor's
-        # factory *is* its block class (tests/test_bus.py reads the signal names
+        # factory *is* its block class (tests/ui/sheet/test_bus.py reads the signal names
         # off it), and ``block_key`` already defaults to the template's own key.
         # The closure is only how the *extra* instances are built.
         NotesSection,

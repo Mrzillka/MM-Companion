@@ -110,12 +110,14 @@ constructor).
 ## Test
 
 ```bash
-pytest                          # full suite (GUI tests included)
-pytest tests/test_ui_wiring.py  # a fast UI-wiring slice (~3.4s, 18 tests)
+python .claude/skills/affected-tests/affected.py  # only what a change can affect
+pytest                                    # full suite (~16 min, GUI tests included)
+pytest tests/ui/sheet/test_ui_wiring.py   # a fast UI-wiring slice
 ```
 
-On headless Linux, prefix with `xvfb-run -a`. CI runs `ruff check .`,
-`black --check .`, and `xvfb-run -a pytest` on Python 3.10–3.13.
+Tests need no display on any OS: `tests/conftest.py` puts Qt on its offscreen
+platform with pinned fonts and screen (see `docs/notes/testing.md`). CI runs
+`ruff check .`, `black --check .`, and `pytest` on Python 3.10–3.13.
 
 ## Gotchas
 
@@ -133,8 +135,6 @@ On headless Linux, prefix with `xvfb-run -a`. CI runs `ruff check .`,
   data is parsed. `MainWindow` / `PowerConstructorWindow` don't need it.
 - **`MainWindow` starts locked (read-only) by default.** The driver builds it
   with `locked=False` so fields are editable — otherwise setting values no-ops.
-- One known Windows-offscreen test flake exists (a block-sizes font test); it
-  passes on CI under xvfb. Unrelated to launching the app.
 
 ## Troubleshooting
 

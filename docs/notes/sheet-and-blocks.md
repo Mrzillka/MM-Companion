@@ -17,7 +17,7 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   `normalize` collapses. Every structural operation — `insert_beside`, `remove`,
   `merge_into`, `split_out`, `move`, `set_sizes` — is a pure function over frozen
   dataclasses, so the structural half of a drag is tested with no widget, window
-  or display server (`tests/test_layout_tree.py`).
+  or display server (`tests/ui/canvas/test_layout_tree.py`).
 - **Width tiles, height scrolls**, and the two containers in `ui/grid_view.py` are
   the difference. A `GridSplitter` renders a split *inside* a row: its children
   share a fixed extent, so a divider drag there is zero-sum — give one block width
@@ -207,7 +207,7 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
 "It just feels off sometimes" turned out to be four separate faults, each one a
 gesture whose *undoing* did not give back the page that went in. They were found by
 round-tripping gestures on a real sheet and diffing every block's size and the saved
-tree; `tests/test_layout_drift.py` is that probe, kept.
+tree; `tests/ui/canvas/test_layout_drift.py` is that probe, kept.
 
 - **A splitter is born in Qt's default box.** A rebuild makes new row splitters and
   hands them the tree's sizes before their row has laid them out, and in that 100×30
@@ -272,7 +272,7 @@ took the height the roll history needed. A row is divided by its blocks'
 in it states one, so Skills opens at about 60% of its row; any other row divides itself
 from the blocks' recommended widths, as before. A saved layout is untouched by this —
 only a new workspace or **View ▸ Reset Layout** gets the new default.
-`tests/test_adaptive_blocks.py` pins the *old* arrangement in its fixture: those tests
+`tests/ui/canvas/test_adaptive_blocks.py` pins the *old* arrangement in its fixture: those tests
 measure how a block sheds as the page narrows, and the default moving every shedding
 band is not what they are about.
 
@@ -439,7 +439,7 @@ band is not what they are about.
   any of it, since how much room a block needs depends on the look's density.
 - **The numbers were measured, not inherited.** They began life as *floors*, and a
   number that stopped a block clipping is not the same as the width it reads well
-  at. `tests/test_recommended_sizes.py` floats each block out, binary-searches the
+  at. `tests/ui/canvas/test_recommended_sizes.py` floats each block out, binary-searches the
   narrowest width at which its content still fits after everything it knows how to
   reflow, and fails if a recommendation sits under that — which is how Advantages
   turned out to be recommending 300 for a block that needs 316. Measured on

@@ -252,7 +252,7 @@ mini strip, `Esc`, or that same button leaves.
   splitter's layout meanwhile, and they never go parentless, so the no-visible-
   orphan rule still holds; the caller's own `adopt` is the one re-parent, which is
   why `adopt` and `release_roller` each carry half of this note.
-  `tests/test_compact_mode.py` counts `ParentChange` events and insists on exactly
+  `tests/ui/dice/test_compact_mode.py` counts `ParentChange` events and insists on exactly
   one per part per direction — the property, not the arrangement, which the tests
   either side of it already pin.
 - **And the private history is capped, at last.** `LocalRollHistory` had no cap at
@@ -385,7 +385,7 @@ mini strip, `Esc`, or that same button leaves.
   things, so it goes on sitting beside the mini roller too, and `✕` is how you say
   otherwise. What `suspend_windows` actually clears is the narrower case: the blocks a
   user explicitly sent behind, which are the ones not being read. Do not "fix" the
-  test at `tests/test_compact_mode.py` that calls `set_block_on_top(…, False)` first —
+  test at `tests/ui/dice/test_compact_mode.py` that calls `set_block_on_top(…, False)` first —
   that call is the point of it.
 - The **flag** matters more than what it hides, and that is the other reason
   `suspend_windows` is called on every entry regardless: `_windows_suspended` is what
@@ -483,7 +483,7 @@ drawn squashed, and a tall compact window stretched it the other way.
   `skill_roll`, `initiative_roll`, `power_rolls`. Each folds in the **displayed**
   (condition-adjusted) number, so what is rolled always matches what the sheet
   shows, while the build math itself stays condition-free. Pure Python — provable
-  without a display (`tests/test_roll_specs.py`).
+  without a display (`tests/core/test_roll_specs.py`).
 - Two things a spec deliberately does *not* know, because this character's sheet
   cannot see them: an attack's **DC** (the target's Defense — `dc` stays `None` and
   the roller's DC box supplies it) and a save's **modifier** (the target's
@@ -676,7 +676,7 @@ of NPCs — often fewer. Two answers, and they are independent.
   role reads as see-through there, so its colours are resolved to `#rrggbb`
   (`toasts._solid`) before they are written.
 - `tests/conftest.py` sets `toasts.SUPPRESSED` for every test, or every roll a test
-  makes would pop a real window on the developer's desktop; `tests/test_toasts.py`
+  makes would pop a real window on the developer's desktop; `tests/ui/dice/test_toasts.py`
   lifts it for its own.
 
 ## The Action row

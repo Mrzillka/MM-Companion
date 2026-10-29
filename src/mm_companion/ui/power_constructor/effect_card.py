@@ -305,7 +305,7 @@ class EffectCard(QFrame):
         linked = bool(self.instance.attack_skill)
         self._attack_skill_check.setChecked(linked)
         # Hidden, never shown, until it is in a layout: a parentless visible widget is a
-        # top-level window (see CLAUDE.md, tests/test_window_flash.py). Both this and the
+        # top-level window (see CLAUDE.md, tests/ui/sheet/test_window_flash.py). Both this and the
         # host below are put right once they have a parent.
         self._attack_skill.hide()
         if linked:

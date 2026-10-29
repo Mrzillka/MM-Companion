@@ -272,7 +272,7 @@ class ColumnFlowPanels:
         ``resizeEvent`` then rebuilds to as many as fit.
 
         The floor must not move with the lock (a locked section hides its picker) —
-        see ``tests/test_lock_geometry.py`` and the standing rule that a lock toggle
+        see ``tests/ui/canvas/test_lock_geometry.py`` and the standing rule that a lock toggle
         may change a block's height but never its width — nor with anything the
         adaptive decisions themselves change. Both blocks answer with theme metrics
         and constants for that reason.

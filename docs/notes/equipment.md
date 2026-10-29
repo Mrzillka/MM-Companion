@@ -23,7 +23,7 @@ Equipment is the powers layer used a second way, not a parallel one. The full ma
   `equipment_points_remaining` in `core/rules/equipment.py`). An item's price is never a
   term in `power_points_spent` and never the reverse. Nothing raises when this breaks —
   the build total is just wrong — so both totals are asserted in
-  `tests/test_equipment.py`.
+  `tests/core/test_equipment.py`.
 - **The Removable discount is never reapplied.** The book prices gear at what its
   effects would cost *undiscounted*, precisely because the advantage already granted the
   points. `build_item_from_entry` never attaches a removable-gated flaw, and
@@ -66,7 +66,7 @@ Equipment is the powers layer used a second way, not a parallel one. The full ma
   name, and `item_superseded` matches on it. Two copies of one armour share a name and an
   amount, so matching by those had *both* cards claiming to have lost while the bonus
   actually on the sheet was disowned by both. **Powers pass none**, deliberately: a
-  power's card explains itself from its own build, and `tests/test_stat_appliers.py`
+  power's card explains itself from its own build, and `tests/core/test_stat_appliers.py`
   asserts whole-dataclass equality on a power's contribution.
 - **Gear does not stack, and that is a resolver, not an applier.**
   `build_contributions(power, char, data, stacking=, group=)` gathers a power *and* an
@@ -77,7 +77,7 @@ Equipment is the powers layer used a second way, not a parallel one. The full ma
   group the `sum` contributions add and the largest `max` one joins them; **between**
   groups the larger total wins outright, never the sum of the two maxima. Powers keep
   summing among themselves, which is why no existing number moved;
-  `tests/test_derived_stats.py` is the guard and passes unedited. Whatever lost is
+  `tests/core/test_derived_stats.py` is the guard and passes unedited. Whatever lost is
   reported in `TraitBonus.superseded` and `item_superseded`, so an outclassed item's
   card says *what* beat it — a silently inert bonus reads as a bug. The per-item
   `stacks` checkbox opts one item out and badges it homerule.

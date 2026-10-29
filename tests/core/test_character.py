@@ -1,0 +1,645 @@
+"""Tests for the character model and the derived-math / validation rules."""
+
+from __future__ import annotations
+
+from dataclasses import replace
+
+import pytest
+
+from mm_companion.core.character import (
+    AdvantageSelection,
+    AppliedCondition,
+    Character,
+    Complication,
+)
+from mm_companion.core.data_loader import load_game_data
+from mm_companion.core.powers import Power, PowerEffectInstance
+from mm_companion.core.rules import (
+    ability_cost_rate,
+    ability_points_spent,
+    advantage_points_spent,
+    advantage_rank_cap,
+    advantage_violations,
+    apply_condition,
+    defense_class,
+    effective_pp_per_level,
+    effective_trait_costs,
+    estimated_power_level,
+    has_cost_overrides,
+    heroic_advantage_budget,
+    heroic_advantage_ranks,
+    min_power_points,
+    power_level_for_points,
+    power_level_violations,
+    power_points_remaining,
+    power_points_spent,
+    reconcile_points_to_level,
+    resistance_cost_rate,
+    resistance_points_spent,
+    resistance_total,
+    skill_bonus,
+    skill_cost_rate,
+    skill_modifiers,
+    skill_points_spent,
+    skill_total,
+)
+
+
+def test_new_default_seeds_from_game_data() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    assert char.power_level == 10
+    assert char.power_points_total == 150
+    # Every ability/resistance key is present and starts at 0.
+    assert set(char.abilities) == {a.key for a in data.abilities}
+    assert set(char.resistances) == {r.key for r in data.resistances}
+    assert all(v == 0 for v in char.abilities.values())
+
+
+def test_to_dict_from_dict_round_trip() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.abilities["STR"] = 4
+    char.skill_ranks["Stealth"] = 6
+    char.focuses["Close Combat"] = ["Swords"]
+    char.specializations["Stealth"] = ["Urban"]
+    char.skill_ranks["Stealth::spec::Urban"] = 4
+    char.advantages.append(AdvantageSelection("Close Attack", 2))
+    char.advantages.append(AdvantageSelection("Alternate Initiative", parameter="AWE"))
+    char.complications.append(Complication("Enemy", "Dr. Volt swears revenge."))
+    char.complications.append(Complication("Motivation", "Doing good."))
+    char.conditions.append(AppliedCondition("dazed"))
+    char.powers.append(
+        Power(name="Fire Blast", effects=[PowerEffectInstance(effect_id="damage", rank=8)])
+    )
+    char.cost_overrides["ability_per_rank"] = 3
+    char.cost_overrides["pp_per_level"] = 20
+    char.skill_order = ["Stealth", "Acrobatics"]
+    char.hidden_skills = ["Vehicles"]
+
+    restored = Character.from_dict(char.to_dict())
+    assert restored == char
+
+
+def test_the_skills_display_state_is_omitted_when_untouched() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    # A player who has not reordered or removed a skill row saves neither key, so a
+    # character written before the Skills block could be rearranged round-trips
+    # byte-for-byte.
+    saved = char.to_dict()
+    assert "skill_order" not in saved
+    assert "hidden_skills" not in saved
+
+    restored = Character.from_dict(saved)
+    assert restored.skill_order == []
+    assert restored.hidden_skills == []
+
+
+def test_cost_overrides_are_omitted_when_empty() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    # A stock build carries no homebrew rates, so the key is left out of the save.
+    assert "cost_overrides" not in char.to_dict()
+    assert Character.from_dict(char.to_dict()).cost_overrides == {}
+
+
+def test_saved_powers_count_toward_points_spent() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    baseline = power_points_spent(char, data)
+
+    char.powers.append(
+        Power(name="Fire Blast", effects=[PowerEffectInstance(effect_id="damage", rank=8)])
+    )
+    # Damage costs 1 PP/rank, so a rank-8 power adds 8 to the build.
+    assert power_points_spent(char, data) == baseline + 8
+
+
+def test_power_points_spent_matches_hand_computed_build() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.abilities["STR"] = 3  # 3 * 2 = 6
+    char.abilities["ATK"] = 2  # derived combat: 2 * 2 = 4
+    char.resistances["TOUGHNESS"] = 4  # 4 * 1 = 4
+    char.resistances["DEF"] = 2  # derived combat: 2 * 2 = 4
+    # Skills pool: 4 + 8 = 12 ranks at 2/PP (focused skills cost the normal rate) →
+    # ceil(12 / 2) = 6.
+    char.skill_ranks["Stealth"] = 4
+    char.skill_ranks["Close Combat: Swords"] = 8
+    char.advantages.append(AdvantageSelection("Close Attack", 3))  # 3 * 1 = 3
+
+    assert power_points_spent(char, data) == 27
+    assert power_points_remaining(char, data) == 150 - 27
+
+
+def test_skill_cost_is_pooled_across_skills() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    # One rank in four different skills is 4 ranks total → ceil(4 / 2) = 2 PP, not
+    # 4 (one per row).
+    for name in ("Stealth", "Deception", "Perception", "Insight"):
+        char.skill_ranks[name] = 1
+    assert skill_points_spent(char, data) == 2
+
+
+def test_focused_skill_costs_the_normal_rate() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    # A focused focus pools at 2 ranks/PP just like any skill (not the old 4/PP).
+    char.skill_ranks["Close Combat::Blades"] = 6
+    assert skill_points_spent(char, data) == 3  # ceil(6 / 2)
+
+
+def test_expertise_is_priced_at_the_normal_rate() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    # Expertise's focuses pool at the normal 2 ranks/PP like any other focused skill.
+    char.focuses["Expertise"] = ["Science"]
+    char.skill_ranks["Expertise::Science"] = 8
+    assert skill_points_spent(char, data) == 4  # ceil(8 / 2)
+
+
+def test_specialized_pool_costs_half_and_pools_separately() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.specializations["Stealth"] = ["Urban"]
+    char.skill_ranks["Stealth::spec::Urban"] = 8  # 8 ranks at 4/PP → 2 PP
+    assert skill_points_spent(char, data) == 2
+
+
+def test_mixed_normal_and_specialized_ranks_round_together() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.skill_ranks["Stealth"] = 1  # 1/2 PP
+    char.specializations["Deception"] = ["Bluffing"]
+    char.skill_ranks["Deception::spec::Bluffing"] = 1  # 1/4 PP
+    # 1/2 + 1/4 = 3/4 → ceil = 1 PP (pooled rounding, not 1 + 1).
+    assert skill_points_spent(char, data) == 1
+
+
+def test_min_power_points_is_level_times_per_level_rate() -> None:
+    data = load_game_data()
+    per_level = data.costs.power_level.pp_per_level  # 15
+    assert min_power_points(10, data) == 10 * per_level
+    assert min_power_points(0, data) == 0
+
+
+def test_power_level_for_points_floors_at_the_border() -> None:
+    data = load_game_data()
+    per_level = data.costs.power_level.pp_per_level  # 15
+    assert power_level_for_points(10 * per_level, data) == 10  # exactly on the border
+    assert power_level_for_points(10 * per_level + 1, data) == 10  # within the band
+    assert power_level_for_points(11 * per_level, data) == 11  # next border → next level
+
+
+@pytest.mark.parametrize(
+    "level,budget_levels,extra,expected_levels,expected_extra",
+    [
+        # 160 sits inside PL 10's band (150–164), so it is left untouched.
+        pytest.param(10, 10, 10, 10, 10, id="inside-the-band-is-kept"),
+        # PL raised to 11 while the budget is still PL 10's minimum → snaps up to 165.
+        pytest.param(11, 10, 0, 11, 0, id="below-the-minimum-is-raised"),
+        # PL lowered to 9 while the budget is in PL 11's band → snaps down to PL 9's min.
+        pytest.param(9, 11, 0, 9, 0, id="above-the-band-is-lowered"),
+    ],
+)
+def test_reconcile_points_keeps_the_budget_in_the_levels_band(
+    level, budget_levels, extra, expected_levels, expected_extra
+) -> None:
+    data = load_game_data()
+    per_level = data.costs.power_level.pp_per_level  # 15
+    budget = budget_levels * per_level + extra
+    assert reconcile_points_to_level(level, budget, data) == expected_levels * per_level + (
+        expected_extra
+    )
+
+
+# -- homebrew cost overrides ---------------------------------------------------
+
+
+def test_effective_trait_costs_layers_overrides_over_defaults() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    assert effective_trait_costs(char, data) == data.costs.traits  # empty → defaults
+
+    char.cost_overrides["ability_per_rank"] = 3
+    eff = effective_trait_costs(char, data)
+    assert eff.ability_per_rank == 3
+    # Only the overridden field changes; the rest keep their defaults.
+    assert eff.resistance_per_rank == data.costs.traits.resistance_per_rank
+    # A non-TraitCosts key (pp_per_level) is ignored here.
+    char.cost_overrides["pp_per_level"] = 20
+    assert effective_trait_costs(char, data).ability_per_rank == 3
+
+
+def test_effective_pp_per_level_reads_the_override() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    assert effective_pp_per_level(char, data) == data.costs.power_level.pp_per_level
+    char.cost_overrides["pp_per_level"] = 20
+    assert effective_pp_per_level(char, data) == 20
+
+
+def test_has_cost_overrides_ignores_rates_equal_to_default() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    assert has_cost_overrides(char, data) is False
+    # A stored value equal to the default is not a homebrew.
+    char.cost_overrides["ability_per_rank"] = data.costs.traits.ability_per_rank
+    assert has_cost_overrides(char, data) is False
+    char.cost_overrides["ability_per_rank"] = data.costs.traits.ability_per_rank + 1
+    assert has_cost_overrides(char, data) is True
+
+
+def test_ability_cost_reflects_a_homebrew_rate() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.abilities["STR"] = 5
+    base = ability_points_spent(char, data)  # 5 * 2 = 10 at the default rate
+    char.cost_overrides["ability_per_rank"] = 3
+    assert ability_points_spent(char, data) == base + 5  # 5 * 3 = 15
+
+
+def test_advantage_cost_reflects_a_homebrew_rate() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.advantages.append(AdvantageSelection("Close Attack", 4))
+    assert advantage_points_spent(char, data) == 4  # 4 * 1 default
+    char.cost_overrides["advantage_per_rank"] = 2
+    assert advantage_points_spent(char, data) == 8  # 4 * 2 homebrew
+
+
+def test_pp_per_level_override_drives_the_level_math() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.cost_overrides["pp_per_level"] = 20
+    # With char the per-level rate is the homebrew 20; without it the default 15.
+    assert min_power_points(10, data, char) == 200
+    assert min_power_points(10, data) == 10 * data.costs.power_level.pp_per_level
+    assert power_level_for_points(200, data, char) == 10  # 200 / 20
+    assert power_level_for_points(200, data) == 200 // data.costs.power_level.pp_per_level
+
+
+def test_skill_default_rate_matches_before_and_after_no_override() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.skill_ranks["Stealth"] = 8
+    base = skill_points_spent(char, data)  # ceil(8 / 2) = 4
+    char.cost_overrides["skill_ranks_per_pp"] = 4  # homebrew: 4 ranks per point
+    assert skill_points_spent(char, data) == 2  # ceil(8 / 4)
+    assert base == 4
+
+
+# -- per-item homebrew cost overrides ------------------------------------------
+
+
+def test_per_ability_override_reprices_only_that_ability() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    first, second = data.abilities[0], data.abilities[1]
+    char.abilities[first.key] = 4
+    char.abilities[second.key] = 4
+    base = ability_points_spent(char, data)  # both at the default rate
+
+    char.item_cost_overrides["abilities"] = {first.key: 5}
+    assert ability_cost_rate(char, data, first) == 5
+    assert ability_cost_rate(char, data, second) == data.costs.traits.ability_per_rank
+    # Only the first ability's ranks are repriced (4 * (5 - default)).
+    assert ability_points_spent(char, data) == base + 4 * (5 - data.costs.traits.ability_per_rank)
+
+
+def test_per_resistance_override_reprices_only_that_resistance() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    res = next(r for r in data.resistances if not r.derived)
+    char.resistances[res.key] = 3
+    base = resistance_points_spent(char, data)
+
+    res_rate = 4
+    char.item_cost_overrides["resistances"] = {res.key: res_rate}
+    assert resistance_cost_rate(char, data, res) == res_rate
+    assert resistance_points_spent(char, data) == base + 3 * (
+        res_rate - data.costs.traits.resistance_per_rank
+    )
+
+
+def test_per_skill_override_prices_that_skill_alone() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    skill = next(s for s in data.skills if not s.focused and not s.specialized_cost)
+    char.skill_ranks[skill.name] = 8
+    assert skill_points_spent(char, data) == 4  # ceil(8 / 2)
+
+    char.item_cost_overrides["skills"] = {skill.name: 1}  # 1 rank / PP
+    assert skill_cost_rate(char, data, skill) == 1
+    assert skill_points_spent(char, data) == 8  # ceil(8 / 1)
+
+
+def test_item_override_follows_a_changed_category_rate_for_has_overrides() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    first = data.abilities[0]
+    # A per-item value equal to the ruleset category default is not a homebrew.
+    char.item_cost_overrides["abilities"] = {first.key: data.costs.traits.ability_per_rank}
+    assert has_cost_overrides(char, data) is False
+    char.item_cost_overrides["abilities"][first.key] = data.costs.traits.ability_per_rank + 1
+    assert has_cost_overrides(char, data) is True
+
+
+def test_item_cost_overrides_round_trip_and_omit_when_empty() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    assert "item_cost_overrides" not in char.to_dict()
+    # An empty category dict still serializes to nothing.
+    char.item_cost_overrides["skills"] = {}
+    assert "item_cost_overrides" not in char.to_dict()
+
+    char.item_cost_overrides["abilities"] = {"STR": 5}
+    restored = Character.from_dict(char.to_dict())
+    assert restored.item_cost_overrides == {"abilities": {"STR": 5}}
+
+
+def test_skill_total_is_ability_plus_ranks() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.abilities["AGL"] = 2
+    char.skill_ranks["Stealth"] = 4
+    assert skill_total(char, data, "Stealth") == 6  # AGL 2 + 4 ranks, nothing granted
+    assert skill_bonus(char, data, "Stealth") is None
+
+
+def test_specialized_ranks_add_to_the_skill_they_narrow() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.abilities["AGL"] = 2
+    char.skill_ranks["Stealth"] = 10
+    char.specializations["Stealth"] = ["Hiding"]
+    char.skill_ranks["Stealth::spec::Hiding"] = 3
+
+    # The narrow pool is bought on top of the skill, not instead of it: hiding reads
+    # AGL 2 + 10 Stealth + 3 Hiding, while plain Stealth is untouched by the pool.
+    assert skill_total(char, data, "Stealth") == 12
+    assert skill_total(char, data, "Stealth::spec::Hiding") == 15
+    # And the parent ranks are *shown* rather than folded in silently, so the row's
+    # columns still sum to its total.
+    bonus = skill_bonus(char, data, "Stealth::spec::Hiding")
+    assert bonus is not None
+    assert bonus.amount == 10
+    assert bonus.sources == ("Stealth ranks",)
+
+
+def test_a_focus_does_not_pick_up_its_skills_ranks() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.abilities["INT"] = 1
+    char.focuses["Expertise"] = ["Law"]
+    char.skill_ranks["Expertise::Law"] = 4
+    # A focused skill has no shared pool for a focus to add to. Even given ranks on the
+    # bare name (a hand-edited save; the sheet buys none there), the focus stands alone.
+    char.skill_ranks["Expertise"] = 6
+
+    assert skill_total(char, data, "Expertise::Law") == 5  # INT 1 + 4 ranks
+    assert skill_bonus(char, data, "Expertise::Law") is None
+
+
+def test_skill_bonus_folds_in_an_advantage_that_grants_one() -> None:
+    data = load_game_data()
+    # No shipped advantage grants a flat skill bonus, so stand one up the way a mod
+    # would (skillBonusPerRank + skillBonusTarget) rather than mutating the cached data.
+    granting = replace(
+        next(a for a in data.advantages if a.name == "Favored Foe"),
+        skill_bonus_per_rank=2,
+        skill_bonus_target="Perception",
+    )
+    data = replace(
+        data, advantages=[granting if a.name == granting.name else a for a in data.advantages]
+    )
+    char = Character.new_default(data)
+    char.advantages.append(AdvantageSelection(name="Favored Foe", rank=2))
+
+    bonus = skill_bonus(char, data, "Perception")
+    assert bonus is not None
+    assert bonus.amount == 4  # 2 per rank, bought at rank 2
+    assert bonus.sources == ("Favored Foe",)
+    assert skill_bonus(char, data, "Stealth") is None  # only the named skill
+
+
+def test_skill_bonus_targets_the_skill_the_selection_chose() -> None:
+    data = load_game_data()
+    # With no fixed target the bonus lands on the skill the selection's parameter names.
+    granting = replace(
+        next(a for a in data.advantages if a.name == "Skill Mastery"), skill_bonus_per_rank=3
+    )
+    data = replace(
+        data, advantages=[granting if a.name == granting.name else a for a in data.advantages]
+    )
+    char = Character.new_default(data)
+    char.advantages.append(AdvantageSelection(name="Skill Mastery", parameter="Stealth"))
+
+    assert skill_bonus(char, data, "Stealth").amount == 3
+    assert skill_bonus(char, data, "Acrobatics") is None
+
+
+def test_skill_modifiers_net_a_condition_penalty_against_the_grants() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.abilities["AGL"] = 2
+    char.skill_ranks["Stealth"] = 4
+    apply_condition(char, "impaired", data, parameter="Stealth")
+
+    mods = skill_modifiers(char, data, "Stealth")
+    assert mods.has_flat_modifier
+    assert mods.amount == -2  # nothing granted, so just the penalty
+    assert mods.condition.condition_ids == frozenset({"impaired"})
+    # The penalty is display-only: the build value keeps the bought ranks whole, and
+    # the sheet's number is the overlay on top of it.
+    assert skill_total(char, data, "Stealth") == 6
+    assert mods.condition.apply(skill_total(char, data, "Stealth")) == 4
+    # Scoped, so a row the condition doesn't name carries nothing.
+    assert skill_modifiers(char, data, "Acrobatics").has_flat_modifier is False
+
+
+def test_skill_modifiers_ignore_an_override_that_is_not_a_flat_modifier() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.skill_ranks["Stealth"] = 6
+    # Debilitated zeroes the trait outright rather than shifting it by an amount, so
+    # there is no number for the "+" column — the override lands on the total instead.
+    apply_condition(char, "debilitated", data, parameter="Stealth")
+
+    mods = skill_modifiers(char, data, "Stealth")
+    assert mods.condition.active
+    assert mods.has_flat_modifier is False
+    assert mods.condition.apply(skill_total(char, data, "Stealth")) == 0
+
+
+def test_focused_skill_row_resolves_parent_ability() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.abilities["ATK"] = 3
+    char.skill_ranks["Close Combat: Swords"] = 5
+    # Close Combat is an ATK skill; the "<Skill>: <focus>" row inherits that.
+    assert skill_total(char, data, "Close Combat: Swords") == 8
+
+
+def test_resistance_and_defense_derivation() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.abilities["STA"] = 3
+    char.resistances["TOUGHNESS"] = 4  # Toughness links to Stamina
+    assert resistance_total(char, data, "TOUGHNESS") == 7
+
+    char.resistances["DEF"] = 5  # Defence is derived (no linked ability)
+    assert resistance_total(char, data, "DEF") == 5
+    assert defense_class(char, data) == 15
+
+
+def test_power_level_violation_is_reported() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)  # PL 10 -> skill-mod cap 20
+    char.abilities["AGL"] = 15
+    char.skill_ranks["Stealth"] = 10  # total 25 > 20
+    violations = power_level_violations(char, data)
+    assert any("Stealth" in v for v in violations)
+
+
+def test_clean_build_has_no_violations() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.abilities["AGL"] = 2
+    char.skill_ranks["Stealth"] = 4  # total 6, well under cap
+    assert power_level_violations(char, data) == []
+
+
+# -- being large is never paid for twice ------------------------------------------
+
+
+def _capped(data, size: str = "Medium"):
+    """A character sitting exactly on the Dodge + Toughness cap."""
+    char = Character.new_default(data)
+    char.power_level = 10
+    char.characteristics["size"] = size
+    char.abilities["STA"] = 10  # Toughness 10
+    char.resistances["DEF"] = 10  # Dodge 10
+    return char
+
+
+def test_size_trips_no_paired_cap_warning_on_its_own() -> None:
+    """Dodge loses what Toughness gains, so the pair is unmoved and needs no shift."""
+    data = load_game_data()
+    for size in ("Medium", "Large", "Huge", "Small"):
+        assert power_level_violations(_capped(data, size), data) == [], size
+
+
+def test_the_paired_cap_still_bites_when_the_build_really_is_over() -> None:
+    data = load_game_data()
+    char = _capped(data, "Huge")
+    char.resistances["DEF"] = 11
+
+    assert any("Dodge" in v for v in power_level_violations(char, data))
+
+
+def test_size_trips_no_attack_cap_warning_on_the_effect_it_scaled() -> None:
+    """The rank and its cap move together, which is the book's own arithmetic."""
+    from mm_companion.core.powers import Power, PowerEffectInstance
+    from mm_companion.core.rules import power_pl_violations
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.power_level = 10
+    char.abilities["ATK"] = 10
+    fists = Power(name="Fists", effects=[PowerEffectInstance("damage", rank=10)])
+
+    for size in ("Medium", "Large", "Colossal"):
+        char.characteristics["size"] = size
+        assert power_pl_violations(fists, char, data) == [], size
+
+
+def test_size_hands_an_unscaled_effect_no_extra_cap() -> None:
+    """A giant's laser is not a giant's fist — with the switch off, nothing moves."""
+    from mm_companion.core.powers import Power, PowerEffectInstance
+    from mm_companion.core.rules import power_pl_violations
+
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.power_level = 10
+    char.abilities["ATK"] = 10
+    char.characteristics["size"] = "Colossal"
+    laser = Power(
+        name="Laser",
+        effects=[PowerEffectInstance("damage", rank=11, size_scales_damage=False)],
+    )
+
+    assert any("exceeds" in v for v in power_pl_violations(laser, char, data))
+
+
+def test_estimated_power_level_is_zero_for_a_trait_less_character() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)  # all traits at 0
+    assert estimated_power_level(char, data) == 0
+
+
+def test_estimated_power_level_reads_the_paired_resistance_caps() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    # Dodge + Toughness = 6 + 8 = 14 -> ceil(14 / 2) = 7 (the ×2 paired cap).
+    char.resistances["DODGE"] = 6
+    char.resistances["TOUGHNESS"] = 8
+    assert estimated_power_level(char, data) == 7
+    # A bigger Fortitude + Will pair raises the estimate to the larger of the two.
+    char.resistances["FORTITUDE"] = 10
+    char.resistances["WILL"] = 10  # sum 20 -> 10
+    assert estimated_power_level(char, data) == 10
+
+
+def test_estimated_power_level_counts_an_offensive_power() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)
+    char.abilities["ATK"] = 6
+    damage = next(e for e in data.effects if e.resistance_dc_base is not None)
+    char.powers.append(
+        Power(name="Blast", effects=[PowerEffectInstance(effect_id=damage.id, rank=10)])
+    )
+    # An attack effect obeys attack + rank <= PL*2; here that is at least ceil(rank/2).
+    assert estimated_power_level(char, data) >= 5
+
+
+def _advantage(data, name):
+    return next(a for a in data.advantages if a.name == name)
+
+
+def test_advantage_rank_cap_reads_the_cap_kind() -> None:
+    data = load_game_data()
+    # Fixed cap: Improved Critical is Ranked 4 regardless of Power Level.
+    assert advantage_rank_cap(_advantage(data, "Improved Critical"), 10) == 4
+    # Improved Initiative caps at ceil(PL / 2).
+    assert advantage_rank_cap(_advantage(data, "Improved Initiative"), 10) == 5
+    assert advantage_rank_cap(_advantage(data, "Improved Initiative"), 5) == 3
+    # PL-shared and Heroic-budget advantages carry no standalone number here.
+    assert advantage_rank_cap(_advantage(data, "Close Attack"), 10) is None
+    assert advantage_rank_cap(_advantage(data, "Luck"), 10) is None
+    # An unranked advantage is always a single rank.
+    assert advantage_rank_cap(_advantage(data, "Diehard"), 10) == 1
+
+
+def test_heroic_budget_pools_across_heroic_advantages() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)  # PL 10 -> budget 5
+    assert heroic_advantage_budget(char.power_level) == 5
+    char.advantages.append(AdvantageSelection("Luck", 3))  # ranked Heroic: 3
+    char.advantages.append(AdvantageSelection("Encouragement", 1))  # unranked Heroic: flat 1
+    char.advantages.append(AdvantageSelection("Close Attack", 4))  # not Heroic: ignored
+    assert heroic_advantage_ranks(char, data) == 4
+    assert advantage_violations(char, data) == []
+
+
+def test_advantage_violations_flag_over_cap_and_over_budget() -> None:
+    data = load_game_data()
+    char = Character.new_default(data)  # PL 10
+    char.advantages.append(AdvantageSelection("Improved Critical", 5))  # cap 4
+    char.advantages.append(AdvantageSelection("Determination", 4))
+    char.advantages.append(AdvantageSelection("Guidance", 3))  # Heroic total 7 > budget 5
+    violations = advantage_violations(char, data)
+    assert any("Improved Critical" in v for v in violations)
+    assert any("Heroic advantages" in v for v in violations)

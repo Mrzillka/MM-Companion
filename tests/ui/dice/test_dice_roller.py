@@ -1,0 +1,1217 @@
+"""The dice roller presents results, records history, and persists quick rolls.
+
+The subject is :class:`DiceRollerView` — the roll panel plus whichever history is
+the right one — which is what the sheet's Dice block puts on screen. There is no
+standalone roller window any more.
+
+Two modes, and the difference is the point. On its own the panel rolls locally
+and its cards land in the view's own private history. In a session it rolls
+*nothing* — it asks the server and waits for the broadcast — so the tests below
+drive a real loopback session and check that the number on screen is the
+server's, that the shared history replaces the private one, and that a session
+which never answers releases the inputs instead of locking the die forever.
+
+The tumble is zeroed (``ROLL_DURATION_MS``) wherever a test would otherwise wait
+1.4 s for an animation.
+"""
+
+from __future__ import annotations
+
+import pytest
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QBoxLayout, QLabel, QPushButton
+
+from mm_companion.core import storage
+from mm_companion.core.dice import resolve_check
+from mm_companion.core.rules import RollSpec
+from mm_companion.core.session.model import new_session
+from mm_companion.ui import dice_roller
+from mm_companion.ui.dice_roller import DiceRollerPanel, DiceRollerView, degree_text
+from mm_companion.ui.roll_history import (
+    HISTORY_FLOOR_HEIGHT,
+    MAX_CARDS,
+    MAX_QUICK_ROLLS,
+    MIN_HISTORY_HEIGHT,
+    NoteCard,
+    RollHistoryPanel,
+    roll_parameters,
+)
+from mm_companion.ui.session_bridge import SessionBridge, set_active_session
+
+pytestmark = pytest.mark.usefixtures("workspace")
+
+
+@pytest.fixture(autouse=True)
+def _clear_active_session():
+    yield
+    set_active_session(None)
+
+
+@pytest.fixture
+def hosting(qapp: QApplication) -> SessionBridge:
+    """A real session on loopback, published as the process-wide one."""
+    bridge = SessionBridge()
+    bridge.host(new_session("Table"), port=0, bind="127.0.0.1")
+    set_active_session(bridge)
+    yield bridge
+    bridge.stop()
+
+
+# -- degree_text (pure) ------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bonus,dc,roll,expected",
+    [
+        pytest.param(5, 15, 10, "Success", id="15-at-the-dc-one-degree"),
+        pytest.param(5, 10, 10, "Success (2 degrees)", id="15-vs-10-two-degrees"),
+        pytest.param(0, 15, 10, "Failure", id="10-vs-15-one-degree-down"),
+        pytest.param(5, 15, 20, "Success (4 degrees) — Nat 20!", id="nat-20-adds-a-degree"),
+        pytest.param(20, 20, 1, "Failure — Nat 1!", id="nat-1-drags-a-hit-to-a-miss"),
+    ],
+)
+def test_degree_text_reads_the_result(bonus: int, dc: int, roll: int, expected: str) -> None:
+    assert degree_text(resolve_check(bonus, dc, roll=roll)) == expected
+
+
+def test_degree_text_is_empty_without_a_dc() -> None:
+    assert degree_text(None) == ""
+
+
+# -- rolling (GUI) -----------------------------------------------------------
+
+
+def test_roll_without_dc_shows_total_and_records_history(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 12)
+    view = DiceRollerView()
+    view.panel._bonus_spin.setValue(4)
+    view.panel._penalty_spin.setValue(1)  # net modifier +3
+    view.panel._dc_check.setChecked(False)
+
+    view.panel._finish_roll()
+
+    cards = view._local_history.cards()
+    assert len(cards) == 1
+    assert cards[0]._params == {"name": "", "bonus": 4, "penalty": 1}
+    text = view.panel._readout.text()
+    assert "15" in text  # die 12 + net modifier 3
+    assert "Success" not in text and "Failure" not in text  # no DC → no degree
+
+
+def test_roll_with_dc_shows_degree_of_success(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 20)
+    view = DiceRollerView()
+    view.panel._bonus_spin.setValue(5)
+    view.panel._penalty_spin.setValue(0)
+    view.panel._dc_check.setChecked(True)
+    view.panel._dc_spin.setValue(15)
+
+    view.panel._finish_roll()
+
+    assert "Success" in view.panel._readout.text()
+    assert "Nat 20" in view.panel._readout.text()
+
+
+def test_reroll_waits_for_a_roll_to_throw_again(qapp: QApplication) -> None:
+    view = DiceRollerView()
+    assert not view.panel._reroll_button.isEnabled()
+    assert view.panel.reroll() is False
+
+
+def test_reroll_throws_the_last_roll_again_with_a_lucky_die(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 4)
+    monkeypatch.setattr(dice_roller, "reroll_d20", lambda *a, **k: (14, False))
+    view = DiceRollerView()
+    panel = view.panel
+    panel._bonus_spin.setValue(5)
+    panel._penalty_spin.setValue(1)
+    panel._dc_check.setChecked(True)
+    panel._dc_spin.setValue(15)
+    panel._start_roll()
+    panel._finish_roll()
+    assert panel._reroll_button.isEnabled()
+    # The roll spent its sliders, and the player has since touched the DC.
+    panel._dc_spin.setValue(25)
+
+    assert panel.reroll() is True
+    panel._finish_roll()
+
+    newest = view._local_history.cards()[0]._params
+    assert (newest["bonus"], newest["penalty"]) == (5, 1)  # the last roll's, not the inputs'
+    text = panel._readout.text()
+    assert "18" in text and "vs DC 15" in text  # die 14 + 4 against the old DC
+    assert "reroll" in text.lower()
+
+
+def test_a_roll_spends_the_bonus_and_penalty(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A circumstance modifier is for one check, not for every roll after it."""
+    monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 12)
+    view = DiceRollerView()
+    view.panel._bonus_spin.setValue(4)
+    view.panel._penalty_spin.setValue(1)
+
+    view.panel._finish_roll()
+
+    # The roll itself still carried them …
+    assert view._local_history.cards()[0]._params["bonus"] == 4
+    # … and then they were gone.
+    assert view.panel._bonus_spin.value() == 0
+    assert view.panel._penalty_spin.value() == 0
+
+
+def test_an_abandoned_roll_keeps_its_bonus(qapp: QApplication) -> None:
+    """Nobody answered, so the player will throw it again — as it was."""
+    view = DiceRollerView()
+    view.panel._bonus_spin.setValue(3)
+    view.panel._rolling = True
+
+    view.panel._abandon_roll("No answer")
+
+    assert view.panel._bonus_spin.value() == 3
+
+
+def test_a_set_bonus_or_penalty_is_highlighted(qapp: QApplication) -> None:
+    view = DiceRollerView()
+    panel = view.panel
+    assert panel._bonus_label.styleSheet() == ""
+    assert panel._penalty_spin.styleSheet() == ""
+
+    panel._bonus_spin.setValue(2)
+    assert "bold" in panel._bonus_label.styleSheet()
+    assert "bold" in panel._bonus_spin.styleSheet()
+    assert panel._penalty_label.styleSheet() == ""
+
+    panel._penalty_spin.setValue(1)
+    assert "bold" in panel._penalty_label.styleSheet()
+
+    panel._bonus_spin.setValue(0)
+    assert panel._bonus_label.styleSheet() == ""
+    assert panel._bonus_spin.styleSheet() == ""
+
+
+def test_a_named_quick_roll_lets_go_of_its_name_once_rolled(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Its sliders are spent, so a chip left captioning them would be lying."""
+    monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
+    view = DiceRollerView()
+    view.panel._add_quick_roll({"bonus": 9, "penalty": 0}, name="Athletics")
+
+    view.panel._apply_quick_roll(view.panel._quick_rolls[0])
+
+    assert view._local_history.cards()[0]._params == {
+        "name": "Athletics",
+        "bonus": 9,
+        "penalty": 0,
+    }
+    assert view.panel.current_spec() is None
+    assert view.panel._bonus_spin.value() == 0
+
+
+def test_saving_a_roll_adds_a_persisted_quick_roll(qapp: QApplication) -> None:
+    view = DiceRollerView()
+
+    view.panel._add_quick_roll({"bonus": 4, "penalty": 1})
+
+    assert view.panel._quick_flow.count() == 1
+    assert storage.load_settings()["quick_rolls"] == [{"bonus": 4, "penalty": 1}]
+
+    # De-duplicated by name *and* numbers: the same roll twice is one chip, but the
+    # same numbers under another name is a different roll and gets its own.
+    view.panel._add_quick_roll({"bonus": 4, "penalty": 1})
+    assert view.panel._quick_flow.count() == 1
+
+    view.panel._add_quick_roll({"bonus": 4, "penalty": 1}, name="Attack")
+    assert view.panel._quick_flow.count() == 2
+
+
+def test_a_saved_roll_keeps_the_name_it_was_rolled_under(qapp: QApplication) -> None:
+    """A strip of chips reading +6, +4, +4 is a puzzle a few rolls later."""
+    view = DiceRollerView()
+
+    view.panel.toggle_quick_roll(roll_parameters({"label": "Athletics", "bonus": 9, "dc": 15}))
+
+    # The name came with the roll — no dialog, and no DC.
+    assert view.panel._quick_rolls == [{"bonus": 9, "penalty": 0, "name": "Athletics"}]
+    labels = {b.text() for b in view.panel._quick_container.findChildren(QPushButton)}
+    assert "Athletics" in labels
+
+
+def test_a_quick_roll_leaves_the_dc_box_alone(qapp: QApplication) -> None:
+    """The difficulty belongs to the situation in front of you, not to the chip."""
+    view = DiceRollerView()
+    view.panel._add_quick_roll({"bonus": 9, "penalty": 0}, name="Athletics")
+    view.panel._dc_check.setChecked(True)
+    view.panel._dc_spin.setValue(21)
+
+    view.panel._apply_quick_roll(view.panel._quick_rolls[0])
+
+    assert view.panel._dc_check.isChecked() is True
+    assert view.panel._dc_spin.value() == 21
+    assert view.panel._bonus_spin.value() == 9
+    assert view.panel.current_spec().label == "Athletics"
+
+
+def test_quick_rolls_persist_across_windows(qapp: QApplication) -> None:
+    first = DiceRollerView()
+    first.panel._add_quick_roll({"bonus": 2, "penalty": 0}, name="Stealth")
+
+    second = DiceRollerView()
+    assert second.panel._quick_flow.count() == 1
+    assert second.panel._quick_rolls == [{"bonus": 2, "penalty": 0, "name": "Stealth"}]
+
+
+def test_a_strip_saved_with_dcs_is_read_back_without_them(qapp: QApplication) -> None:
+    """A workspace written before a quick roll dropped its DC still has to open.
+
+    And the two chips that differed *only* by their DC are now one roll, so the
+    read has to collapse them — two identical chips of which only the first ever
+    answers a click is worse than the migration.
+    """
+    storage.update_settings(
+        quick_rolls=[
+            {"bonus": 3, "penalty": 0, "dc": 15},
+            {"bonus": 3, "penalty": 0, "dc": None},
+            {"bonus": 3, "penalty": 0, "dc": 20, "name": "Athletics"},
+        ]
+    )
+
+    view = DiceRollerView()
+
+    assert view.panel._quick_rolls == [
+        {"bonus": 3, "penalty": 0},
+        {"bonus": 3, "penalty": 0, "name": "Athletics"},
+    ]
+
+
+def test_removing_a_quick_roll_persists(qapp: QApplication) -> None:
+    view = DiceRollerView()
+    entry = {"bonus": 3, "penalty": 0}
+    view.panel._add_quick_roll(entry)
+
+    view.panel._remove_quick_roll(entry)
+
+    assert view.panel._quick_flow.count() == 0
+    assert storage.load_settings()["quick_rolls"] == []
+
+
+def test_named_quick_roll_shows_its_name(qapp: QApplication) -> None:
+    view = DiceRollerView()
+
+    view.panel._add_quick_roll({"bonus": 1, "penalty": 0}, name="Perception")
+
+    assert view.panel._quick_rolls == [{"bonus": 1, "penalty": 0, "name": "Perception"}]
+    labels = {b.text() for b in view.panel._quick_container.findChildren(QPushButton)}
+    assert "Perception" in labels
+
+
+def test_reordering_moves_and_persists(qapp: QApplication) -> None:
+    view = DiceRollerView()
+    first = {"bonus": 1, "penalty": 0}
+    second = {"bonus": 2, "penalty": 0}
+    view.panel._add_quick_roll(first)
+    view.panel._add_quick_roll(second)
+
+    # Drop the second chip (index 1) before the first (insertion index 0).
+    view.panel._reorder_quick_roll(1, 0)
+
+    assert view.panel._quick_rolls == [second, first]
+    assert storage.load_settings()["quick_rolls"] == [second, first]
+
+
+def test_the_strip_holds_no_more_than_the_cap(qapp: QApplication) -> None:
+    # An unbounded strip ratchets the whole Dice block (and the pinned strip holding
+    # it) taller and taller, which is the point of the cap.
+    view = DiceRollerView()
+
+    for bonus in range(MAX_QUICK_ROLLS + 3):
+        view.panel._add_quick_roll({"bonus": bonus, "penalty": 0})
+
+    assert view.panel._quick_flow.count() == MAX_QUICK_ROLLS
+    assert view.panel.quick_rolls_full() is True
+    assert len(storage.load_settings()["quick_rolls"]) == MAX_QUICK_ROLLS
+
+
+def test_a_settings_file_over_the_cap_is_truncated_on_load(qapp: QApplication) -> None:
+    # Written before there was a cap, or by hand — either way it must not hold the
+    # strip open past it.
+    stored = [{"bonus": b, "penalty": 0} for b in range(MAX_QUICK_ROLLS + 4)]
+    storage.update_settings(quick_rolls=stored)
+
+    view = DiceRollerView()
+
+    assert len(view.panel._quick_rolls) == MAX_QUICK_ROLLS
+    assert view.panel._quick_flow.count() == MAX_QUICK_ROLLS
+
+
+def test_a_star_saves_then_unsaves_the_same_roll(qapp: QApplication) -> None:
+    view = DiceRollerView()
+    params = {"bonus": 3, "penalty": 0, "name": "Athletics"}
+
+    view.panel.toggle_quick_roll(params)
+    assert view.panel._quick_flow.count() == 1
+
+    view.panel.toggle_quick_roll(params)
+    assert view.panel._quick_flow.count() == 0
+    assert storage.load_settings()["quick_rolls"] == []
+
+
+def test_a_stars_click_takes_out_the_chip_it_saved(qapp: QApplication) -> None:
+    view = DiceRollerView()
+    view.panel._add_quick_roll({"bonus": 3, "penalty": 0}, name="Perception")
+
+    # A card saving the same numbers under no name is a *different* quick roll now,
+    # so its star must not take Perception away.
+    view.panel.toggle_quick_roll({"bonus": 3, "penalty": 0})
+    assert len(view.panel._quick_rolls) == 2
+
+    view.panel.toggle_quick_roll({"bonus": 3, "penalty": 0, "name": "Perception"})
+    assert view.panel._quick_rolls == [{"bonus": 3, "penalty": 0}]
+
+
+def test_a_rename_that_would_collide_is_refused(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two chips with one identity would leave the second unreachable by any star."""
+    view = DiceRollerView()
+    view.panel._add_quick_roll({"bonus": 1, "penalty": 0}, name="Perception")
+    view.panel._add_quick_roll({"bonus": 1, "penalty": 0}, name="Insight")
+    monkeypatch.setattr(
+        dice_roller.QInputDialog, "getText", staticmethod(lambda *a, **k: ("Perception", True))
+    )
+
+    view.panel._rename_quick_roll(view.panel._quick_rolls[1])
+
+    assert view.panel._quick_rolls[1]["name"] == "Insight"
+
+
+def test_a_history_cards_star_follows_the_strip(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 9)
+    view = DiceRollerView()
+    view.panel._bonus_spin.setValue(2)
+    view.panel._finish_roll()
+    star = view._local_history.cards()[0].star
+
+    assert star.is_saved() is False
+
+    # Saving that roll lights its card, with no rebuild of the card in between.
+    view.panel.toggle_quick_roll({"bonus": 2, "penalty": 0})
+    assert star.is_saved() is True
+
+    view.panel.toggle_quick_roll({"bonus": 2, "penalty": 0})
+    assert star.is_saved() is False
+
+
+def test_a_full_strip_disables_an_unsaved_cards_star(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 9)
+    view = DiceRollerView()
+    view.panel._bonus_spin.setValue(20)  # not a roll any of the chips below match
+    view.panel._finish_roll()
+
+    for bonus in range(MAX_QUICK_ROLLS):
+        view.panel._add_quick_roll({"bonus": bonus, "penalty": 0})
+
+    star = view._local_history.cards()[0].star
+    assert star.is_saved() is False
+    assert star.isEnabled() is False
+
+
+def test_renaming_a_chip_persists_and_recaptions_it(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    view = DiceRollerView()
+    entry = {"bonus": 1, "penalty": 0}
+    view.panel._add_quick_roll(entry)
+    monkeypatch.setattr(
+        dice_roller.QInputDialog, "getText", staticmethod(lambda *a, **k: ("Perception", True))
+    )
+
+    view.panel._rename_quick_roll(entry)
+
+    assert storage.load_settings()["quick_rolls"] == [dict(entry, name="Perception")]
+    labels = {b.text() for b in view.panel._quick_container.findChildren(QPushButton)}
+    assert "Perception" in labels
+
+    # And an empty answer puts the numbers back.
+    monkeypatch.setattr(
+        dice_roller.QInputDialog, "getText", staticmethod(lambda *a, **k: ("  ", True))
+    )
+    view.panel._rename_quick_roll(view.panel._quick_rolls[0])
+    assert "name" not in view.panel._quick_rolls[0]
+
+
+def test_removing_a_history_card(qapp: QApplication, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 7)
+    view = DiceRollerView()
+    view.panel._finish_roll()
+    card = view._local_history.cards()[0]
+
+    card.removeRequested.emit()
+    qapp.processEvents()
+
+    assert view._local_history.cards() == []
+
+
+# -- reflowing to the space available ----------------------------------------
+
+
+def _settled(qapp: QApplication, view: DiceRollerView, width: int, height: int) -> None:
+    """Resize *view* and let the deferred re-division settle (see `_divide_row`)."""
+    view.resize(width, height)
+    for _ in range(8):
+        qapp.processEvents()
+
+
+def test_a_narrow_tall_roller_stacks_its_parts(qapp: QApplication) -> None:
+    view = DiceRollerView()
+    view.show()
+
+    _settled(qapp, view, 360, 800)  # the right-hand pinned strip's shape
+
+    assert view.is_row is False
+    assert view.panel.is_row is False
+    assert view._splitter.orientation() is Qt.Orientation.Vertical
+    assert view.panel._box.direction() is QBoxLayout.Direction.TopToBottom
+
+
+def test_a_short_wide_roller_puts_every_part_in_one_row(qapp: QApplication) -> None:
+    # The case that prompted the whole thing: a bottom strip is short and wide, and
+    # a column there forces the strip open to half the window.
+    view = DiceRollerView()
+    view.show()
+
+    _settled(qapp, view, 1500, 300)
+
+    assert view.is_row is True
+    assert view.panel.is_row is True  # both levels, so it is one row of four
+    assert view._splitter.orientation() is Qt.Orientation.Horizontal
+    assert view.panel._box.direction() is QBoxLayout.Direction.LeftToRight
+
+
+def test_the_arrangement_follows_the_shape_back_and_forth(qapp: QApplication) -> None:
+    view = DiceRollerView()
+    view.show()
+
+    _settled(qapp, view, 1500, 300)
+    assert (view.is_row, view.panel.is_row) == (True, True)
+
+    _settled(qapp, view, 360, 800)
+    assert (view.is_row, view.panel.is_row) == (False, False)
+
+    _settled(qapp, view, 1500, 300)
+    assert (view.is_row, view.panel.is_row) == (True, True)
+
+
+def test_a_row_reports_a_shorter_minimum_than_a_column(qapp: QApplication) -> None:
+    # This is *why* the reflow fixes the bottom strip: the strip's thickness is
+    # driven by the block's minimum height, and the row's is far smaller.
+    view = DiceRollerView()
+    view.show()
+
+    _settled(qapp, view, 360, 800)
+    tall = view.minimumSizeHint().height()
+    _settled(qapp, view, 1500, 300)
+    short = view.minimumSizeHint().height()
+
+    assert short < tall
+
+
+def test_going_wide_never_raises_the_minimum_width(qapp: QApplication) -> None:
+    # A row's real width minimum would pin the window open at it; the widget can
+    # always narrow again by reflowing, so it must keep reporting the column width.
+    view = DiceRollerView()
+    view.show()
+
+    _settled(qapp, view, 360, 800)
+    narrow = view.minimumSizeHint().width()
+    _settled(qapp, view, 1500, 300)
+
+    assert view.minimumSizeHint().width() <= narrow
+    assert view.minimumSizeHint().width() < view.row_minimum_width()
+
+
+# -- a chosen shape, rather than a derived one -------------------------------
+
+
+def _extended(qapp: QApplication) -> DiceRollerView:
+    storage.set_dice_layout(storage.DICE_LAYOUT_EXTENDED)
+    view = DiceRollerView()
+    view.show()
+    return view
+
+
+def test_extended_keeps_the_controls_a_column_beside_the_history(
+    qapp: QApplication,
+) -> None:
+    """The shape GM Mode was built as, now had by asking for it.
+
+    What Extended pins is the **panel**: controls in a column beside a history,
+    where the same width left to itself would deal them out as one row of four
+    (see ``test_extended_is_the_shape_an_auto_roller_would_not_choose``).
+    """
+    view = _extended(qapp)
+
+    _settled(qapp, view, 900, 500)
+
+    assert view.is_row is True
+    assert view._splitter.orientation() is Qt.Orientation.Horizontal
+    # ...and the panel stays a column inside it, or this would be a row of four.
+    assert view.panel.is_row is False
+    assert view.panel._box.direction() is QBoxLayout.Direction.TopToBottom
+
+
+def test_extended_is_the_shape_an_auto_roller_would_not_choose(
+    qapp: QApplication,
+) -> None:
+    """Wide enough that the room alone would break the panel into a row."""
+    view = _extended(qapp)
+
+    for width, height in ((1500, 300), (2000, 400), (900, 500)):
+        _settled(qapp, view, width, height)
+        assert (view.is_row, view.panel.is_row) == (True, False)
+
+    view.set_layout(storage.DICE_LAYOUT_AUTO)
+    _settled(qapp, view, 1500, 300)
+    assert view.panel.is_row is True
+
+
+def test_extended_stacks_where_a_row_will_not_fit(qapp: QApplication) -> None:
+    """A preference, not a lock — and the difference is a pinned side strip.
+
+    Extended used to force the row whatever the width, which meant this view had
+    to report the *row's* width as its minimum: a chosen shape cannot narrow out
+    of itself. That held the block, the strip and the window open at close to
+    600px, spent half of a side strip on a controls column with an empty tail
+    under it, and squeezed the history — the one thing here that scrolls — into
+    what was left. Extra room is the history's.
+    """
+    view = _extended(qapp)
+
+    _settled(qapp, view, 360, 800)  # the right-hand pinned strip's shape
+
+    assert view.is_row is False
+    assert view.panel.is_row is False
+    # The *stacked* arrangement's width — the wider of the controls and the history
+    # — not the controls' alone: the history keeps its own floor
+    # (``MIN_HISTORY_WIDTH``), and which of the two is wider is down to the fonts.
+    assert view.minimumSizeHint().width() <= view.column_minimum_width()
+    assert view.minimumSizeHint().width() < view.row_minimum_width()
+
+
+def test_extended_gives_a_taller_strip_to_the_history_alone(
+    qapp: QApplication,
+) -> None:
+    view = _extended(qapp)
+    _settled(qapp, view, 360, 700)
+    panel_height, history_height = view._splitter.sizes()
+
+    _settled(qapp, view, 360, 1300)
+
+    grown_panel, grown_history = view._splitter.sizes()
+    assert grown_panel == panel_height
+    assert grown_history == history_height + 600
+
+
+def test_leaving_extended_hands_the_arrangement_back_to_the_room(
+    qapp: QApplication,
+) -> None:
+    view = _extended(qapp)
+    _settled(qapp, view, 1500, 300)
+    assert (view.is_row, view.panel.is_row) == (True, False)
+
+    view.set_layout(storage.DICE_LAYOUT_AUTO)
+    _settled(qapp, view, 1500, 300)
+
+    assert (view.is_row, view.panel.is_row) == (True, True)
+
+
+# -- extra room is the history's, in every shape ------------------------------
+#
+# The history is the only thing in the Dice block allowed to scroll, so length is
+# worth something to it and nothing to a row of spin boxes. One case per shape the
+# roller can be in, because each divides its space by a different branch of
+# ``_row_sizes`` / ``_column_sizes``.
+
+
+def test_a_taller_strip_is_all_history(qapp: QApplication) -> None:
+    """Stacked, in a side strip: the controls hold their height, the list grows."""
+    view = DiceRollerView()
+    view.show()
+    _settled(qapp, view, 360, 700)
+    panel_height, history_height = view._splitter.sizes()
+    assert view.is_row is False
+
+    _settled(qapp, view, 360, 1300)
+
+    grown_panel, grown_history = view._splitter.sizes()
+    assert grown_panel == panel_height == view.panel.sizeHint().height()
+    assert grown_history == history_height + 600
+
+
+def test_a_wider_strip_is_all_history(qapp: QApplication) -> None:
+    """Side by side, in a bottom strip: the controls take the row they ask for.
+
+    They used to take a quarter of everything past it as well — "a little air" —
+    which on a wide strip was a slab of empty groupbox charged to the history.
+    """
+    view = DiceRollerView()
+    view.show()
+    _settled(qapp, view, 1400, 300)
+    panel_width, history_width = view._splitter.sizes()
+    assert view.is_row is True
+
+    _settled(qapp, view, 1900, 300)
+
+    grown_panel, grown_history = view._splitter.sizes()
+    assert grown_panel == panel_width
+    assert grown_history == history_width + 500
+
+
+def test_a_host_supplied_history_is_given_the_room_too(qapp: QApplication) -> None:
+    """The GM window's Rolls block is this view with its own history handed in.
+
+    So it inherits the rule rather than restating it — which is the point of the
+    ``history=`` seam, and worth a test because it is the surface a GM watches a
+    whole fight through.
+    """
+    view = DiceRollerView(hidden_option=True, history=RollHistoryPanel(gm=True))
+    view.show()
+    _settled(qapp, view, 360, 700)
+    panel_height, history_height = view._splitter.sizes()
+    assert view.is_row is False
+
+    _settled(qapp, view, 360, 1300)
+
+    grown_panel, grown_history = view._splitter.sizes()
+    assert grown_panel == panel_height
+    assert grown_history == history_height + 600
+
+
+def test_the_roller_never_asks_a_block_for_more_than_a_column(
+    qapp: QApplication,
+) -> None:
+    """Whichever shape is chosen, and that is what frees a side strip.
+
+    A minimum is a refusal, and the block's is the strip's thickness: a roller
+    that asked for its row width there held the whole strip open at close to
+    600px whether or not anything was better off for it.
+    """
+    for layout in (
+        storage.DICE_LAYOUT_AUTO,
+        storage.DICE_LAYOUT_EXTENDED,
+        storage.DICE_LAYOUT_COMPACT,
+    ):
+        storage.set_dice_layout(layout)
+        view = DiceRollerView()
+        view.show()
+        view.set_layout(layout)
+        _settled(qapp, view, 900, 500)  # wide enough to be a row before we ask
+
+        # A column is the controls stacked over the history, so its width is the
+        # wider of the two — see ``test_extended_stacks_where_a_row_will_not_fit``.
+        assert view.minimumSizeHint().width() <= view.column_minimum_width()
+        assert view.minimumSizeHint().width() < view.row_minimum_width()
+
+
+def test_a_column_gives_the_space_back_when_a_chip_goes(qapp: QApplication) -> None:
+    # The panel carries no splitter stretch, so it keeps whatever height the chips
+    # pushed it to unless the space is divided again — which used to leave a growing
+    # gap above the strip as chips were removed.
+    view = DiceRollerView()
+    view.show()
+    for bonus in range(MAX_QUICK_ROLLS):
+        view.panel._add_quick_roll({"bonus": bonus, "penalty": 0})
+    _settled(qapp, view, 360, 800)
+
+    full_panel, full_history = view._splitter.sizes()
+
+    for entry in list(view.panel._quick_rolls):
+        view.panel._remove_quick_roll(entry)
+    for _ in range(8):
+        qapp.processEvents()
+
+    empty_panel, empty_history = view._splitter.sizes()
+    assert empty_panel < full_panel
+    assert empty_history > full_history
+
+
+def test_a_history_asks_for_two_cards_and_settles_for_one(qapp: QApplication) -> None:
+    """The two heights are deliberately different numbers, and the gap is the point.
+
+    A history *asks* for two cards' worth so it reads as a list. It is not a
+    *minimum*, because the history is the elastic part of the Dice block: when the
+    roll panel above it grows, this is what gives the room back rather than the
+    block growing past the window.
+    """
+    view = DiceRollerView()
+
+    for history in (view._local_history, view._session_history):
+        assert history._scroll.minimumHeight() == HISTORY_FLOOR_HEIGHT
+        assert history.sizeHint().height() == MIN_HISTORY_HEIGHT
+        assert HISTORY_FLOOR_HEIGHT < MIN_HISTORY_HEIGHT
+
+
+def test_a_history_does_not_grow_taller_as_the_log_gets_longer(qapp: QApplication) -> None:
+    """What it asks for is a readable window onto the log, not the whole log.
+
+    Left to itself a ``QScrollArea`` reports its inner widget's hint, and a block's
+    minimum is its content's *preferred* height — so the Dice block's minimum used
+    to climb with every roll until the pinned strip could no longer fit it.
+    """
+    view = DiceRollerView()
+    before = view._local_history.sizeHint()
+
+    for _ in range(20):
+        view._local_history.add_roll(
+            {"die": 11, "bonus": 0, "penalty": 0, "dc": None, "result": None}
+        )
+
+    assert len(view._local_history.cards()) == 20
+    assert view._local_history.sizeHint() == before
+
+
+def test_the_private_history_is_capped_like_the_shared_one(qapp: QApplication) -> None:
+    """It went uncapped for a long time, and the cost was not only memory.
+
+    Every card is ~5 widgets, and Qt walks all of them whenever the history changes
+    width or parent — so an evening's rolling made compact mode take seconds to
+    shrink and grow again (see ``test_compact_mode``). The shared history has always
+    capped itself at :data:`MAX_CARDS`; this list reads the same constant so the two
+    can never drift on how long a history is.
+    """
+    view = DiceRollerView()
+
+    for _ in range(MAX_CARDS + 25):
+        view._local_history.add_roll(
+            {"die": 11, "bonus": 0, "penalty": 0, "dc": None, "result": None}
+        )
+
+    assert len(view._local_history.cards()) == MAX_CARDS
+
+
+def test_the_cap_counts_notes_and_requests_too(qapp: QApplication) -> None:
+    """Everything in the list is a card, so everything in it is trimmed.
+
+    A private history holds notes and parked requests beside its rolls, and counting
+    only the rolls would have let either of those grow without limit — which is the
+    same leak again, wearing a different card.
+    """
+    view = DiceRollerView()
+
+    for index in range(MAX_CARDS + 25):
+        view._local_history.add_note(f"extra effort {index}")
+
+    assert len(view._local_history._entries()) == MAX_CARDS
+
+
+def test_a_dragged_split_is_left_alone_until_the_axis_flips(qapp: QApplication) -> None:
+    view = DiceRollerView()
+    view.show()
+    _settled(qapp, view, 1500, 300)
+
+    # What dragging the handle emits (setSizes never does — the same distinction
+    # PinnedBoard._remember_dragged_extent relies on).
+    view._splitter.setSizes([900, 580])
+    view._splitter.splitterMoved.emit(900, 1)
+    _settled(qapp, view, 1400, 300)
+
+    assert view._user_sized is True
+    assert view._splitter.sizes()[0] > view._row_sizes()[0]  # our division did not win
+
+    _settled(qapp, view, 360, 800)  # a flip is a fresh axis, so the choice is dropped
+    assert view._user_sized is False
+
+
+# -- rolling in a session ----------------------------------------------------
+
+
+def test_a_session_replaces_the_private_history(qapp: QApplication, hosting: SessionBridge) -> None:
+    view = DiceRollerView()
+
+    assert view._session_box.isVisibleTo(view)
+    assert not view._local_box.isVisibleTo(view)
+
+
+def test_the_roll_comes_from_the_server_not_the_panel(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch, hosting: SessionBridge
+) -> None:
+    monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
+    # Any local roll would use this; the server has its own rng.
+    monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 1)
+    view = DiceRollerView()
+    view.panel._bonus_spin.setValue(4)
+
+    view.panel._start_roll()
+    qapp.processEvents()
+
+    recorded = hosting.server.state.rolls
+    assert len(recorded) == 1
+    assert recorded[0].bonus == 4
+    assert str(recorded[0].total) in view.panel._readout.text()
+    # The card is the shared one; nothing landed in the private list.
+    assert len(view._session_history.cards()) == 1
+    assert view._local_history.cards() == []
+
+
+def test_the_session_roll_is_graded_against_the_dc(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch, hosting: SessionBridge
+) -> None:
+    monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
+    view = DiceRollerView()
+    view.panel._dc_check.setChecked(True)
+    view.panel._dc_spin.setValue(10)
+    view.panel._bonus_spin.setValue(20)  # cannot fail
+
+    view.panel._start_roll()
+    qapp.processEvents()
+
+    assert "Success" in view.panel._readout.text()
+    assert "DC 10" in view.panel._readout.text()
+
+
+def test_someone_elses_roll_does_not_end_ours(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch, hosting: SessionBridge
+) -> None:
+    monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
+    view = DiceRollerView()
+    # Nothing answers our request, so the panel stays waiting.
+    monkeypatch.setattr(hosting, "request_roll", lambda **kw: True)
+    view.panel._start_roll()
+
+    other = hosting.server.state.add_player("Bo")
+    hosting.server.roll(player_id=other.player_id, label="not ours")
+    qapp.processEvents()
+
+    assert view.panel._awaiting is True
+    assert view.panel._rolling is True
+    view.panel._abandon_roll("done")  # release the timer chain
+
+
+def test_a_session_that_never_answers_releases_the_die(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch, hosting: SessionBridge
+) -> None:
+    monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
+    monkeypatch.setattr(dice_roller, "SESSION_ROLL_TIMEOUT_MS", 0)
+    monkeypatch.setattr(hosting, "request_roll", lambda **kw: True)
+    view = DiceRollerView()
+
+    view.panel._start_roll()
+
+    assert dice_roller.NO_ANSWER in view.panel._readout.text()
+    assert view.panel._die_button.isEnabled()
+    assert view.panel._bonus_spin.isEnabled()
+
+
+def test_a_roll_that_cannot_be_sent_says_so(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch, hosting: SessionBridge
+) -> None:
+    monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
+    monkeypatch.setattr(hosting, "request_roll", lambda **kw: False)
+    view = DiceRollerView()
+
+    view.panel._start_roll()
+
+    assert dice_roller.NOT_SENT in view.panel._readout.text()
+    assert view.panel._die_button.isEnabled()
+
+
+# -- a roll of one's own must never be held for good --------------------------
+#
+# The shared history holds one's own roll back so the card lands as the die
+# settles rather than the instant the server answers. Only the roller's reveal
+# lets it go again, so anything that holds a roll the roller is *not* waiting for
+# hides it for the rest of the session — from the person who made it, while every
+# other seat sees it. These four cover the ways that used to happen.
+
+
+def test_the_panel_opens_and_closes_the_deferral_window(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch, hosting: SessionBridge
+) -> None:
+    monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
+    view = DiceRollerView()
+    seen: list[bool] = []
+    view.panel.awaitingOwnRoll.connect(seen.append)
+
+    view.panel._start_roll()
+    qapp.processEvents()
+
+    # Open before the request goes out, shut once the number is on screen — a
+    # hosted session answers *during* the request, so the order matters.
+    assert seen == [True, False]
+    assert view._session_history._awaiting_own is False
+
+
+def test_giving_up_on_a_roll_closes_the_window(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch, hosting: SessionBridge
+) -> None:
+    monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
+    monkeypatch.setattr(dice_roller, "SESSION_ROLL_TIMEOUT_MS", 0)
+    monkeypatch.setattr(hosting, "request_roll", lambda **kw: True)
+    view = DiceRollerView()
+
+    view.panel._start_roll()
+
+    assert view._session_history._awaiting_own is False
+
+
+def test_a_roll_that_answers_after_the_die_gave_up_still_lands(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch, hosting: SessionBridge
+) -> None:
+    """The server rolled it; the roller merely stopped waiting.
+
+    The readout goes on saying nobody answered — that was true of the tumble —
+    but the card has to appear, or the roll is lost to the one seat that made it.
+    """
+    monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
+    monkeypatch.setattr(dice_roller, "SESSION_ROLL_TIMEOUT_MS", 0)
+    monkeypatch.setattr(hosting, "request_roll", lambda **kw: True)
+    view = DiceRollerView()
+    view.panel._start_roll()
+    assert dice_roller.NO_ANSWER in view.panel._readout.text()
+
+    # ...and now the answer the roller stopped waiting for turns up.
+    hosting.server.roll(player_id=hosting.own_player_id(), label="late")
+    qapp.processEvents()
+
+    assert len(view._session_history.cards()) == 1
+
+
+def test_a_replayed_log_keeps_ones_own_rolls(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch, hosting: SessionBridge
+) -> None:
+    """What a reconnect does: the fresh Welcome repaints the whole history."""
+    monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
+    view = DiceRollerView()
+    view.panel._start_roll()
+    qapp.processEvents()
+    assert len(view._session_history.cards()) == 1
+
+    view._session_history.set_rolls(hosting.history())
+
+    assert len(view._session_history.cards()) == 1
+
+
+def test_leaving_the_session_brings_the_private_history_back(
+    qapp: QApplication, hosting: SessionBridge
+) -> None:
+    view = DiceRollerView()
+
+    hosting.stop()
+    set_active_session(None)
+    view._sync_session()
+
+    assert view._local_box.isVisibleTo(view)
+    assert not view._session_box.isVisibleTo(view)
+
+
+# -- notes in the history ----------------------------------------------------
+
+
+def test_a_note_lands_in_the_private_history(qapp: QApplication) -> None:
+    view = DiceRollerView()
+
+    view.add_local_note("spent a hero point — 2 left")
+
+    notes = view._local_history.findChildren(NoteCard)
+    assert [note.findChild(QLabel).text() for note in notes] == ["spent a hero point — 2 left"]
+    # A note is not a roll: it has no parameters to save to the quick-roll strip.
+    assert view._local_history.cards() == []
+
+
+def test_a_note_reaches_the_shared_history(qapp: QApplication, hosting: SessionBridge) -> None:
+    view = DiceRollerView()
+
+    assert hosting.post_note("gained a hero point — 3 left") is True
+    qapp.processEvents()
+
+    cards = view._session_history.findChildren(NoteCard)
+    assert len(cards) == 1
+    assert "gained a hero point" in cards[0].findChildren(QLabel)[-1].text()
+
+
+def test_a_note_arriving_mid_roll_is_not_mistaken_for_the_answer(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch, hosting: SessionBridge
+) -> None:
+    """A note has no die; taking one for the roll would settle the d20 on zero."""
+    monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
+    monkeypatch.setattr(hosting, "request_roll", lambda **kw: True)
+    view = DiceRollerView()
+    view.panel._start_roll()
+
+    hosting.post_note("spent a hero point — 1 left")  # from our own seat, mid-tumble
+    qapp.processEvents()
+
+    assert view.panel._awaiting is True
+    assert view.panel._pending is None
+    view.panel._abandon_roll("done")  # release the timer chain
+
+
+# -- the hidden-roll option --------------------------------------------------
+
+
+def test_the_hidden_option_is_off_by_default(qapp: QApplication) -> None:
+    view = DiceRollerView()
+    assert view.panel._hidden_check.isVisibleTo(view.panel) is False
+
+
+def test_a_hidden_roll_never_reaches_the_wire(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch, hosting: SessionBridge
+) -> None:
+    monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
+    panel = dice_roller.DiceRollerPanel(hidden_option=True)
+    panel._hidden_check.setChecked(True)
+
+    panel._start_roll()
+    qapp.processEvents()
+
+    recorded = hosting.server.state.rolls
+    assert [roll.hidden for roll in recorded] == [True]
+    assert hosting.server.state.visible_rolls() == []
+    assert "only you" in panel._readout.text()
+
+
+@pytest.mark.parametrize("preference", [storage.DICE_LAYOUT_COMPACT, storage.DICE_LAYOUT_EXTENDED])
+def test_a_chosen_shape_is_offered_the_width_it_asks_for(qapp, preference: str) -> None:
+    """A panel that will not reflow must not be measured as one that might.
+
+    Only Extended took the locked branch, so a Compact preference fell through to
+    the auto one and was sized at its row-of-three minimum — an arrangement it is
+    pinned out of adopting. On a wide block that handed the controls two thirds of
+    the width and squeezed the history, the opposite of what Compact is for.
+    """
+    view = DiceRollerView()
+    view.set_layout(preference)
+    view.resize(1000, 500)
+    view.show()
+    qapp.processEvents()
+
+    panel_width, history_width = view._splitter.sizes()
+
+    assert panel_width == view.panel.sizeHint().width()
+    assert history_width > panel_width
+
+
+def test_a_long_trait_name_keeps_the_chip_one_line_tall(qapp) -> None:
+    """A wrapped caption asked for a second line nothing above the Roll box passed on.
+
+    So a long name in a narrow strip was drawn squashed into one line's height. The
+    caption elides instead, the whole of it in the tooltip, and the chip never grows.
+    """
+    panel = DiceRollerPanel()
+    panel.resize(300, 600)
+    panel.show()
+    try:
+        panel.load_spec(RollSpec(label="Toughness against a very long attack name", modifier=12))
+        qapp.processEvents()
+        chip, label = panel._spec_chip, panel._spec_label
+
+        assert not label.wordWrap()
+        assert label.text().endswith("Toughness against a very long attack name +12")
+        assert label.fontMetrics().horizontalAdvance(label.text()) > label.width()
+        assert "very long attack name" in label.toolTip()
+        assert chip.height() == chip.sizeHint().height()
+    finally:
+        panel.close()
+
+
+def test_clearing_the_chip_takes_back_the_dc_it_brought(qapp) -> None:
+    """The ✕ on the chip means "forget what I loaded", DC included.
+
+    A spec that names its own difficulty ticks the box; unloading it left the box
+    ticked, so every later manual roll was graded against a trait that was no longer
+    there. Requests made this the common path rather than a rare one.
+    """
+    panel = DiceRollerPanel()
+    panel.load_spec(RollSpec(label="Toughness", modifier=0, dc=18))
+    assert panel._dc_check.isChecked()
+    assert panel._dc_spin.value() == 18
+
+    panel.load_spec(None)
+
+    assert not panel._dc_check.isChecked()
+
+
+def test_a_dc_the_player_typed_is_left_alone(qapp) -> None:
+    """The guard on the one above: only a DC the chip supplied is withdrawn."""
+    panel = DiceRollerPanel()
+    panel._dc_check.setChecked(True)
+    panel._dc_spin.setValue(15)
+
+    panel.load_spec(RollSpec(label="Athletics", modifier=4))  # brings no DC of its own
+    assert panel._dc_check.isChecked()
+    assert panel._dc_spin.value() == 15
+
+    panel.load_spec(None)
+    assert panel._dc_check.isChecked()
+    assert panel._dc_spin.value() == 15
+
+
+def test_a_lifted_twenty_is_not_read_as_a_natural_one(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 4)
+    monkeypatch.setattr(dice_roller, "reroll_d20", lambda *a, **k: (20, False))
+    view = DiceRollerView()
+    view.panel._dc_check.setChecked(True)
+    view.panel._dc_spin.setValue(15)
+    view.panel._start_roll()
+    view.panel._finish_roll()
+
+    view.panel.reroll()
+    view.panel._finish_roll()
+
+    assert "Nat 20" not in view.panel._readout.text()
+
+
+def test_an_abandoned_roll_is_not_offered_for_a_reroll(qapp: QApplication) -> None:
+    view = DiceRollerView()
+    panel = view.panel
+    panel._start_roll()
+    panel._rolling = True  # the tumble is still running when the session gives up
+    panel._abandon_roll("No answer")
+
+    assert panel._last_roll is None
+    assert not panel._reroll_button.isEnabled()
+    assert panel.reroll() is False
+
+
+def test_a_reroll_leaves_the_loaded_trait_alone(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """It neither re-localizes the last roll's spec nor drops what is loaded now."""
+    from dataclasses import replace
+
+    from mm_companion.core.rules import RollSpec
+
+    monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 4)
+    monkeypatch.setattr(dice_roller, "reroll_d20", lambda *a, **k: (15, True))
+    view = DiceRollerView()
+    panel = view.panel
+    panel.set_localizer(lambda spec: replace(spec, modifier=spec.modifier + 8))
+    rolled: list[dict] = []
+    panel.localRoll.connect(rolled.append)
+
+    panel.roll_spec(RollSpec(label="Will", trait_key="will"))
+    panel._finish_roll()
+    stealth = RollSpec(label="Stealth")
+    panel.load_spec(stealth)
+
+    panel.reroll()
+    panel._finish_roll()
+
+    assert rolled[-1]["spec"].modifier == 8  # localized once, not twice
+    assert rolled[-1]["reroll"] is True
+    assert rolled[-1]["bonus"] == 8
+    assert panel.current_spec().label == "Stealth"  # still loaded

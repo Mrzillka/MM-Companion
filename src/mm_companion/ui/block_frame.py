@@ -944,7 +944,7 @@ class BlockFrame(QFrame):
         padding, and several blocks hide their editing entry points outright, so the
         block's own minimum really does move — mostly in height, since the width is
         held lock-invariant (see :mod:`mm_companion.ui.lock` and
-        ``tests/test_lock_geometry.py``). Much of that chrome lives in widgets no
+        ``tests/ui/canvas/test_lock_geometry.py``). Much of that chrome lives in widgets no
         layout ever sees — a table's cell widgets are index widgets, not layout items
         — so Qt's own invalidation stops before it reaches this frame. Saying so here
         is what makes the rest of the chain ask again: the row and the page's

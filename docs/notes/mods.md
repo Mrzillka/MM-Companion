@@ -73,5 +73,5 @@ authoring guide is `docs/modding.md`; the shape:
 - Four living examples ship under `docs/sample-mods/`: `campaign-notes` (data-only),
   `flat-bonus-readouts` (data+Python — a new readout kind) and `field-kit`
   (data+Python — a piece of gear and the stat-applier seam), all three exercised
-  end-to-end by `tests/test_mod_loading.py`; plus `guardian-kit`, the finished mod
+  end-to-end by `tests/core/test_mod_loading.py`; plus `guardian-kit`, the finished mod
   built step by step in `docs/modding-tutorial.md`.

@@ -130,7 +130,7 @@ field end **on** the arrow's first pixel (`r.setRight(minX)`), whatever padding 
 sheet states.
 
 **To lift the cap:** once PySide6 6.12.1 is out, install it and run
-`tests/test_input_arrow_columns.py`. Expect the two "does not sit under its
+`tests/ui/widgets/test_input_arrow_columns.py`. Expect the two "does not sit under its
 text" tests to fail by exactly that 1px. Loosen them to allow an overlap of at most one
 column, keeping the click test as the real proof. Then chase the garbage-collection
 abort, and move the pin to `>=6.6,<6.13,!=6.11.3,!=6.12.0`.

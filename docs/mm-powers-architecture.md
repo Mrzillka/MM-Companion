@@ -794,23 +794,38 @@ resolves to `Ranged` gets two further game-term rows after its Range row:
 
 ```
 Range:                              Ranged
-Distance:                           rank 10          ← tinted better when bought up
-Measurements (short / medium / long): 1 mile / 2 miles / 4 miles
+Distance:                           10 × distance rank 1   ← tinted when a modifier moves it
+Measurements (short / medium / long): 150 feet / 300 feet / 600 feet
 ```
 
-The reach is a **distance rank**, resolved by `rules.ranged_distance_ranks`:
+The book's rule is **rank × distance value** (p104, p198): short range is the effect's
+rank times the distance at distance rank 1, medium rank × distance rank 2, long rank ×
+distance rank 3. It is *not* the effect's rank read as a distance rank — rank 10 is
+10 × 15 feet, not distance rank 10's mile. An earlier version read it that way and
+put every Blast's short range miles off; `rules.ranged_distance_ranks` now returns a
+`RangedDistance` of `multiplier` (the effect's *effective* rank) and `rank` (the
+distance rank of the short range's distance value):
 
-- the base rank comes from the effect's `rangeDistance` spec — by default the effect's
-  own *effective* rank, seeded system-wide from `system.json`'s `ranged_distance`;
+- both come from the effect's `rangeDistance` spec, seeded system-wide from
+  `system.json`'s `ranged_distance`: `multiplyByRank` and `distanceValue: 1` state the
+  rule above, and `steps` `[0, 1, 2]` are the further distance ranks of medium and long;
 - an effect whose reach doesn't scale that way overrides only the keys it needs in its
-  own `rangeDistance` block (`{"rank": 4}` pins it, `{"offset": -2}` shifts it);
-- every attached modifier with a `distanceRankBonus` adds its ranks on top. That is
-  what makes **Extended Range** visible: it now moves the Distance row rather than
-  silently costing points, and so it drops out of the trailing Notes row.
+  own `rangeDistance` block (`{"rank": 4}` pins the multiplier, `{"offset": -2}` shifts
+  the distance rank, `{"multiplyByRank": false}` makes the rank itself the distance rank);
+- every attached modifier with a `distanceRankBonus` moves the distance value: **Extended
+  Range** +1 a rank (short becomes rank × distance rank 2, p152), **Diminished Range** −1
+  (p157–158). That is what makes them visible: they move the Distance row rather than
+  silently changing points, and so drop out of the trailing Notes row;
+- a modifier with a `rangeRank` (**Thrown**: distance rank 2 + Strength, p155) states a
+  plain distance rank, so its multiplier is 1 and the Distance row reads `rank 2`.
 
-The range increments are `steps` further rank shifts from that rank — the default
-`[0, 1, 2]` is the ×1/×2/×4 short/medium/long progression, the same idiom
-`rules.speed_columns` uses for walk/dash/run. Measurements are imperial for now.
+A multiplied distance has no row in the table to label it, so it is worked out in feet
+from `distance_ft` and worded by `rules.distance_text`; an unmultiplied one keeps the
+table's own label. Measurements are imperial for now.
+
+Elongation's card bands follow the same rule (p117): reach at rank × distance rank 1,
+−2 at rank × distance rank 2 and −5 at rank × distance rank 3 — the bands carry a
+`distanceRank` in `effect_readouts.json`, not a multiple of the first band.
 
 ## 11. Out of scope for this file
 

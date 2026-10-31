@@ -139,9 +139,12 @@
       { "key": "DEF", "label": "Defence" },
       { "key": "initiative", "label": "Initiative" }
     ],
+    "_ranged_distance": "A Ranged effect reaches rank x distance value: short range is the effect rank times the distance at distanceValue (distance rank 1), and each step reads one distance rank further (medium rank x distance rank 2, long rank x distance rank 3). Core book p104 (PDF p106) and p198. multiplyByRank false would make the effect rank itself the distance rank instead.",
     "ranged_distance": {
       "rangeValue": "Ranged",
       "rankSource": "effect_rank",
+      "multiplyByRank": true,
+      "distanceValue": 1,
       "offset": 0,
       "steps": [0, 1, 2],
       "stepLabels": ["short", "medium", "long"]

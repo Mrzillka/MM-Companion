@@ -359,6 +359,27 @@ def feet_text(feet: float) -> str:
     return f"{feet:.1f}".rstrip("0").rstrip(".")
 
 
+def distance_text(feet: float) -> str:
+    """A worked-out distance in the measurement table's own words: ``"150 feet"``.
+
+    For a distance the table cannot label because it was multiplied rather than looked up
+    (a Ranged effect's rank × distance value). Inches under a foot and miles from one
+    mile up, as the table's labels are; ``""`` for nothing at all.
+    """
+
+    if feet <= 0:
+        return ""
+    if feet < 1:
+        inches = max(1, round(feet * 12))
+        return f"{inches} inch" if inches == 1 else f"{inches} inches"
+    if feet >= 5280:
+        miles = feet / 5280
+        text = f"{miles:,.0f}" if miles >= 10 else f"{miles:.1f}".rstrip("0").rstrip(".")
+        return f"{text} mile" if text == "1" else f"{text} miles"
+    text = f"{feet:,.1f}".rstrip("0").rstrip(".")
+    return f"{text} foot" if text == "1" else f"{text} feet"
+
+
 def reach_text(reach: Reach) -> str:
     """``"3 spaces / 18 ft."`` — or ``"~7 spaces / 45 ft."`` when the Spaces are rounded.
 

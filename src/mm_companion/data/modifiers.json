@@ -443,7 +443,7 @@
       "flat": true,
       "ranked": true,
       "distanceRankBonus": 1,
-      "description": "Increases how far a ranged effect can reach, by one distance rank per rank."
+      "description": "Increases how far a ranged effect can reach: each rank raises the distance value of its short, medium and long ranges by one (1 rank makes them rank x distance rank 2, 3 and 4)."
     },
     {
       "id": "feature_extra",
@@ -904,7 +904,7 @@
       "flat": true,
       "ranked": true,
       "distanceRankBonus": -1,
-      "description": "Shortens a ranged effect's short/medium/long distances."
+      "description": "Shortens a ranged effect's reach: each rank lowers the distance value of its short, medium and long ranges by one (1 rank makes them rank x distance rank 0, 1 and 2)."
     },
     {
       "id": "distracting",

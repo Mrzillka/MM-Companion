@@ -214,7 +214,7 @@ def test_diminished_range_shortens_the_reach(data) -> None:
     effect = _blast(6)
     effect.flaws.append(ModifierSelection("diminished_range", rank=2))
     row = {r.key: r for r in effect_stat_rows(effect, data)}["distance_rank"]
-    assert (row.value, row.change) == ("rank 4", "worse")
+    assert (row.value, row.change) == ("6 × distance rank -1", "worse")
 
 
 def test_the_per_unit_extras_are_bought_in_ranks(data) -> None:

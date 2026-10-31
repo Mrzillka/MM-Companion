@@ -445,7 +445,7 @@
       },
       "reach": {
         "perRankDistanceRank": 1,
-        "note": "Each rank extends the character's reach by the distance value at rank 1 (the extension actions are performed at with no check penalty; the same distance twice over carries -2 and three times over -5)."
+        "note": "Each rank extends the character's reach by the distance value at rank 1, at which actions take no check penalty. Stretching further, to rank x distance rank 2, carries -2, and full extension, rank x distance rank 3, carries -5 (core book p117)."
       },
       "description": "Stretches your limbs or body to extend your reach."
     },

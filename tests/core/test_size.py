@@ -457,3 +457,16 @@ def test_a_rationed_elongation_reaches_only_as_far_as_its_share_bought(data) -> 
     power.effects[0].current_rank = 1
     assert effect_current_rank(power.effects[0], data, char) == 1
     assert reach_text(character_reach(char, data)) == "~2 spaces / 15 ft."
+
+
+def test_distance_text_words_a_worked_out_distance() -> None:
+    from mm_companion.core.rules import distance_text
+
+    assert distance_text(150) == "150 feet"
+    assert distance_text(1) == "1 foot"
+    assert distance_text(2000) == "2,000 feet"
+    assert distance_text(0.5) == "6 inches"
+    assert distance_text(5280) == "1 mile"
+    assert distance_text(18000) == "3.4 miles"
+    assert distance_text(5280 * 120) == "120 miles"
+    assert distance_text(0) == ""

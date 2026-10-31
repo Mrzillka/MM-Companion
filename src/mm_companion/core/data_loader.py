@@ -1368,14 +1368,21 @@ class PairedCap:
 
 @dataclass(frozen=True)
 class RangeDistance:
-    """How far a ranged effect reaches, as a distance rank plus its range increments.
+    """How far a ranged effect reaches, and its range increments.
 
-    An effect whose range resolves to ``range_value`` reaches distance rank
-    ``rank_source`` (the effect's own effective rank, or a fixed ``rank`` when the
-    effect doesn't scale that way) shifted by ``offset``. ``steps`` are the further
-    rank shifts of each range increment and ``step_labels`` names them — the default
-    ``(0, 1, 2)`` / short-medium-long is the ×1/×2/×4 progression, the same idiom
-    :func:`mm_companion.core.rules.speed_columns` uses for walk/dash/run.
+    The book's rule (p104, p198) is **rank × distance value**: short range is the
+    effect's rank times the distance at distance rank 1, medium rank × distance rank 2,
+    long rank × distance rank 3. So with ``multiply_by_rank`` (the default) the
+    *multiplier* is ``rank_source`` — the effect's own effective rank, or a fixed
+    ``rank`` — and the short range is read at distance rank ``distance_value`` +
+    ``offset``. Rank 10 is 10 × 15 feet, not distance rank 10 (a mile).
+
+    Without ``multiply_by_rank`` the source rank *is* the distance rank (plus
+    ``offset``), for a reach the rules state as a plain distance rank.
+
+    ``steps`` are the distance-rank shifts of each increment from the short one and
+    ``step_labels`` names them — the default ``(0, 1, 2)`` / short-medium-long. Extended
+    and Diminished Range move every increment by their ``distanceRankBonus``.
 
     The default lives in ``system.json``; an effect in ``effects.json`` may carry its
     own ``rangeDistance`` block overriding whichever keys it names — the effects whose
@@ -1388,6 +1395,8 @@ class RangeDistance:
     steps: tuple[int, ...] = (0, 1, 2)
     step_labels: tuple[str, ...] = ("short", "medium", "long")
     range_value: str = "Ranged"
+    multiply_by_rank: bool = True
+    distance_value: int = 1
 
 
 @dataclass(frozen=True)
@@ -4090,6 +4099,8 @@ def _parse_range_distance(raw: dict | None, base: RangeDistance) -> RangeDistanc
         steps=tuple(int(s) for s in raw["steps"]) if "steps" in raw else base.steps,
         step_labels=(tuple(raw["stepLabels"]) if "stepLabels" in raw else base.step_labels),
         range_value=raw.get("rangeValue", base.range_value),
+        multiply_by_rank=bool(raw.get("multiplyByRank", base.multiply_by_rank)),
+        distance_value=int(raw.get("distanceValue", base.distance_value)),
     )
 
 

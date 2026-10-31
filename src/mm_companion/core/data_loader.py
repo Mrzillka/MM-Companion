@@ -459,9 +459,14 @@ class ConfigOption:
 
     ``cost_delta`` *adjusts* the magnitude the option arrives at rather than replacing
     it, and unlike the three above it is summed across **every** config field rather
-    than first-wins — so a second choice can shade a price the first one set. Removable's
-    Short-Term Only is worth ``-1`` off whichever tier is chosen (Equipment 4 → 3), and
-    the rules let that reach 0, which is why the sum is floored there and not at 1.
+    than first-wins — so a second choice can shade a price the first one set (Area's
+    Emanation, +1 on its shape's rate). The sum is floored at 0, not at 1.
+
+    ``flat_delta`` adjusts a **power-scope** modifier's *total* instead — added once,
+    after the per-points rate has been charged, rather than to the rate itself. It is how
+    Removable's Short-Term Only is priced: "a 1-point flat reduction in the value of the
+    flaw" (p159–160), so a 20-point Removable power is discounted 4 − 1 = 3, to 17. Summed
+    across every field like ``cost_delta``, and the total is floored at 0.
 
     ``supersedes``, on a **multiselect** option, names the other options this one already
     covers, so ticking both is paying twice for one thing. An entry is a bare ``value``
@@ -478,6 +483,7 @@ class ConfigOption:
     flat: bool | None = None
     ranked: bool | None = None
     cost_delta: int = 0
+    flat_delta: int = 0
     supersedes: tuple[str, ...] = ()
 
 
@@ -2974,6 +2980,7 @@ def _parse_config_field(c: dict) -> EffectConfigField:
                 flat=o.get("flat"),
                 ranked=o.get("ranked"),
                 cost_delta=int(o.get("costDelta", 0)),
+                flat_delta=int(o.get("flatDelta", 0)),
                 supersedes=tuple(o.get("supersedes", ())),
             )
             for o in c.get("options", [])

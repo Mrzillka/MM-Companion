@@ -162,6 +162,49 @@ def test_alternate_defense_best_of_two_reads_as_a_choice(data) -> None:
     assert rows["check"].endswith("vs. Will or Defense + 10")
 
 
+# -- Alternate Resistance's best or worst of two -------------------------------------
+
+
+def _choice_save(data, hero, against: str) -> RollSpec:
+    effect = _effect(
+        data,
+        "damage",
+        mods=[
+            ("ranged", {}),
+            (
+                "alternate_resistance",
+                {"resistance": "Fortitude", "resistanceSecond": "Will", "against": against},
+            ),
+        ],
+    )
+    attack = power_rolls(Power(name="Zap", effects=[effect]), hero, data)[0]
+    assert attack.follow_up is not None and attack.follow_up.kind == KIND_POWER_SAVE
+    return attack.follow_up
+
+
+@pytest.mark.parametrize(
+    "against,picked", [("worst", "Will"), ("best", "Fortitude")], ids=["worst", "best"]
+)
+def test_a_choice_of_two_saves_is_rolled_with_the_targets_own_number(
+    data, hero, against, picked
+) -> None:
+    """The save button on the history card used to roll "Fortitude or Will" at +0."""
+    target = Character.new_default(data)
+    target.resistances.update({"FORTITUDE": 6, "WILL": 1})
+    save = _choice_save(data, hero, against)
+
+    own = localize_spec(save, target, data)
+
+    expected = resistance_total(target, data, picked.upper())
+    assert own.modifier == expected
+    assert own.label.endswith(f"({picked})")
+
+
+def test_a_choice_of_two_saves_survives_the_wire(data, hero) -> None:
+    save = _choice_save(data, hero, "worst")
+    assert RollSpec.from_dict(sanitize_spec(save.to_dict())).trait_key == save.trait_key
+
+
 # -- a Linked power's one attack ---------------------------------------------------------
 
 

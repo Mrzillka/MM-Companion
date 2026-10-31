@@ -32,7 +32,9 @@ resolves every roll and broadcasts the result, so nobody reports their own
 number — and the answer arrives back on
 :attr:`~mm_companion.ui.session_bridge.SessionBridge.rollAdded`. The tumble
 animation covers the round trip, which is why it is a fixed 1.4 s rather than
-instant. Outside a session the panel rolls locally, exactly as before.
+instant, and every *other* seat holds the roll a little longer than that
+(``session_bridge.PEER_ROLL_DELAY_MS``), so the roller sees the number first.
+Outside a session the panel rolls locally, exactly as before.
 
 Nothing here owns character state — it drives :mod:`mm_companion.core.dice`
 directly (no game rules live here) and persists quick rolls through
@@ -41,12 +43,13 @@ directly (no game rules live here) and persists quick rolls through
 
 from __future__ import annotations
 
+import math
 import random
 from collections.abc import Callable
 from dataclasses import replace
 
 from PySide6.QtCore import QElapsedTimer, QMimeData, QPoint, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QDrag, QFont, QIcon, QPixmap, QShowEvent
+from PySide6.QtGui import QDrag, QFont, QIcon, QPixmap, QShowEvent, QTextDocument
 from PySide6.QtWidgets import (
     QBoxLayout,
     QCheckBox,
@@ -389,6 +392,78 @@ class RollCard(QFrame):
     def set_save_state(self, saved_keys: set, room: bool) -> None:
         """Light this card's star if its roll is among *saved_keys*."""
         self.star.set_state(quick_roll_key(self._params) in saved_keys, room)
+
+
+def readout_html(
+    label: str,
+    die: int,
+    modifier: int,
+    dc: int | None,
+    degree: int | None,
+    critical: bool = False,
+    *,
+    hidden: bool = False,
+    routine: bool = False,
+) -> str:
+    """The rich text under the die: the roll's name, the total and its working, the grade."""
+
+    total = die + modifier
+    muted = theme.color("text.muted.rich")
+    html = ""
+    if label:
+        html += (
+            f"<span style='color:{theme.color('accent.dice')}'>"
+            f"{escape_rich_text(label)}</span><br>"
+        )
+    made = "routine" if routine else "d20"
+    html += (
+        f"<span style='font-size:{theme.font_size('size.roll-readout')}pt'>"
+        f"<b>{total}</b></span> "
+        f"<span style='color:{muted}'>({made} {die} {modifier:+d})</span>"
+    )
+    if dc is not None:
+        html += f" vs DC {dc}"
+    if degree is not None:
+        color = theme.color("tint.better" if degree > 0 else "tint.worse")
+        html += f"<br><span style='color:{color}'>{degree_label(degree, critical, die)}</span>"
+    if hidden:
+        note = f"{HIDDEN_MARK} only you can see this roll"
+        html += f"<br><span style='color:{muted}'>{note}</span>"
+    return html
+
+
+class ReadoutLabel(QLabel):
+    """The readout under the die, whose preferred width does not follow its text.
+
+    A word-wrapped ``QLabel`` prefers a width worked out from whatever it is showing,
+    and the die part beside the quick rolls (compact) or the other two parts (a row)
+    takes exactly its preferred width. So every roll moved the die: a long name pushed
+    the column wider and the quick rolls narrower, the next short one pulled them back,
+    and the text re-wrapped each time. The preferred width is instead the width of a
+    **template result** — two-digit numbers throughout and a several-degree failure on a
+    natural 1 — drawn in the same markup and fonts, so it follows the theme and never
+    the roll. A longer name wraps inside it.
+    """
+
+    def __init__(self, text: str = "") -> None:
+        super().__init__(text)
+        self._reference: tuple[tuple, int] | None = None
+
+    def _reference_width(self) -> int:
+        html = readout_html("", 1, 20, 40, -4, True)
+        key = (self.font().toString(), html)
+        if self._reference is None or self._reference[0] != key:
+            doc = QTextDocument()
+            doc.setDefaultFont(self.font())
+            doc.setHtml(html)
+            margins = self.contentsMargins()
+            width = math.ceil(doc.idealWidth()) + margins.left() + margins.right()
+            self._reference = (key, width)
+        return self._reference[1]
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        width = self._reference_width()
+        return QSize(width, self.heightForWidth(width))
 
 
 class DiceRollerPanel(ReflowBox, QWidget):
@@ -1015,7 +1090,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
         grid.addWidget(self._face, 0, 0, alignment=Qt.AlignmentFlag.AlignCenter)
         column.addWidget(container, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        self._readout = QLabel(IDLE_PROMPT)
+        self._readout = ReadoutLabel(IDLE_PROMPT)
         self._readout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._readout.setWordWrap(True)
         self._readout.setTextFormat(Qt.TextFormat.RichText)
@@ -1707,29 +1782,10 @@ class DiceRollerPanel(ReflowBox, QWidget):
         routine: bool = False,
     ) -> None:
         self._showing_result = True
-        total = die + modifier
-        muted = theme.color("text.muted.rich")
-        html = ""
         label = reroll_label(self._roll_label(), self._rerolling)
-        if label:
-            html += (
-                f"<span style='color:{theme.color('accent.dice')}'>"
-                f"{escape_rich_text(label)}</span><br>"
-            )
-        made = "routine" if routine else "d20"
-        html += (
-            f"<span style='font-size:{theme.font_size('size.roll-readout')}pt'>"
-            f"<b>{total}</b></span> "
-            f"<span style='color:{muted}'>({made} {die} {modifier:+d})</span>"
+        html = readout_html(
+            label, die, modifier, dc, degree, critical, hidden=hidden, routine=routine
         )
-        if dc is not None:
-            html += f" vs DC {dc}"
-        if degree is not None:
-            color = theme.color("tint.better" if degree > 0 else "tint.worse")
-            html += f"<br><span style='color:{color}'>{degree_label(degree, critical, die)}</span>"
-        if hidden:
-            note = f"{HIDDEN_MARK} only you can see this roll"
-            html += f"<br><span style='color:{muted}'>{note}</span>"
         self._readout.setText(html)
 
     # -- quick rolls ---------------------------------------------------------

@@ -746,6 +746,8 @@ def _own_trait_roll(spec: RollSpec, char: Character, game_data: GameData) -> Rol
         if any(a.key == key for a in game_data.abilities):
             return ability_roll(char, game_data, key)
     elif spec.kind in (KIND_RESISTANCE, KIND_POWER_SAVE, KIND_AREA_DODGE, ""):
+        if spec.kind == KIND_POWER_SAVE and is_choice_key(key):
+            return _best_own_roll(key, char, game_data, worst=choice_is_worst(key))
         if any(r.key == key for r in game_data.resistances):
             return resistance_roll(char, game_data, key)
         if spec.kind == KIND_POWER_SAVE:
@@ -764,6 +766,79 @@ def _own_trait_roll(spec: RollSpec, char: Character, game_data: GameData) -> Rol
         if any(t.key == key for t in game_data.system.derived_traits):
             return initiative_roll(char, game_data)
     return None
+
+
+def is_choice_key(key: str) -> bool:
+    """Whether *key* names several candidates (:func:`best_of_key`) rather than one trait.
+
+    A power's save phrased as a choice — Alternate Resistance's "Fortitude or Will" —
+    stays a :data:`KIND_POWER_SAVE`, because that kind is how a pin or a team attack
+    finds the save on a power; the choice travels in its key instead.
+    """
+
+    return BEST_OF_SEPARATOR in key
+
+
+def choice_is_worst(key: str) -> bool:
+    """Whether a choice key (:func:`save_choice_key`) is rolled at the worst candidate."""
+
+    return key.split(BEST_OF_SEPARATOR, 1)[0] == KIND_WORST_OF
+
+
+def trait_named(name: str, game_data: GameData) -> tuple[str, str] | None:
+    """``(kind, trait key)`` of the trait a card's resistance phrase names, or ``None``.
+
+    A resistance first, then an ability, then a skill — Alternate Resistance may swap in
+    any of them.
+    """
+
+    wanted = name.strip().lower()
+    for resistance in game_data.resistances:
+        if resistance.name.lower() == wanted:
+            return KIND_RESISTANCE, resistance.key
+    for ability in game_data.abilities:
+        if ability.name.lower() == wanted:
+            return KIND_ABILITY, ability.key
+    for skill in game_data.skills:
+        if skill.name.lower() == wanted:
+            return KIND_SKILL, skill.name
+    return None
+
+
+def takes_the_worse(effect: PowerEffectInstance, game_data: GameData) -> bool:
+    """Whether a modifier choice on *effect* makes a choice of two the worse one."""
+
+    for selection in (*effect.extras, *effect.flaws):
+        for modifier_id, key, value in game_data.area.worst_of:
+            if selection.modifier_id == modifier_id and selection.config.get(key) == value:
+                return True
+    return False
+
+
+def save_choice_key(phrase: str, effect: PowerEffectInstance, game_data: GameData) -> str:
+    """The choice key of a save phrase naming several traits, or ``""``.
+
+    ``"Fortitude or Will vs. 18"`` is resisted with the better of the two, or the worse
+    when Alternate Resistance says so — and which number that is depends on the sheet
+    that rolls it. The key lists the candidates (:func:`best_of_key`), led by
+    :data:`KIND_WORST_OF` for the worse, so whoever clicks the save gets the right one of
+    their own numbers filled in rather than none at all.
+    """
+
+    names = phrase.partition(" vs")[0]
+    if " or " not in names.lower():
+        return ""
+    candidates = [
+        found
+        for found in (trait_named(part, game_data) for part in re.split(r"(?i) or ", names))
+        if found is not None
+    ]
+    if len(candidates) < 2:
+        return ""
+    key = best_of_key(candidates)
+    if takes_the_worse(effect, game_data):
+        return f"{KIND_WORST_OF}{BEST_OF_SEPARATOR}{key}"
+    return key
 
 
 def best_of_key(candidates: list[tuple[str, str]] | tuple[tuple[str, str], ...]) -> str:
@@ -849,7 +924,7 @@ def localize_spec(spec: RollSpec, char: Character | None, game_data: GameData) -
     # A Toughness save against Damage: the target's Impervious or Hardened decides what
     # the roll is for before it is made (the DC Penetrating leaves, a second die).
     spec = localized_damage_save(spec, char, game_data)
-    if spec.kind in (KIND_BEST_OF, KIND_WORST_OF):
+    if spec.kind in (KIND_BEST_OF, KIND_WORST_OF) or is_choice_key(spec.trait_key):
         # Which candidate won is worth saying: "Resist Demoralized (Will)".
         return replace(
             spec, modifier=spec.modifier + own.modifier, label=f"{spec.label} ({own.label})"
@@ -873,12 +948,9 @@ def trait_roll_for(spec: RollSpec, char: Character, game_data: GameData) -> Roll
 
     if not spec.trait_key:
         return None
-    if spec.kind in (KIND_BEST_OF, KIND_WORST_OF):
-        rolls = best_own_rolls(spec.trait_key, char, game_data)
-        if not rolls:
-            return None
-        pick = min if spec.kind == KIND_WORST_OF else max
-        return pick(rolls, key=lambda r: r.modifier)
+    if spec.kind in (KIND_BEST_OF, KIND_WORST_OF) or is_choice_key(spec.trait_key):
+        worst = spec.kind == KIND_WORST_OF or choice_is_worst(spec.trait_key)
+        return _best_own_roll(spec.trait_key, char, game_data, worst=worst)
     own = _own_trait_roll(spec, char, game_data)
     if own is None:
         return None
@@ -1030,7 +1102,8 @@ def _effect_roll_parts(
             outcomes=effect_outcome_ladder(effect, game_data, base_effect),
             success_outcome=effect_success_outcome(effect, game_data, base_effect),
             rolled_by_target=True,
-            trait_key=_save_key(resistance_row.value, game_data),
+            trait_key=_save_key(resistance_row.value, game_data)
+            or save_choice_key(resistance_row.value, effect, game_data),
             ladder=_damage_measured(
                 effect_spec_ladder(effect, game_data, base_effect), effect, game_data, numbers.dc
             ),

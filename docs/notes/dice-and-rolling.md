@@ -46,6 +46,30 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   comes back. `set_rolls` also re-reads `own_player_id()` before repainting, since
   `attach` runs once per join and a redial that failed to reclaim the old seat returns
   under a new `player_id`.
+- **Everyone else's screen waits for the roller's die.** The server answers the
+  moment the die is clicked and broadcasts to every seat at once, so the table used to
+  read a number ~1.4 s before the player whose die it was. `SessionBridge` therefore
+  holds **another seat's** die roll for `PEER_ROLL_DELAY_MS` (1.8 s: the tumble plus a
+  beat) before raising `rollAdded`, and holds whatever arrives behind it — a note, a
+  removal, a reveal — behind it, so the log keeps its order (`_on_feed`). It is done
+  in the bridge, not the history, because the GM window's attack, area and Impress
+  flows listen to `rollAdded` too and must not act on a roll before its card shows.
+  Not held: one's own roll (the panel's tumble covers it), a `group` roll (the GM
+  rolling for several creatures, with no die tumbling anywhere), and a fresh
+  `historyReplaced`, which drops whatever is still waiting since it already holds it.
+  One's own roll that lands right behind a held peer roll still waits its turn: the
+  die just tumbles a fraction longer, which is cheaper than two screens disagreeing
+  about the order of the log.
+  The bridge's event callbacks run on socket threads, so all four roll signals go
+  through the internal `_feed` signal to reach the GUI thread, where the timer lives.
+  Tests turn it off (`_peer_rolls_land_at_once` in `tests/ui/conftest.py`).
+- **The readout under the die does not decide the die's width.** A word-wrapped
+  `QLabel` prefers a width worked out from its text, and beside the quick rolls
+  (compact) or in a row the die part takes exactly its preferred width — so every roll
+  slid the die sideways and re-wrapped the text, worst with a long session label.
+  `ReadoutLabel.sizeHint` reports the width of a **template result** (`readout_html`
+  with two-digit numbers and a several-degree natural-1 failure), measured in the same
+  markup and fonts, so it follows the theme and never the roll.
 - **A card is as narrow as its longest word, and widens only when it has room.** Every
   roll button on a card is a `WrappingButton` (`roll_button`), and the small buttons
   (☆, Show, ↶, ✕, the private card's −) sit beside the card's first line

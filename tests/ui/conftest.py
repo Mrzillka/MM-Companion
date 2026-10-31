@@ -102,6 +102,23 @@ def _no_spare_npc_sheets():
     GMWindow.SPARE_NPC_DELAY_MS = original
 
 
+@pytest.fixture(autouse=True)
+def _peer_rolls_land_at_once():
+    """Show another seat's roll the moment it arrives, as it was before the hold.
+
+    A live table holds a peer's die roll until their own die has stopped tumbling
+    (``SessionBridge.PEER_ROLL_DELAY_MS``). The session tests reason about what each
+    seat sees after a roll, not about that timing, so it is off here; the tests about
+    the hold set a delay of their own.
+    """
+    from mm_companion.ui.session_bridge import SessionBridge
+
+    original = SessionBridge.PEER_ROLL_DELAY_MS
+    SessionBridge.PEER_ROLL_DELAY_MS = None
+    yield
+    SessionBridge.PEER_ROLL_DELAY_MS = original
+
+
 @pytest.fixture
 def instant_die(monkeypatch):
     """A roll that lands at once, on an 11, so a test can read the roller straight after."""

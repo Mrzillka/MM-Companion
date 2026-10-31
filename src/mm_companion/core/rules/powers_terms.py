@@ -1805,7 +1805,7 @@ def _readout_size_table(
 def _readout_state(
     readout, effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
 ):
-    rank = effect.rank
+    rank = effect_current_rank(effect, game_data, char)
     by_rank = {int(k): v for k, v in readout.data.get("byRank", {}).items()}
     if not by_rank:
         return []
@@ -1822,7 +1822,11 @@ def _readout_measure_offsets(
     # ``fromRank``: a measure read off a fixed rank rather than the effect's — Teleport
     # carries mass rank 0 whatever its distance — which ``plusModifier``'s ranks then
     # raise (Increased Mass).
-    rank = int(data["fromRank"]) if "fromRank" in data else effect.rank
+    rank = (
+        int(data["fromRank"])
+        if "fromRank" in data
+        else effect_current_rank(effect, game_data, char)
+    )
     if data.get("plusModifier"):
         rank += _modifier_rank(effect, data["plusModifier"])
     column = data.get("column", "distance")
@@ -1844,7 +1848,7 @@ def _readout_measure_offsets(
 def _readout_thresholds(
     readout, effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
 ):
-    rank = effect.rank
+    rank = effect_current_rank(effect, game_data, char)
     return [
         EffectStat("readout", row.get("label", ""), "", row.get("text", ""), "")
         for row in readout.data.get("rows", [])
@@ -1867,7 +1871,15 @@ def _readout_points_per_rank(
     readout, effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
 ):
     per = int(readout.data.get("perRank", 1))
-    return [EffectStat("pool", readout.label, "", f"{effect.rank * per} points", "")]
+    return [
+        EffectStat(
+            "pool",
+            readout.label,
+            "",
+            f"{effect_current_rank(effect, game_data, char) * per} points",
+            "",
+        )
+    ]
 
 
 @READOUT_KINDS.handler("rank_scaled")
@@ -1885,7 +1897,9 @@ def _readout_rank_scaled(
     """
 
     data = readout.data
-    value = effect.rank * int(data.get("perRank", 1)) + int(data.get("offset", 0))
+    value = effect_current_rank(effect, game_data, char) * int(data.get("perRank", 1)) + int(
+        data.get("offset", 0)
+    )
     if "max" in data:
         value = min(value, int(data["max"]))  # Leaping is speed only up to rank 10
     template = data.get("format") or "{value}"
@@ -2011,7 +2025,7 @@ def _readout_capped_rank_bonus(
     data = readout.data
     per_rank = int(data.get("perRank", 1))
     cap = int(data.get("cap", 0))
-    bonus = effect.rank * per_rank
+    bonus = effect_current_rank(effect, game_data, char) * per_rank
     capped = cap and bonus > cap
     if capped:
         bonus = cap

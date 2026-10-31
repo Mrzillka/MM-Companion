@@ -51,7 +51,14 @@ from .runtime import (
     trait_allocation_field,
     trait_display_name,
 )
-from .size import Reach, base_size_rank, character_reach, feet_text, reach_text
+from .size import (
+    Reach,
+    base_size_rank,
+    character_reach,
+    distance_text,
+    feet_text,
+    reach_text,
+)
 
 
 def _effect_name(effect: PowerEffectInstance, game_data: GameData) -> str:
@@ -984,16 +991,38 @@ def _modifier_range_rank(
     return None
 
 
+@dataclass(frozen=True)
+class RangedDistance:
+    """How far a ranged effect reaches: ``multiplier`` × the distance at ``rank``.
+
+    ``rank`` is the distance rank of the **short** range's distance value, after the
+    attached modifiers moved it (Extended Range +1 a rank, Diminished Range −1), and
+    ``base_rank`` is the same before them. ``multiplier`` is what that distance is
+    multiplied by: the effect's rank for an ordinary Ranged effect (rank × distance
+    value), and ``1`` for a reach the rules give as a plain distance rank (Thrown's
+    "distance rank 2 + Strength").
+    """
+
+    base_rank: int
+    rank: int
+    multiplier: int = 1
+
+
 def ranged_distance_ranks(
     effect: PowerEffectInstance, game_data: GameData, char: Character | None = None
-) -> tuple[int, int] | None:
-    """``(base rank, effective rank)`` an effect reaches, or ``None`` if it isn't ranged.
+) -> RangedDistance | None:
+    """How far an effect reaches (:class:`RangedDistance`), or ``None`` if it isn't ranged.
 
-    A ranged effect's reach is a distance rank — by default the effect's own effective
-    rank, though an effect whose reach doesn't scale that way overrides the derivation
-    in its ``rangeDistance`` block. The effective rank adds whatever the attached
-    modifiers extend it by (Extended Range), so the two returned ranks differ exactly
-    when the reach was bought up and the Distance row should read as improved.
+    By the book a Ranged effect reaches **rank × distance value**: rank 10 is short range
+    10 × 15 feet, not distance rank 10. So the effect's own effective rank is the
+    multiplier, and the distance value starts at the spec's ``distance_value``; an
+    effect whose reach doesn't scale that way overrides the derivation in its
+    ``rangeDistance`` block. Extended and Diminished Range move the distance value, so
+    ``base_rank`` and ``rank`` differ exactly when a modifier changed the reach and the
+    Distance row should read as improved or worse.
+
+    A range-giving modifier (Thrown: "distance rank 2 + Strength") states its reach as a
+    plain distance rank, so it is not multiplied.
 
     ``None`` for a Close, Personal or Perception effect — those have no distance to
     state — which also covers a Ranged effect a flaw has since brought back to Close.
@@ -1008,29 +1037,49 @@ def ranged_distance_ranks(
     source = effect_effective_rank(effect, game_data, char) if spec.rank is None else spec.rank
     thrown = _modifier_range_rank(effect, game_data, char)
     if thrown is not None:
-        source = thrown
-    base_rank = source + spec.offset
-    return base_rank, base_rank + _distance_rank_bonus(effect, game_data)
+        base_rank, multiplier = thrown + spec.offset, 1
+    elif spec.multiply_by_rank:
+        base_rank, multiplier = spec.distance_value + spec.offset, source
+    else:
+        base_rank, multiplier = source + spec.offset, 1
+    rank = base_rank + _distance_rank_bonus(effect, game_data)
+    return RangedDistance(base_rank=base_rank, rank=rank, multiplier=multiplier)
 
 
-def ranged_distance_increments(rank: int, game_data: GameData, spec) -> str:
-    """The reach's range increments — ``"short 200 feet / medium 400 feet / long 800 feet"``.
+def ranged_distance_increments(reach: RangedDistance, game_data: GameData, spec) -> str:
+    """The reach's range increments — ``"short 150 feet / medium 300 feet / long 600 feet"``.
 
-    One entry per ``spec.steps`` offset from ``rank``, each named by the matching
-    ``spec.step_labels`` entry. The names sit in the value rather than the row's label
-    because the summary panel lays labels out in a fixed column, and a label long
-    enough to spell them pushes the value column off the panel. Steps that fall off the
-    ends of the measurement table are dropped rather than rendered blank.
+    One entry per ``spec.steps`` offset from ``reach.rank``, each named by the matching
+    ``spec.step_labels`` entry and worth ``reach.multiplier`` times the distance at that
+    rank. An unmultiplied distance keeps the table's own label. The names sit in the
+    value rather than the row's label because the summary panel lays labels out in a
+    fixed column, and a label long enough to spell them pushes the value column off the
+    panel. Steps that fall off the ends of the measurement table are dropped rather than
+    rendered blank.
     """
 
+    if reach.multiplier <= 0:
+        return ""
     parts = []
     for index, step in enumerate(spec.steps):
-        measure = game_data.measurements.label("distance", rank + step)
+        rank = reach.rank + step
+        if reach.multiplier == 1:
+            measure = game_data.measurements.label("distance", rank)
+        else:
+            measure = distance_text(reach.multiplier * game_data.measurements.distance_ft(rank))
         if not measure:
             continue
         name = spec.step_labels[index] if index < len(spec.step_labels) else ""
         parts.append(f"{name} {measure}".strip())
     return " / ".join(parts)
+
+
+def _distance_term(reach: RangedDistance, rank: int) -> str:
+    """The Distance row's value: ``"10 × distance rank 1"``, or ``"rank 2"`` unmultiplied."""
+
+    if reach.multiplier == 1:
+        return f"rank {rank}"
+    return f"{reach.multiplier} × distance rank {rank}"
 
 
 def _ranged_distance_rows(
@@ -1042,26 +1091,29 @@ def _ranged_distance_rows(
     """The Distance and Measurements rows that follow a Ranged effect's Range row.
 
     "Ranged" on its own says nothing about how far, so the reach is spelled out: the
-    distance rank, then that rank's range increments as real measurements. The rank row
-    reads as improved when a modifier bought the reach up past its base, and as worse
-    when Diminished Range cut it short.
+    rank × distance value it reaches, then its range increments as real measurements.
+    The Distance row reads as improved when Extended Range bought the reach up past its
+    base, and as worse when Diminished Range cut it short.
     """
 
-    ranks = ranged_distance_ranks(effect, game_data, char)
-    if ranks is None:
+    reach = ranged_distance_ranks(effect, game_data, char)
+    if reach is None:
         return []
-    base_rank, rank = ranks
     spec = base_effect.range_distance
     rows = [
         EffectStat(
             "distance_rank",
             "Distance",
-            f"rank {base_rank}",
-            f"rank {rank}",
-            "better" if rank > base_rank else "worse" if rank < base_rank else "",
+            _distance_term(reach, reach.base_rank),
+            _distance_term(reach, reach.rank),
+            (
+                "better"
+                if reach.rank > reach.base_rank
+                else "worse" if reach.rank < reach.base_rank else ""
+            ),
         )
     ]
-    increments = ranged_distance_increments(rank, game_data, spec)
+    increments = ranged_distance_increments(reach, game_data, spec)
     if increments:
         rows.append(EffectStat("distance", "Measurements", "", increments, ""))
     return rows
@@ -1641,13 +1693,15 @@ def _merge_readouts(rows: list[EffectStat], readouts: list[EffectStat]) -> None:
     printed "Range: 1 mile" above a second row reading "Range: Same continent". A
     readout keyed like a row already on the card (``range`` here) now takes that row's
     place — but only an untinted one, so a modifier that changed the range keeps its say.
+    It takes the base too: an untinted row's base is its value, and keeping the old one
+    left a "Base: 15 feet" tooltip on a range that is really "Same city".
     """
 
     by_key = {row.key: index for index, row in enumerate(rows)}
     for readout in readouts:
         index = by_key.get(readout.key)
         if index is not None and readout.key in _STANDARD_STAT_KEYS and not rows[index].change:
-            rows[index] = replace(rows[index], value=readout.value)
+            rows[index] = replace(rows[index], base=readout.value, value=readout.value)
         else:
             rows.append(readout)
 
@@ -1903,9 +1957,11 @@ def _readout_reach_extension(
 
     One rank buys the distance at the effect's own ``reach`` rank
     (:class:`~..data_loader.EffectReach`), so the same 15-feet-a-rank the sheet
-    stretches by. Each band multiplies that by its ``multiple`` and carries the check
-    penalty the rules put on reaching that far; the bands are data, so a mod's own
-    reach effect states its own.
+    stretches by. Each band is rank × the distance at its ``distanceRank`` — the book's
+    rank × distance value 1 / 2 / 3 (p117), which is ×1 / ×2 / ×4 of that, not ×1 / ×2 /
+    ×3 — and carries the check penalty the rules put on reaching that far. A band may
+    instead give a plain ``multiple`` of the per-rank reach. The bands are data, so a
+    mod's own reach effect states its own.
     """
 
     base = next((e for e in game_data.effects if e.id == effect.effect_id), None)
@@ -1916,12 +1972,16 @@ def _readout_reach_extension(
     # to stretch the sheet's reach. The two are a statement about the same arm, so an
     # Elongation turned down — or rationed by a Dynamic array's pool — has to shorten
     # in both places or the card contradicts the block.
-    feet = effect_current_rank(effect, game_data, char) * per_rank
+    rank = effect_current_rank(effect, game_data, char)
+    feet = rank * per_rank
     if feet <= 0:
         return []
     rows = []
     for band in readout.data.get("bands", []):
-        reached = feet * float(band.get("multiple", 1))
+        if "distanceRank" in band:
+            reached = rank * game_data.measurements.distance_ft(int(band["distanceRank"]))
+        else:
+            reached = feet * float(band.get("multiple", 1))
         note = band.get("note", "")
         value = f"+{feet_text(reached)} ft."
         rows.append(

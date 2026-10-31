@@ -929,6 +929,12 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   a `format`, and `rank_scaled` takes a `max`; `fixed` is a row the rules state outright.
   And a modifier may set where its range **starts** (`rangeRank`): Thrown's short range is
   distance rank 2 + Strength (p155), not the effect's rank — 2 with no wielder.
+- **A Ranged effect reaches rank × distance value, not its rank as a distance rank.**
+  Short is rank × distance rank 1, medium × 2, long × 3 (p104, p198), and Extended /
+  Diminished Range move that distance rank by one a rank. The card once read Blast 10 as
+  distance rank 10 (a mile) and let the two modifiers shift it; see
+  `mm-powers-architecture.md` §10. Thrown is the exception the book makes: a plain
+  distance rank, unmultiplied. Elongation's bands are the same rank × distance rank 1/2/3.
 - **A modifier is taken once unless the ruleset says otherwise.** `repeatable` in
   `modifiers.json` / `effect_modifiers.json` is what `EffectCard.attach_modifier` reads,
   and only seven records carry it: **Limited**, **Quirk**, **Feature**, the **Custom** pair,

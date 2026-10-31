@@ -963,11 +963,11 @@ def test_elongation_states_its_reach_bands_not_the_wielders_total() -> None:
     """
     data = load_game_data()
     rows = [r.value for r in effect_readout_rows(PowerEffectInstance("elongation", rank=3), data)]
-    # 15 feet a rank, then the same distance twice and three times over.
+    # Rank x distance value 1 / 2 / 3 (15 / 30 / 60 feet), as the book has it (p117).
     assert rows == [
         "+45 ft. (no check penalty)",
         "+90 ft. (-2 to checks)",
-        "+135 ft. (-5 to checks)",
+        "+180 ft. (-5 to checks)",
     ]
 
 
@@ -3782,15 +3782,48 @@ def _rows_by_key(effect, data, char=None) -> dict:
     return {row.key: row for row in effect_stat_rows(effect, data, char)}
 
 
-def test_ranged_effect_states_its_distance_rank_and_increments() -> None:
+def test_ranged_effect_reaches_rank_times_distance_value() -> None:
     data = load_game_data()
-    effect = PowerEffectInstance("damage", rank=8, extras=[ModifierSelection("ranged")])
+    effect = PowerEffectInstance("damage", rank=10, extras=[ModifierSelection("ranged")])
 
     rows = _rows_by_key(effect, data)
-    assert rows["distance_rank"].value == "rank 8"
+    assert rows["distance_rank"].value == "10 × distance rank 1"
     assert rows["distance_rank"].change == ""  # nothing bought it up
-    # Short / medium / long are distance ranks 8 / 9 / 10 — the x1/x2/x4 progression.
-    assert rows["distance"].value == "short 1,800 feet / medium 1/2 mile / long 1 mile"
+    # Rank x distance value 1 / 2 / 3 (15 / 30 / 60 feet) — not distance rank 10's mile.
+    assert rows["distance"].value == "short 150 feet / medium 300 feet / long 600 feet"
+
+
+def test_diminished_range_lowers_every_distance_value() -> None:
+    data = load_game_data()
+    effect = PowerEffectInstance(
+        "damage",
+        rank=10,
+        extras=[ModifierSelection("ranged")],
+        flaws=[ModifierSelection("diminished_range", rank=1)],
+    )
+
+    rows = _rows_by_key(effect, data)
+    assert rows["distance_rank"].value == "10 × distance rank 0"
+    assert rows["distance_rank"].change == "worse"
+    # Rank x distance value 0 / 1 / 2 (6 / 15 / 30 feet).
+    assert rows["distance"].value == "short 60 feet / medium 150 feet / long 300 feet"
+
+
+def test_thrown_reach_is_a_plain_distance_rank() -> None:
+    data = load_game_data()
+    effect = PowerEffectInstance("damage", rank=4, extras=[ModifierSelection("thrown")])
+
+    rows = _rows_by_key(effect, data)
+    # Distance rank 2 + Strength (none without a wielder), then one rank further each.
+    assert rows["distance_rank"].value == "rank 2"
+    assert rows["distance"].value == "short 30 feet / medium 60 feet / long 120 feet"
+
+
+def test_communication_range_band_replaces_the_base_too() -> None:
+    data = load_game_data()
+    row = _rows_by_key(PowerEffectInstance("communication", rank=1), data)["range"]
+    # Its rank buys a band, not a distance: no "Base: 15 feet" left behind.
+    assert (row.base, row.value) == ("Same city", "Same city")
 
 
 def test_close_effect_has_no_distance_rows() -> None:
@@ -3809,9 +3842,11 @@ def test_extended_range_raises_the_distance_rank_and_leaves_the_notes_row() -> N
     )
 
     rows = _rows_by_key(effect, data)
-    assert rows["distance_rank"].base == "rank 8"
-    assert rows["distance_rank"].value == "rank 10"
+    assert rows["distance_rank"].base == "8 × distance rank 1"
+    assert rows["distance_rank"].value == "8 × distance rank 3"
     assert rows["distance_rank"].change == "better"
+    # Rank x distance value 3 / 4 / 5 (60 / 120 / 250 feet).
+    assert rows["distance"].value == "short 480 feet / medium 960 feet / long 2,000 feet"
     # It now shows in a stat cell, so it is no longer listed as an invisible Note.
     assert "Extended Range" not in (rows["notes"].value if "notes" in rows else "")
 
@@ -3831,7 +3866,8 @@ def test_ranged_distance_ranks_returns_none_without_a_ranged_range() -> None:
     data = load_game_data()
     assert ranged_distance_ranks(PowerEffectInstance("damage", rank=4), data) is None
     ranged = PowerEffectInstance("damage", rank=4, extras=[ModifierSelection("ranged")])
-    assert ranged_distance_ranks(ranged, data) == (4, 4)
+    reach = ranged_distance_ranks(ranged, data)
+    assert (reach.base_rank, reach.rank, reach.multiplier) == (1, 1, 4)
 
 
 # -- Extra Limbs' capped bonus --------------------------------------------------

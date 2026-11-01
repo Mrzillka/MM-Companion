@@ -1156,7 +1156,7 @@ def _answer_as_npc(window: GMWindow, spec: RollSpec, party, degree: int, monkeyp
 def _menu_texts(window: GMWindow, spec: RollSpec, monkeypatch, context=None) -> list[str]:
     from PySide6.QtWidgets import QMenu
 
-    from mm_companion.ui import gm_window
+    from mm_companion.ui.gm import rolls
 
     seen: list[list[str]] = []
 
@@ -1164,7 +1164,7 @@ def _menu_texts(window: GMWindow, spec: RollSpec, monkeypatch, context=None) -> 
         def exec(self, *_args):  # noqa: A003 - Qt's name
             seen.append([a.text() for a in self.actions()])
 
-    monkeypatch.setattr(gm_window, "QMenu", Recording)
+    monkeypatch.setattr(rolls, "QMenu", Recording)
     window._on_history_roll(spec, context)
     return [t for t in seen[0] if t]
 
@@ -1205,7 +1205,7 @@ def test_the_gm_setting_keeps_a_kind_of_save_from_applying(
 def test_the_menu_lists_the_board_npcs_with_their_numbers_and_ticks(
     qapp, window: GMWindow, data, monkeypatch
 ) -> None:
-    from mm_companion.ui.gm_window import ANSWERED_MARK, NO_NPCS_TO_ANSWER
+    from mm_companion.ui.gm.model import ANSWERED_MARK, NO_NPCS_TO_ANSWER
     from mm_companion.ui.roll_history import AnswerContext
 
     save = _damage_save(data)

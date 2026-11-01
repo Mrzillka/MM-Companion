@@ -21,7 +21,7 @@ from PySide6.QtWidgets import QApplication
 from mm_companion.core import library, storage
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.npc import quick_npc
-from mm_companion.ui import gm_window
+from mm_companion.ui.gm import scene as gm_scene
 from mm_companion.ui.gm_window import SCENE_NPC, GMWindow
 from mm_companion.ui.scene_board import SceneBoard
 from mm_companion.ui.session_bridge import set_active_session
@@ -82,7 +82,7 @@ def test_a_portrait_is_encoded_once_however_often_the_scene_is_pushed(
     goon = _npc_file(window, "Goon")
     encodes: list[str] = []
     monkeypatch.setattr(
-        gm_window,
+        gm_scene,
         "encode_scene_portrait",
         lambda path: encodes.append(path or "") or "",
     )
@@ -102,7 +102,7 @@ def test_a_new_picture_is_still_encoded(window: GMWindow, monkeypatch: pytest.Mo
 
     encodes: list[str] = []
     monkeypatch.setattr(
-        gm_window,
+        gm_scene,
         "encode_scene_portrait",
         lambda path: encodes.append(path or "") or "",
     )

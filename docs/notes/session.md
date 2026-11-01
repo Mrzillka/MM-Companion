@@ -106,7 +106,11 @@ The shape:
   trade-off is written out on that method.
 - `src/mm_companion/ui/` — Qt: `session_bridge.py` (`SessionBridge`, the **only**
   place core `on_event` callbacks become signals; module-level
-  `active_session()`/`live_session()`), `connection_indicator.py`, `gm_window.py`,
+  `active_session()`/`live_session()`), `connection_indicator.py`, `gm_window.py`
+  (the GM window's frame; its parts are mixins under `ui/gm/`, one per concern —
+  `hosting`, `players`, `scene`, `npc_board`, `npc_groups`, `npc_conditions`,
+  `rolls`, `actions`, `pins` — sharing state through `self`; a test that patches a
+  name the GM code imports patches it on the mixin module that uses it),
   `ui/npc_window.py`, `ui/player_card.py`, `ui/roll_history.py`,
   `ui/scene_card.py`/`ui/scene_board.py`/`ui/card_drop.py`/`ui/card_chips.py`, and
   `session_player.py`/`session_dialogs.py`. `SessionBridge.joined` follows the

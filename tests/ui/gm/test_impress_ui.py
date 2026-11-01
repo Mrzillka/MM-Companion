@@ -204,12 +204,13 @@ def test_offline_the_dialog_rolls_a_check_that_carries_the_resistance(qapp, data
     assert "Full action" in spec.hint
 
 
-def test_an_advantage_gated_impression_is_shown_but_cannot_be_picked(qapp, data) -> None:
+def test_an_impression_the_impresser_cannot_make_is_not_offered(qapp, data) -> None:
+    """Dazed needs Dazing Interaction: without it, it is not in the list at all."""
     dialog = ImpressDialog(data, talker(data))
-    index = dialog._impression.findData("dazed")
-    item = dialog._impression.model().item(index)
-    assert not item.isEnabled()
-    assert "Dazing Interaction" in dialog._impression.itemData(index, Qt.ItemDataRole.ToolTipRole)
+    assert dialog._impression.findData("dazed") < 0
+    index = dialog._impression.findData("demoralized")
+    assert index >= 0
+    assert dialog._impression.itemData(index, Qt.ItemDataRole.ToolTipRole)
 
 
 def test_online_the_dialog_takes_targets_the_way_an_area_does(qapp, data) -> None:
@@ -945,3 +946,15 @@ def test_end_of_turn_asks_a_player_to_shake_each_impression_off(
     window._impress.take_roll({**record, "degree": 1, "spec": spec.to_dict()})
     assert removed == [[("impaired", None)]]
     assert run.closed and window._impress.lingering("s-nova") == []
+
+
+def test_the_impress_dialog_picks_targets_off_a_copy_of_the_scene(qapp, data) -> None:
+    scene = [
+        {"ref": "s1", "name": "Me", "player_id": "p-me"},
+        {"ref": "s2", "name": "Goon"},
+    ]
+    dialog = ImpressDialog(data, talker(data), scene=scene, own_player_id="p-me")
+    assert dialog.picker.shown_refs() == ["s2"]
+    dialog.picker._activate("s2")
+    assert dialog.target_refs() == ["s2"]
+    assert dialog.picker.shown_refs() == []

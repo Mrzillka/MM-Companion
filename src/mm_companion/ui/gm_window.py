@@ -1248,6 +1248,18 @@ class GMWindow(QMainWindow):
 
     # -- the actions' two extra host methods (see AreaHost, ImpressHost) ----------
 
+    def action_scene(self) -> tuple[list[dict], dict]:
+        """The board as an action window's scene copy draws it: the wire entries, and
+        each one's decoded thumbnail by ref."""
+        entries = self._scene_payload()
+        portraits = {}
+        for entry in entries:
+            ref = str(entry.get("ref", ""))
+            pixmap = self._scene_board.portrait(ref)
+            if pixmap is not None:
+                portraits[ref] = pixmap
+        return entries, portraits
+
     def action_add_card(self, card) -> None:
         """Put an action's reminder — its Resolve button — in the GM's history."""
         self._history.add_card(card)

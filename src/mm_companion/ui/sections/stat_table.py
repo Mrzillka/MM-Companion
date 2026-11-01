@@ -380,19 +380,23 @@ def apply_stat_effects(
     totals: dict,
     bonuses: dict,
     cond_effects: dict[str, ConditionEffect] | None = None,
-) -> None:
+) -> bool:
     """Fill each trait's Total cell from its rank, power bonuses and conditions.
 
-    Every cell carries a number, so the column never reads as empty: the rank spin
-    box's value plus any standing modifier, then a condition overlay (a Hit penalty
-    on Toughness, a halved/zeroed active defense, a scoped check penalty). A modifier
-    tints the cell by its **sign** (:func:`bonus_tint`) — a power boost green, a large
-    creature's −1 Defense red; any condition tints it red regardless, struck through
-    when the overlay reports the trait lost (``ConditionEffect.trait_lost``). An
-    unmodified trait's total is just its rank, untinted.
+    Every cell carries a number: the rank spin box's value plus any standing
+    modifier, then a condition overlay (a Hit penalty on Toughness, a halved/zeroed
+    active defense, a scoped check penalty). A modifier tints the cell by its
+    **sign** (:func:`bonus_tint`) — a power boost green, a large creature's −1
+    Defense red; any condition tints it red regardless, struck through when the
+    overlay reports the trait lost (``ConditionEffect.trait_lost``). An unmodified
+    trait's total is just its rank, untinted.
+
+    Returns whether any trait is modified at all — when none is, the column only
+    repeats the Rank column, and a caller may leave it out.
     """
 
     cond_effects = cond_effects or {}
+    modified = False
     for key, item in totals.items():
         bonus = bonuses.get(key)
         effect = cond_effects.get(key)
@@ -400,7 +404,9 @@ def apply_stat_effects(
         if not bonus and not (effect is not None and effect.active):
             paint_stat_cell(item, str(total), None, None)
             continue
+        modified = True
         paint_stat_cell(item, str(_overlaid(total, effect)), bonus, effect)
+    return modified
 
 
 def apply_value_column(

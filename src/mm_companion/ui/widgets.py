@@ -10,6 +10,7 @@ resolve their theme tokens in one place instead of a dozen f-strings.
 from __future__ import annotations
 
 import html
+import re
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from functools import wraps
@@ -406,14 +407,36 @@ def hline_separator() -> QFrame:
 HELP_SHOW_MS = 30000
 
 
-def help_tooltip(text: str) -> str:
-    """*text* as a tooltip that wraps: a blank line starts a paragraph.
+_BOLD = re.compile(r"\*\*(.+?)\*\*")
+_ITALIC = re.compile(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])")
 
-    Qt wraps a tooltip only when it is rich text, and a plain paragraph shown as one
-    long line runs off the screen — so the text is escaped and set as HTML.
+
+def help_markup(text: str) -> str:
+    """*text* as tooltip HTML, with a little markup for writing help in plain strings.
+
+    A blank line starts a paragraph and a single newline breaks the line; ``**bold**``
+    and ``*italic*`` do what they say, and a line starting ``- `` is a bullet. Everything
+    else is escaped, so a ``<`` in game text stays a ``<``. Qt wraps a tooltip only when
+    it is rich text, which is the other reason every tooltip goes through here.
     """
     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
-    return "".join("<p>" + html.escape(p).replace("\n", "<br>") + "</p>" for p in paragraphs)
+    out = []
+    for paragraph in paragraphs:
+        lines = []
+        for line in paragraph.split("\n"):
+            line = html.escape(line.strip(), quote=False)
+            if line.startswith("- "):
+                line = "• " + line[2:]
+            line = _BOLD.sub(r"<b>\1</b>", line)
+            line = _ITALIC.sub(r"<i>\1</i>", line)
+            lines.append(line)
+        out.append("<p>" + "<br>".join(lines) + "</p>")
+    return "".join(out)
+
+
+def help_tooltip(text: str) -> str:
+    """*text* as a wrapping tooltip — see :func:`help_markup` for what it may contain."""
+    return help_markup(text)
 
 
 class HelpButton(QToolButton):

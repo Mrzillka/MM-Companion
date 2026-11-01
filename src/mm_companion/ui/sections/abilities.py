@@ -2,8 +2,9 @@
 
 Ability ranks live on the :class:`~mm_companion.core.character.Character`, so the
 spin boxes are views over it. The Total column shows each ability's effective
-value; a trait a power raises (Enhanced Trait) shows its enhanced total there in
-green without replacing the bought value; the boost is computed in
+value, and is only there while something moves one — otherwise it would repeat the
+Rank column. A trait a power raises (Enhanced Trait) shows its enhanced total there
+in green without replacing the bought value; the boost is computed in
 :func:`~mm_companion.core.rules.trait_bonuses`, the *sheet-wide* number, so worn
 equipment shows in this column on the same terms as a power (and by the same
 no-stacking rule, gear that loses to a power does not).
@@ -35,6 +36,9 @@ from mm_companion.core.rules import (
 )
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.sections.stat_table import (
+    COL_ABBR,
+    COL_RANK,
+    COL_TOTAL,
     PinMenuState,
     apply_stat_effects,
     build_stat_table,
@@ -144,18 +148,30 @@ class AbilitiesSection(TitledSection):
         self.set_priced_title("Abilities", ability_points_spent(self._character, self._data))
 
     def refresh_enhancements(self) -> None:
-        """Recompute each ability's Total cell from standing boosts and condition penalties."""
+        """Recompute each ability's Total cell from standing boosts and condition penalties.
+
+        The column is left out while nothing modifies any ability, since it would
+        only repeat the Rank column. Which columns the table may shed follows the
+        same *content* question, never the width: with no Total, Rank is the only
+        number a row has and is never shed; with one, Rank may go first, as the
+        Total then carries the number. (Tying the Total to whether Rank is shed
+        would make the table's minimum move with its own shed decision.)
+        """
         bonuses = trait_bonuses(self._character, self._data).get("ability", {})
         cond_effects = {
             a.key: condition_scope_penalty(self._character, self._data, {a.key, a.name})
             for a in self._data.abilities
         }
-        apply_stat_effects(
+        modified = apply_stat_effects(
             self._abilities,
             self._ability_enh,
             bonuses,
             cond_effects,
         )
+        if modified != getattr(self, "_total_shown", None):
+            self._total_shown = modified
+            self.table.set_column_absent(COL_TOTAL, not modified)
+            self.table.set_shed_order([COL_ABBR, COL_RANK] if modified else [COL_ABBR])
 
     def _roll_spec(self, key: str) -> RollSpec:
         """This ability's roll, built fresh at click time so it is never stale."""

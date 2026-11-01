@@ -354,6 +354,10 @@ class ImpressController(QObject):
         window.dismissed.connect(lambda a=action: self._on_dismissed(a))
         window.calledOff.connect(lambda a=action: self._call_off(a))
         window.rollWaitingRequested.connect(action.run.roll_waiting)
+        # The board's own cards for the scene copy, where the host can draw them.
+        scene = getattr(self._host, "action_scene", None)
+        if scene is not None:
+            window.set_scene_view(*scene())
         window.show()
         return window
 

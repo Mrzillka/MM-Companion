@@ -1076,6 +1076,10 @@ def test_saved_enhanced_trait_shows_on_the_stat_and_feeds_skills(qapp: QApplicat
 
     enh = sheet.abilities._ability_enh["STR"]
     assert enh.text() == "5"  # 2 bought + 3 boost
+    # A boost is what brings the Total column on at all.
+    from mm_companion.ui.sections.stat_table import COL_TOTAL
+
+    assert not sheet.abilities.table.isColumnHidden(COL_TOTAL)
     assert "Mighty" in enh.toolTip()
 
     # A Strength-linked skill total reflects the boosted ability.

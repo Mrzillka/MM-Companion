@@ -30,7 +30,7 @@ import uuid
 from dataclasses import dataclass, field
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QStandardItemModel, QValidator
+from PySide6.QtGui import QValidator
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -77,8 +77,10 @@ from mm_companion.ui.action_ui import (
     ActionRow,
     ActionWindow,
     BodyScroll,
+    ScenePicker,
     TargetsBox,
     fit_to_screen,
+    regrow,
 )
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import (
@@ -137,44 +139,24 @@ def choice_caption(choice: TraitChoice) -> str:
 def _fill_impressions(
     combo: QComboBox, data: GameData, character: Character | None, current: str = ""
 ) -> None:
-    """List every impression, greying out the ones *character* may not make.
+    """List the impressions *character* can make, each with its outcomes as a tooltip.
 
-    Shown rather than hidden, so a player can see that Dazed exists and what it
-    would take — the tooltip names the advantage.
+    One that needs an advantage the character lacks (Dazed needs Dazing Interaction)
+    is left out rather than shown greyed: a list of things that cannot be picked is
+    noise in a dropdown. *current* stays selected if it is still on the list.
     """
     combo.blockSignals(True)
     combo.clear()
-    model = combo.model()
     for impression in data.impress.impressions:
-        combo.addItem(impression.name, impression.id)
-        index = combo.count() - 1
-        outcomes = " → ".join(impression_outcomes(data, impression))
-        tip = f"Success: {outcomes}" if outcomes else impression.name
         if not impression_allowed(character, data, impression):
-            advantage = next(
-                (a.name for a in data.advantages if a.id == impression.advantage),
-                impression.advantage,
-            )
-            tip = f"Needs the {advantage} advantage. {tip}"
-            if isinstance(model, QStandardItemModel):
-                item = model.item(index)
-                if item is not None:
-                    item.setEnabled(False)
-        combo.setItemData(index, tip, Qt.ItemDataRole.ToolTipRole)
+            continue
+        combo.addItem(impression.name, impression.id)
+        outcomes = " → ".join(impression_outcomes(data, impression))
+        tip = f"<b>{impression.name}</b><br>On a failed resistance: {outcomes}" if outcomes else ""
+        if tip:
+            combo.setItemData(combo.count() - 1, tip, Qt.ItemDataRole.ToolTipRole)
     wanted = combo.findData(current) if current else -1
-    if wanted >= 0 and not impression_allowed(character, data, data.impress.impressions[wanted]):
-        # Kept from another impresser who could make it; this one cannot.
-        wanted = -1
-    if wanted < 0:
-        wanted = next(
-            (
-                i
-                for i, imp in enumerate(data.impress.impressions)
-                if impression_allowed(character, data, imp)
-            ),
-            0,
-        )
-    combo.setCurrentIndex(wanted)
+    combo.setCurrentIndex(wanted if wanted >= 0 else 0)
     combo.blockSignals(False)
 
 
@@ -503,6 +485,7 @@ class ImpressDialog(QDialog):
         *,
         scene: list[dict] | None = None,
         own_player_id: str = "",
+        portraits: dict | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -549,17 +532,24 @@ class ImpressDialog(QDialog):
         self._mode_buttons: dict[str, QRadioButton] = {}
         self._modifiers: ModifiersPanel | None = None
         self.targets: TargetsBox | None = None
+        self.picker: ScenePicker | None = None
         if self._online:
             self.targets = TargetsBox(
                 "Targets",
                 "impressTargets",
                 resolve=self._resolve,
-                choices=lambda: list(self._names.items()),
                 placeholder="Drop the cards of everyone you are impressing here",
                 help_text=targets_help(data),
             )
             self.targets.field.changed.connect(self._sync)
-            layout.addWidget(self.targets, stretch=1)
+            layout.addWidget(self.targets)
+            # The scene, to pick the targets off: dragged up, or right-clicked.
+            self.picker = ScenePicker(data)
+            self.picker.add_destination("Impress this one", self.targets.field.add_ref)
+            self.picker.set_scene(
+                [e for e in scene or [] if str(e.get("ref", "")) in self._names], portraits
+            )
+            layout.addWidget(self.picker, stretch=1)
             mode_host, self._mode_buttons, group = mode_row(self)
             self._mode_buttons[MODE_RESOLVE].setChecked(True)
             group.buttonToggled.connect(lambda *_: self._sync())
@@ -666,6 +656,9 @@ class ImpressDialog(QDialog):
         self._sync()
 
     def _sync(self) -> None:
+        if self.picker is not None:
+            self.picker.set_placed(self.target_refs())
+            regrow(self)
         impression, skill = self.impression(), self.skill()
         self._outcome.setText(outcome_text(self._data, impression))
         count = len(self.target_refs())
@@ -825,6 +818,7 @@ class ImpressWindow(ActionWindow):
             columns=(("Resists with", "What each target rolls against the impress check"),),
             from_card=from_card,
             help_text=GM_HELP,
+            pick_label="Make a target",
             parent=parent,
         )
         self._attempt = attempt

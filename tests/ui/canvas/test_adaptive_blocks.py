@@ -219,10 +219,11 @@ def _narrow_to(sheet, qapp, width: int) -> None:
 
 
 #: A sheet narrow enough that the stat tables have shed their first column and no
-#: more. The band is roughly 840-920 and this sits in the middle of it, clear of
-#: both edges: shedding is hysteretic, so a width near a boundary answers
-#: differently depending on which side the sheet arrived from.
-ONE_COLUMN_SHED = 900
+#: more. The band is roughly 680-850 (an unmodified Abilities table has no Total
+#: column to fit) and this sits in the middle of it, clear of both edges: shedding
+#: is hysteretic, so a width near a boundary answers differently depending on which
+#: side the sheet arrived from.
+ONE_COLUMN_SHED = 780
 
 
 def test_a_squeezed_stat_table_drops_the_abbreviation(squeezed, qapp) -> None:
@@ -235,16 +236,29 @@ def test_a_squeezed_stat_table_drops_the_abbreviation(squeezed, qapp) -> None:
 
     assert table.shed_columns() == (COL_ABBR,)
     assert table.isColumnHidden(COL_ABBR)
-    for column in (COL_NAME, COL_RANK, COL_TOTAL):
+    for column in (COL_NAME, COL_RANK):
         assert not table.isColumnHidden(column), "a load-bearing column was hidden"
+
+
+def _boost_strength(sheet) -> None:
+    """Put a standing +4 on Strength, which is what brings the Total column on."""
+    from mm_companion.core.powers import Power, PowerEffectInstance
+
+    effect = PowerEffectInstance(
+        "enhanced_trait", rank=4, config={"traits": [{"trait": "STR", "ranks": 4}]}
+    )
+    sheet.character.powers.append(Power(name="Might", effects=[effect]))
+    sheet.abilities.refresh_enhancements()
 
 
 def test_a_table_squeezed_further_gives_up_the_rank_too(squeezed, qapp) -> None:
     """Down to the trait and its number, which is what a sheet is read for.
 
     The build is typed once, at a width the player chooses; the total is read at
-    whatever width the page has left. Name and Total are the two that never go.
+    whatever width the page has left. Name and Total are the two that never go —
+    once there is a Total: an unmodified table has none, and keeps its Rank.
     """
+    _boost_strength(squeezed)
     table = squeezed.abilities.table
 
     _narrow_to(squeezed, qapp, 800)
@@ -254,16 +268,22 @@ def test_a_table_squeezed_further_gives_up_the_rank_too(squeezed, qapp) -> None:
         assert not table.isColumnHidden(column), "a load-bearing column was hidden"
 
 
-def test_the_total_carries_the_number_at_every_width(squeezed, qapp) -> None:
-    """The Total column always states the value, so neither a wide block nor one
-    that has shed its Rank column reads as a column of blank cells."""
+def test_the_total_only_shows_once_something_modifies_an_ability(squeezed, qapp) -> None:
+    """Unmodified, the Total column would repeat Rank, so it is left out and Rank is
+    never shed (it is the only number a row has). A boost brings the Total on."""
     section = squeezed.abilities
-    strength = section._ability_enh["STR"]
-    assert strength.text() == str(section._abilities["STR"].value())
+    table = section.table
+    assert table.isColumnHidden(COL_TOTAL), "an unmodified Total repeats the Rank"
 
-    _narrow_to(squeezed, qapp, 800)
+    _narrow_to(squeezed, qapp, 600)
+    assert COL_RANK not in table.shed_columns()
+    assert table.isColumnHidden(COL_TOTAL)
 
-    assert strength.text() == str(section._abilities["STR"].value())
+    _boost_strength(squeezed)
+    _settle(qapp)
+
+    assert not table.isColumnHidden(COL_TOTAL)
+    assert section._ability_enh["STR"].text() == str(section._abilities["STR"].value() + 4)
 
 
 def test_it_takes_the_column_back_when_the_room_returns(squeezed, qapp) -> None:

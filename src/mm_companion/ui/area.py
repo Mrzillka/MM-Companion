@@ -148,44 +148,46 @@ def use_summary(use: AreaUse, data: GameData) -> str:
 
 #: How an area attack works, behind the "?" of both windows.
 AREA_HELP = (
-    "Everyone in the area makes a Dodge check against the Dodge DC. Making it halves "
-    "the rank they resist the effect at, rounded up; Evasion adds to that Dodge.\n\n"
-    "The area may be aimed at one creature, the primary target, with an attack check "
-    "against its Defense. A hit means no Dodge for it: it resists at full rank. An area "
-    "with no attack check hits its primary target without one.\n\n"
-    "A free use (any attack used as an area) has its rank capped at the Power Level."
+    "**Dodge:** everyone in the area makes a Dodge check against the area's Dodge DC. "
+    "Success halves the rank they resist the effect at (rounded up). Evasion adds to "
+    "that Dodge.\n\n"
+    "**Primary target:** the area may be aimed at one creature with an attack check "
+    "against its Defense. On a hit it gets no Dodge and resists at full rank. An area "
+    "with no attack check always hits its primary target.\n\n"
+    "**Free use:** any attack used as an area has its rank capped at the Power Level."
 )
 AREA_HELP += (
-    "\n\nAn area Healing has no Dodge and no primary target: one check is made, and each "
-    "degree of success takes a condition off everyone in the area."
+    "\n\n**Healing:** an area Healing has no Dodge and no primary target. One check is "
+    "made, and each degree of success removes a condition from everyone in the area."
 )
 AREA_MODE_HELP = (
-    "GM resolves: the GM rolls every NPC's Dodge and save, each player caught is asked to "
-    "roll theirs, and the conditions land on their own.\n\n"
-    "Request only: the history gets a Dodge card and a save card — the save at full rank "
-    "or at half — and everyone caught rolls from them and applies what it does."
+    "**GM resolves:** the GM rolls every NPC's Dodge and save, each player caught is "
+    "asked to roll theirs, and the conditions are applied automatically.\n\n"
+    "**Request only:** the history gets a Dodge card and a save card (full or half "
+    "rank). Everyone caught rolls from them and applies the result themselves."
 )
 HEAL_HELP = (
-    "Everyone the area reaches. One check is made, and each degree of success takes a "
-    "condition off each of them, least severe first."
+    "Everyone the area reaches. One check is made, and each degree of success removes "
+    "a condition from each of them, least severe first."
 )
 DIALOG_HELP = (
-    "Drop cards off the Scene into the boxes, or pick them from Add. The GM checks "
-    "the attack, sets each creature's cover, and resolves it.\n\n" + AREA_HELP
+    "**Picking targets:** drag cards from the scene under the boxes (or from the Scene "
+    "block) into them, or right-click a card. The GM checks the attack, sets each "
+    "creature's cover and resolves the rest.\n\n" + AREA_HELP
 )
 DIALOG_HELP_OFFLINE = (
-    "Not in a session: the attack is rolled here, and the history is left a request to "
-    "dodge for whoever is caught.\n\n" + AREA_HELP
+    "**Not in a session:** the attack is rolled here, and the history gets a Dodge "
+    "request for whoever is caught.\n\n" + AREA_HELP
 )
 PRIMARY_HELP = (
-    "The creature the area is aimed at, if any. Roll the attack against its Defense, "
-    "and Hit is ticked from the result, or tick Hit to call it yourself. A primary "
-    "target that is hit makes no Dodge check and resists at full rank.\n\n"
+    "The creature the area is aimed at, if any. Roll the attack against its Defense and "
+    "Hit is ticked from the result, or tick Hit yourself. A primary target that is hit "
+    "makes no Dodge check and resists at full rank.\n\n"
     "With no primary target the area is aimed at a point, and everyone in it dodges."
 )
 CAUGHT_HELP = (
-    "Everyone else the area catches. Each makes a Dodge check against the Dodge DC, and "
-    "resists the effect at half rank if they make it."
+    "Everyone else the area catches. Each makes a Dodge check against the Dodge DC; on "
+    "a success they resist at half rank."
 )
 GM_BOX_HELP = (
     "**Putting creatures in:** drag a card from the scene under the table (or from the "

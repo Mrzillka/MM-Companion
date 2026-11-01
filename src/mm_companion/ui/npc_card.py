@@ -89,7 +89,7 @@ from mm_companion.ui.sections.conditions import (
     condition_display_name,
     condition_tooltip,
 )
-from mm_companion.ui.widgets import discard_widget, muted_style
+from mm_companion.ui.widgets import discard_widget, help_markup, muted_style
 
 #: How far the pointer must move with the button down to count as a drag rather
 #: than a click, in pixels.
@@ -111,13 +111,13 @@ MINION_MARK = "minion"
 #: What the Power Level line adds for a creature the GM tagged as summoned.
 SUMMONED_MARK = "summoned"
 SUMMONED_HINT = (
-    "Summoned: a creature called up by a power, an advantage or a spell. Only a tag "
-    "for now — the table sees it on the Scene."
+    "**Summoned:** a creature called up by a power, an advantage or a spell. Just a tag for now: "
+    "the table sees it on the Scene."
 )
 MINION_HINT = (
-    "A minion is a minor character (thugs, bystanders, a horde): a failed save is its "
-    "worst outcome, its natural 20 is no critical, and heroes may take 10 against it. "
-    "Which of these rules apply is this session's choice (Settings ▸ Session settings)."
+    "**Minion:** a minor character (thugs, bystanders, a horde).\n- A failed save is its worst "
+    "outcome.\n- Its natural 20 is not a critical hit.\n- Heroes may take 10 against it.\n\nWhich "
+    "of these apply is set per session: Settings ▸ Session settings."
 )
 
 
@@ -335,7 +335,7 @@ class NPCCard(QFrame):
         self._minion_button.setText(MINION_CAPTION)
         self._minion_button.setCheckable(True)
         self._minion_button.setChecked(character.minion)
-        self._minion_button.setToolTip(MINION_HINT)
+        self._minion_button.setToolTip(help_markup(MINION_HINT))
         self._minion_button.toggled.connect(
             lambda on: self.minionToggled.emit(self.name_key, bool(on))
         )
@@ -837,7 +837,7 @@ class NPCCard(QFrame):
         menu.addAction(
             "Untag as summoned" if summoned else "Tag as summoned",
             lambda: self.summonedToggled.emit(self.name_key, not summoned),
-        ).setToolTip(SUMMONED_HINT)
+        ).setToolTip(help_markup(SUMMONED_HINT))
         menu.addAction("Pin a parameter…", lambda: self.pinPickerRequested.emit(self.name_key))
         if self.row:
             menu.addAction(

@@ -575,8 +575,9 @@ def test_a_card_shows_the_player_character_from_their_snapshot(
     assert card._hero_points.value() == 4
     assert card.condition_names() == ["Dazed"]
     assert card._portrait.isEnabled() is True
-    # The hover summary is the NPC card's, now on both.
-    assert "Resistances" in card.toolTip()
+    # The hover summary is the NPC card's, now on both - over the name, not the card.
+    assert "Resistances" in card._character_label.toolTip()
+    assert card.toolTip() == ""
 
 
 def test_a_card_without_a_snapshot_says_so_and_cannot_be_opened(

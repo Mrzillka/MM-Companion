@@ -820,7 +820,7 @@ class GMWindow(QMainWindow):
         button_row = FlowContainer()
         buttons = FlowLayout(button_row, spacing=int(theme.metric("space.sm")))
         quick = QPushButton("Quick NPC…")
-        quick.setToolTip("A mook from five numbers — name, attack, effect, defence, toughness.")
+        quick.setToolTip("A mook from five numbers — name, attack, effect, defense, toughness.")
         quick.clicked.connect(self._quick_npc)
         buttons.addWidget(quick)
         create = QPushButton("Create NPC")

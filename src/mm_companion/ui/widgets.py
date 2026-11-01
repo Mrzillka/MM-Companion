@@ -563,7 +563,12 @@ def attach_context_removal(widget: QWidget, on_remove: Callable[[], None], *, wh
     _ContextRemoval(widget, on_remove)
     hint = f"Right-click to remove {what}."
     existing = widget.toolTip()
-    widget.setToolTip(f"{existing}\n\n{hint}" if existing else hint)
+    if existing.lstrip().startswith("<"):
+        # A rich tooltip (a condition's rule entry) gets the gesture as a muted last line.
+        muted = theme.color("text.muted")
+        widget.setToolTip(f"{existing}<p style='color:{muted}'>{html.escape(hint)}</p>")
+    else:
+        widget.setToolTip(f"{existing}\n\n{hint}" if existing else hint)
 
 
 # -- a grip to drag by -------------------------------------------------------------

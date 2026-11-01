@@ -585,7 +585,7 @@ def test_hindered_condition_slows_the_ground_speed(qapp: QApplication) -> None:
 
     assert "-1 rank" in sheet.system_info._speed.rendered_text()
     assert theme.color("tint.worse") in sheet.system_info._speed.rendered_styles()
-    assert "slowed" in sheet.system_info._speed.toolTip()
+    assert "slowed" in sheet.system_info._speed._ground_tip
 
 
 def test_immobile_condition_marks_the_ground_speed_immobilised(qapp: QApplication) -> None:

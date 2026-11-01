@@ -101,7 +101,13 @@ from mm_companion.ui.roll_history import (
 from mm_companion.ui.session_bridge import SessionBridge, live_session
 from mm_companion.ui.svg_assets import die_resource, svg_pixmap
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import ElidingLabel, discard_widget, make_spin_box, tinted_style
+from mm_companion.ui.widgets import (
+    ElidingLabel,
+    discard_widget,
+    help_markup,
+    make_spin_box,
+    tinted_style,
+)
 
 # The quick-roll list is stored under this settings key as a list of plain dicts
 # ``{"bonus": int, "penalty": int, "dc": int | None, "name"?: str}`` so no Qt
@@ -136,9 +142,9 @@ IDLE_PROMPT = "Click the die to roll."
 #: The roller's take-10 box (PDF p17): a routine check, rolled as a 10.
 ROUTINE_LABEL = "Routine (take 10)"
 ROUTINE_HINT = (
-    "Take 10 instead of rolling: the check counts as a 10 on the die, never a natural "
-    "1 or 20. For a check made under no pressure, and for any attack or interaction "
-    "against a minion. It unticks after one roll."
+    "**Routine check (take 10):** the die counts as a 10, so there is no natural 1 or 20. For a "
+    "check made without pressure, and for attacks or interactions against a minion.\n\nUnticks "
+    "itself after one roll."
 )
 
 
@@ -804,8 +810,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
 
         self._hidden_check = QCheckBox("Hidden roll")
         self._hidden_check.setToolTip(
-            "Roll without it reaching anyone else — a hidden roll is never sent "
-            "to a player, so there is nothing for them to see."
+            "Roll without anyone else seeing it. A hidden roll is never sent to the players."
         )
         self._hidden_check.setVisible(self._hidden_option)
         row = 4
@@ -817,7 +822,7 @@ class DiceRollerPanel(ReflowBox, QWidget):
         # interaction against a minion (p25). One roll's worth — it unticks once the
         # roll is made, so it is never left on for the next one against a villain.
         self._routine_check = QCheckBox(ROUTINE_LABEL)
-        self._routine_check.setToolTip(ROUTINE_HINT)
+        self._routine_check.setToolTip(help_markup(ROUTINE_HINT))
         grid.addWidget(self._routine_check, row, 0, 1, 3)
         row += 1
 
@@ -841,8 +846,10 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._action_line = line
         self._reroll_button = QPushButton("Reroll")
         self._reroll_button.setToolTip(
-            "Roll your last roll again, with the same bonus, penalty and DC. "
-            "The die can't come up low: a 1-10 counts 10 more, so it lands on 11-20."
+            help_markup(
+                "**Reroll** your last roll with the same bonus, penalty and DC. A result of 1–10 "
+                "gets +10, so it lands on 11–20."
+            )
         )
         self._reroll_button.setEnabled(False)  # nothing to throw again yet
         self._reroll_button.clicked.connect(self.reroll)
@@ -1077,7 +1084,6 @@ class DiceRollerPanel(ReflowBox, QWidget):
         self._die_button.setObjectName("dieButton")
         self._die_button.setFlat(True)
         self._die_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._die_button.setToolTip("Click to roll")
         self._die_button.clicked.connect(self._start_roll)
 
         self._face = QLabel("?")

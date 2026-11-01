@@ -74,6 +74,7 @@ from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import (
     BOLD_STYLE,
     discard_widget,
+    help_markup,
     make_spin_box,
     muted_style,
     tinted_style,
@@ -618,8 +619,8 @@ class PowerConstructorWindow(QMainWindow):
         self._improvised_toggle.setChecked(False)
         self._improvised_toggle.setText(f"{self._COLLAPSED_GLYPH} Improvise this effect")
         self._improvised_toggle.setToolTip(
-            "What it would take to rig this power up with a skill check instead of "
-            "buying it, for a character with the Improvised Effect advantage."
+            "What it would take to pull off this power with a skill check instead of buying it, "
+            "for a character with the Improvised Effect advantage."
         )
         self._improvised_toggle.toggled.connect(self._on_improvised_toggled)
         outer.addWidget(with_help(self._improvised_toggle, IMPROVISE_HELP))
@@ -634,8 +635,8 @@ class PowerConstructorWindow(QMainWindow):
         trades.addWidget(QLabel("Prepare faster by"))
         self._improvised_saved = make_spin_box(0, 30, value=0, buttons=False, max_width=44)
         self._improvised_saved.setToolTip(
-            "Time ranks shaved off the preparation. Each one adds to the preparation DC, "
-            "and the preparation can never drop below the ruleset's minimum."
+            "Time ranks cut from the preparation. Each adds to the preparation DC, and the "
+            "preparation can't drop below the ruleset's minimum."
         )
         self._improvised_saved.valueChanged.connect(lambda _v: self._refresh_improvised())
         trades.addWidget(self._improvised_saved)
@@ -815,10 +816,11 @@ class PowerConstructorWindow(QMainWindow):
         layout.setSpacing(2)
         self._rank_dial = QCheckBox("Add a rank scale to the card")
         self._rank_dial.setToolTip(
-            "Let this power be used below its bought rank in play — a Damage 10 fired "
-            "at 5. It costs the same either way: what a power is worth is what it was "
-            "bought at, and dialling one down refunds nothing. A size effect starts "
-            "ticked, since a Growth 3 is a ladder rather than a single leap."
+            help_markup(
+                "**Use at a lower rank:** in play, this power can be used below the rank it was "
+                "bought at (a Damage 10 fired at 5). The cost stays the same.\n\nGrowth and "
+                "Shrinking start ticked: their ranks are a ladder you climb."
+            )
         )
         self._rank_dial.toggled.connect(self._on_rank_dial_toggled)
         layout.addWidget(self._rank_dial)
@@ -848,10 +850,11 @@ class PowerConstructorWindow(QMainWindow):
         # — a tooltip nobody knows is there is not documentation.
         caption = QLabel("Ranks each modifier applies to  \u24d8")
         caption.setToolTip(
-            "A modifier may cover part of an effect rather than all of it — a Blast 12 "
-            "whose top four ranks alone are Tiring pays for eight plain ranks and four "
-            "discounted ones. Widening a pair to the whole effect is how a band is taken "
-            "back off, and costs what it always did."
+            help_markup(
+                "**Partial modifiers:** an extra or flaw may cover only some of an effect's "
+                "ranks. A Blast 12 with Tiring on its top 4 ranks pays for 8 plain ranks and 4 "
+                "cheaper ones.\n\nSet a band back to the whole effect to remove it."
+            )
         )
         layout.addWidget(caption)
         self._rank_bands_host = QVBoxLayout()
@@ -1242,9 +1245,10 @@ class PowerConstructorWindow(QMainWindow):
 
         self._stacks = QCheckBox("Stacks with other bonuses")
         self._stacks.setToolTip(
-            "Equipment bonuses normally do not stack — with each other or with powers, "
-            "the best one applies. Tick this to add this item's bonus on top of the "
-            "winner instead. It is a homerule, and the item's card is badged ⌂ for it."
+            help_markup(
+                "**Homerule:** add this item's bonus on top of the best one. Normally equipment "
+                "bonuses don't stack, with each other or with powers. The item's card is marked ⌂."
+            )
         )
         self._stacks.toggled.connect(self._on_stacks_toggled)
         row.addWidget(self._stacks)
@@ -1283,8 +1287,8 @@ class PowerConstructorWindow(QMainWindow):
         for category in self._data.equipment_categories:
             self._attaches.addItem(category.title or category.id, category.id)
         self._attaches.setToolTip(
-            "Gear this can be fitted to. An accessory lives on its host rather than "
-            "loose on the sheet, and its price folds into the host's."
+            "Gear this can be fitted to. An accessory lives on its host instead of on the sheet, "
+            "and its cost is added to the host's."
         )
         self._attaches.currentIndexChanged.connect(self._on_attaches_changed)
         guard_wheel(self._attaches)
@@ -1376,8 +1380,8 @@ class PowerConstructorWindow(QMainWindow):
         # hatch, and a first look at the window should read the summary, not it.
         self._dev_mode = QCheckBox("Edit by hand (house rules)")
         self._dev_mode.setToolTip(
-            "Edit this power's derived game terms, readouts, and point cost by hand. "
-            "A power with any override is flagged as homerule on its card."
+            "Edit this power's game terms, readouts and point cost by hand. A power with any "
+            "manual change is marked as homerule on its card."
         )
         self._dev_mode.toggled.connect(self._on_dev_mode_toggled)
 

@@ -16,6 +16,7 @@ unlike the rest of the build — so :meth:`set_locked` is a deliberate no-op.
 
 from __future__ import annotations
 
+import html
 from collections.abc import Callable
 
 from PySide6.QtCore import Signal
@@ -183,15 +184,19 @@ def condition_tooltip(
     """
     if record is None:
         return ""
-    parts: list[str] = []
+    # Rich text, laid out the way a rule entry reads: the name in bold, where it came
+    # from beside it, what it does, then how it ends.
+    heading = f"<b>{html.escape(record.name)}</b>"
     if applied.provenance is not None:
         umbrella = conditions_by_id.get(applied.provenance)
-        parts.append(f"via {umbrella.name if umbrella else applied.provenance}")
+        source = umbrella.name if umbrella else applied.provenance
+        heading += f" <i>(from {html.escape(source)})</i>"
+    parts = [heading]
     if record.effect:
-        parts.append(record.effect)
+        parts.append(html.escape(record.effect))
     if record.recovery and record.recovery != "n/a":
-        parts.append(f"Recovery: {record.recovery}")
-    return "\n\n".join(parts)
+        parts.append(f"<i>Recovery:</i> {html.escape(record.recovery)}")
+    return "<p>" + "</p><p>".join(parts) + "</p>"
 
 
 class ConditionsSection(QGroupBox):

@@ -120,10 +120,10 @@ MODE_CAPTIONS = {
     MODE_REQUEST: "Request only",
 }
 MODE_HELP = (
-    "GM resolves: the GM rolls every NPC's resistance, each player targeted is asked to "
-    "roll theirs, and the conditions land on their own.\n\n"
-    "Request only: only the impress check is rolled. Its card in the history offers each "
-    "target a button to resist with, and they apply what it does themselves."
+    "**GM resolves:** the GM rolls every NPC's resistance, each player targeted is asked "
+    "to roll theirs, and the conditions are applied automatically.\n\n"
+    "**Request only:** only the impress check is rolled. Its card in the history gives "
+    "each target a button to resist with, and they apply the result themselves."
 )
 
 
@@ -185,33 +185,33 @@ def _preselect_skill(combo: QComboBox, impression: Impression | None, data: Game
 # -- what the windows say, and what they keep behind a "?" ------------------------
 
 DIALOG_HELP = (
-    "You declare the impression, the skill you roll and who you are impressing. The GM "
+    "You choose the impression, the skill you roll and who you are impressing. The GM "
     "sets the situational modifiers and rolls.\n\n"
-    "The impression decides what success does and the skill decides what is rolled, so "
-    "any pairing is allowed. An impression that needs an advantage you lack is greyed "
-    "out — hover it to see which."
+    "The impression decides what success does and the skill decides what you roll, so "
+    "any pairing is allowed. Only impressions you can make are listed: some need an "
+    "advantage (Dazed needs Dazing Interaction)."
 )
 DIALOG_HELP_OFFLINE = (
-    "Not in a session: the check is rolled here with the modifiers you set, and its card "
-    "in the history offers each target a button to resist with."
+    "**Not in a session:** the check is rolled here with the modifiers you set, and its "
+    "card in the history gives each target a button to resist with."
 )
 GM_HELP = (
-    "Set who impresses whom, the situational modifiers, and an adjustment (a bonus or a "
-    "penalty) to the impresser's check. Roll, and the window stays open: each roll comes "
-    "back into its row as it is made.\n\n"
-    "Each target resists with its highest option unless you pick one. A player targeted "
-    "is asked to roll once the check is in, and picks how to resist then.\n\n"
-    "A target's own Adjust moves the check against that target alone."
+    "Set who impresses whom, the situational modifiers, and an adjustment to the "
+    "impresser's check. Roll, and the window stays open: each roll comes back into its "
+    "row as it is made.\n\n"
+    "**Resisting:** each target resists with its highest option unless you pick one. A "
+    "player is asked to roll once the check is in, and picks how to resist then.\n\n"
+    "**Adjust** on a target's row moves the check against that target alone."
 )
 
 
 def targets_help(data: GameData) -> str:
     """What the Targets box explains: picking them, and the group penalty."""
     return (
-        "Drag the card of everyone you are impressing off the Scene, or pick them from "
-        "Add.\n\n"
-        "More than one target is a group impression: one check, at "
-        f"{_signed(data.impress.group_penalty)} once, each target resisting it separately."
+        "**Picking targets:** drag cards from the scene below (or from the Scene block) "
+        "into this box, or right-click a card.\n\n"
+        "**Group impression:** more than one target means one check at "
+        f"{_signed(data.impress.group_penalty)}, and each target resists it separately."
     )
 
 
@@ -474,8 +474,9 @@ class ImpressDialog(QDialog):
     the resistance as a button for whoever is on the receiving end.
 
     Targets are picked the way an area's are: scene cards dragged into the field, or
-    picked off its Add button. Modeless, for the reason the area's dialog is — a modal
-    one swallows the press that starts dragging a card off the board behind it.
+    right-clicked off the scene copy under it. Modeless, for the reason the area's
+    dialog is — a modal one swallows the press that starts dragging a card off the
+    board behind it.
     """
 
     def __init__(

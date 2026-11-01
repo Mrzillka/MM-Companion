@@ -158,6 +158,7 @@ from mm_companion.ui.widgets import (
     BOLD_STYLE,
     ElidingLabel,
     HeldRebuild,
+    help_markup,
     hline_separator,
     muted_style,
     rebuilding,
@@ -175,18 +176,17 @@ _RollLine = RollLine
 
 # What a click on a card does, by activation role (see _activation_role).
 _CLICK_HINTS = {
-    "toggle": "Click this card to switch the power on or off — its bonuses apply "
-    "only while it is active.",
-    "select": "Click this card to make it the array's live alternate; its siblings switch off.",
+    "toggle": "Click the card to switch this power on or off. Its bonuses apply only while "
+    "it is on.",
+    "select": "Click the card to make this the array's active effect. The others switch off.",
 }
 
 # The same click while the array's points are split across its Dynamic members, when
 # "its siblings switch off" has stopped being true: the split decides who is running,
 # so selecting one member no longer switches anything off (see live_array_children).
 _SPLIT_SELECT_HINT = (
-    "This array's points are split across its Dynamic members, so they are all running "
-    "at once — selecting one alternate only matters once the pool is handed back, which "
-    "is the ↺ button on the group's title bar."
+    "The array's points are split across its Dynamic effects, so they all run at once. "
+    "Picking one matters again after ↺ on the group's title bar hands the points back."
 )
 
 # What each group mode is called on its title bar.
@@ -684,9 +684,8 @@ class _EffectSelector(QWidget):
         self._combo.addItems(titles)
         self._combo.setCurrentIndex(max(0, min(current, len(titles) - 1)))
         self._combo.setToolTip(
-            "Only one effect of an array runs at a time — that is what makes an array "
-            "cheaper than the same effects bought separately. The others contribute "
-            "nothing to the sheet until you pick them."
+            "Only one effect of an array runs at a time. That is why an array costs less than the "
+            "same effects bought separately. The others add nothing until picked."
         )
         self._combo.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not interactive)
         self._combo.setCursor(
@@ -1297,8 +1296,8 @@ class PowersSection(HeldRebuild, TitledSection):
         if any(effect.extra_effort for effect in power.effects):
             clear = menu.addAction("Clear Extra Effort")
             clear.setToolTip(
-                "Extra Effort lasts until the end of your turn, and nothing here tracks "
-                "turns — take the ranks back when it is over."
+                "Extra Effort lasts until the end of your turn, and the app doesn't track turns. "
+                "Take the ranks back when it is over."
             )
             clear.triggered.connect(lambda _checked=False, p=power: self.clear_extra_effort(p))
             offered = True
@@ -1308,9 +1307,9 @@ class PowersSection(HeldRebuild, TitledSection):
                 menu.addSeparator()
             use = menu.addAction("Use once")
             use.setToolTip(
-                "Count a use of its Short-Term or Fades effects without rolling — an "
-                "always-on Protection that fades as it is hit, say. Rolling off the card "
-                "counts one by itself."
+                "Count one use of its Short-Term or Fades effect without rolling (an always-on "
+                "Protection that fades as it is hit, say). Rolling from the card counts a use by "
+                "itself."
             )
             use.triggered.connect(
                 lambda _checked=False, p=power, i=tuple(counted): self.spend_uses(p, i)
@@ -1318,8 +1317,8 @@ class PowersSection(HeldRebuild, TitledSection):
             recharge = menu.addAction("Recharge")
             recharge.setEnabled(any(power.effects[i].uses for i in counted))
             recharge.setToolTip(
-                "Give the uses back — recharging, rest, repair or reloading, usually "
-                "outside action time and at least an hour (p158, p160)."
+                "Restore the uses: recharging, resting, repairing or reloading. That usually "
+                "takes at least an hour, outside action time."
             )
             recharge.triggered.connect(lambda _checked=False, p=power: self.recharge(p))
             offered = True
@@ -1335,9 +1334,11 @@ class PowersSection(HeldRebuild, TitledSection):
             area.setCheckable(True)
             area.setChecked(power.area_use)
             area.setToolTip(
-                "Lets this attack be used on an area without buying the Area extra — the "
-                "GM's call, as for an attacker far larger than its target. The area's "
-                "rank is capped at your Power Level."
+                help_markup(
+                    "**Area use:** use this attack on an area without buying the Area extra. It's "
+                    "the GM's call (an attacker much larger than its target, say). The area's "
+                    "rank is capped at your Power Level."
+                )
             )
             area.toggled.connect(lambda on, p=power: self.set_area_use(p, on))
         return menu
@@ -1586,10 +1587,11 @@ class PowersSection(HeldRebuild, TitledSection):
             return None
         label = QLabel()
         label.setToolTip(
-            "This array's points are shared across its Dynamic members, which run at "
-            "the same time at reduced effectiveness. Pick a pip on a member's rank "
-            "scale to give it a share of the pool; hand the whole pool back with the "
-            "button beside this."
+            help_markup(
+                "**Dynamic:** this array's points are shared by its members, which all run at "
+                "once at reduced strength.\n\nClick a pip on a member's rank scale to give it a "
+                "share. The button beside this hands the whole pool back."
+            )
         )
         # A group's header is built before its members' cards, so their dials have not
         # registered yet and the coordinator does not exist. Say the truth now and let
@@ -1666,10 +1668,11 @@ class PowersSection(HeldRebuild, TitledSection):
         label = QLabel(_SplitGroup.readout_text(assigned, pool))
         label.setStyleSheet(muted_style())
         label.setToolTip(
-            "This power's points are shared across its Dynamic effects, which run at "
-            "the same time at reduced effectiveness. Pick a pip on an effect's rank "
-            "scale to give it a share of the pool; hand the whole pool back with the "
-            "button beside this."
+            help_markup(
+                "**Dynamic:** this power's points are shared by its effects, which all run at "
+                "once at reduced strength.\n\nClick a pip on an effect's rank scale to give it a "
+                "share. The button beside this hands the whole pool back."
+            )
         )
         self._pool_labels[power.id] = label
         return label
@@ -1843,12 +1846,12 @@ class PowersSection(HeldRebuild, TitledSection):
         """
         role = self._activation_role(node, parent)
         if self._selectable_array_member(parent) and _pool_is_split(parent):
-            card.setToolTip(_SPLIT_SELECT_HINT)
+            card.set_click_hint(_SPLIT_SELECT_HINT)
             return
         if not (role and interactive):
             return
         card.set_clickable(True)
-        card.setToolTip(_CLICK_HINTS[role])
+        card.set_click_hint(_CLICK_HINTS[role])
         card.clicked.connect(lambda n=node, p=parent, r=role: self._on_card_clicked(n, p, r))
 
     def _show_activation(
@@ -2054,6 +2057,7 @@ class PowersSection(HeldRebuild, TitledSection):
             name.setStyleSheet(BOLD_STYLE)
         name.setFont(font)
         layout.addWidget(name)
+        card.set_hint_target(name)
 
         # A stunt says so, and says what it is a stunt *of*: it is a card of its own
         # rather than a member of the source power's array, so the relationship is only
@@ -2064,9 +2068,11 @@ class PowersSection(HeldRebuild, TitledSection):
             badge = QLabel(f"✦ stunt of {of}")
             badge.setStyleSheet(muted_style(italic=True))
             badge.setToolTip(
-                "A power stunt: a temporary alternate effect bought with Extra Effort "
-                "rather than with Power Points (p20). It costs nothing, it is not saved "
-                "with the character, and it lasts as long as the scene does."
+                help_markup(
+                    "**Power stunt:** a temporary alternate effect paid for with Extra Effort "
+                    "instead of Power Points. It costs nothing, isn't saved with the character, "
+                    "and lasts until the end of the scene."
+                )
             )
             layout.addWidget(badge)
 
@@ -2094,7 +2100,7 @@ class PowersSection(HeldRebuild, TitledSection):
             homerule = QLabel("⌂")
             homerule.setStyleSheet(tinted_style("tint.homerule"))
             homerule.setToolTip(
-                "Homerule power — carries manual (Dev-mode) overrides or a custom modifier."
+                "Homerule power — carries manual (Edit by hand) overrides or a custom modifier."
             )
             layout.addWidget(homerule)
         layout.addStretch()

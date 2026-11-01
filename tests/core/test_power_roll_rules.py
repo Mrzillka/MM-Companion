@@ -200,9 +200,12 @@ def test_a_choice_of_two_saves_is_rolled_with_the_targets_own_number(
     assert own.label.endswith(f"({picked})")
 
 
-def test_a_choice_of_two_saves_survives_the_wire(data, hero) -> None:
-    save = _choice_save(data, hero, "worst")
-    assert RollSpec.from_dict(sanitize_spec(save.to_dict())).trait_key == save.trait_key
+@pytest.mark.parametrize("against", ["worst", "best"])
+def test_a_choice_of_two_saves_survives_the_wire(data, hero, against) -> None:
+    save = _choice_save(data, hero, against)
+    assert save.pick == against
+    landed = RollSpec.from_dict(sanitize_spec(save.to_dict()))
+    assert (landed.trait_key, landed.pick) == (save.trait_key, save.pick)
 
 
 # -- a Linked power's one attack ---------------------------------------------------------

@@ -226,14 +226,14 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   any "whichever is higher" resistance can use it, and the import graph forbids
   `rolls` reaching up into `impress`. **`KIND_WORST_OF`** is its mirror (the lowest
   candidate), for an area resisted by the worst of two.
-- **A single-target power's save carries the same choice in its key, not its kind.**
-  An attack resisted by "Fortitude or Will" (Alternate Resistance's best or worst of
-  two) stays a `KIND_POWER_SAVE` — that kind is how a pin and a team attack find the
-  save on a power — and its `trait_key` is the `best_of_key`, led by `worst-of|` for
-  the worse (`save_choice_key`, `is_choice_key`, `choice_is_worst`). The format already
-  crossed the wire for Impress, so nothing about the protocol changed. Before it, the
-  save named nothing (`_save_key` refuses an "or"), and its button on a history card
-  rolled at +0. The GM's aimed-attack window offers the choice itself as the first
+- **A single-target power's save carries the same choice in its key and `pick`, not
+  its kind.** An attack resisted by "Fortitude or Will" (Alternate Resistance's best or
+  worst of two) stays a `KIND_POWER_SAVE` — that kind is how a pin and a team attack
+  find the save on a power. Its `trait_key` is the `best_of_key`, and the spec's own
+  `pick` field says `"best"` or `"worst"` (`save_choice`, `is_choice_key`,
+  `rolls_worst`); a choice save with no pick takes the better. `pick` is protocol
+  **v19**. Before it, the save named nothing (`_save_key` refuses an "or"), and its
+  button on a history card rolled at +0. The GM's aimed-attack window offers the choice itself as the first
   "Resists with" entry.
 - **`dc_from_total`** on a follow-up: its DC is the provoking roll's *total*, filled
   in by `follow_up_for_result(…, total=)`. The natural-1 graze rule does not apply to

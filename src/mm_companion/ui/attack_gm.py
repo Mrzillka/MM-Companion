@@ -43,12 +43,12 @@ from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.dice import ROUTINE_DIE
 from mm_companion.core.rules import (
+    PICK_WORST,
     MinionRules,
     RollSpec,
     TeamEntry,
     TeamOption,
     answer_rung,
-    choice_is_worst,
     combine_team_attack,
     critical_answer,
     defense_class,
@@ -688,7 +688,7 @@ class AttackWindow(QDialog):
                 # creature would roll it at, so the default is the rule rather than a guess.
                 picked = trait_roll_for(save, character, data)
                 if picked is not None:
-                    which = "Worst" if choice_is_worst(save.trait_key) else "Best"
+                    which = "Worst" if save.pick == PICK_WORST else "Best"
                     combo.addItem(
                         f"{which} of: {picked.label} {picked.modifier:+d}", save.trait_key
                     )

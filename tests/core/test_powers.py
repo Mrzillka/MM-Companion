@@ -4439,6 +4439,7 @@ def test_a_save_naming_two_resistances_names_both_for_the_target_to_choose() -> 
     save = next(s for s in power_rolls(Power(effects=[effect]), None, data) if s.dc)
     assert save.label.startswith("Fortitude or Will")
     assert save.trait_key == "resistance:FORTITUDE|resistance:WILL"
+    assert save.pick == "best"
 
 
 def test_a_dialled_down_power_reads_its_readouts_at_the_dialled_rank() -> None:

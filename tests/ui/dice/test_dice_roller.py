@@ -19,14 +19,14 @@ from __future__ import annotations
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QBoxLayout, QLabel, QPushButton
+from PySide6.QtWidgets import QApplication, QBoxLayout, QInputDialog, QLabel, QPushButton
 
 from mm_companion.core import storage
 from mm_companion.core.dice import resolve_check
 from mm_companion.core.rules import RollSpec
 from mm_companion.core.session.model import new_session
 from mm_companion.ui import dice_roller
-from mm_companion.ui.dice_roller import DiceRollerPanel, DiceRollerView, degree_text
+from mm_companion.ui.dice_roller import DiceRollerPanel, degree_text
 from mm_companion.ui.roll_history import (
     HISTORY_FLOOR_HEIGHT,
     MAX_CARDS,
@@ -36,6 +36,7 @@ from mm_companion.ui.roll_history import (
     RollHistoryPanel,
     roll_parameters,
 )
+from mm_companion.ui.roller.view import DiceRollerView
 from mm_companion.ui.session_bridge import SessionBridge, set_active_session
 
 pytestmark = pytest.mark.usefixtures("workspace")
@@ -384,9 +385,7 @@ def test_a_rename_that_would_collide_is_refused(
     view = DiceRollerView()
     view.panel._add_quick_roll({"bonus": 1, "penalty": 0}, name="Perception")
     view.panel._add_quick_roll({"bonus": 1, "penalty": 0}, name="Insight")
-    monkeypatch.setattr(
-        dice_roller.QInputDialog, "getText", staticmethod(lambda *a, **k: ("Perception", True))
-    )
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("Perception", True)))
 
     view.panel._rename_quick_roll(view.panel._quick_rolls[1])
 
@@ -434,9 +433,7 @@ def test_renaming_a_chip_persists_and_recaptions_it(
     view = DiceRollerView()
     entry = {"bonus": 1, "penalty": 0}
     view.panel._add_quick_roll(entry)
-    monkeypatch.setattr(
-        dice_roller.QInputDialog, "getText", staticmethod(lambda *a, **k: ("Perception", True))
-    )
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("Perception", True)))
 
     view.panel._rename_quick_roll(entry)
 
@@ -445,9 +442,7 @@ def test_renaming_a_chip_persists_and_recaptions_it(
     assert "Perception" in labels
 
     # And an empty answer puts the numbers back.
-    monkeypatch.setattr(
-        dice_roller.QInputDialog, "getText", staticmethod(lambda *a, **k: ("  ", True))
-    )
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("  ", True)))
     view.panel._rename_quick_roll(view.panel._quick_rolls[0])
     assert "name" not in view.panel._quick_rolls[0]
 

@@ -180,7 +180,7 @@ def test_the_stack_grows_away_from_the_chosen_corner(qapp, live_toasts) -> None:
 
 
 def test_a_private_roll_pops_up_too(qapp, live_toasts) -> None:
-    from mm_companion.ui.dice_roller import LocalRollHistory
+    from mm_companion.ui.roller.history import LocalRollHistory
 
     history = LocalRollHistory()
     history.add_roll({"die": 5, "bonus": 2, "penalty": 0, "dc": None, "result": None})

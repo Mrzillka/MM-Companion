@@ -444,7 +444,7 @@ class RollToaster(QObject):
 
     One per application (:func:`roll_toaster`), fed by the histories themselves —
     :class:`~mm_companion.ui.roll_history.RollHistoryPanel` for the table's shared
-    log and :class:`~mm_companion.ui.dice_roller.LocalRollHistory` for one's own —
+    log and :class:`~mm_companion.ui.roller.history.LocalRollHistory` for one's own —
     with *live* entries only: a reconnect replaying the log must not flood the
     screen with an evening's rolls.
 

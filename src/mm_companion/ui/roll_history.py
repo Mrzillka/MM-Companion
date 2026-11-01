@@ -157,7 +157,7 @@ HISTORY_FLOOR_HEIGHT = 90
 def size_history_scroll(scroll: QScrollArea) -> None:
     """Give a history's scroll area its floors, and hand back the size to ask for.
 
-    Both histories — the private :class:`~mm_companion.ui.dice_roller.LocalRollHistory`
+    Both histories — the private :class:`~mm_companion.ui.roller.history.LocalRollHistory`
     and the shared :class:`RollHistoryPanel` — are the same widget in every way
     that matters to a layout: a scrolling list of the same cards. So the three
     numbers that make one behave live here once, rather than being restated in a
@@ -774,7 +774,7 @@ class RequestCard(HistoryCard):
 class SessionRollCard(HistoryCard):
     """One roll in the shared history: who rolled it, what it was, how it went.
 
-    Deliberately not :class:`~mm_companion.ui.dice_roller.RollCard`: that one is
+    Deliberately not :class:`~mm_companion.ui.roller.history.RollCard`: that one is
     the local roller's own entry and can be thrown away, while this is a line in a
     log everyone shares. Its parameters can be saved for reuse (for a roll of one's
     own), and the GM — and only the GM — can strike it from everyone's log with the

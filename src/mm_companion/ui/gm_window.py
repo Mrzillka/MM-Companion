@@ -64,7 +64,6 @@ from mm_companion.ui.blocks.gm_registry import (
 from mm_companion.ui.card_drop import CardDropFlow
 from mm_companion.ui.compact import CompactController
 from mm_companion.ui.connection_indicator import install_connection_indicator
-from mm_companion.ui.dice_roller import DiceRollerView
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.gm.actions import GMActionsMixin
 from mm_companion.ui.gm.hosting import GMHostingMixin
@@ -101,6 +100,7 @@ from mm_companion.ui.pin_picker import PinPickerDialog
 from mm_companion.ui.pinned_panel import PinnedBoard
 from mm_companion.ui.player_card import PlayerCard
 from mm_companion.ui.roll_history import RollHistoryPanel
+from mm_companion.ui.roller.view import DiceRollerView
 from mm_companion.ui.scene_board import NO_SCENE_GM, SceneBoard
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.session_bridge import SessionBridge, last_session, set_active_session
@@ -602,7 +602,7 @@ class GMWindow(
     def _build_rolls_box(self) -> QGroupBox:
         """The GM's own roller beside the table's shared history.
 
-        The same :class:`~mm_companion.ui.dice_roller.DiceRollerView` a player's
+        The same :class:`~mm_companion.ui.roller.view.DiceRollerView` a player's
         Dice block holds — so it reflows to the room it is given and follows the
         Normal / Compact / Extended preference exactly as theirs does — with the
         two things only a GM gets: a **Hidden roll** switch, and this window's own

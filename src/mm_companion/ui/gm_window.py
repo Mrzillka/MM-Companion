@@ -4164,7 +4164,7 @@ class GMWindow(QMainWindow):
         if entry.card is not None:
             entry.card.refresh_conditions()
             # And the pinned numbers, which a condition moves: a Vulnerable NPC's
-            # Defence chip must read what the GM should actually use. The chips
+            # Defense chip must read what the GM should actually use. The chips
             # resolve from the model, so this is only a matter of asking them to.
             # (A player's card gets this for free — a condition there comes back as
             # a fresh snapshot, which restates the whole card.)

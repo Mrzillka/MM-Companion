@@ -1,7 +1,7 @@
 """Building a mook from a handful of numbers.
 
 Most NPCs a GM writes mid-session are not builds — they are a handful of numbers
-and a name. A bandit hits at +6, does damage 5, is Defence 6 and Toughness 4, and
+and a name. A bandit hits at +6, does damage 5, is Defense 6 and Toughness 4, and
 nothing else about it will ever be looked at. Walking that through the full
 character sheet and the Power Constructor is several minutes of work for a
 creature that lives one fight.
@@ -175,7 +175,7 @@ def quick_npc(
 
     *defence*, *toughness*, *fortitude* and *will* are bought ranks. A quick NPC has
     no abilities, so every resistance base is 0 and the numbers entered are the
-    numbers the sheet shows; Dodge derives from Defence and follows on its own.
+    numbers the sheet shows; Dodge derives from Defense and follows on its own.
 
     *initiative* is the bonus it rolls Initiative with. It is written to the ability
     initiative is rolled off (``system.json``'s ``default_initiative_ability``), the

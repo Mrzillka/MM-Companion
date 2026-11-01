@@ -638,7 +638,7 @@ ask for a check nobody had provoked.
 - **The choices are `rules/pins.requested_roll_choices(data)`** — a third
   character-free list beside `default_pin_choices`, and smaller again: abilities,
   resistances, skills and initiative, being exactly the four kinds `localize_spec`
-  can answer. **No Defence DC** (it resolves to no spec — it is a difficulty), and
+  can answer. **No Defense DC** (it resolves to no spec — it is a difficulty), and
   **no powers or equipment** (a pin names a power by an id belonging to one
   character, so there is nothing honest to localize on anyone else's sheet). Labels
   are full names rather than `pin_label`'s chip abbreviations: these are read in a

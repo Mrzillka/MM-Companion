@@ -165,13 +165,20 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
   caller's to say (`SettingsWindow(page=GMPage.title)`), which is how the GM window
   lands on its own rather than on the sheet's; a caller that names none gets the
   **first**, so the tuple's order is a decision and not an accident.
+- **One OK / Cancel / Apply bar saves every page.** Pages have no Save button of
+  their own: Apply calls `save()` on each dirty page, OK applies and closes (staying
+  open if a page's save did not take — a session that refused its rules), Cancel
+  closes without saving. Closing with the title bar's ✕ still asks page by page.
+  Apply's enabled state is *polled* (`is_dirty` every 250 ms) rather than signalled,
+  because pages change in too many ways (a pin dragged, a theme duplicated) for each
+  to announce.
 - The Themes page separates two things on purpose. **Picking** a preset writes
   through at once (`set_active_theme`), as the old menu did. **Editing** one is a
   draft: `TokenEditor` (`ui/settings/token_editor.py`) generates a form by walking
   the preset's token maps and choosing a widget from the *shape of each value* —
   never a hardcoded list, so a token added later or by a mod appears on its own.
   Each edit previews live through `theme.set_preview(draft, app)`, debounced;
-  nothing is written until Save, and `closeEvent` always calls `discard()` so a
+  nothing is written until OK or Apply, and `closeEvent` always calls `discard()` so a
   preview never outlives its window. A filter box above the form
   (`TokenEditor.set_filter`) matches every word against the token's own dotted
   name *and* its label and hint, folding away any group box it empties; it

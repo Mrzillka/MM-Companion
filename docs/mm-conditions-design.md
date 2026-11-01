@@ -75,7 +75,7 @@ The typed effect fields exist so the engine never parses `effect` prose. `Impair
 `category` is a **rules fact** — whether a condition sits on the damage ladder, and
 the axis the applied chips on a sheet are grouped by. `group` is **ergonomics**: it
 is what splits a "+" menu into submenus (Senses, Movement, Action & Control,
-Defence, Impairment, Damage), because a flat list of 36 conditions is slow to
+Defense, Impairment, Damage), because a flat list of 36 conditions is slow to
 search in the middle of a round. The titles and their display order come from
 `_meta.conditionGroups`; a condition whose group is not listed there — a mod's,
 say — is offered flat below the submenus, and a ruleset that declares no groups at

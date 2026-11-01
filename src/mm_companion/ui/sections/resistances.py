@@ -19,7 +19,7 @@ single total says nothing about which:
 The spin box used to hold the *total* instead, with the model storing the difference
 from a base the widget had to subtract back out on every edit. Three numbers cost
 that trick nothing and end it: the base is a column now, so it can move — a power
-raising Stamina, or Dodge's own base moving when Defence is bought — without ever
+raising Stamina, or Dodge's own base moving when Defense is bought — without ever
 re-seeding a spin box the player is typing in, and without a clamped display being
 able to rewrite the ranks underneath.
 
@@ -130,7 +130,7 @@ class ResistancesSection(TitledSection):
 
     def _on_resistance_changed(self, key: str, value: int) -> None:
         # The spin box holds the bought ranks and the model stores the bought ranks,
-        # so the edit is the write. Dodge derives from the Defence trait, though, so
+        # so the edit is the write. Dodge derives from the Defense trait, though, so
         # buying a rank of one resistance can still move another's readout.
         self._character.resistances[key] = value
         self.refresh_readouts()
@@ -182,7 +182,7 @@ class ResistancesSection(TitledSection):
 
         The **Ability** column is the derived base, tinted by whatever is raising the
         trait it comes from (:func:`~mm_companion.core.rules.resistance_base_bonus` —
-        an Enhanced Stamina, or Defence's own boost reaching Dodge). The **Total** is
+        an Enhanced Stamina, or Defense's own boost reaching Dodge). The **Total** is
         :func:`~mm_companion.core.rules.resistance_total`, so it carries the ranks, the
         base and every standing bonus at once, with the conditions painted over it —
         Hit's penalty on Toughness, Vulnerable/Defenseless halving or zeroing an active
@@ -216,7 +216,7 @@ class ResistancesSection(TitledSection):
     def _base_value(self, res: Resistance) -> int | None:
         """This resistance's base, or ``None`` where there is no trait to derive from.
 
-        Defence is bought outright rather than derived, so its Ability cell reads as a
+        Defense is bought outright rather than derived, so its Ability cell reads as a
         dash instead of the 0 :func:`~mm_companion.core.rules.resistance_base` returns
         for it — a 0 there claims a base that is merely low.
         """

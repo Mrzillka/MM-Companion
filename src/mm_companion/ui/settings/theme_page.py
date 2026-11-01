@@ -154,9 +154,7 @@ class ThemePage(SettingsPage):
 
     def _build_actions(self) -> QHBoxLayout:
         row = QHBoxLayout()
-        self._save_button = QPushButton("Save")
-        self._save_button.clicked.connect(self.save)
-        row.addWidget(self._save_button)
+        # Saving is the window's OK / Apply bar; Revert stays, being this page's own.
         self._revert_button = QPushButton("Revert")
         self._revert_button.clicked.connect(self._revert)
         row.addWidget(self._revert_button)
@@ -261,7 +259,6 @@ class ThemePage(SettingsPage):
         # Through the shared helper, not setReadOnly: a locked field also sheds its
         # frame, so it reads as a label like every other locked field in the app.
         set_widget_locked(self._name_field, not editable)
-        self._save_button.setEnabled(editable and self._dirty)
         self._revert_button.setEnabled(editable and self._dirty)
         self._delete_button.setEnabled(editable)
         self._delete_button.setText("Revert to built-in" if shadow else "Delete")

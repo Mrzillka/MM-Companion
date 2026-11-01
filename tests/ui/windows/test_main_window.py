@@ -390,3 +390,62 @@ def test_renaming_after_the_first_edit_updates_the_title(qapp: QApplication) -> 
 
     fields["hero_name"].setText("Batman")
     assert win.windowTitle() == "MM-Companion — *Batman"
+
+
+def test_the_file_menu_has_new_and_standard_shortcuts(qapp: QApplication) -> None:
+    """New, Open, Save and Save As are where every other application has them."""
+    win = MainWindow(locked=False)
+    entries = {}
+    for action in win.menuBar().actions():
+        if action.text() == "&File":
+            entries = {e.text(): e for e in action.menu().actions() if e.text()}
+            assert entries["New"].isEnabled()
+            assert entries["New"].shortcut() == QKeySequence(QKeySequence.StandardKey.New)
+            assert entries["Open..."].shortcut() == QKeySequence(QKeySequence.StandardKey.Open)
+            assert entries["Save"].shortcut() == QKeySequence(QKeySequence.StandardKey.Save)
+            # On the window too, so compact mode (no menu bar) keeps them.
+            assert entries["Save"] in win.actions()
+    assert entries, "no File menu"
+
+
+def test_settings_has_no_dead_placeholder_entries(qapp: QApplication) -> None:
+    win = MainWindow(locked=False)
+    assert "Rules" not in _menu_labels(win, "&Settings")
+
+
+def test_file_new_opens_a_blank_editable_sheet_of_the_same_kind(qapp: QApplication) -> None:
+    win = MainWindow(locked=True)
+    opened = []
+    win.childOpened.connect(opened.append)
+    win._new()
+    (child,) = opened
+    assert type(child) is MainWindow
+    assert child._sheet.locked is False
+    child.close()
+
+    npc = NPCWindow()
+    npc_opened = []
+    npc.childOpened.connect(npc_opened.append)
+    npc._new()
+    assert type(npc_opened[0]) is NPCWindow
+    npc_opened[0].close()
+
+
+def test_a_locked_sheet_says_how_to_edit_it_until_the_user_has_unlocked_once(
+    qapp: QApplication,
+) -> None:
+    first = MainWindow(locked=True)
+    assert first._lock_hint is not None
+    assert first._lock_action.shortcut() == QKeySequence("Ctrl+E")
+
+    first._lock_action.trigger()  # unlock
+
+    assert first._lock_hint is None
+    assert storage.lock_hint_seen()
+    again = MainWindow(locked=True)
+    assert getattr(again, "_lock_hint", None) is None
+
+
+def test_an_unlocked_sheet_shows_no_lock_hint(qapp: QApplication) -> None:
+    win = MainWindow(locked=False)
+    assert getattr(win, "_lock_hint", None) is None

@@ -22,19 +22,57 @@ def test_start_window_shows_the_action_buttons(qapp: QApplication) -> None:
     labels = {b.text() for b in window.findChildren(QPushButton) if not b.isHidden()}
     assert labels == {
         "Create New Character",
-        "Open Existing",
+        "Open from File…",
         "Open GM Mode",
         "Join Session",
         "Manage Mods",
         "Settings",
         "Exit",
+        # The empty library's own way forward.
+        "Create your first character",
     }
 
 
 def test_empty_store_shows_the_empty_state(qapp: QApplication) -> None:
     window = StartWindow()
-    assert window._library_stack.currentWidget() is window._empty_label
+    assert window._library_stack.currentWidget() is window._empty_state
     assert window._cards_flow.count() == 0
+
+
+def test_the_empty_state_offers_to_create_a_character(qapp: QApplication) -> None:
+    window = StartWindow()
+    (button,) = [
+        b
+        for b in window._empty_state.findChildren(QPushButton)
+        if b.text() == "Create your first character"
+    ]
+    button.click()
+    try:
+        assert len(window._child_windows) == 1
+        assert window._child_windows[0]._lock_action.isChecked() is False
+    finally:
+        for child in list(window._child_windows):
+            child.close()
+
+
+def test_a_sheet_opened_from_a_sheet_keeps_the_launcher_hidden(qapp: QApplication) -> None:
+    """File ▸ New from a sheet is tracked like one the launcher opened: closing the
+    first sheet leaves the launcher hidden while the second is still up."""
+    window = StartWindow()
+    window.show()
+    window._create_new_character()
+    first = window._child_windows[0]
+    first.show()
+    first._new()
+    assert len(window._child_windows) == 2
+    second = window._child_windows[1]
+    second.show()
+
+    first.close()
+    assert window.isHidden()
+
+    second.close()
+    assert not window.isHidden()
 
 
 def test_create_new_character_opens_an_unlocked_sheet(qapp: QApplication) -> None:
@@ -97,7 +135,7 @@ def test_deleting_a_card_removes_the_file_and_refreshes(
 
     assert not path.exists()
     assert window._cards_flow.count() == 0
-    assert window._library_stack.currentWidget() is window._empty_label
+    assert window._library_stack.currentWidget() is window._empty_state
 
 
 def test_declining_the_delete_prompt_keeps_the_file(
@@ -153,7 +191,7 @@ def test_the_library_survives_a_round_trip_through_the_empty_state(
 
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
     card.deleteRequested.emit(card._summary)
-    assert window._library_stack.currentWidget() is window._empty_label
+    assert window._library_stack.currentWidget() is window._empty_state
     # Both halves outlive the swap — the wrappers alone are not proof, since the
     # flow's own count() is a Python override that answers from a freed object.
     assert shiboken6.Shiboken.isValid(window._cards_container)
@@ -164,5 +202,5 @@ def test_the_library_survives_a_round_trip_through_the_empty_state(
     assert window._library_stack.currentWidget() is window._cards_container
     cards = [window._cards_flow.itemAt(i).widget() for i in range(window._cards_flow.count())]
     assert [c._summary.name for c in cards] == ["Kestrel"]
-    assert shiboken6.Shiboken.isValid(window._empty_label)
+    assert shiboken6.Shiboken.isValid(window._empty_state)
     window.close()

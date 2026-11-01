@@ -1,4 +1,4 @@
-"""The Character Image block: a user-loadable portrait.
+"""The Portrait block (key ``character_image``): a user-loadable character image.
 
 Split out of the former base-info block so the portrait can be arranged
 independently. The image fills the whole block and rescales with it — keeping its

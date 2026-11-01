@@ -136,7 +136,7 @@
     "_linkedAttackBonus": "Linked effects use a single attack check (PDF p157, printed p155), and the book does not say at which bonus when theirs differ, nor does any published ruling. first (the first attacking effect on the card, the lead), highest, or lowest.",
     "linkedAttackBonus": "first",
     "derived_traits": [
-      { "key": "DEF", "label": "Defence" },
+      { "key": "DEF", "label": "Defense" },
       { "key": "initiative", "label": "Initiative" }
     ],
     "_ranged_distance": "A Ranged effect reaches rank x distance value: short range is the effect rank times the distance at distanceValue (distance rank 1), and each step reads one distance rank further (medium rank x distance rank 2, long rank x distance rank 3). Core book p104 (PDF p106) and p198. multiplyByRank false would make the effect rank itself the distance rank instead.",

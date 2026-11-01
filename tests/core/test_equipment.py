@@ -704,7 +704,7 @@ def test_a_fitted_accessorys_own_effects_reach_the_weapon(data, hero) -> None:
 def test_a_shields_enhanced_trait_costs_and_boosts_as_it_always_did(data, hero) -> None:
     """The authored ``config["target"]`` shape predates the trait allocation.
 
-    Enhanced Trait is priced "as trait" now, but Defence is a derived resistance bought
+    Enhanced Trait is priced "as trait" now, but Defense is a derived resistance bought
     at the combat rate — the same 2 points a rank the flat base cost used to charge — so
     a shield's price is unmoved, and its single authored target still reads back through
     the fallback in :func:`~mm_companion.core.rules.boost_allocations`.

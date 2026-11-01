@@ -82,9 +82,9 @@ def test_the_choices_are_the_four_kinds_a_sheet_can_answer(data) -> None:
 
 
 def test_no_choice_names_something_only_one_character_has(data) -> None:
-    """No powers, no equipment, no Defence DC.
+    """No powers, no equipment, no Defense DC.
 
-    A power pin is an id belonging to one character, and a Defence DC resolves to
+    A power pin is an id belonging to one character, and a Defense DC resolves to
     no spec at all — neither is a thing to put in somebody else's roller.
     """
     groups = requested_roll_choices(data)

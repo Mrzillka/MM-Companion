@@ -428,6 +428,11 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   open at the length of whatever the power was called, and a block narrower than that
   clipped its own buttons off rather than letting the card adapt. Equipment gets all of
   it for nothing, since an item's card is drawn by the same code.
+- **Closing the constructor by hand asks before losing a build.** The window snapshots
+  the build's `to_dict()` when it opens; a ✕ (a *spontaneous* close) on a build that
+  differs offers Save / Discard / Cancel. A close from code — a host tearing it down, a
+  test — never asks. Save goes through `_try_save`, the checks without the `close()`,
+  because a `close()` re-entered from inside `closeEvent` is ignored by Qt.
 - **The constructor forwards rolls; it does not make them.** It is a window, not a sheet
   block, so it is not on the block bus — `PowerConstructorWindow.rollRequested` is
   connected by the `PowersSection` that opened it, which hands the request on exactly as

@@ -68,7 +68,7 @@ DEFAULT_PRESET = "balance"
 #: this is only the order the dialog lays them out in.
 STAT_ROWS = (
     (("attack", "Attack"), ("effect", "Effect")),
-    (("defence", "Defence"), ("toughness", "Toughness")),
+    (("defence", "Defense"), ("toughness", "Toughness")),
     (("fortitude", "Fortitude"), ("will", "Will")),
 )
 

@@ -570,7 +570,7 @@ class FakeBridge(QObject):
 
 def test_with_no_session_the_page_is_the_book_and_greyed_out(qapp) -> None:
     page = SessionPage(bridge=FakeBridge(live=False))
-    assert not page._minions_box.isEnabled() and not page._save_button.isEnabled()
+    assert not page._minions_box.isEnabled() and not page.is_dirty()
     assert all(page.check(key).isChecked() for key in MinionRules().to_dict())
     assert not page.is_dirty()
 

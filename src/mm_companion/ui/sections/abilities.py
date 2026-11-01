@@ -1,9 +1,9 @@
 """The abilities block: a table of ability ranks backed by the shared model.
 
 Ability ranks live on the :class:`~mm_companion.core.character.Character`, so the
-spin boxes are views over it. A trait a power raises (Enhanced Trait) shows its
-enhanced total in green in the Total column — ``→ 5`` — without replacing the
-bought value; the boost is computed in
+spin boxes are views over it. The Total column shows each ability's effective
+value; a trait a power raises (Enhanced Trait) shows its enhanced total there in
+green without replacing the bought value; the boost is computed in
 :func:`~mm_companion.core.rules.trait_bonuses`, the *sheet-wide* number, so worn
 equipment shows in this column on the same terms as a power (and by the same
 no-stacking rule, gear that loses to a power does not).
@@ -35,7 +35,6 @@ from mm_companion.core.rules import (
 )
 from mm_companion.ui.lock import set_widget_locked
 from mm_companion.ui.sections.stat_table import (
-    COL_RANK,
     PinMenuState,
     apply_stat_effects,
     build_stat_table,
@@ -112,16 +111,12 @@ class AbilitiesSection(TitledSection):
         # it and both of them grow their line spacing rather than their empty half.
         layout.addWidget(self.table)
 
-        # A narrowed table sheds its Rank column, and the Total column then has to
-        # carry the number outright — see :meth:`refresh_enhancements`.
-        self.table.shedChanged.connect(self.refresh_enhancements)
-
         self.refresh_enhancements()
         self.refresh_cost()
 
     def _on_ability_changed(self, key: str, value: int) -> None:
         self._character.abilities[key] = value
-        # The base moved, so this ability's own "→ total" moves with it; the
+        # The base moved, so this ability's own total moves with it; the
         # resistances that derive from this ability are refreshed by the sheet,
         # which listens to abilityChanged.
         self.refresh_enhancements()
@@ -149,15 +144,7 @@ class AbilitiesSection(TitledSection):
         self.set_priced_title("Abilities", ability_points_spent(self._character, self._data))
 
     def refresh_enhancements(self) -> None:
-        """Recompute each ability's Total cell from standing boosts and condition penalties.
-
-        The cell normally reads ``→ N`` and stays blank on a trait nothing has
-        moved, because it is an *and here is what changed* beside the rank it
-        changed. Once the block is narrow enough to have shed the Rank column there
-        is nothing beside it, so every cell prints its number plainly instead — a
-        two-column Abilities block is a trait and its value, which is what a sheet
-        is read for.
-        """
+        """Recompute each ability's Total cell from standing boosts and condition penalties."""
         bonuses = trait_bonuses(self._character, self._data).get("ability", {})
         cond_effects = {
             a.key: condition_scope_penalty(self._character, self._data, {a.key, a.name})
@@ -168,7 +155,6 @@ class AbilitiesSection(TitledSection):
             self._ability_enh,
             bonuses,
             cond_effects,
-            always=self.table.isColumnHidden(COL_RANK),
         )
 
     def _roll_spec(self, key: str) -> RollSpec:

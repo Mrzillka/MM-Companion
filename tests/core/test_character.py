@@ -490,7 +490,7 @@ def test_resistance_and_defense_derivation() -> None:
     char.resistances["TOUGHNESS"] = 4  # Toughness links to Stamina
     assert resistance_total(char, data, "TOUGHNESS") == 7
 
-    char.resistances["DEF"] = 5  # Defence is derived (no linked ability)
+    char.resistances["DEF"] = 5  # Defense is derived (no linked ability)
     assert resistance_total(char, data, "DEF") == 5
     assert defense_class(char, data) == 15
 

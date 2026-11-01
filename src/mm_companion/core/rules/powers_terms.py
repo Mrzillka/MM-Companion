@@ -2185,7 +2185,7 @@ def _resistance_target_options(game_data: GameData) -> tuple[tuple[str, str], ..
     """Every trait a resistance check can be rolled with, in one flat list.
 
     The four resistances, then the abilities, then Damage, then the skills — the order
-    a player looks for them in, commonest first. Derived resistances (Defence itself)
+    a player looks for them in, commonest first. Derived resistances (Defense itself)
     are left out: they are a number an attack is made *against*, not a check anyone
     rolls. Read off the game data rather than listed, so a mod's own ability or skill
     is offered here the moment it exists.

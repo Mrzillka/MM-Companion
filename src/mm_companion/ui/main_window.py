@@ -11,7 +11,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QMainWindow,
-    QMenu,
     QMessageBox,
     QVBoxLayout,
     QWidget,
@@ -44,9 +43,10 @@ SIMPLE_TEXT_ON = "Edit sheet"
 
 #: Undo and redo, on the bar for the same reason the lock is: they are reached
 #: constantly while building, and a button that is *there* is worth more than an
-#: entry two clicks into a menu. Same plain-glyph bargain as the lock.
-UNDO_GLYPH = "↶"
-REDO_GLYPH = "↷"
+#: entry two clicks into a menu. Words, like the simple-sheet switch: the ↶ ↷
+#: glyphs they replaced rendered small and faint on most fonts.
+UNDO_TEXT = "Undo"
+REDO_TEXT = "Redo"
 
 
 class MainWindow(QMainWindow):
@@ -73,6 +73,9 @@ class MainWindow(QMainWindow):
 
     closed = Signal()
     saved = Signal()
+    #: Another sheet window was opened from this one (File ▸ New or Open). The
+    #: launcher tracks it like one it opened itself.
+    childOpened = Signal(object)
     #: A row of this sheet was right-clicked and pinned. Carries a
     #: :class:`~mm_companion.core.rules.pins.PinRef`, relayed straight from the
     #: sheet. Only ever raised on a window opened with ``pin_target=True``, which
@@ -181,6 +184,17 @@ class MainWindow(QMainWindow):
         if locked and not self._npc and storage.simple_sheet_on_open():
             self._sheet.set_simple(True)
 
+        # A saved sheet opens read-only, which a first-time user reads as broken;
+        # say how to edit it until they have unlocked one. Not over the simple
+        # sheet: that is a play view with the lock stood down.
+        if (
+            locked
+            and hasattr(self, "_lock_action")
+            and not self._sheet.is_simple
+            and not storage.lock_hint_seen()
+        ):
+            self._show_lock_hint()
+
     @property
     def sheet(self) -> CharacterSheet:
         """The character sheet this window hosts — the seam a session attaches to."""
@@ -208,6 +222,10 @@ class MainWindow(QMainWindow):
         """The window File ▸ Open builds — the same kind as this one."""
         return MainWindow(character=character, path=path, locked=True)
 
+    def _new_blank(self) -> MainWindow:
+        """The window File ▸ New builds: a blank, editable sheet of the same kind."""
+        return MainWindow(locked=False)
+
     def _build_menu_bar(self, locked: bool) -> None:
         """Build the top menu bar.
 
@@ -223,10 +241,18 @@ class MainWindow(QMainWindow):
 
         if not self._gm_view:
             file_menu = menu_bar.addMenu("&File")
-            self._add_placeholder_actions(file_menu, ["New"])
-            file_menu.addAction("Open...").triggered.connect(self._open)
-            file_menu.addAction("Save").triggered.connect(self._save)
-            file_menu.addAction("Save As...").triggered.connect(self._save_as)
+            for label, key, slot in (
+                ("New", QKeySequence.StandardKey.New, self._new),
+                ("Open...", QKeySequence.StandardKey.Open, self._open),
+                ("Save", QKeySequence.StandardKey.Save, self._save),
+                ("Save As...", QKeySequence.StandardKey.SaveAs, self._save_as),
+            ):
+                action = file_menu.addAction(label)
+                action.setShortcut(key)
+                action.triggered.connect(slot)
+                # Also on the window, so the key still works while compact mode
+                # hides the menu bar (see _build_undo_actions).
+                self.addAction(action)
             file_menu.addSeparator()
             # What is printed is the simple sheet, whichever view is on screen — see
             # mm_companion.ui.simple.printing.
@@ -247,7 +273,6 @@ class MainWindow(QMainWindow):
             return
 
         settings_menu = menu_bar.addMenu("&Settings")
-        self._add_placeholder_actions(settings_menu, ["Rules"])
         settings_menu.addAction("Preferences...").triggered.connect(self._open_settings)
         settings_menu.addAction("Mods...").triggered.connect(self._manage_mods)
         # Homebrew the non-power PP-cost rates for this character. Stays available even
@@ -289,10 +314,13 @@ class MainWindow(QMainWindow):
         self._lock_action.setChecked(locked)
         self._lock_action.toggled.connect(self._sheet.set_locked)
         self._lock_action.toggled.connect(self._show_lock_state)
+        self._lock_action.toggled.connect(self._on_lock_toggled)
+        self._lock_action.setShortcut(QKeySequence("Ctrl+E"))
+        self.addAction(self._lock_action)
         self._show_lock_state(locked)
 
     def _build_undo_actions(self, menu_bar) -> None:
-        """Add the ↶ / ↷ buttons and their shortcuts, just before the lock.
+        """Add the Undo / Redo buttons and their shortcuts, just before the lock.
 
         Two things worth knowing. The shortcuts hang off the actions rather than off
         a bare :class:`QShortcut`, so one object carries the key, the button and the
@@ -304,11 +332,11 @@ class MainWindow(QMainWindow):
         menu bar and a shortcut is inactive while the widget owning it is hidden. An
         action may belong to several widgets; the window is always visible.
         """
-        self._undo_action = menu_bar.addAction(UNDO_GLYPH)
+        self._undo_action = menu_bar.addAction(UNDO_TEXT)
         self._undo_action.setShortcut(QKeySequence.StandardKey.Undo)
         self._undo_action.setToolTip("Undo (Ctrl+Z)")
         self._undo_action.triggered.connect(self._router.undo)
-        self._redo_action = menu_bar.addAction(REDO_GLYPH)
+        self._redo_action = menu_bar.addAction(REDO_TEXT)
         self._redo_action.setShortcuts([QKeySequence("Ctrl+Shift+Z"), QKeySequence("Ctrl+Y")])
         self._redo_action.setToolTip("Redo (Ctrl+Shift+Z)")
         self._redo_action.triggered.connect(self._router.redo)
@@ -349,10 +377,31 @@ class MainWindow(QMainWindow):
         """Put the current lock state on the bar's glyph and its tooltip."""
         self._lock_action.setText(LOCK_GLYPH_LOCKED if locked else LOCK_GLYPH_UNLOCKED)
         self._lock_action.setToolTip(
-            "Locked — click to edit this sheet"
+            "Locked — click to edit this sheet (Ctrl+E)"
             if locked
-            else "Unlocked — click to make this sheet read-only"
+            else "Unlocked — click to make this sheet read-only (Ctrl+E)"
         )
+
+    def _on_lock_toggled(self, locked: bool) -> None:
+        """Once the user has unlocked a sheet, they know where the lock is."""
+        if not locked:
+            storage.set_lock_hint_seen()
+            hint = getattr(self, "_lock_hint", None)
+            if hint is not None:
+                self._lock_hint = None
+                hint.dismiss()
+
+    def _show_lock_hint(self) -> None:
+        """Tell a newcomer how to edit a sheet that opened read-only."""
+        self._lock_hint = notify_window(
+            self,
+            f"This sheet is locked for play. Click {LOCK_GLYPH_LOCKED} on the menu bar "
+            "or press Ctrl+E to edit it.",
+        )
+        self._lock_hint.closed.connect(self._forget_lock_hint)
+
+    def _forget_lock_hint(self) -> None:
+        self._lock_hint = None
 
     def _build_view_menu(self, menu_bar) -> None:
         """The View menu: one show/hide toggle per block, plus Reset Layout."""
@@ -462,6 +511,10 @@ class MainWindow(QMainWindow):
             lock.setEnabled(not simple)
             if simple:
                 lock.setToolTip("The simple sheet is a play view — switch back to edit")
+                hint = getattr(self, "_lock_hint", None)
+                if hint is not None:
+                    self._lock_hint = None
+                    hint.dismiss()
             else:
                 self._show_lock_state(lock.isChecked())
 
@@ -630,9 +683,22 @@ class MainWindow(QMainWindow):
         if not path:
             return
         character = library.load_character(Path(path))
-        window = self._new_child(character, Path(path))
+        self._show_child(self._new_child(character, Path(path)))
+
+    def _new(self) -> None:
+        """Open a blank sheet in a new window."""
+        self._show_child(self._new_blank())
+
+    def _show_child(self, window: MainWindow) -> None:
+        """Show a window opened from this one, keeping it referenced and announced."""
         self._child_windows.append(window)
+        window.closed.connect(lambda w=window: self._drop_child(w))
+        self.childOpened.emit(window)
         window.show()
+
+    def _drop_child(self, window: MainWindow) -> None:
+        if window in self._child_windows:
+            self._child_windows.remove(window)
 
     # -- layout persistence --------------------------------------------------
 
@@ -768,10 +834,3 @@ class MainWindow(QMainWindow):
         if choice == QMessageBox.StandardButton.Save:
             return self._save()  # a cancelled Save As leaves the window open
         return choice == QMessageBox.StandardButton.Discard
-
-    @staticmethod
-    def _add_placeholder_actions(menu: QMenu, labels: list[str]) -> None:
-        """Add disabled placeholder actions to *menu*, one per label."""
-        for label in labels:
-            action = menu.addAction(label)
-            action.setEnabled(False)

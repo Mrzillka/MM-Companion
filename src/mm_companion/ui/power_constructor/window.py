@@ -206,7 +206,7 @@ class PowerConstructorWindow(QMainWindow):
         # The palette opens wide enough for a brick's full cost subtitle, and can't be
         # dragged shut — it is the only way to add anything, so a collapsed palette
         # leaves the window with no visible way forward.
-        splitter.setSizes([330, 560, 340])
+        splitter.setSizes([330, 610, 290])
         splitter.setCollapsible(0, False)
         self.setCentralWidget(splitter)
 
@@ -230,6 +230,19 @@ class PowerConstructorWindow(QMainWindow):
         # item's hand-set price is the same kind of edit and opens it the same way.
         if power_is_homerule(self.power) or (self.item is not None and self._item_priced_by_hand()):
             self._dev_mode.setChecked(True)
+
+        # What the build looked like when the window opened, so a close can tell
+        # whether there is anything to lose.
+        self._saved = False
+        self._baseline = self._snapshot()
+
+    def _snapshot(self) -> dict:
+        """The build as saved data — what a close compares against to see edits."""
+        return self.item.to_dict() if self.item is not None else self.power.to_dict()
+
+    def has_unsaved_changes(self) -> bool:
+        """Whether the build differs from what the window opened with."""
+        return not self._saved and self._snapshot() != self._baseline
 
     @property
     def _noun(self) -> str:
@@ -1346,7 +1359,7 @@ class PowerConstructorWindow(QMainWindow):
         """The game-terms breakdown in its own scrolling column.
 
         Normally read-only, it tints each stat a modifier changed (green better, red
-        worse). A **Dev mode (homerule)** check box pinned at its top turns the whole
+        worse). An **Edit by hand (house rules)** check box under it (Dev mode) turns the whole
         table editable in place: every game-term row becomes a combo you can pick or
         type into, with a before/after-modifiers order, plus derived-row and custom-row
         overrides and a whole-power cost override. Housed apart from the canvas so it
@@ -1356,19 +1369,17 @@ class PowerConstructorWindow(QMainWindow):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(4, 0, 0, 0)
 
-        head_row = QHBoxLayout()
         heading = QLabel("Game terms")
         heading.setStyleSheet(BOLD_STYLE)
-        head_row.addWidget(heading)
-        head_row.addStretch()
-        self._dev_mode = QCheckBox("Dev mode (homerule)")
+        layout.addWidget(heading)
+        # Below the table rather than beside its heading: it is a house-rule escape
+        # hatch, and a first look at the window should read the summary, not it.
+        self._dev_mode = QCheckBox("Edit by hand (house rules)")
         self._dev_mode.setToolTip(
             "Edit this power's derived game terms, readouts, and point cost by hand. "
             "A power with any override is flagged as homerule on its card."
         )
         self._dev_mode.toggled.connect(self._on_dev_mode_toggled)
-        head_row.addWidget(self._dev_mode)
-        layout.addLayout(head_row)
 
         self._terms = PowerTermsView()
         # An in-table override edit recomputes cost / PL warning, but must NOT rebuild
@@ -1380,6 +1391,7 @@ class PowerConstructorWindow(QMainWindow):
         scroll.setWidget(self._terms)
         guard_wheel(scroll)
         layout.addWidget(scroll, stretch=1)
+        layout.addWidget(self._dev_mode)
         return panel
 
     def _on_dev_mode_toggled(self, on: bool) -> None:
@@ -1515,7 +1527,14 @@ class PowerConstructorWindow(QMainWindow):
         self._warning.setVisible(bool(headline))
 
     def _save_power(self) -> None:
-        """Hand the assembled power — or item — to the host section, then close.
+        """Save the build (see :meth:`_try_save`) and close the window if it went through."""
+        if self._try_save():
+            self.close()
+
+    def _try_save(self) -> bool:
+        """Hand the assembled power — or item — to the host section.
+
+        Returns whether it was handed over.
 
         A power with no effects has nothing to cost or resolve, so it is rejected
         with a prompt rather than saved empty. An over-allocated Tier-4 effect (one
@@ -1536,14 +1555,14 @@ class PowerConstructorWindow(QMainWindow):
                     "Name this item",
                     "Give this item a name before saving it.",
                 )
-                return
+                return False
         elif not self.power.effects:
             QMessageBox.information(
                 self,
                 "Nothing to save",
                 "Add at least one effect before saving this power.",
             )
-            return
+            return False
         alloc = self._alloc_violations()
         if alloc:
             QMessageBox.warning(
@@ -1552,7 +1571,7 @@ class PowerConstructorWindow(QMainWindow):
                 f"This {self._noun} can't be saved because an effect allocates more ranks "
                 "than it has:\n\n• " + "\n• ".join(alloc),
             )
-            return
+            return False
         linked = self._linked_violations()
         if linked:
             QMessageBox.warning(
@@ -1561,7 +1580,7 @@ class PowerConstructorWindow(QMainWindow):
                 f"This {self._noun} can't be saved because its linked effects don't share "
                 "the same Range:\n\n• " + "\n• ".join(linked),
             )
-            return
+            return False
         violations = self._pl_violations()
         if violations and storage.pl_enforcement() == storage.PL_ENFORCE_BLOCK:
             QMessageBox.warning(
@@ -1570,13 +1589,38 @@ class PowerConstructorWindow(QMainWindow):
                 f"This {self._noun} can't be saved because it breaks Power Level caps:"
                 "\n\n• " + "\n• ".join(violations),
             )
-            return
+            return False
         if self.item is not None:
             self.itemSaved.emit(self.item)
         else:
             self.powerSaved.emit(self.power)
-        self.close()
+        self._saved = True
+        return True
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        """Ask before throwing away an unsaved build.
+
+        Only a close the user asked for (the title bar's ✕, Alt+F4) asks: a host
+        closing the window from code has already decided.
+        """
+        if event.spontaneous() and self.has_unsaved_changes() and not self._confirm_discard():
+            event.ignore()
+            return
         self.closed.emit()
         super().closeEvent(event)
+
+    def _confirm_discard(self) -> bool:
+        """Offer Save / Discard / Cancel; return True if the window may close."""
+        choice = QMessageBox.question(
+            self,
+            "Unsaved changes",
+            f"Save this {self._noun} before closing?",
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
+        )
+        if choice == QMessageBox.StandardButton.Save:
+            # A save that fails its checks leaves the window open.
+            return self._try_save()
+        return choice == QMessageBox.StandardButton.Discard

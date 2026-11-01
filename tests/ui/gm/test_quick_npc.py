@@ -39,7 +39,7 @@ def test_the_numbers_land_where_the_rules_read_them() -> None:
     # is what the sheet shows.
     assert resistance_total(npc, data, "DEF") == 7
     assert resistance_total(npc, data, "TOUGHNESS") == 4
-    # Dodge derives from Defence, so it follows without being asked for.
+    # Dodge derives from Defense, so it follows without being asked for.
     assert resistance_total(npc, data, "DODGE") == 7
     assert npc.abilities["ATK"] == 6
 

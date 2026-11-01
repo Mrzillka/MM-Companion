@@ -15,18 +15,24 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   opaque base64 strings so no Qt types leak into `core`); `load_settings` tolerates
   unknown keys.
 - The app launches into `StartWindow` (`ui/start_window.py`), a standalone
-  launcher: seven action buttons (Create New Character, Open Existing, Open GM
+  launcher: seven action buttons (Create New Character, Open from File…, Open GM
   Mode, Join Session, Manage Mods, Settings, Exit) beside a scrollable library of
   `CharacterCard`s (image, name, PL). The cards come from
   `core.library.list_saved_characters()` — the single seam
   for saved characters; it scans the workspace `characters/` dir, so the library
-  shows a "No characters yet" state only when nothing is saved. "Create New
+  shows a "No characters yet" state — with its own "Create your first character"
+  button — only when nothing is saved. "Create New
   Character" opens a `MainWindow` (`locked=False`, editable) as its own window,
   kept referenced in `_child_windows`, and **hides the launcher** behind it.
-  Clicking a `CharacterCard` or "Open Existing" (a file picker) loads a saved
+  Clicking a `CharacterCard` or "Open from File…" (a file picker) loads a saved
   character into a `locked=True` read-only sheet the same way. `MainWindow` emits
   a `closed` signal (from `closeEvent`) and a `saved` signal (after a write);
-  `StartWindow` refreshes the library on both and re-shows the launcher on close.
+  `StartWindow` refreshes the library on both and re-shows the launcher on close —
+  once the *last* sheet is closed: a sheet opened from another (File ▸ New / Open)
+  is announced over `MainWindow.childOpened` and tracked the same way.
+- **A saved sheet opens locked**, and until the user has unlocked one (the
+  `lock_hint_seen` setting) a toast says how: click 🔒 or press `Ctrl+E`. Not over
+  the simple sheet, where the lock is stood down.
   Right-clicking a card offers to delete it (confirmed, then the file is removed
   via `core.library.delete_character` and the library refreshes). The launcher's
   own Exit closes the app. "Open GM Mode" runs a `GMSessionLaunchDialog` and then

@@ -1,5 +1,5 @@
 {
-  "_comment": "Defenses/resistances and derived Defence for MM-Companion (Mutants & Masterminds, Open Game Content). Consumed by mm_companion.core.data_loader.",
+  "_comment": "Defenses/resistances and derived Defense for MM-Companion (Mutants & Masterminds, Open Game Content). Consumed by mm_companion.core.data_loader.",
   "resistances": [
     {
       "key": "DODGE",
@@ -23,7 +23,7 @@
     },
     {
       "key": "DEF",
-      "name": "Defence",
+      "name": "Defense",
       "ability": "",
       "abbr": "DEF",
       "derived": true

@@ -33,7 +33,7 @@ side (:meth:`~mm_companion.ui.pin_panel.PinPanel._build_grid`). The strip was ca
 at four chips on a collapsed card and scrolled the rest out of sight, which made the
 default six unreadable on exactly the card a GM collapses for a fight; tiles show all
 of them in two rows. Which tiles roll and which are only read is the pin's own
-answer — a Defence or an effect rank is read, never thrown.
+answer — a Defense or an effect rank is read, never thrown.
 
 A card's **width is not its own**. It reports what its contents need
 (:meth:`NPCCard.body_width_hint`, :meth:`NPCCard.pin_width_hint`) and the window

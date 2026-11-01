@@ -98,7 +98,7 @@ class Resistance:
     """A defense/resistance, linked to the ability it derives from.
 
     ``abbr`` is the short display code. ``derived`` marks combat stats (e.g.
-    Defence) the UI shows below a separator, apart from the core resistances.
+    Defense) the UI shows below a separator, apart from the core resistances.
     """
 
     key: str
@@ -1410,7 +1410,7 @@ class DerivedTrait:
     """A numeric stat a player can be asked to check that isn't a bought trait.
 
     The abilities, resistances and skills are enumerated by their own data files;
-    these are the leftovers a check can still name — the derived Defence aggregate,
+    these are the leftovers a check can still name — the derived Defense aggregate,
     Initiative — listed in ``system.json`` rather than hardcoded in the picker.
     """
 

@@ -278,7 +278,7 @@ def test_size_neither_supersedes_nor_is_superseded() -> None:
 
 
 def test_a_negative_intrinsic_nets_against_a_bought_bonus() -> None:
-    """A small creature's Defence penalty is not a bonus to be picked over its rivals."""
+    """A small creature's Defense penalty is not a bonus to be picked over its rivals."""
     resolved = resolve_contributions([_intrinsic(-2, source="Size (Tiny)"), _bonus(5)])
     assert resolved.amount == 3
 

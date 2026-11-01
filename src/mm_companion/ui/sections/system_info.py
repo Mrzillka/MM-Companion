@@ -702,7 +702,7 @@ class SystemInfoSection(QGroupBox):
         if seed in [self._size_combo.itemText(i) for i in range(self._size_combo.count())]:
             self._size_combo.setCurrentText(seed)
         self._size_combo.setToolTip(
-            "The size this character is built at. It shifts their Defence, Toughness, "
+            "The size this character is built at. It shifts their Defense, Toughness, "
             "Damage and Speed limits, their Intimidation and Stealth, and their reach."
         )
         self._size_combo.currentTextChanged.connect(self._on_size_changed)

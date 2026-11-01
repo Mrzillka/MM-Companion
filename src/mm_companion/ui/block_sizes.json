@@ -4,17 +4,17 @@
   "base_info": {
     "recommended_width": 320,
     "recommended_height": 160,
-    "default_share": 36
+    "default_share": 33
   },
   "system_info": {
     "recommended_width": 340,
     "recommended_height": 200,
-    "default_share": 40
+    "default_share": 41
   },
   "character_image": {
     "recommended_width": 200,
     "recommended_height": 210,
-    "default_share": 24
+    "default_share": 26
   },
   "abilities": {
     "default_share": 35

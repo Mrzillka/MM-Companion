@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import html
 
+import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QLabel, QWidget
 
@@ -1074,7 +1075,7 @@ def test_saved_enhanced_trait_shows_on_the_stat_and_feeds_skills(qapp: QApplicat
     window._save_power()
 
     enh = sheet.abilities._ability_enh["STR"]
-    assert enh.text() == "→ 5"  # 2 bought + 3 boost
+    assert enh.text() == "5"  # 2 bought + 3 boost
     assert "Mighty" in enh.toolTip()
 
     # A Strength-linked skill total reflects the boosted ability.
@@ -2747,3 +2748,79 @@ def test_a_narrowed_picker_still_shows_the_value_it_holds(qapp: QApplication) ->
     assert card.instance.config["resistance"] == "Athletics"
     assert combo.currentData() == "Athletics"
     assert combo.currentText() == "Athletics (needs Alternate Resistance)"
+
+
+class _UserClose:
+    """A close the user asked for — the title bar's ✕ — which is what asks first."""
+
+    def __init__(self) -> None:
+        self.ignored = False
+
+    def spontaneous(self) -> bool:
+        return True
+
+    def ignore(self) -> None:
+        self.ignored = True
+
+    def accept(self) -> None:
+        pass
+
+
+def _close_by_hand(window: PowerConstructorWindow, monkeypatch, answer) -> _UserClose:
+    from PySide6.QtWidgets import QMainWindow, QMessageBox
+
+    asked = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: asked.append(a) or answer)
+    monkeypatch.setattr(QMainWindow, "closeEvent", lambda self, event: None)
+    event = _UserClose()
+    window.closeEvent(event)
+    event.asked = bool(asked)
+    return event
+
+
+def test_an_untouched_constructor_closes_without_asking(qapp: QApplication, monkeypatch) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    window = PowerConstructorWindow(load_game_data())
+    event = _close_by_hand(window, monkeypatch, QMessageBox.StandardButton.Discard)
+    assert not event.asked and not event.ignored
+
+
+def test_closing_a_half_built_power_asks_and_can_be_cancelled(
+    qapp: QApplication, monkeypatch
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    window = PowerConstructorWindow(load_game_data())
+    window.canvas.add_effect("damage")
+    assert window.has_unsaved_changes()
+
+    event = _close_by_hand(window, monkeypatch, QMessageBox.StandardButton.Cancel)
+    assert event.asked and event.ignored
+
+    event = _close_by_hand(window, monkeypatch, QMessageBox.StandardButton.Discard)
+    assert event.asked and not event.ignored
+
+
+def test_save_from_the_close_prompt_hands_the_power_over(qapp: QApplication, monkeypatch) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    window = PowerConstructorWindow(load_game_data())
+    window._name.setText("Blast")
+    window.canvas.add_effect("damage")
+    saved = []
+    window.powerSaved.connect(saved.append)
+
+    event = _close_by_hand(window, monkeypatch, QMessageBox.StandardButton.Save)
+
+    assert len(saved) == 1 and not event.ignored
+    assert not window.has_unsaved_changes()
+
+
+def test_a_programmatic_close_never_asks(qapp: QApplication, monkeypatch) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    window = PowerConstructorWindow(load_game_data())
+    window.canvas.add_effect("damage")
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: pytest.fail("asked"))
+    window.close()

@@ -2,7 +2,7 @@
 
 Two lists, one per kind of card, editing the ``gm_default_pins`` setting. They are
 separate because the two cards answer different questions: a GM reads a *player's*
-card to know what to roll **against** them (their Defence DC, their Toughness),
+card to know what to roll **against** them (their Defense DC, their Toughness),
 and an *NPC's* to know what to roll **with** it.
 
 A default is written down long before the card it will seed exists, which is the
@@ -222,9 +222,7 @@ class GMPage(SettingsPage):
 
     def _build_actions(self) -> QHBoxLayout:
         row = QHBoxLayout()
-        self._save_button = QPushButton("Save")
-        self._save_button.clicked.connect(self.save)
-        row.addWidget(self._save_button)
+        # Saving is the window's OK / Apply bar; this button is the page's own.
         self._apply_button = QPushButton("Apply to cards on the board…")
         self._apply_button.setToolTip(
             "Throw away every card's own strip and seed them all from these lists again."

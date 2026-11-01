@@ -254,13 +254,12 @@ def test_a_table_squeezed_further_gives_up_the_rank_too(squeezed, qapp) -> None:
         assert not table.isColumnHidden(column), "a load-bearing column was hidden"
 
 
-def test_the_total_carries_the_number_once_the_rank_has_gone(squeezed, qapp) -> None:
-    """Or a two-column Abilities block would be a column of blank cells: the Total
-    is an "and here is what changed" while the rank it changed is beside it, and
-    there is nothing beside it any more."""
+def test_the_total_carries_the_number_at_every_width(squeezed, qapp) -> None:
+    """The Total column always states the value, so neither a wide block nor one
+    that has shed its Rank column reads as a column of blank cells."""
     section = squeezed.abilities
     strength = section._ability_enh["STR"]
-    assert strength.text() == "", "an unmodified trait states its change, not its value"
+    assert strength.text() == str(section._abilities["STR"].value())
 
     _narrow_to(squeezed, qapp, 800)
 

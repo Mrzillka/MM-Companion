@@ -102,7 +102,7 @@ no-op pass through the constructor changes nothing, because the signature still 
 
 `src/mm_companion/data/equipment.json` holds the shipped catalog — items, stock
 vehicles, vehicle Features and modifiers, stock installations and their Features, and
-the two size tables — parsed into frozen records by `core/data_loader.py`
+the two size tables — parsed into frozen records by `core/data_loader/`
 (`EquipmentEntry`, `EquipmentCategory`, `EquipmentRules`, `StockVehicle`,
 `PlatformFeature`, `StockInstallation`, the size rows). `GameData.equipment_catalog()`
 is the `id -> entry` lookup, and it includes the platforms: a stock vehicle and a stock

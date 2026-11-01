@@ -1,0 +1,825 @@
+"""Parsing: turn the traits', conditions', powers' and actions' raw JSON dicts into their
+typed records.
+"""
+
+from __future__ import annotations
+
+from ..components import APPLY_BONUS, Integration, TraitBoost
+from .game_data import (
+    ActionModifier,
+    AreaCover,
+    AreaEvasion,
+    AreaRules,
+    Impression,
+    ImpressRules,
+    ResistOptions,
+)
+from .parsing_rules import (
+    _extras,
+    _parse_range_distance,
+)
+from .power_records import (
+    AllocationOption,
+    BaseCostBy,
+    ConfigOption,
+    ConfiguredEffect,
+    ConfiguredModifier,
+    Effect,
+    EffectConfigField,
+    EffectReach,
+    Measure,
+    Modifier,
+    PowerConfiguration,
+    RepeatableColumn,
+    ResistanceGrant,
+    ResistanceOutcome,
+    SpeedRank,
+    SubBuild,
+)
+from .system_records import (
+    RangeDistance,
+)
+from .traits import (
+    Ability,
+    Advantage,
+    AttackMods,
+    Characteristic,
+    Condition,
+    ConditionParameter,
+    ConditionParameterOption,
+    Debilitation,
+    DefenseMod,
+    Field,
+    ParameterSpec,
+    RandomActionRow,
+    RecoveryCheck,
+    Resistance,
+    ResistanceMod,
+    Skill,
+    StackingRule,
+)
+
+# ===========================================================================
+# Parsing — turn each raw JSON dict into the typed records above. One ``_parse_*``
+# per record group; all mechanical (read keys, coerce types), so kept terse.
+# ===========================================================================
+
+
+def _parse_field(f: dict) -> Field:
+    return Field(
+        key=f["key"],
+        label=f["label"],
+        primary=bool(f.get("primary", False)),
+        extra=_extras(f, "key", "label", "primary"),
+    )
+
+
+def _parse_ability(a: dict) -> Ability:
+    return Ability(
+        key=a["key"],
+        name=a["name"],
+        abbr=a.get("abbr", ""),
+        derived=bool(a.get("derived", False)),
+        extra=_extras(a, "key", "name", "abbr", "derived"),
+    )
+
+
+def _parse_resistance(r: dict) -> Resistance:
+    return Resistance(
+        key=r["key"],
+        name=r["name"],
+        ability=r.get("ability", ""),
+        abbr=r.get("abbr", ""),
+        derived=bool(r.get("derived", False)),
+        extra=_extras(r, "key", "name", "ability", "abbr", "derived"),
+    )
+
+
+def _parse_characteristic(c: dict) -> Characteristic:
+    options = list(c.get("options", []))
+    # Infer a widget kind when not stated: enumerated -> choice, else text.
+    kind = c.get("kind") or ("choice" if options else "text")
+    return Characteristic(
+        key=c["key"],
+        label=c["label"],
+        kind=kind,
+        options=options,
+        default=c.get("default"),
+        minimum=int(c.get("min", 0)),
+        maximum=int(c.get("max", 999)),
+        extra=_extras(c, "key", "label", "kind", "options", "default", "min", "max"),
+    )
+
+
+def _parse_skill(s: dict) -> Skill:
+    return Skill(
+        name=s["name"],
+        ability=s["ability"],
+        focused=bool(s["focused"]),
+        id=s.get("id", ""),
+        trained_only=bool(s.get("trainedOnly", False)),
+        action=s.get("action", ""),
+        specializations=tuple(s.get("specializations", ())),
+        specialization_note=s.get("specializationNote", ""),
+        focuses=tuple(s.get("focuses", ())),
+        focus_note=s.get("focusNote", ""),
+        description=s.get("description", ""),
+        specialized_cost=bool(s.get("specializedCost", False)),
+        extra=_extras(
+            s,
+            "name",
+            "ability",
+            "focused",
+            "id",
+            "trainedOnly",
+            "action",
+            "specializations",
+            "specializationNote",
+            "focuses",
+            "focusNote",
+            "description",
+            "specializedCost",
+        ),
+    )
+
+
+def _parse_parameter(raw: dict | None, initiative_choice: tuple[str, ...]) -> ParameterSpec | None:
+    """Build the advantage's :class:`ParameterSpec`, or ``None`` if it takes no subject.
+
+    An explicit ``parameter`` object wins; otherwise Alternate Initiative's
+    ``initiativeAbilityChoice`` is synthesised into an ability-choice spec so the
+    one legacy field keeps driving both the picker and the initiative math.
+    """
+
+    if raw is not None:
+        return ParameterSpec(
+            label=raw.get("label", ""),
+            kind=raw.get("kind", "text"),
+            options=tuple(raw.get("options", ())),
+            options_from=raw.get("optionsFrom", ""),
+        )
+    if initiative_choice:
+        return ParameterSpec(
+            label="Initiative",
+            kind="choice",
+            options=initiative_choice,
+            options_from="abilities",
+        )
+    return None
+
+
+def _parse_advantage(a: dict) -> Advantage:
+    # Accept the rich ``types`` list, falling back to a legacy singular ``type``.
+    types = tuple(a["types"]) if "types" in a else tuple(t for t in (a.get("type"),) if t)
+    initiative_choice = tuple(a.get("initiativeAbilityChoice", ()))
+    return Advantage(
+        name=a["name"],
+        ranked=bool(a["ranked"]),
+        description=a.get("description", ""),
+        id=a.get("id", ""),
+        types=types,
+        max_rank=a.get("maxRank"),
+        max_rank_kind=a.get("maxRankKind", "none"),
+        focused=bool(a.get("focused", False)),
+        initiative_bonus_per_rank=int(a.get("initiativeBonusPerRank", 0)),
+        initiative_ability_choice=initiative_choice,
+        skill_bonus_per_rank=int(a.get("skillBonusPerRank", 0)),
+        skill_bonus_target=a.get("skillBonusTarget", ""),
+        parameter=_parse_parameter(a.get("parameter"), initiative_choice),
+        uses_per_rank=max(0, int(a.get("usesPerAdventurePerRank", 0) or 0)),
+        allows_untrained=bool(a.get("allowsUntrained", False)),
+        allows_untrained_except=tuple(str(n) for n in a.get("allowsUntrainedExcept", ())),
+        extra=_extras(
+            a,
+            "name",
+            "ranked",
+            "description",
+            "id",
+            "types",
+            "type",
+            "maxRank",
+            "maxRankKind",
+            "focused",
+            "initiativeBonusPerRank",
+            "initiativeAbilityChoice",
+            "skillBonusPerRank",
+            "skillBonusTarget",
+            "parameter",
+            "usesPerAdventurePerRank",
+            "allowsUntrained",
+            "allowsUntrainedExcept",
+        ),
+    )
+
+
+def _parse_condition_parameter_option(raw) -> ConditionParameterOption:
+    """One ``options`` entry: a bare string, or an object carrying the per-choice flags."""
+
+    if isinstance(raw, dict):
+        return ConditionParameterOption(
+            value=str(raw.get("value", "")),
+            unscoped=bool(raw.get("unscoped", False)),
+            specific_kind=str(raw.get("specificKind", "")),
+        )
+    return ConditionParameterOption(value=str(raw))
+
+
+def _parse_condition_parameter(raw: dict | None) -> ConditionParameter | None:
+    if not raw:
+        return None
+    specs = tuple(_parse_condition_parameter_option(o) for o in raw.get("options", ()))
+    return ConditionParameter(
+        type=raw.get("type", ""),
+        required=bool(raw.get("required", False)),
+        label=raw.get("label", ""),
+        help=raw.get("help", ""),
+        options=tuple(spec.value for spec in specs),
+        option_specs=specs,
+    )
+
+
+def _parse_debilitation(raw: dict | None) -> Debilitation | None:
+    if not raw:
+        return None
+    cascade = {trait: tuple(conds) for trait, conds in raw.get("cascade", {}).items()}
+    return Debilitation(cascade=cascade, notes=raw.get("notes", ""))
+
+
+def _parse_speed_rank_mod(raw: int | str | None) -> int | None:
+    """``"zero"`` → 0, an int passes through, absent → ``None`` (no movement mod)."""
+
+    if raw is None:
+        return None
+    if raw == "zero":
+        return 0
+    return int(raw)
+
+
+def _parse_defense_mod(raw: dict | None) -> DefenseMod | None:
+    if not raw:
+        return None
+    return DefenseMod(defense=raw.get("defense", ""), dodge=raw.get("dodge", ""))
+
+
+def _parse_attack_mods(raw: dict | None) -> AttackMods | None:
+    if not raw:
+        return None
+    return AttackMods(
+        own_close=int(raw.get("ownCloseAttack", 0)),
+        incoming_close=int(raw.get("incomingCloseAttack", 0)),
+        incoming_ranged=int(raw.get("incomingRangedAttack", 0)),
+    )
+
+
+def _parse_resistance_mod(raw: dict | None) -> ResistanceMod | None:
+    if not raw:
+        return None
+    return ResistanceMod(
+        scope=raw.get("scope", ""),
+        penalty_formula=raw.get("penaltyFormula", ""),
+        best_outcome=raw.get("bestOutcome", ""),
+    )
+
+
+def _parse_stacking_rule(raw: dict | None) -> StackingRule | None:
+    if not raw:
+        return None
+    return StackingRule(
+        per_instance_penalty=int(raw.get("perInstancePenalty", 0)),
+        applies_to=raw.get("appliesTo", ""),
+        removed_per_recovery=int(raw.get("removedPerRecovery", 0)),
+    )
+
+
+def _parse_recovery_check(raw: dict | None) -> RecoveryCheck | None:
+    if not raw:
+        return None
+    return RecoveryCheck(
+        trait=raw.get("trait"),
+        dc=raw.get("dc"),
+        cadence=raw.get("cadence", ""),
+        condition=raw.get("condition", ""),
+        outcome=raw.get("outcome", ""),
+        success_degrees=max(1, int(raw.get("successDegrees", 1) or 1)),
+        becomes=str(raw.get("becomes", "") or ""),
+        blocked_by=tuple(str(c) for c in raw.get("blockedBy", ()) or ()),
+    )
+
+
+def _parse_condition(c: dict) -> Condition:
+    return Condition(
+        name=c["name"],
+        description=c.get("description", ""),
+        id=c.get("id", ""),
+        category=c.get("category", ""),
+        group=c.get("group", ""),
+        tooltip=c.get("tooltip", ""),
+        includes=tuple(c.get("includes", ())),
+        supersedes=tuple(c.get("supersedes", ())),
+        mechanisms=tuple(c.get("mechanisms", ())),
+        stacking=bool(c.get("stacking", False)),
+        parameter=_parse_condition_parameter(c.get("parameter")),
+        debilitates=_parse_debilitation(c.get("debilitates")),
+        effect=c.get("effect", ""),
+        recovery=c.get("recovery", ""),
+        penalty=c.get("penalty"),
+        speed_rank_mod=_parse_speed_rank_mod(c.get("speedRankMod")),
+        defense_mod=_parse_defense_mod(c.get("defenseMod")),
+        attack_mods=_parse_attack_mods(c.get("attackMods")),
+        resistance_mod=_parse_resistance_mod(c.get("resistanceMod")),
+        stacking_rule=_parse_stacking_rule(c.get("stackingRule")),
+        recovery_check=_parse_recovery_check(c.get("recoveryCheck")),
+        random_table=tuple(
+            RandomActionRow(range=r.get("range", ""), outcome=r.get("outcome", ""))
+            for r in c.get("randomTable", ())
+        ),
+        trait_lost=bool(c.get("traitLost", False)),
+    )
+
+
+def _parse_speed_rank(raw) -> SpeedRank | None:
+    """One ``speeds`` entry: a flat rank (``2``) or a ground expression (``"ground-1"``).
+
+    ``None`` (or anything unparseable) means the tier grants no rate of its own.
+    """
+
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return SpeedRank(value=int(raw))
+    text = str(raw).strip().replace(" ", "")
+    if not text.startswith("ground"):
+        return SpeedRank(value=int(text)) if text.lstrip("+-").isdigit() else None
+    offset = text[len("ground") :]
+    return SpeedRank(value=int(offset) if offset else 0, from_ground=True)
+
+
+def _parse_config_field(c: dict) -> EffectConfigField:
+    return EffectConfigField(
+        key=c["key"],
+        label=c.get("label", c["key"]),
+        type=c.get("type", "select"),
+        overrides=c.get("overrides"),
+        grants=bool(c.get("grants", False)),
+        template=c.get("template", ""),
+        required=bool(c.get("required", False)),
+        multiselect_with=c.get("multiselectWith"),
+        hidden_with=c.get("hiddenWith"),
+        shown_with=c.get("shownWith"),
+        widen_with=c.get("widenWith"),
+        widen_source=c.get("widenSource"),
+        toggles=c.get("toggles"),
+        source=c.get("source"),
+        hides_field=bool(c.get("hidesField", False)),
+        names_owner=bool(c.get("namesOwner", False)),
+        hint=c.get("hint", ""),
+        min_value=int(c.get("min", 0)),
+        max_value=int(c.get("max", 0)),
+        default_value=int(c.get("default", 0)),
+        show_when_points=int(c.get("showWhenPoints", 0)),
+        show_when_field=c.get("showWhenField", ""),
+        show_when_value=c.get("showWhenValue", ""),
+        options=tuple(
+            ConfigOption(
+                value=o["value"],
+                label=o.get("label", o["value"]),
+                cost_value=o.get("costValue"),
+                flat=o.get("flat"),
+                ranked=o.get("ranked"),
+                cost_delta=int(o.get("costDelta", 0)),
+                flat_delta=int(o.get("flatDelta", 0)),
+                supersedes=tuple(o.get("supersedes", ())),
+            )
+            for o in c.get("options", [])
+        ),
+        alloc_options=tuple(
+            AllocationOption(
+                id=o["id"],
+                label=o.get("label", o["id"]),
+                tiers=tuple(int(t) for t in o.get("tiers", (1,))),
+                per_note=o.get("perNote", ""),
+                description=o.get("description", ""),
+                speeds=tuple(_parse_speed_rank(s) for s in o.get("speeds", ())),
+                tier_notes=tuple(o.get("tierNotes", ())),
+                tier_labels=tuple(o.get("tierLabels", ())),
+                prompt=o.get("prompt", ""),
+            )
+            for o in c.get("allocOptions", [])
+        ),
+        columns=tuple(
+            RepeatableColumn(
+                key=col["key"],
+                label=col.get("label", col["key"]),
+                type=col.get("type", "text"),
+                source=col.get("source", ""),
+                suggestions=tuple(
+                    (str(item["label"]), int(item.get("ranks", 0)))
+                    for item in col.get("suggestions", ())
+                ),
+                default=int(col.get("default", 0)),
+            )
+            for col in c.get("columns", [])
+        ),
+    )
+
+
+def _parse_measure(raw: dict | None, effect_id: str = "") -> Measure | None:
+    if not raw:
+        return None
+    return Measure(
+        column=raw.get("column", "distance"),
+        label=raw["label"],
+        per_round=bool(raw.get("perRound", False)),
+        mode=raw.get("mode", "") or effect_id,
+    )
+
+
+def _parse_integration(raw: dict, configurable: bool) -> Integration:
+    """Build the typed :class:`Integration` from a ``statIntegration`` block.
+
+    A base effect's, or a **modifier's**: an extra like Elongation's Striding ("longer
+    strides grant ranks of Speed") is a stat effect in every sense except that it hangs
+    off another effect, and it is read by the same appliers.
+
+    A :class:`TraitBoost` is attached only for the trait-boosting effects — those
+    the player targets (``configurable``, e.g. Enhanced Trait) or that carry a fixed
+    ``target`` (e.g. Protection). ``affects`` is the ``"a|b"`` category string split
+    into a set.
+
+    ``apply``/``amountPerRank``/``amountFlat`` say which applier reads the record and
+    what it is worth (see :mod:`mm_companion.core.rules.appliers`). All three default
+    to the historical rule — a ``bonus`` worth the effect's rank — so an effect that
+    states none of them, in this ruleset or a mod's, behaves exactly as before.
+    """
+
+    affects = frozenset(a for a in raw.get("affects", "").split("|") if a)
+    target = raw.get("target", "")
+    boost = None
+    if configurable or target:
+        boost = TraitBoost(
+            affects=affects,
+            target=target,
+            configurable=configurable,
+            apply=raw.get("apply", APPLY_BONUS),
+            per_rank=int(raw.get("amountPerRank", 1)),
+            flat=int(raw.get("amountFlat", 0)),
+        )
+    return Integration(pattern=raw.get("pattern", ""), trait_boost=boost)
+
+
+def _parse_outcome_rung(entry: object) -> ResistanceOutcome | None:
+    """One rung of a ``resistanceOutcomes`` ladder; a plain string is shorthand for ``text``."""
+
+    if isinstance(entry, str):
+        return ResistanceOutcome(text=entry)
+    if not isinstance(entry, dict):
+        return None
+    escalates = entry.get("escalates", {})
+    parameters = entry.get("parameters", {})
+    return ResistanceOutcome(
+        conditions=tuple(entry.get("conditions", ())),
+        config_key=entry.get("configKey", ""),
+        scope_key=str(entry.get("scopeKey", "")),
+        text=entry.get("text", ""),
+        note=entry.get("note", ""),
+        escalates=tuple(escalates.items()) if isinstance(escalates, dict) else (),
+        parameters=(
+            tuple((str(k), str(v)) for k, v in parameters.items())
+            if isinstance(parameters, dict)
+            else ()
+        ),
+    )
+
+
+def _parse_resistance_outcomes(raw: object) -> tuple[ResistanceOutcome, ...]:
+    """Parse an effect's ``resistanceOutcomes`` failure ladder (see :class:`ResistanceOutcome`).
+
+    Accepts the ladder either as a bare list of rungs or wrapped in an object with a
+    ``degrees`` list, so a mod can hang its own documentation — and its ``success``
+    rung — off the same block.
+    """
+
+    if isinstance(raw, dict):
+        raw = raw.get("degrees", ())
+    if not isinstance(raw, list):
+        return ()
+    rungs = (_parse_outcome_rung(entry) for entry in raw)
+    return tuple(rung for rung in rungs if rung is not None)
+
+
+def _parse_resistance_success(raw: object) -> ResistanceOutcome | None:
+    """The ``success`` rung of a ``resistanceOutcomes`` block, if it has one."""
+
+    if not isinstance(raw, dict):
+        return None
+    return _parse_outcome_rung(raw.get("success"))
+
+
+def _parse_action_modifier(raw: dict) -> ActionModifier:
+    kind = str(raw.get("kind", "toggle"))
+    return ActionModifier(
+        id=str(raw.get("id", "")),
+        label=str(raw.get("label", raw.get("id", ""))),
+        kind=kind if kind in ("toggle", "slider") else "toggle",
+        value=int(raw.get("value", 0)),
+        minimum=int(raw.get("min", 0)),
+        maximum=int(raw.get("max", 0)),
+        step=max(1, int(raw.get("step", 1))),
+        exclusive=str(raw.get("exclusive", "")),
+        hint=str(raw.get("hint", "")),
+    )
+
+
+def _parse_impression(raw: dict) -> Impression:
+    return Impression(
+        id=str(raw.get("id", "")),
+        name=str(raw.get("name", raw.get("id", ""))),
+        skill=str(raw.get("skill", "")),
+        advantage=str(raw.get("advantage", "")),
+        outcomes=_parse_resistance_outcomes(raw.get("outcomes")),
+    )
+
+
+def _parse_impress(raw: dict) -> ImpressRules:
+    """Parse ``actions.json``'s ``impress`` block (see :class:`ImpressRules`)."""
+
+    block = raw.get("impress")
+    if not isinstance(block, dict):
+        return ImpressRules()
+    resist = block.get("resist", {})
+    if not isinstance(resist, dict):
+        resist = {}
+    return ImpressRules(
+        skills=tuple(str(s) for s in block.get("skills", ())),
+        resist=ResistOptions(
+            same_skill=bool(resist.get("sameSkill", True)),
+            skills=tuple(str(s) for s in resist.get("skills", ())),
+            resistances=tuple(str(r) for r in resist.get("resistances", ())),
+        ),
+        group_penalty=int(block.get("groupPenalty", 0)),
+        impressions=tuple(
+            _parse_impression(i) for i in block.get("impressions", ()) if isinstance(i, dict)
+        ),
+        modifiers=tuple(
+            _parse_action_modifier(m) for m in block.get("modifiers", ()) if isinstance(m, dict)
+        ),
+    )
+
+
+def _parse_area(raw: dict) -> AreaRules:
+    """Parse ``actions.json``'s ``area`` block (see :class:`AreaRules`)."""
+
+    block = raw.get("area")
+    if not isinstance(block, dict):
+        return AreaRules()
+    evasion = block.get("evasion")
+    shapes = block.get("shapes", {})
+    return AreaRules(
+        modifiers=tuple(str(m) for m in block.get("modifiers", ())),
+        dodge=str(block.get("dodge", "")),
+        dc_base=int(block.get("dcBase", 10)),
+        halve=str(block.get("halve", "up")),
+        base_distance_rank=int(block.get("baseDistanceRank", 1)),
+        shapes={str(k): str(v) for k, v in shapes.items()} if isinstance(shapes, dict) else {},
+        default_shape=str(block.get("defaultShape", "")),
+        evasion=(
+            AreaEvasion(
+                advantage=str(evasion.get("advantage", "")),
+                dodge_bonus=int(evasion.get("dodgeBonus", 0)),
+                negate_at_rank=int(evasion.get("negateAtRank", 0)),
+            )
+            if isinstance(evasion, dict) and evasion.get("advantage")
+            else None
+        ),
+        free_use_pl_cap=bool(block.get("freeUsePlCap", True)),
+        cover=tuple(
+            AreaCover(str(c["id"]), str(c.get("label", c["id"])), int(c.get("value", 0)))
+            for c in block.get("cover", ())
+            if isinstance(c, dict) and c.get("id")
+        ),
+        worst_of=tuple(
+            (str(w["modifier"]), str(w.get("key", "")), str(w.get("value", "")))
+            for w in block.get("worstOf", ())
+            if isinstance(w, dict) and w.get("modifier")
+        ),
+    )
+
+
+def _parse_base_cost_by(raw: dict | None) -> BaseCostBy | None:
+    """Parse an effect's ``baseCostBy`` block, or ``None`` when it has none.
+
+    ``max`` is optional and absent means uncapped, so it cannot be read with a numeric
+    default the way ``base``/``min`` can.
+    """
+
+    if not raw:
+        return None
+    maximum = raw.get("max")
+    return BaseCostBy(
+        fields=tuple(raw.get("fields", ())),
+        base=int(raw.get("base", 0)),
+        minimum=int(raw.get("min", 1)),
+        maximum=None if maximum is None else int(maximum),
+    )
+
+
+def _parse_sub_build(raw: dict | None) -> SubBuild | None:
+    """Parse a ``subBuild`` block, or ``None`` for the records that declare none."""
+
+    if not raw:
+        return None
+    return SubBuild(
+        key=str(raw["key"]),
+        label=str(raw.get("label", "Build")),
+        budget=dict(raw.get("budget", {})),
+        count=dict(raw.get("count", {})),
+        hint=str(raw.get("hint", "")),
+        forbids_effects=tuple(raw.get("forbidsEffects", ())),
+        forbids_advantages=tuple(raw.get("forbidsAdvantages", ())),
+        menu_with=tuple(raw.get("menuWith", ())),
+    )
+
+
+def _parse_effect(e: dict, ranged_distance: RangeDistance | None = None) -> Effect:
+    default_distance = ranged_distance or RangeDistance()
+    return Effect(
+        id=e["id"],
+        name=e["name"],
+        effect_type=e["effectType"],
+        action=e.get("action", ""),
+        range_=e.get("range", ""),
+        personal=None if e.get("personal") is None else bool(e["personal"]),
+        duration=e.get("duration", ""),
+        check=e.get("check"),
+        resistance=e.get("resistance"),
+        opposed_check=e.get("opposedCheck", ""),
+        base_cost=e.get("baseCost", ""),
+        base_cost_value=int(e.get("baseCostValue", 1)),
+        base_cost_mode=e.get("baseCostMode", "flat"),
+        base_cost_by=_parse_base_cost_by(e.get("baseCostBy")),
+        sub_build=_parse_sub_build(e.get("subBuild")),
+        rank_follows_allocation=bool(e.get("rankFollowsAllocation", False)),
+        integration=_parse_integration(
+            e.get("statIntegration", {}), bool(e.get("configurableTarget", False))
+        ),
+        description=e.get("description", ""),
+        config_fields=tuple(_parse_config_field(c) for c in e.get("config", [])),
+        measure=_parse_measure(e.get("measure"), e["id"]),
+        resistance_dc_base=e.get("resistanceDcBase"),
+        resistance_vs_check=bool(e.get("resistanceVsCheck", False)),
+        resistance_outcomes=_parse_resistance_outcomes(e.get("resistanceOutcomes")),
+        resistance_success=_parse_resistance_success(e.get("resistanceOutcomes")),
+        check_dc=_check_dc(e.get("checkOutcomes")),
+        success_removes=_success_removes(e.get("checkOutcomes")),
+        implicit_modifiers=tuple(e.get("implicitModifiers", ())),
+        range_distance=_parse_range_distance(e.get("rangeDistance"), default_distance)
+        or default_distance,
+        reach=_parse_effect_reach(e.get("reach")),
+    )
+
+
+def _check_dc(raw: object) -> int | None:
+    """An effect's ``checkOutcomes.dc`` — the DC its own check is made against."""
+    if not isinstance(raw, dict):
+        return None
+    dc = raw.get("dc")
+    return dc if isinstance(dc, int) and not isinstance(dc, bool) else None
+
+
+def _success_removes(raw: object) -> tuple[str, ...]:
+    """An effect's ``checkOutcomes.removes`` — condition ids, one per degree of success."""
+    if not isinstance(raw, dict):
+        return ()
+    return tuple(str(c) for c in raw.get("removes", ()) or () if str(c).strip())
+
+
+def _parse_effect_reach(raw: dict | None) -> EffectReach | None:
+    if not raw:
+        return None
+    return EffectReach(per_rank_distance_rank=int(raw.get("perRankDistanceRank", 0)))
+
+
+# ``overrides`` keys are camelCase in the JSON like every other key there, but the
+# stat dicts :func:`mm_companion.core.rules.effect_stat_rows` builds are snake_case.
+_OVERRIDE_KEYS = {"effectType": "effect_type"}
+
+
+def _parse_resistance_grant(raw: object) -> ResistanceGrant | None:
+    """A modifier's ``grantsResistance`` block, or ``None`` when it has none."""
+    if not isinstance(raw, dict):
+        return None
+    return ResistanceGrant(
+        dc_base=int(raw.get("dcBase", 10)),
+        dc_trait=str(raw.get("dcTrait", "")),
+        placeholder=str(raw.get("placeholder", "")),
+    )
+
+
+def _parse_modifier(m: dict, category: str | None = None) -> Modifier:
+    # Effect-specific modifiers carry no ``category`` of their own — it comes from
+    # whether they sit in an ``extras`` or ``flaws`` array (passed in as ``category``).
+    return Modifier(
+        id=m["id"],
+        name=m["name"],
+        category=category or m["category"],
+        cost_formula=m.get("costFormula", ""),
+        cost_value=int(m.get("costValue", 0)),
+        cost_mode=m.get("costMode", ""),
+        flat=bool(m.get("flat", False)),
+        ranked=bool(m.get("ranked", False)),
+        max_rank=m.get("maxRank"),
+        overrides={_OVERRIDE_KEYS.get(k, k): v for k, v in m.get("overrides", {}).items()},
+        check_bonus=int(m.get("checkBonus", 0)),
+        grants_attack=bool(m.get("grantsAttack", False)),
+        drops_check=bool(m.get("dropsCheck", False)),
+        grants_resistance=_parse_resistance_grant(m.get("grantsResistance")),
+        check_note=m.get("checkNote", ""),
+        step_field=m.get("stepField", ""),
+        step_by=int(m.get("stepBy", 0)),
+        distance_rank_bonus=int(m.get("distanceRankBonus", 0)),
+        range_rank=dict(m.get("rangeRank", {})),
+        reach_spaces=int(m.get("reachSpaces", 0)),
+        adds_ability=m.get("addsAbility", ""),
+        cost_scope=m.get("costScope", ""),
+        cost_per_points=int(m.get("costPerPoints", 0)),
+        dynamic_cost_value=int(m.get("dynamicCostValue", 0)),
+        gate=m.get("gate", ""),
+        requires_effect_id=m.get("requiresEffect", ""),
+        repeatable=bool(m.get("repeatable", False)),
+        sub_build=_parse_sub_build(m.get("subBuild")),
+        hidden=bool(m.get("hidden", False)),
+        note_template=m.get("noteTemplate", ""),
+        note_per_rank=int(m.get("notePerRank", 0)),
+        note_values={k: dict(v) for k, v in m.get("noteValues", {}).items()},
+        requires_check=bool(m.get("requiresCheck", False)),
+        check_trait=str(m.get("checkTrait", "")),
+        check_dc=m.get("checkDc") if isinstance(m.get("checkDc"), int) else None,
+        use_costs=tuple(str(c) for c in m.get("useCosts", ())),
+        uses_per_charge=int(m.get("usesPerCharge", 0)),
+        fades_per_use=int(m.get("fadesPerUse", 0)),
+        requires_any=tuple(m.get("requiresAny", ())),
+        config_fields=tuple(_parse_config_field(c) for c in m.get("config", [])),
+        custom=bool(m.get("custom", False)),
+        description=m.get("description", ""),
+        integration=(
+            _parse_integration(m["statIntegration"], bool(m.get("configurableTarget", False)))
+            if m.get("statIntegration")
+            else None
+        ),
+    )
+
+
+def _parse_ladders(raw: dict) -> dict[str, tuple[str, ...]]:
+    """Read ``gameTermLadders`` (field -> ordered values) from ``modifiers.json``."""
+
+    return {field: tuple(values) for field, values in raw.get("gameTermLadders", {}).items()}
+
+
+def _parse_duration_action_floor(raw: dict) -> dict[str, str]:
+    """Read ``durationActionFloor`` (duration -> minimum action) from ``modifiers.json``."""
+
+    return {str(k): str(v) for k, v in raw.get("durationActionFloor", {}).items()}
+
+
+def _parse_configured_modifier(raw: dict) -> ConfiguredModifier:
+    return ConfiguredModifier(
+        id=raw["id"], rank=int(raw.get("rank", 0)), config=dict(raw.get("config", {}))
+    )
+
+
+def _parse_configured_effect(raw: dict) -> ConfiguredEffect:
+    return ConfiguredEffect(
+        effect_id=raw["effectId"],
+        rank=int(raw.get("rank", 0)),
+        config=dict(raw.get("config", {})),
+        extras=tuple(_parse_configured_modifier(m) for m in raw.get("extras", [])),
+        flaws=tuple(_parse_configured_modifier(m) for m in raw.get("flaws", [])),
+    )
+
+
+def _parse_configuration(raw: dict) -> PowerConfiguration:
+    return PowerConfiguration(
+        id=raw["id"],
+        name=raw["name"],
+        base_effect=raw.get("baseEffect", ""),
+        cost_note=raw.get("costNote", ""),
+        cite=raw.get("cite", ""),
+        description=raw.get("description", ""),
+        structure=raw.get("structure", "independent"),
+        effects=tuple(_parse_configured_effect(e) for e in raw.get("effects", [])),
+    )
+
+
+def _parse_effect_modifiers(raw: dict) -> dict[str, list[Modifier]]:
+    """Parse ``effect_modifiers.json`` into ``effect id -> [Modifier, ...]``.
+
+    Each effect's ``extras`` and ``flaws`` arrays are flattened into one list, with
+    the category tagged onto each modifier from the array it came from.
+    """
+
+    result: dict[str, list[Modifier]] = {}
+    for effect_id, groups in raw.get("effectModifiers", {}).items():
+        mods = [_parse_modifier(m, "extra") for m in groups.get("extras", [])]
+        mods += [_parse_modifier(m, "flaw") for m in groups.get("flaws", [])]
+        result[effect_id] = mods
+    return result

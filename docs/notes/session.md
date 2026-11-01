@@ -738,6 +738,12 @@ The shape:
     hub** with the release.
   - The session's *rules* for minions need no bump: they ride the shared-state
     channel as the core app's `"session"` entry.
+- **Protocol v19 carries a choice save's `pick`** (`"best"` or `"worst"`): which of the
+  traits a "Fortitude or Will" save names the target rolls (see
+  [actions](actions.md)). One more whitelisted spec text key. Bumped for the v13
+  reason: a v18 server strips it without a word, so a worst-of save clicked on the
+  target's card would roll their better number. v18 never shipped, so the hub goes
+  from v17 to v19 in one redeploy.
 - **A join code is version 2, and a public-server session's is 24 characters.**
   Version 1 spelled the relay URL out byte by byte and came to 130 characters for
   a session on the hub. `discovery.encode_join_code` now packs every field as

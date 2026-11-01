@@ -625,3 +625,89 @@ def test_a_hosting_gm_writes_a_mod_line_into_the_shared_history(
     assert seen[0][0]["kind"] == "mod"
     assert seen[0][0]["mod_id"] == "timers"
     assert seen[0][0]["text"] == "Timer Bomb finished"
+
+
+# -- a peer's roll waits for their die ----------------------------------------
+
+
+def _peer_roll(seq: int, player_id: str = "someone-else", **extra) -> dict:
+    return {"kind": "roll", "seq": seq, "player_id": player_id, "label": "Will", "die": 7, **extra}
+
+
+@pytest.fixture
+def short_hold(monkeypatch):
+    """A hold short enough to wait out, long enough to see a roll held."""
+    monkeypatch.setattr(SessionBridge, "PEER_ROLL_DELAY_MS", 150)
+
+
+def test_the_default_hold_outlasts_the_rollers_tumble() -> None:
+    from mm_companion.ui import dice_roller
+
+    assert session_bridge.PEER_ROLL_DELAY_MS > dice_roller.ROLL_DURATION_MS
+
+
+@pytest.mark.usefixtures("short_hold")
+def test_a_peers_roll_waits_until_their_die_has_landed(
+    qapp: QApplication, bridge: SessionBridge
+) -> None:
+    host_locally(bridge)
+    seen = collect(bridge.rollAdded)
+
+    bridge._on_server_event(server_mod.EVENT_ROLL, _peer_roll(1))
+    qapp.processEvents()
+    assert seen == []  # the player who rolled it is still watching the die
+
+    drain(qapp, seen)
+    assert seen[0][0]["seq"] == 1
+
+
+@pytest.mark.usefixtures("short_hold")
+def test_ones_own_roll_and_a_group_roll_are_not_held(
+    qapp: QApplication, bridge: SessionBridge
+) -> None:
+    host_locally(bridge)
+    seen = collect(bridge.rollAdded)
+
+    bridge._on_server_event(server_mod.EVENT_ROLL, _peer_roll(1, bridge.own_player_id()))
+    bridge._on_server_event(server_mod.EVENT_ROLL, _peer_roll(2, group="saves"))
+    qapp.processEvents()
+
+    assert [args[0]["seq"] for args in seen] == [1, 2]
+
+
+@pytest.mark.usefixtures("short_hold")
+def test_what_follows_a_held_roll_waits_behind_it(
+    qapp: QApplication, bridge: SessionBridge
+) -> None:
+    host_locally(bridge)
+    seen = collect(bridge.rollAdded)
+    removed = collect(bridge.rollRemoved)
+
+    bridge._on_server_event(server_mod.EVENT_ROLL, _peer_roll(1))
+    bridge._on_server_event(server_mod.EVENT_ROLL, {"kind": "note", "seq": 2, "text": "hi"})
+    bridge._on_server_event(server_mod.EVENT_ROLL_REMOVED, {"seq": 1})
+    qapp.processEvents()
+    assert seen == [] and removed == []
+
+    drain(qapp, seen, count=2)
+    drain(qapp, removed)
+    assert [args[0]["seq"] for args in seen] == [1, 2]  # the log's own order
+    assert removed == [(1,)]
+
+
+@pytest.mark.usefixtures("short_hold")
+def test_a_fresh_history_replaces_what_was_still_held(
+    qapp: QApplication, bridge: SessionBridge
+) -> None:
+    host_locally(bridge)
+    seen = collect(bridge.rollAdded)
+    replaced = collect(bridge.historyReplaced)
+
+    bridge._on_server_event(server_mod.EVENT_ROLL, _peer_roll(1))
+    bridge._feed.emit("replaced", [_peer_roll(1)])
+    qapp.processEvents()
+    time.sleep(0.3)
+    qapp.processEvents()
+
+    assert seen == []  # the history already carries it, so it is not added twice
+    assert replaced[-1][0][0]["seq"] == 1

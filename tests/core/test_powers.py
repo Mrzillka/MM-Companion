@@ -1039,9 +1039,33 @@ def test_removable_tier_scales_the_per_five_points_discount() -> None:
     assert at(tier="removable") == 78  # -1 x 20
     assert at(tier="easily_removable") == 58  # -2 x 20
     assert at(tier="equipment") == 18  # -4 x 20
-    # Short-Term Only is worth 1 off the flaw's own value, and may take it to 0 (p160).
-    assert at(tier="equipment", loss="short_term_only") == 38  # -3 x 20
-    assert at(tier="removable", loss="short_term_only") == 98  # no discount at all
+    # Short-Term Only is a 1-point *flat* reduction in the flaw's whole value (p160),
+    # not 1 off its rate per 5 points.
+    assert at(tier="removable", loss="short_term_only") == 79  # -20 + 1
+    assert at(tier="equipment", loss="short_term_only") == 19  # -80 + 1
+
+
+def test_short_term_only_gives_one_point_of_the_discount_back() -> None:
+    data = load_game_data()
+    # A 20-point power: Removable takes 4 off, Short-Term Only gives 1 back.
+    power = Power(effects=[PowerEffectInstance("protection", rank=20)])
+    power.effects[0].flaws = [ModifierSelection("removable", config={"tier": "removable"})]
+    assert power_total_cost(power, data) == 16
+    power.effects[0].flaws[0].config["loss"] = "short_term_only"
+    assert power_total_cost(power, data) == 17
+    (term,) = power_scope_terms(power, data, 20)
+    assert (term.magnitude, term.units, term.flat_delta, term.amount) == (1, 4, -1, -3)
+
+
+def test_short_term_only_can_take_the_discount_to_nothing() -> None:
+    data = load_game_data()
+    # Removable on a 5-point power is worth 1, and Short-Term Only takes that 1 (p160).
+    power = Power(effects=[PowerEffectInstance("protection", rank=5)])
+    power.effects[0].flaws = [
+        ModifierSelection("removable", config={"tier": "removable", "loss": "short_term_only"})
+    ]
+    assert power_total_cost(power, data) == 5
+    assert power_scope_terms(power, data, 5) == ()
 
 
 def test_one_removable_discounts_a_power_however_many_effects_carry_it() -> None:
@@ -4403,8 +4427,10 @@ def test_alternate_resistance_invents_no_save_on_an_effect_without_one() -> None
     assert "resistance" not in rows
 
 
-def test_a_save_naming_two_resistances_fills_in_neither() -> None:
-    """The target's sheet cannot know which applies, so it does not guess the first."""
+def test_a_save_naming_two_resistances_names_both_for_the_target_to_choose() -> None:
+    """Not the first of them: the target rolls the better, or the worse when the build
+    says so — and only their own sheet knows which number that is. It used to name
+    neither, so the save button on the history card rolled at +0."""
     from mm_companion.core.powers import Power
     from mm_companion.core.rules import power_rolls
 
@@ -4412,4 +4438,19 @@ def test_a_save_naming_two_resistances_fills_in_neither() -> None:
     effect = _alt_resisted("damage", resistance="Fortitude", resistanceSecond="Will")
     save = next(s for s in power_rolls(Power(effects=[effect]), None, data) if s.dc)
     assert save.label.startswith("Fortitude or Will")
-    assert save.trait_key == ""
+    assert save.trait_key == "resistance:FORTITUDE|resistance:WILL"
+    assert save.pick == "best"
+
+
+def test_a_dialled_down_power_reads_its_readouts_at_the_dialled_rank() -> None:
+    """The card's Range row followed the dial while the readouts beside it did not.
+
+    So Communication 4 turned down to 1 still promised "Worldwide", and its overhearing
+    DC stayed at rank 4's. Every readout now reads the rank the power is set to.
+    """
+    data = load_game_data()
+    effect = PowerEffectInstance("communication", rank=4)
+    effect.current_rank = 1
+    rows = {r.label: r.value for r in effect_readout_rows(effect, data)}
+    assert rows["Range"] == "Same city"
+    assert rows["Overheard"].startswith("Perception DC 11")

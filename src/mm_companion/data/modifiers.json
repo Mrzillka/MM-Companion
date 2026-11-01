@@ -1065,10 +1065,10 @@
           "key": "loss",
           "label": "Long-term loss",
           "type": "select",
-          "hint": "Short-Term Only takes 1 off the flaw's value: the power can still be taken away, but is never lost for longer than a scene. It can reduce the value to 0, leaving no discount at all.",
+          "hint": "Short-Term Only is a 1-point flat reduction in the flaw's whole value, not in its rate per 5 points: a 20-point power Removable is discounted 4, to 16, and Short-Term Only makes that 3, to 17. The power can still be taken away, but is never lost long-term. It can reduce the value to 0, leaving no discount at all.",
           "options": [
             { "value": "long_term", "label": "Can be lost long-term" },
-            { "value": "short_term_only", "label": "Short-term only", "costDelta": -1 }
+            { "value": "short_term_only", "label": "Short-term only", "flatDelta": -1 }
           ]
         }
       ],

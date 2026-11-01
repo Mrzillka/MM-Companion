@@ -1215,3 +1215,33 @@ def test_a_reroll_leaves_the_loaded_trait_alone(
     assert rolled[-1]["reroll"] is True
     assert rolled[-1]["bonus"] == 8
     assert panel.current_spec().label == "Stealth"  # still loaded
+
+
+def test_the_die_stays_put_whatever_the_readout_says(qapp) -> None:
+    """The readout under the die used to decide how wide the die's column was.
+
+    So in compact mode — the quick rolls beside the die — every roll slid the die and
+    re-wrapped its text: a long name widened the column and squeezed the quick rolls,
+    and the next short one pulled them back. Its width is now that of a template
+    result, so a long name wraps in place instead.
+    """
+    panel = DiceRollerPanel()
+    panel.resize(460, 420)
+    panel.show()
+    try:
+        panel.set_compact(True)
+        qapp.processEvents()
+        widths = [panel._die_part.width()]
+        for label, die, modifier, dc, degree in (
+            ("Toughness vs. 20", 1, 15, 20, -2),
+            ("Close Attack (Enhanced Strength) vs. Defense 18", 14, 12, 18, 1),
+        ):
+            panel.load_spec(RollSpec(label=label, modifier=modifier, dc=dc))
+            panel._update_readout(die, modifier, dc, degree, die == 1)
+            qapp.processEvents()
+            widths.append(panel._die_part.width())
+
+        assert len(set(widths)) == 1
+        assert panel._readout.sizeHint().width() <= panel._die_part.width()
+    finally:
+        panel.close()

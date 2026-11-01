@@ -43,6 +43,7 @@ from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.dice import ROUTINE_DIE
 from mm_companion.core.rules import (
+    PICK_WORST,
     MinionRules,
     RollSpec,
     TeamEntry,
@@ -52,6 +53,7 @@ from mm_companion.core.rules import (
     critical_answer,
     defense_class,
     follow_ups_for_result,
+    is_choice_key,
     judge_attack,
     localize_spec,
     minion_save_spec,
@@ -61,6 +63,7 @@ from mm_companion.core.rules import (
     rung_caption,
     team_incompatibility,
     team_save_spec,
+    trait_roll_for,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.action_run import ActionRun, group_line, total_of
@@ -680,6 +683,15 @@ class AttackWindow(QDialog):
             grid.addWidget(QLabel(html.escape(save.label)), row, 0)
             combo = QComboBox()
             guard_wheel(combo)
+            if is_choice_key(save.trait_key):
+                # "Fortitude or Will": offer the choice itself first, at the number this
+                # creature would roll it at, so the default is the rule rather than a guess.
+                picked = trait_roll_for(save, character, data)
+                if picked is not None:
+                    which = "Worst" if save.pick == PICK_WORST else "Best"
+                    combo.addItem(
+                        f"{which} of: {picked.label} {picked.modifier:+d}", save.trait_key
+                    )
             for resistance in resistances:
                 value = resistance_total(character, data, resistance.key)
                 combo.addItem(f"{resistance.name} {value:+d}", resistance.key)

@@ -136,7 +136,12 @@ from typing import ClassVar
 #: ``minion`` badge. Bumped for the v13 reason: a v17 server ignores the two request
 #: fields without a word, so a hero taking 10 would roll a d20 after all, and a
 #: minion's natural 20 would land a critical hit the rules say it cannot score.
-PROTOCOL_VERSION = 18
+#:
+#: v19 carries which of a choice save's candidates the target rolls (``pick``:
+#: ``"best"`` or ``"worst"``) on the spec — Alternate Resistance's "Fortitude or Will".
+#: Bumped for the v13 reason: a v18 server strips the key without a word, and a worst-of
+#: save clicked on the target's card would roll their better number.
+PROTOCOL_VERSION = 19
 
 #: Hard cap on one encoded message, including its trailing newline. A character
 #: snapshot is the largest thing that legitimately travels (tens of KB); anything
@@ -992,6 +997,7 @@ _SPEC_TEXT_KEYS = (
     "actor",
     "recovers",
     "recovers_parameter",
+    "pick",
 )
 _SPEC_INT_KEYS = ("modifier", "dc", "dc_if_resisted")
 #: How many names a spec's ``targets`` may carry — a scene's worth.

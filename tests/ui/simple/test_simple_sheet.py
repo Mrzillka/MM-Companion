@@ -32,7 +32,7 @@ from mm_companion.ui.cards import DraggableCard
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.main_window import MainWindow
 from mm_companion.ui.npc_window import NPCWindow
-from mm_companion.ui.sections.powers import _RankDial
+from mm_companion.ui.sections.power_parts.widgets import _RankDial
 from mm_companion.ui.simple.printing import PrintDocument, export_pdf, page_breaks
 from mm_companion.ui.simple.sheet import SimpleBox
 from mm_companion.ui.simple.style import TermLabel

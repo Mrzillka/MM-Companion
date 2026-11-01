@@ -966,7 +966,9 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   and `power_linked_range_violations`. Whether a PL breach merely warns or blocks
   the save is the single app-wide seam `core.storage.pl_enforcement()`
   (`"warn"` / `"block"`), so it can become a settings toggle later.
-- **UI**: `PowersSection` ("Add Power") launches the standalone
+- **UI**: `PowersSection` (`ui/sections/powers.py`: construction, rendering and the
+  cards; editing the tree, spending uses, activation, the Dynamic share dial and the
+  rank dials are mixins in `ui/sections/power_parts/`) ("Add Power") launches the standalone
   `ui/power_constructor/window.py::PowerConstructorWindow` — a drag-and-drop
   brick-builder (a palette of Effect/Extra/Flaw bricks → an effect-card canvas,
   a `PowerModeBar` for the structure once ≥2 effects). It hands the finished

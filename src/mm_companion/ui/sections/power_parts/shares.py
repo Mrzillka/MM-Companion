@@ -43,26 +43,17 @@ class PowersSharesMixin:
     ) -> QWidget | None:
         """The dial a Dynamic member's share is made on — and its **only** dial.
 
-        The split used to be a modal dialog of spin boxes reached from the group header.
-        It is the same dial a rank is dialled on now, for the reason the dialog itself
-        had to keep explaining: a share is only ever interesting for the rank it buys, so
-        the notches *are* the ranks and the points are what each one spends
-        (:func:`~mm_companion.core.rules.dynamic_share_steps`). A member costing 2 points
-        a rank moves the split 2 points a notch and one costing 1 moves it by 1, so every
-        stop is a legal price for both of them.
+        A share is only interesting for the rank it buys, so the notches *are* the
+        ranks and the points are what each spends
+        (:func:`~mm_companion.core.rules.dynamic_share_steps`).
 
-        It **replaces** the rank dial rather than sitting beside it — :meth:`_rank_dials`
-        stands down for a member under a share. Two dials each claiming the same rank
-        deadlocked: the rank one wrote a value the share then clamped away, and because
-        the clamp was a minimum that written-and-clamped value survived as a floor the
-        share could no longer lift.
+        It **replaces** the rank dial (:meth:`_rank_dials` stands down): two dials
+        claiming one rank deadlocked, the share clamping away what the rank dial wrote
+        and the clamp surviving as a floor.
 
-        The reachable pips **end where the pool does**: a member can be set to its last
-        hollow pip and no further, and one dotted pip turns hollow for every point a
-        sibling hands back. A Growth 6 holding all six of a six-point pool leaves an
-        Elongation 3 with every pip dotted; drop the Growth a rung and it has one.
-        The dial is always drawn, even at one notch — it used to disappear outright
-        once its siblings had spent the pool, with no way to give it points again.
+        The reachable pips **end where the pool does**; one dotted pip turns hollow
+        for every point a sibling hands back. The dial is always drawn, even at one
+        notch: it used to vanish once siblings spent the pool, with no way back.
         """
 
         if parent is None or not node.dynamic or parent.mode != STRUCTURE_ARRAY:
@@ -146,14 +137,10 @@ class PowersSharesMixin:
         landing back on it counts as *no change*, while the pool goes on being counted
         without it until the player actually picks another notch.
 
-        **And its label says so**, by naming the rank without a price. Every other notch
-        is priced because picking it spends that many points; the one a
-        member was *found* on spends nothing, and reading ``10 PP · Growth 6`` under a
-        header saying the array is not split invited exactly the wrong conclusion — that
-        this member was holding the whole pool. :class:`_SplitGroup` already counts a
-        phantom as zero (:meth:`_SplitGroup._held`); this is the label agreeing with the
-        arithmetic. The price appears the moment another notch is picked, which is the moment
-        the points are genuinely spoken for.
+        **Its label names the rank without a price**: that notch spends nothing, and
+        ``10 PP · Growth 6`` under an unsplit header read as this member holding the
+        whole pool. :class:`_SplitGroup` counts it as zero too (:meth:`_SplitGroup._held`).
+        The price appears once another notch is picked.
         """
 
         notches = self._share_notches(node, full, held)
@@ -243,27 +230,20 @@ class PowersSharesMixin:
     def _fallback_share(self, node, host, full: int) -> tuple[int, int | None]:
         """The notch a member holding *no* share is running on anyway — share and rank.
 
-        Zero for every member the pool is actually rationing — its own share seats its
-        dial, and that is the whole story. But an array whose shares are all handed back
-        is not split at all, and :func:`~mm_companion.core.rules.live_array_children`
-        then falls back to running its **selected alternate** at the rank it stands at;
-        one level down, :func:`~mm_companion.core.rules.effect_is_selected` says the same
-        of a power's own effects. That member is running, so its one dial has to say
-        where — seating it on "Off" is the same lie the zero notch was fixed for at the
-        other end (see :meth:`_on_share_dialled`), and the one an untouched Dynamic array
-        told about every member it was running.
+        Zero for every member the pool is rationing. But an array whose shares are
+        all handed back is not split, and
+        :func:`~mm_companion.core.rules.live_array_children` runs its **selected
+        alternate** at its rank (:func:`~mm_companion.core.rules.effect_is_selected`
+        for a power's own effects). That member is running, so its dial must not say
+        "Off" (it used to, for every member of an untouched Dynamic array).
 
-        Priced through the exact inverse of what a share buys
-        (:func:`~mm_companion.core.rules.dynamic_share_points`), so the handle lands on
-        the notch that *would* buy what the member is running: a member at its full rank
-        lands on its whole cost, which is what an unsplit array's alternate is worth. One
-        holding several effects is priced whole rather than by whichever of them was
-        asked, since the split rations them together anyway.
+        Priced through the inverse of what a share buys
+        (:func:`~mm_companion.core.rules.dynamic_share_points`), so a member at full
+        rank lands on its whole cost; one holding several effects is priced whole.
 
-        A reading, not a claim: nothing is written, and the array's :class:`_SplitGroup`
-        leaves these points out of the pool it counts down until the handle is moved. The
-        rank comes back with the price so the handle lands on the right one of the two
-        notches that can share it (:meth:`_seat`).
+        A reading, not a claim: nothing is written, and :class:`_SplitGroup` leaves
+        these points out of the pool until the handle moves. The rank comes back too,
+        to pick between two notches that share a price (:meth:`_seat`).
         """
 
         if node.dynamic_points is not None or not self._member_is_running(node):
@@ -314,15 +294,11 @@ class PowersSharesMixin:
     def _share_notches(self, node, full: int, held: int) -> list[tuple[int, int | None]]:
         """Every ``(share, rank)`` this member's dial can stop on, cheapest first.
 
-        **One notch per rank, not per price.** A share buys a ceiling rather than a rank,
-        and the two are different ladders wherever a member does not cost a round number
-        of points a rank: five points of a six-rank member costing five buys all six, and
-        nothing at all buys exactly five. Pricing the notches meant that rank simply was
-        not on the dial — a Growth could be Large or Gargantuan and never Huge, which
-        for a size effect is not a rounding error but a rung the player wanted (bigger is
-        easier to hit and impossible to hide). So every rank gets a notch, priced at the
-        cheapest share that *reaches* it, and the notch carries the rank it stands at:
-        the two notches that share a price differ by where they stop, which is what
+        **One notch per rank, not per price.** A share buys a ceiling, not a rank, and
+        where a member's cost per rank is not round some ranks have no price of their
+        own: notches by price let a Growth be Large or Gargantuan but never Huge. So
+        every rank gets a notch, priced at the cheapest share that *reaches* it, and
+        carries the rank it stands at, which
         :func:`~mm_companion.core.rules.dynamic_held_rank` reads back.
 
         The rank is ``None`` for a member holding **several** effects, whose share
@@ -385,12 +361,8 @@ class PowersSharesMixin:
         that share a price: "5 PP · Huge" is the one that stops there, and
         "5 PP · Gargantuan" beside it spends the same points on the next rung.
 
-        **A size effect is named by the size it becomes**, exactly as the rank dial this
-        dial replaces names it (:meth:`_dial_labels`). Moving a Growth into a Dynamic
-        array used to swap its ladder of Large/Huge/Gargantuan for bare rank numbers, so
-        the one control the player had left said less than the one it replaced — and
-        "Huge" is the thing being chosen, while the rank is an accounting fact the card
-        already prints.
+        **A size effect is named by the size it becomes**, as on the rank dial
+        (:meth:`_dial_labels`); it used to show bare rank numbers here.
 
         *priced* is off for the notch a member was merely **found** on rather than paid
         for (see :meth:`_build_share_dial`): the rank is true, the price is not yet.
@@ -441,38 +413,25 @@ class PowersSharesMixin:
     ) -> None:
         """Hand a member the share its dial was left on — and at zero, switch it off.
 
-        Runtime, so it emits ``runtimeChanged`` like the rank dial it replaces. A notch at
-        zero is stored as *no share at all* rather than a zero — the two behave
-        identically and the model writes ``dynamic_points`` only when it is set, so
-        sliding every member back to nothing leaves a saved character byte-for-byte what
-        it was before anyone split the pool. That is also the way back to an ordinary
-        array, which is what clearing the split used to be a button for.
+        Runtime, so it emits ``runtimeChanged``. Zero is stored as *no share at all*,
+        so sliding every member back to nothing leaves a saved character as it was
+        before the split: the way back to an ordinary array.
 
-        **Zero is off, the same as it is on the rank dial this dial replaces**, and it
-        has to be said out loud here. Handing a share back ordinarily drops the member
-        out of :func:`~mm_companion.core.rules.live_array_children` all by itself — but
-        not the *last* one: with every share back the array falls back to its selected
-        alternate at full rank, so a Growth parked on "Off" came straight back on and the
-        sheet went on reading Gargantuan under a dial saying the power was off. So the
-        notch flips the member's own master switches too, exactly as a click on its card
-        would, and a notch above zero flips them back — every switch the card flips
-        (:meth:`_set_member_running`), and only on this member's own leaves, which is
-        what keeps a share from switching off a Linked group it happens to sit inside.
+        **Zero is off**, said out loud here: handing back the *last* share makes the
+        array fall back to its selected alternate at full rank, so a Growth parked on
+        "Off" came straight back on. So the notch flips the member's own switches as a
+        card click would (:meth:`_set_member_running`), and only on its own leaves, so
+        a share never switches off a Linked group it sits inside.
 
-        A commit that lands where it started rebuilds nothing — tearing every card down
-        to write the number that is already there would be a rebuild for nothing. A click
-        always moves the dial, so this is insurance for a programmatic pick rather than
-        a gesture. *Where it started* is the notch the
-        dial was **drawn** on (:meth:`_build_share_dial` passes its index back) and the
-        switch: the share it holds for a member the pool is rationing, and the share it is
-        running on for one the fallback woke (:meth:`_fallback_share`) — so leaving that
-        dial where it sits keeps the array unsplit, while stepping it down to zero still
-        puts the member down.
+        A commit that lands where it started rebuilds nothing. *Where it started* is
+        the notch the dial was **drawn** on (:meth:`_build_share_dial` passes it back),
+        including one the fallback woke (:meth:`_fallback_share`), so leaving that dial
+        keeps the array unsplit while stepping it to zero puts the member down.
 
-        A notch is a **share and a rank**, and both are written: two notches can spend the
-        same points and stop at different ranks (:meth:`_share_notches`), so the index is
-        what a commit is compared by and :meth:`_hold_member` stores the rank the dial
-        stopped at whenever it is below what those points buy.
+        A notch is a **share and a rank**, and both are written: two notches can spend
+        the same points and stop at different ranks (:meth:`_share_notches`), so the
+        index is compared, and :meth:`_hold_member` stores the rank when it is below
+        what the points buy.
         """
 
         points, hold = notches[max(0, min(index, len(notches) - 1))]
@@ -511,16 +470,11 @@ class PowersSharesMixin:
     def _set_member_running(node, running: bool) -> None:
         """Switch one Dynamic member on or off, leaving its siblings alone.
 
-        **Every** switch on the member's own leaves, not just ``activated``. A card
-        click switches a power off through :meth:`_set_power_active`, which clears
-        ``activated``, ``item_present`` and each effect's ``toggled_on`` together — so a
-        share dialled up afterwards that raised only ``activated`` left the other two
-        down, and :func:`~mm_companion.core.rules.effect_is_active` went on reading the
-        member as off. The points were spent, the card lit up, and the sheet never moved:
-        a Speed parked in a Dynamic array by a card click could not be bought back on.
-        Which flags a given power's gates actually consult is
-        :func:`~mm_companion.core.rules.effect_is_active`'s business, so this raises the
-        same three the card does and lets it choose.
+        **Every** switch on the member's own leaves, not just ``activated``: a card
+        click clears ``activated``, ``item_present`` and each ``toggled_on`` together
+        (:meth:`_set_power_active`), and raising only ``activated`` left a Speed parked
+        by a card click impossible to buy back on. Which flags matter is
+        :func:`~mm_companion.core.rules.effect_is_active`'s business.
 
         *Its own leaves* is still the whole of the scope: reaching wider, as
         :meth:`_set_power_active` does for a Linked group, would let one member's share

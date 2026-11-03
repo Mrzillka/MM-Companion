@@ -51,9 +51,7 @@ class DiceRollerView(ReflowBox, QWidget):
     filling the rest, whatever the room. See :func:`mm_companion.core.storage.dice_layout`.
 
     *history* is for a host that owns its own history panel and only wants the
-    arrangement: GM Mode passes its ``gm=True`` one, which follows the table (or
-    the log on disk between sessions) rather than the private/shared pair this view
-    would otherwise swap between.
+    arrangement: GM Mode passes its ``gm=True`` one.
     """
 
     def __init__(
@@ -173,14 +171,10 @@ class DiceRollerView(ReflowBox, QWidget):
         """
         available = self.reflow_available_width()
         if self._shape_locked():
-            # A chosen shape gets the width it actually asks for — never the
-            # row-of-three width the auto branch below measures, which is a
-            # different arrangement entirely and would leave the controls stretched
-            # across half the block with the history squeezed beside them.
-            #
-            # Both chosen shapes, not just Extended. Compact pins the panel just as
-            # hard, and measuring it as a row handed it two-thirds of a wide block —
-            # the exact opposite of what somebody picking Compact asked for.
+            # A chosen shape (Compact as well as Extended) gets the width it asks
+            # for, never the row-of-three width the auto branch measures: that left
+            # the controls stretched across half the block, and handed Compact
+            # two-thirds of a wide one.
             floor = self.panel.column_minimum_width()
             wanted = max(floor, self.panel.sizeHint().width())
             wanted = min(wanted, max(floor, available - MIN_HISTORY_WIDTH))
@@ -189,17 +183,13 @@ class DiceRollerView(ReflowBox, QWidget):
         spare = available - self._history_part.minimumSizeHint().width()
         if spare < floor:
             return [self.panel.column_minimum_width(), max(1, available)]
-        # Exactly what the controls ask for, and not a pixel more: everything past
-        # that is the history's, which is the part that benefits from length. The
-        # panel used to take a quarter of the surplus as well — "a little air" —
-        # which on a wide strip was a slab of empty groupbox charged to the one
-        # thing in the block that scrolls.
+        # Exactly what the controls ask for: everything past that is the history's.
+        # (The panel used to take a quarter of the surplus too, an empty slab on a
+        # wide strip.)
         #
-        # ``floor`` usually wins here, and that is not the clamp misfiring: an empty
-        # quick-roll strip asks for almost nothing (a 24px hint against a 170px
-        # minimum), so ``row_natural_width`` under-reports the row the panel can
-        # actually be laid out as. The floor is that row at its narrowest, which is
-        # the honest natural width for a panel shaped like this one.
+        # ``floor`` usually wins, and that is not the clamp misfiring: an empty
+        # quick-roll strip asks for almost nothing, so ``row_natural_width``
+        # under-reports the row. The floor is that row at its narrowest.
         natural = self.panel.row_natural_width()
         wanted = max(floor, min(natural, spare))
         return [wanted, max(1, available - wanted)]
@@ -231,23 +221,16 @@ class DiceRollerView(ReflowBox, QWidget):
     def sync_reflow(self) -> bool:
         """Re-run the width-driven reflow, unless the parts are out on loan.
 
-        **Extended does not pin this axis.** It used to: the preference forced the
-        row whatever the width, and :meth:`minimumSizeHint` then had to report the
-        row's width — a chosen shape cannot narrow out of itself — which held the
-        block, the pinned strip and the window open at close to 600px. In a *side*
-        strip, whose thickness is the ``dice`` block's 360, that spent half the
-        strip on a controls column with a long empty tail under it and squeezed the
-        history, the one thing in the block that scrolls, into what was left. Extra
-        room is the history's, and a shape that takes the room away from it to
-        satisfy a preference is answering the wrong question.
+        **Extended does not pin this axis.** It used to force the row whatever the
+        width, so :meth:`minimumSizeHint` reported the row's width and held the
+        block, the pinned strip and the window open at close to 600px, squeezing the
+        history in a side strip.
 
-        So the room decides the axis here, exactly as it does for an auto roller,
-        and Extended keeps what it was actually chosen for: the **panel** stays a
-        column (``DiceRollerPanel._apply_shape``), so a wide roller is controls
-        beside a history rather than the auto shape's one row of four, and
-        :meth:`_row_sizes` offers that column its own width. Where a row does not
-        fit, the parts stack — which is the same arrangement Extended would have
-        been showing anyway, minus the wasted width.
+        So the room decides the axis, as for an auto roller, and Extended keeps what
+        it was chosen for: the **panel** stays a column
+        (``DiceRollerPanel._apply_shape``), so a wide roller is controls beside a
+        history rather than one row of four, and :meth:`_row_sizes` offers that
+        column its own width. Where a row does not fit, the parts stack.
         """
         if self._lent:
             return False
@@ -441,18 +424,13 @@ class DiceRollerView(ReflowBox, QWidget):
         because the widgets themselves carry on. A second view would have meant a
         second attachment to the table and the same rolls listed twice.
 
-        The two are **hidden, not re-parented**, and handed back in the order they
-        belong in; the caller owns them until :meth:`restore_roller`, and it is the
-        caller's own ``adopt`` that takes them out of the splitter by putting them
-        in its layout. That is the whole reason this does not tidy them onto itself
-        first: a re-parent is the expensive half of the whole transition, because Qt
-        re-polishes every descendant against the application stylesheet, and a used
-        history is where the descendants are — ~5 widgets a card, so ~1000 of them at
-        the :data:`~mm_companion.ui.roll_history.MAX_CARDS` cap. Doing it here and
-        again in ``adopt`` charged that walk twice and put ~150 ms of frozen window on
-        the way in, for a parent nothing was ever laid out under. Hiding them is
-        what stands them out of the splitter's layout in the meantime, and keeps the
-        rule that a widget is never visible with no parent: they always have one.
+        The two are **hidden, not re-parented**, and handed back in order; the
+        caller owns them until :meth:`restore_roller`, and its ``adopt`` takes them
+        out of the splitter by putting them in its layout. A re-parent is the
+        expensive half of the transition (Qt re-polishes every descendant, ~1000 at
+        the :data:`~mm_companion.ui.roll_history.MAX_CARDS` cap), and doing it here
+        too cost ~150 ms of frozen window. Hiding keeps them out of the splitter's
+        layout meanwhile, and they always have a parent.
         """
         self._lent = True
         for part in self.reflow_parts():

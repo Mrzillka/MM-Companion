@@ -98,32 +98,20 @@ class PowersDialsMixin:
     ) -> list[QWidget]:
         """One :class:`_RankDial` per effect that has ranks worth choosing between.
 
-        One way in, and the block names neither Growth nor Damage:
-        :func:`~mm_companion.core.rules.effect_has_rank_dial`, which is the *Add a rank
-        dial* checkbox in the constructor's Extended settings when the player has
-        touched it and the ruleset's own answer when they have not — and the ruleset
-        says yes to anything carrying a size readout, so a mod's own size effect gets a
-        ladder without touching this file. That is the whole of the rule now: a Growth's
-        checkbox used to be a control that changed nothing, because a size effect got its
-        dial whatever the box said.
+        The rule is :func:`~mm_companion.core.rules.effect_has_rank_dial`: the
+        constructor's *Add a rank dial* checkbox when the player has touched it, the
+        ruleset's answer when not (yes for anything with a size readout, so a mod's
+        size effect gets a ladder too). The block names neither Growth nor Damage.
 
-        A single-rank effect gets nothing: dialling a Growth 1 is exactly the card's own
-        on/off switch, and a second way to press it is not a choice. A size effect is
-        measured by its *rungs* rather than its rank there, since the ladder a Growth 1
-        climbs is real even though its rank is one.
+        A single-rank effect gets nothing (that dial would just be the card's switch);
+        a size effect is measured by its *rungs* there, since a Growth 1 still climbs.
 
-        **An effect whose rank a share decides gets nothing here** — whether the share
-        is held by its own power (a Dynamic array of effects) or by the card it sits on
-        (a Dynamic member of an array group). Its rank is not the player's to set
-        directly; the share dial is the control that moves it, and it is deliberately the
-        only one. Two dials claiming one rank is what made a Growth's ladder snap back:
-        this one wrote a rank the share then clamped away, and the clamped value stayed
-        behind as a floor the share could not lift.
+        **An effect whose rank a share decides gets nothing here**, whether the share
+        is its own power's or the card's: the share dial is the only control. Two
+        dials claiming one rank made a Growth's ladder snap back, this one writing a
+        rank the share clamped away and the clamp staying as a floor.
 
-        The caption names the *effect* only when the power has more than one, which is
-        the same bargain the dice footer's labels strike: on the ordinary single-effect
-        Growth card "Size" is the whole story, while a Growth linked to a Shrinking needs
-        to say which dial is which.
+        The caption names the *effect* only when the power has more than one.
         """
         # *shared* is whether a share dial was really drawn for this card. Defaulted from
         # the flag alone so a caller that has not built one can still ask, but the card
@@ -187,15 +175,10 @@ class PowersDialsMixin:
     ) -> None:
         """Hold an effect at *rank* — or, at zero, switch the power off.
 
-        The dial does exactly what a click on the card would have done, and then lands on
-        the notch asked for. So moving it on a dormant power is a request to *be* that
-        rank: it wakes the power (flipping its switches, or becoming its array's live
-        alternate) at the chosen notch rather than at full rank. And sliding back to zero
-        is the card's own click again — off it goes, which is what makes the dial a whole
-        control rather than one that can only ever turn a power on. The one exception is
-        an array's live member, where clicking the card is deliberately a no-op: an array
-        always keeps exactly one member live, and dialling one to zero must not switch
-        the whole array off.
+        The dial does what a click on the card would, then lands on the notch asked
+        for: on a dormant power it wakes it at that rank, and zero switches it off.
+        The exception is an array's live member: an array always keeps one member
+        live, so dialling it to zero must not switch the whole array off.
 
         The rank is written before any activation path, so whichever one runs rebuilds
         the cards with it already in place.

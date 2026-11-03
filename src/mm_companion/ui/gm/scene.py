@@ -92,28 +92,21 @@ class GMSceneMixin:
         """Put back the board this session was last left holding.
 
         ``scene_sources`` is written on every push, persisted with the session and
-        handed back in the GM's own ``Welcome`` — *for this*, exactly as
-        ``npc_paths`` is. It had no reader until now, so a GM who closed the app
-        mid-fight came back to a full cast and an empty board, and the first push
-        after that wrote the empty one over the stored one: the fight was not just
-        forgotten but deleted, while any player still connected watched it vanish.
+        handed back in the GM's own ``Welcome``, as ``npc_paths`` is. Before this had
+        a reader, a GM who closed the app mid-fight came back to an empty board, and
+        the first push wrote the empty one over the stored one while the connected
+        players watched the fight vanish.
 
         Rebuilt in the order the **public** scene was stored in, since that is the
-        list ``_scene_payload`` wrote and so the one the refs are ordered by; the
-        private map only says which creature each ref stood for. The rolled
-        initiatives come back with it, because a turn order without its numbers is
-        most of the way to no turn order at all.
+        order of the refs; the private map only says which creature each ref stood
+        for. Rolled initiatives and each entry's ``turn`` come back with it.
 
-        **Players too**, with their rolled numbers. A disconnected seat keeps its
-        place on the board, and a GM restarting the app is the same thing from the
-        other side; the first roster then drops any seat that has left the table for
-        good, which is the rule ``_sync_scene_players`` keeps. Each entry's place in
-        the turn order comes back as well (``turn``), so a creature the GM had slotted
-        in by hand is still slotted in.
+        **Players too**: a GM restarting the app is a disconnect from the other side,
+        and the first roster then drops any seat that has left for good (the rule
+        ``_sync_scene_players`` keeps).
 
         Called once, after :meth:`_refresh_npcs` has built the cast, so a creature
-        whose file was deleted between sessions is simply not found and its place
-        is dropped rather than restored as a card that stands for nothing.
+        whose file was deleted between sessions is dropped rather than restored.
         """
         sources = dict(self._state.scene_sources)
         if not sources or self._scene:
@@ -237,19 +230,15 @@ class GMSceneMixin:
     def _drop_on_scene(self, ref: str, index: int) -> None:
         """A card was dropped at *index* — a move if we know the ref, else an add.
 
-        **The dragged card is the only one that changes.** It lands exactly where it
-        was dropped and gives up the initiative it rolled, since the GM has just
-        overruled that number; every other card keeps its number and its place. It
-        used to clear a rolled neighbour too, because the board sorted by initiative
-        and an un-rolled card could not otherwise sit in front of a rolled one — which
-        punished the creature the GM was *not* touching.
+        **The dragged card is the only one that changes.** It lands where it was
+        dropped and gives up its rolled initiative, since the GM has overruled it;
+        every other card keeps its number and place. (It used to clear a rolled
+        neighbour too, punishing the creature the GM was not touching.)
 
-        The board can say it now because the order is the GM's list and the numbers
-        on the cards are **turns**, not initiatives. Dropped in among the numbered
-        cards — anywhere up to just after the last of them — the card is *placed*:
-        it has no initiative, but it has a turn, and every card after it moves down
-        one. Dropped further down, among the creatures nobody has rolled for, it is
-        only rearranged.
+        The order is the GM's list and the numbers on the cards are **turns**, not
+        initiatives. Dropped among the numbered cards, up to just after the last of
+        them, the card is *placed*: no initiative, but a turn, and every card after
+        it moves down one. Dropped further down, it is only rearranged.
         """
         entry = self._scene_entry(ref) or self._adopt_dropped(ref)
         if entry is None:
@@ -448,17 +437,14 @@ class GMSceneMixin:
         can change under it — a condition, a damage step, a snapshot — since those
         are the changes a player is watching the board for.
 
-        **A push that would say nothing does nothing**, and that guard is what makes
-        it affordable to call from all of those places. One player editing a stat
-        arrived here twice — once from their snapshot and once from the roster
-        broadcast the same snapshot triggered — and each time redrew the GM's whole
-        board and sent the whole scene to every client, whose own board redrew in
-        turn. None of that is wrong; almost all of it is about a number the board
-        never showed.
+        **A push that would say nothing does nothing**, which is what makes it
+        affordable to call from all of those places. One player editing a stat
+        arrived here twice (their snapshot, then the roster it triggered), and each
+        time redrew the GM's whole board and sent the scene to every client.
 
-        The signature is everything the guarded half reads: the payload, the GM's own
-        arrangement, and whether there is a table to send to — so a scene built
-        *before* hosting starts is still broadcast when it does. What the cards are
+        The signature is everything the guarded half reads: the payload, the GM's
+        own arrangement, and whether there is a table to send to, so a scene built
+        before hosting starts is still broadcast when it does. What the cards are
         told, and what pictures are sent, is settled outside it.
         """
         entries = self._scene_payload()
@@ -522,11 +508,10 @@ class GMSceneMixin:
         been shrunk once for their *sheet* portrait — still big enough that a
         board's worth would be stored per session and replayed to every joiner.
 
-        Encoded at most once per picture. Both roads through here are expensive — a
-        file read or a base64 decode, then a scale and a JPEG re-encode — and this
-        runs for **every** entry on **every** push. ``_scene_portraits`` below only
-        suppresses the *send*, so before this cache a board of a dozen creatures was
-        re-encoded a dozen pictures' worth every time a player touched a spin box.
+        Encoded at most once per picture: both roads are expensive (a read or a
+        decode, then a scale and a JPEG re-encode) and this runs for every entry on
+        every push. ``_scene_portraits`` only suppresses the *send*; before this
+        cache a dozen pictures were re-encoded whenever a player touched a spin box.
         Keyed by the ref and holding the input it was made from, like
         :meth:`~mm_companion.ui.session_player.SnapshotPusher._portrait_payload`: a
         player who changes their picture mid-session still gets a new one.

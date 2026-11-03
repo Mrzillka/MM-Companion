@@ -174,15 +174,11 @@ class LocalRollHistory(QWidget):
     of one's own rolls that only exists while there is no session. Each card can
     be thrown away or saved to the quick-roll strip.
 
-    And it keeps the same :data:`~mm_companion.ui.roll_history.MAX_CARDS` cap that
-    one does, which it went without for far too long. The shared history is a
-    *view* of a log the server holds, so capping it only decides how far back you
-    can scroll; this list is the log, so a cap here does lose the oldest rolls —
-    but the alternative was unbounded, and it was the compact-mode transition that
-    showed why (see :meth:`~DiceRollerView.release_roller`). Every card is ~5
-    widgets that Qt re-polishes and re-lays-out whenever the history changes
-    parent or width, so an evening's play turned the roller into something that
-    took seconds to move.
+    It keeps the same :data:`~mm_companion.ui.roll_history.MAX_CARDS` cap. This
+    list *is* the log, so the cap loses the oldest rolls, but unbounded was worse:
+    every card is ~5 widgets that Qt re-polishes whenever the history changes
+    parent or width, so after an evening's play the roller took seconds to move
+    (see :meth:`~DiceRollerView.release_roller`).
     """
 
     #: A card's star — the roll's parameters, for the roller to save or unsave.
@@ -285,17 +281,12 @@ class LocalRollHistory(QWidget):
     def add_request(self, spec: object) -> None:
         """Write a requested roll that reached nobody — the off-air twin of one.
 
-        Asking the table with no table is still worth a card: the button rolls the
-        trait here, which makes the row a way of parking a roll for later even
-        solo. Unlike :meth:`add_note` it *keeps* its author line — "Requested by
-        you" — because a bare button says nothing about where it came from, and a
-        parked request read back an hour later is otherwise indistinguishable from
-        the follow-up chip a roll left behind.
+        Still worth a card with no table: the button rolls the trait here, so the
+        row parks a roll for later even solo. Unlike :meth:`add_note` it keeps its
+        "Requested by you" line, or it reads like a follow-up chip a roll left.
 
-        And it can be thrown away like every other card in this list. A private
-        card needs no permission (the ``can_remove`` gate is the shared log's, where
-        striking an entry is the GM's), only an id to be struck by — so it takes a
-        negative sequence number, the same convention a pre-hosting roll uses.
+        It can be thrown away like every card here: it needs no permission, only an
+        id, so it takes a negative sequence number as a pre-hosting roll does.
         """
         self._offline_seq -= 1
         card = RequestCard(

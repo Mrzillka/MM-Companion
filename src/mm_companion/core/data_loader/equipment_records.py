@@ -374,7 +374,7 @@ class InstallationRules:
     Python for the reason :attr:`VehicleRules.category` is.
 
     ``toughness_pl_multiple`` and ``impervious_pl_multiple`` are the installation's
-    own Power Level cap pair, and it is genuinely a different pair from a character's:
+    own Power Level cap pair, different from a character's:
     an installation has no defences other than its Toughness, so that Toughness may
     reach **twice** the series Power Level while Impervious stays capped at the Power
     Level itself.

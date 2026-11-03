@@ -280,16 +280,12 @@ class GMNpcBoardMixin:
         """Build a mook from a Power Level and a preset and put it straight in the cast.
 
         Saved immediately rather than handed to an unsaved sheet: the wizard has
-        already collected everything the roster needs, so the creature is in the
-        cast — and rollable against — the moment the dialog closes.
+        everything the roster needs, so the creature is in the cast, and rollable
+        against, the moment the dialog closes.
 
-        And **nothing opens**. It used to throw the new NPC's full sheet up, which
-        is exactly wrong for the thing this button is for: a handful of numbers is all a
-        mook needs, and a GM making five of them wanted five cards, not five
-        windows to close. It lands **expanded**, like every new card: a creature the
-        GM has just made is one they want to see whole, and shrinking it is one click
-        on its caret (or **Collapse all** for the batch). The sheet is one click on
-        the card's portrait away either way.
+        **Nothing opens.** It used to open the new NPC's full sheet, but a GM making
+        five mooks wants five cards, not five windows to close. It lands expanded,
+        like every new card; the sheet is one click on its portrait away.
         """
         dialog = QuickNPCDialog(self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
@@ -455,17 +451,14 @@ class GMNpcBoardMixin:
         """Build the NPC sheet the next card will open, before anyone asks for it.
 
         Opening a creature is almost all *building a sheet*, and none of that depends
-        on which creature it is — so it is done here, in the GM's idle time, and the
-        click only has to hand the sheet a model (:meth:`NPCWindow.load`) and show it.
-        The first one built in a run also pays Qt's one-off warm-up, which used to be
-        what made the first sheet of a session the slowest. Never shown and never
-        parented: it is a top-level window that has simply not been opened yet.
+        on which creature it is — so it is done here, in idle time, and the click only
+        hands the sheet a model (:meth:`NPCWindow.load`) and shows it. The first one
+        built also pays Qt's one-off warm-up. Never shown and never parented: a
+        top-level window that has not been opened yet.
 
-        Not for an empty cast — a GM running a session with no creatures would pay
-        the warm-up for nothing; :meth:`_refresh_npcs` asks again when one joins. And
+        Not for an empty cast (:meth:`_refresh_npcs` asks again when one joins), and
         not under an open dialog: the timer fires inside its event loop too, and a
-        freeze while the GM types a Quick NPC's name is the one place it shows. It
-        waits the dialog out instead.
+        freeze while the GM types a Quick NPC's name is where it shows.
         """
         if self._spare_npc is not None or self._spare_unsupported or not self.isVisible():
             return
@@ -686,29 +679,20 @@ class GMNpcBoardMixin:
         capped at what the block can actually give it.
 
         A card knows what *it* needs; only the block knows what its columns need.
-        The wrapping :class:`~mm_companion.ui.flow_layout.FlowLayout` lays items
-        out at their own size hint, so cards of differing widths stop lining up —
-        which is why the width used to be a flat 210 + 150 constant, and why a
-        card that merely fitted its content would have made the grid ragged and
-        re-flowed it every time a pin was added.
+        The wrapping :class:`~mm_companion.ui.flow_layout.FlowLayout` lays items out
+        at their own size hint, so cards of differing widths would not line up, and
+        would re-flow every time a pin was added.
 
-        The **cap** is what a resizable board needs. A card's asked-for width used
-        to be the answer outright, so a block dragged narrower than one card simply
-        grew a scrollbar and the GM read their mooks through a letterbox. Now the
-        block's own width is a ceiling: the pinned strip gives up its slack first
-        (down to ``gm.pin-strip.min``, since a narrower strip elides its captions
-        and loses least), and then the body follows. Past what both can give, the
-        cards stay legible and the block scrolls — the same bargain every block on
-        the sheet makes.
+        The **cap** is the block's own width. Without it a block dragged narrower
+        than one card grew a scrollbar and the GM read their mooks through a
+        letterbox. The pinned strip gives up its slack first (down to
+        ``gm.pin-strip.min``: a narrower strip elides its captions and loses least),
+        then the body follows. Past that, the block scrolls.
 
-        Measured per block rather than across both: the NPC grid and the player
-        roster are two flows with no columns in common, and a board of pinless
-        players should not be held open by a GM's fattest mook.
-
-        This is also what makes **Collapse all** narrow the board and not only
-        shorten it. One card collapsed among expanded neighbours changes nothing —
-        the widest hint still includes a portrait — but with every card shed of its
-        portrait at once, the shared width falls with them.
+        Measured per block: the NPC grid and the player roster have no columns in
+        common, and a board of pinless players should not be held open by a GM's
+        fattest mook. It is also what makes **Collapse all** narrow the board: with
+        every card's portrait shed at once, the shared width falls with them.
         """
         npc_cards = [e.card for e in self._npc_state.values() if e.card is not None]
         for container, cards in (
@@ -739,8 +723,8 @@ class GMNpcBoardMixin:
         Not from the container, which is the trap: a card is a fixed width, so it
         sets the flow's minimum, so the block's scroll area gives the flow exactly
         that — and asking the container how wide it is returns the width the card
-        forced in the first place. The cap would then never bite, which is precisely
-        what it did until this read the viewport instead.
+        forced in the first place, and the cap never bites (it did not, until this
+        read the viewport).
 
         Zero before the block is realized, which is read as "no cap yet": the first
         paint uses the cards' own hints and the real answer arrives on the first

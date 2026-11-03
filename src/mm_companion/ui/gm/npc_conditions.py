@@ -230,11 +230,9 @@ class GMNpcConditionsMixin:
             # (A player's card gets this for free — a condition there comes back as
             # a fresh snapshot, which restates the whole card.)
             entry.card.pins.refresh()
-        # And the table, if this creature is on the board. Conditions are half of
-        # what a scene card shows, and this method is the *only* path that changes
-        # them without going through _refresh_npcs — the GM's "+", the right-click
-        # that sheds one, and every rung of the damage ladder all land here. Without
-        # this a GM could daze a creature and watch their own card update while the
-        # players went on looking at an undazed one.
+        # And the table, if this creature is on the board: this is the only path
+        # that changes conditions without going through _refresh_npcs (the GM's "+",
+        # the right-click that sheds one, every rung of the damage ladder). Without
+        # it the GM's card showed a dazed creature while the players' did not.
         if self._scene_entry_for(SCENE_NPC, entry.path.name) is not None:
             self._push_scene()

@@ -322,24 +322,18 @@ class GameData:
     def _catalog(self, key: str, build: Callable[[], dict]) -> dict:
         """Memoize one of the merged ``id ->`` lookups below, per :class:`GameData`.
 
-        Each is a flat merge over tuples that never change — :class:`GameData` is
-        frozen and a mod reload builds a *new* one (see :func:`clear_game_data_cache`)
-        — so the answer is fixed for the life of the instance, and rebuilding it per
-        call is pure waste. It was not idle waste either: ``modifier_catalog`` alone
-        was rebuilt three hundred times for **one step of an ability spin box**, since
-        every power and equipment card re-derives its terms on a redraw and every term
-        looks its modifiers up. That was a third of the cost of the whole edit.
+        Each is a flat merge over tuples that never change (:class:`GameData` is
+        frozen; a mod reload builds a new one), so the answer is fixed for the
+        instance. Uncached, ``modifier_catalog`` alone was rebuilt three hundred times
+        for **one step of an ability spin box**, a third of the cost of the edit.
 
         Written through ``object.__setattr__`` because the dataclass is frozen; the
-        cache is not a field, takes no part in equality, and is never serialized.
+        cache is not a field. The returned mapping is **shared**: treat it as
+        read-only.
 
-        The returned mapping is now **shared**, so treat it as read-only — no caller
-        writes to one today, and one that wants to should copy first.
-
-        Unlocked on purpose. The session layer asks these from its reader threads, and
-        two threads racing here both build the same answer from the same frozen
-        tuples: the loser's work is thrown away and rebuilt on some later call, which
-        is cheaper than a lock on the hottest read in the app.
+        Unlocked on purpose: two session reader threads racing here build the same
+        answer from the same frozen tuples, which is cheaper than a lock on the
+        hottest read in the app.
         """
 
         cache = self.__dict__.get("_catalogs")
@@ -374,16 +368,11 @@ class GameData:
     def equipment_catalog(self) -> dict[str, EquipmentEntry]:
         """A single ``id -> EquipmentEntry`` lookup, for the equipment rules layer.
 
-        Both kinds of **platform** are in it. A stock vehicle or installation is a
-        different *shape* of record — bought traits rather than a bundle of effects —
-        but it is bought, priced, worn and drawn as one more thing off the catalog, so
-        it enters the rules layer through the same door (:attr:`vehicle_entries`,
-        :attr:`installation_entries`). Everything that already works
-        on an entry then works on a vehicle: the picker lists it under its category,
-        :func:`~mm_companion.core.rules.build_item_from_entry` gives it a build, and
-        :func:`~mm_companion.core.rules.item_is_stock` keeps it at its printed price.
-        Its platform traits are read from :meth:`vehicle_catalog` by the one layer that
-        needs them.
+        Both kinds of **platform** are in it (:attr:`vehicle_entries`,
+        :attr:`installation_entries`): a stock vehicle or installation is bought,
+        priced, worn and drawn as one more thing off the catalog, so everything that
+        works on an entry works on it. Its platform traits are read from
+        :meth:`vehicle_catalog` by the one layer that needs them.
 
         Items win an id collision: a ruleset that ships a platform and an item under one
         id has a bug, and the item is the older, larger catalog.

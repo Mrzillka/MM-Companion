@@ -37,26 +37,15 @@ from mm_companion.ui.widgets import (
 def _mode_toggle_style(locked: bool) -> str:
     """The mode switch's own stylesheet, in tokens every preset defines.
 
-    It is stated **here, on the widget**, and not as a rule in the theme's
-    application sheet — the same bargain :mod:`~mm_companion.ui.lock` and the
-    compact roller's overlay button strike, and here it is forced twice over.
-    Classic emits no widget chrome at all, so an app-level rule would exist under
-    some presets and not others; and a *styled* preset states ``QPushButton``'s box
-    (border, radius, padding), which makes ``QStyleSheetStyle`` take the whole box
-    over and stop painting the platform's sunken/checked panel. That is the bug this
-    fixes: with no ``:checked`` rule anywhere, the lit segment painted exactly like
-    its two neighbours, and a group card gave no sign of being Independent, Array or
-    Linked. Only tokens *every* preset defines are used — Classic has no
-    ``surface.*`` group.
+    Stated **on the widget**, not in the theme's application sheet: Classic emits no
+    widget chrome, so an app-level rule would exist under some presets only; and a
+    styled preset states ``QPushButton``'s box, so ``QStyleSheetStyle`` stops
+    painting the platform's checked panel. With no ``:checked`` rule, the lit segment
+    looked like its neighbours and a group card gave no sign of its mode. Only tokens
+    *every* preset defines are used (Classic has no ``surface.*`` group).
 
-    The resting border is drawn rather than dropped so a segment does not jump
-    sideways as it lights up, which is the lesson the theme's tool-button rules and
-    ``QuickRollStar`` already carry. No ``font-size`` here: weight only.
-
-    Used by the group card's mode switch alone now that the size ladder has become a
-    dial; it stays a shared helper because a segmented strip is the shape any future
-    one-of-N card control wants, and two of them agreeing about nothing is the bug this
-    docstring exists to prevent.
+    The resting border is drawn so a segment does not jump as it lights up. Weight
+    only, no ``font-size``.
     """
     accent = theme.color("accent")
     rest = (
@@ -111,10 +100,6 @@ class _ModeToggle(QWidget):
     Emits :attr:`modeChanged` with a structure id — or
     :data:`~mm_companion.ui.power_constructor.canvas.MODE_ARRAY_DYNAMIC` — when the user
     picks a segment.
-
-    **Dynamic** was a checkbox beside this strip, which asked the same question twice:
-    an array and a Dynamic array are two answers to "how do these members combine", not
-    one answer and a modifier on it.
 
     The lit segment *is* how the card reports its group's mode, so it states its own
     look rather than trusting the platform to paint a checked button — see
@@ -196,23 +181,15 @@ class _ModeToggle(QWidget):
 class _SplitGroup:
     """Keeps one array's share dials honest about each other, live.
 
-    A split is one decision spread over several controls: every member draws from the
-    same pool, so moving one changes what the others may take. Without something joining
-    them each dial knew only its own bounds at the moment it was built, and the truth
-    arrived a rebuild later — which is how a handle came to move because a *sibling* had,
-    back when the dials were sliders.
+    Every member draws from the same pool, so moving one changes what the others may
+    take. Each dial reports its notch (:attr:`_RankDial.previewed`) and this restates
+    the rest: each other dial's ceiling becomes what the pool has left, and the header
+    says what is unspent. Nothing here writes to the model.
 
-    So each dial reports the notch it is set to (:attr:`_RankDial.previewed`) and this
-    restates the rest of the array from that: each other dial's ceiling becomes what the
-    pool has left once that one is paid, and the header says what is unspent. Nothing
-    here writes to the model; the dial's own commit does.
-
-    A **phantom** entry is a member seated on a share it does not hold: an unsplit array
-    runs its selected alternate anyway, and its dial says so rather than reading "Off"
-    (:meth:`PowersSection._fallback_share`). Those points are not spoken for until the
-    player picks another notch, so they are counted as nothing while it sits where it was
-    drawn — otherwise the first split of an untouched array would find the pool already
-    eaten by a share nobody had assigned.
+    A **phantom** entry is a member seated on a share it does not hold (an unsplit
+    array's running alternate, :meth:`PowersSection._fallback_share`). It counts as
+    nothing until the player picks another notch; otherwise the first split of an
+    untouched array would find the pool already eaten.
     """
 
     __slots__ = ("_pool", "_entries", "_readout")
@@ -261,14 +238,10 @@ class _SplitGroup:
     def readout_text(assigned: int, pool: int) -> str:
         """What the group header says about the pool — before a split and during one.
 
-        A static method because the header's label is built before any of the dials
-        exist (:meth:`PowersSection._pool_readout`) and restated by this coordinator once
-        they do; two places writing the sentence two ways is how a readout comes to
-        disagree with itself.
-
-        **Unsplit is a state, not an absence.** An array with nothing spread says how
-        many points there are and that none of them are spoken for — which is also the
-        line that tells the player the array is still picking one alternate at a time.
+        Static because the header is built before the dials exist
+        (:meth:`PowersSection._pool_readout`) and restated here once they do, so one
+        function writes the sentence. An unsplit array says how many points there are
+        and that none are spoken for.
         """
 
         if assigned <= 0:
@@ -281,46 +254,24 @@ class _SplitGroup:
 class _RankDial(QWidget):
     """A scale of pips for the rank an effect is currently *held at*, and what that means.
 
-    Two kinds of power want one and they want the same control. A Growth 3 is not one
-    leap to Gargantuan — it is Large, then Huge, then Gargantuan, and which of the three
-    you are standing at is a mid-fight decision. A Damage 10 is not all-or-nothing
-    either: a hero pulling their punches fires it at 5. So the card carries one pip per
-    rank (:class:`~mm_companion.ui.rank_pips.RankPips`), with a label beside them saying
-    what the current notch *is*: the **size the character
-    becomes** for a size effect (read against the wielder, so a Small character's scale
-    starts at Medium) and the plain rank otherwise. A rank is an accounting fact the card
-    already prints; "Huge" is the thing being chosen.
+    A Growth 3 is Large, then Huge, then Gargantuan, and which you stand at is a
+    mid-fight decision; a hero pulling their punches fires a Damage 10 at 5. So the
+    card carries one pip per rank (:class:`~mm_companion.ui.rank_pips.RankPips`) and a
+    label saying what the notch *is*: the **size the character becomes** for a size
+    effect (read against the wielder, so a Small character starts at Medium), the
+    rank otherwise. Ranks the Size Table clamps together repeat their category, and
+    the scale groups them with a wider gap.
 
-    It was a ``QSlider``, which looked like a stray form control on a card and had to
-    work around a drag: a slider that wrote on every tick would have deleted itself under
-    the player's thumb, so it committed on release, deferred a commit made from a groove
-    click until the mouse grab was over, and so on. A pip is picked by a click, which is
-    the whole gesture, so all of that went with it.
-
-    Ranks the Size Table clamps together simply repeat their category, which is honest —
-    a Growth 8 really does spend several of its ranks at Gargantuan — and the scale
-    groups them with a wider gap so the stretch at one size is visible.
-
-    What carried over:
-
-    * **Zero is off.** Nothing is held while the power is switched off — the dial
-      reports where the power *is*, and off is nowhere, every pip hollow — and reaching
-      zero switches it off, exactly as clicking the card would, so the dial is a whole
-      control rather than one that can only turn a power on. There is no Off button:
-      clicking the **last lit pip puts it out**, so a power held at rank 1 goes off on
-      that click, and any other one steps down a rank. Picking a pip on a dormant power
-      wakes it at the notch asked for, so going from dormant to Huge is one click.
-    * **Hover names, click commits.** Hovering a pip names the notch a click there would
-      land on and previews it on the scale; nothing reaches the section until a click.
-    * **NoFocus**, because committing destroys the whole card: focus would land on
-      whatever the tab order offers next — a table in some other block — and a
-      ``QScrollArea`` scrolls to show a child that has just taken focus. That was the
-      page jumping away from the card under the cursor.
-    * **Live in the locked sheet**, like every other runtime control on a card: how far
-      a power is turned up is a play action, not a build edit. Inside a switched-off
-      Linked group it goes transparent to the mouse instead, so a click falls through to
-      the card exactly as it does off the group's own chrome — never
-      ``setEnabled(False)``, which nothing in this app does.
+    * **Zero is off.** Every pip is hollow while the power is off, and clicking the
+      **last lit pip puts it out**, as clicking the card would; any other lit pip
+      steps down. Picking a pip on a dormant power wakes it at that notch.
+    * **Hover names, click commits.** Nothing reaches the section until a click.
+    * **NoFocus**: committing destroys the card, focus would land on the next widget
+      in the tab order, and a ``QScrollArea`` scrolls to show it — the page jumped
+      away from the card under the cursor.
+    * **Live in the locked sheet**: how far a power is turned up is a play action.
+      Inside a switched-off Linked group it goes transparent to the mouse instead
+      (never ``setEnabled(False)``).
     """
 
     rankPicked = Signal(int)  #: the effect rank the player settled on (0 = switch off)
@@ -378,16 +329,9 @@ class _RankDial(QWidget):
     def set_ceiling(self, ceiling: int) -> None:
         """End the reachable part of the scale at the highest notch currently affordable.
 
-        What a Dynamic member's dial needs: the reachable pips have to *end* where the
-        pool ends, so the last hollow pip is the most this member can be set to and the
-        dotted ones beyond it are rungs its siblings' shares have spent. Free a point
-        elsewhere and a dotted pip becomes pickable; spend one and one goes dotted. A
-        member whose siblings hold everything is left with only the pip it is sitting
-        on, which a click puts out.
-
-        The **index space does not move**: the notch list is the member's whole ladder
-        and what is affordable is always a prefix of it, so notch *n* buys the same rank
-        for the same points however far the end has travelled.
+        For a Dynamic member: the last hollow pip is the most it can be set to, and
+        the dotted ones beyond are rungs its siblings' shares have spent. The **index
+        space does not move**: what is affordable is always a prefix of the ladder.
 
         Never below the notch the dial is seated on. A rebuild can move the pool under a
         split already made, and an end that cut into a stored share would spend it the
@@ -423,16 +367,11 @@ class _RankDial(QWidget):
 class _EffectSelector(QWidget):
     """Which effect of an array *power* is currently in use.
 
-    The whole-card twin of the click that selects an array **group's** live member, one
-    level down: a power whose own effects are an array runs exactly one of them at a
-    time, and that is what makes it cheaper than the same effects bought independently.
-    A card is one widget, though, so there is no card to click — hence a control.
-
-    A combo rather than the group header's segmented toggle: an effect reads as its name
-    and rank ("Enhanced Trait 4"), several of those do not fit across a card, and an
-    array may hold more than three. Like the rank dial it stays live in the locked
-    sheet — choosing which alternate you are using is a play action, not a build edit —
-    and takes no focus, because committing rebuilds the card out from under it.
+    One level down from clicking an array **group's** member: a power whose own
+    effects are an array runs one at a time, and there is no card per effect to
+    click. A combo, since effect names do not fit across a card as segments. Like the
+    rank dial it stays live in the locked sheet and takes no focus, because
+    committing rebuilds the card.
     """
 
     effectPicked = Signal(int)

@@ -220,25 +220,15 @@ class PowersUsesMixin:
     def _pool_readout(self, group: PowerGroup) -> QWidget | None:
         """How much of a Dynamic array's pool is currently spread, or ``None``.
 
-        A readout, not a control: the split itself is made on each member's own rank
-        dial, which is the point of moving it there — a member's share and the rank
-        that share buys are one gesture instead of a number typed into a dialog and a
-        rank worked out afterwards. What the header still owes the player is the one
-        number no single dial can show, which is how much of the pool is spoken for.
+        A readout, not a control: the split is made on each member's dial, and the
+        header says the one number no dial can, how much of the pool is spoken for.
+        Unassigned points are legal and not tinted; a split *over* the pool (which a
+        rebuild can cause) is flagged.
 
-        Leaving part of a pool unassigned stays legal, so nothing is tinted for it: this
-        says what is spent and what is left, not what is wrong. The one thing it does
-        flag is a split that has come to *more* than the pool, which no dial can
-        produce but a rebuild can — editing the array moves the pool underneath a split
-        already made.
-
-        **It is there before the first split, too**, which is the point it is most
-        needed at. It used to appear only once something had been assigned, so the pool
-        was invisible for exactly the gesture that creates it: a player could not see how
-        many points there were to spread until they had already spread some. An unsplit
-        array therefore states the pool and says it is not split, which is also the only
-        place a Dynamic array announces *which of its two regimes it is in* — click a
-        card to pick one alternate, or pick a pip and run several at once.
+        **It is there before the first split, too**: it used to appear only once
+        something was assigned, hiding the pool from the gesture that spends it. It is
+        also where a Dynamic array says which regime it is in (one alternate, or a
+        split).
 
         It is handed to the array's :class:`_SplitGroup`, which restates it whenever a
         member's dial is set.
@@ -269,22 +259,16 @@ class PowersUsesMixin:
     def _pool_release(self, group: PowerGroup) -> QWidget | None:
         """The one gesture that hands a split pool back, or ``None`` for an array with none.
 
-        Sliding every member to nothing was the only way back to an ordinary array, and
-        it is one gesture per member for a decision the player makes once — the array's
-        own tooltip had to describe it as a chore ("slide them all to nothing"). Worse,
-        a split array's cards stop being clickable, so the way *out* of the pool was the
-        one thing the array offered no control for.
+        Otherwise the way back is sliding every member to nothing, one gesture each,
+        and a split array's cards are not clickable.
 
-        It writes what sliding every dial to zero writes and nothing else: the shares go,
-        and the array's selected alternate is switched back on through the same
-        :meth:`_set_array_active` a click on its card would have used — because with the
-        shares gone that member is what the array is running
-        (:func:`~mm_companion.core.rules.live_array_children`), and the shares that put
-        it down are no longer there to say so.
+        It writes what sliding every dial to zero writes: the shares go, and the
+        selected alternate is switched back on through :meth:`_set_array_active`, since
+        with the shares gone it is what the array runs
+        (:func:`~mm_companion.core.rules.live_array_children`).
 
-        Runtime, so it is one undo step and emits ``runtimeChanged`` like every other
-        control on a card. Shown only for an array that *has* a split; a button that is
-        there and does nothing is the thing the disarmed card click already was.
+        Runtime, so one undo step and ``runtimeChanged``. Shown only for an array that
+        has a split.
         """
 
         if not _pool_is_split(group):

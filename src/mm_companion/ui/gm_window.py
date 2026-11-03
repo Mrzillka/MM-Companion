@@ -255,25 +255,16 @@ class GMWindow(
         # one this app hosted (or a fresh one) so the window always has a session.
         self._state: SessionState = state or last_session() or new_session("Session")
 
-        # The blocks are draggable / hideable / reorderable the same way the
-        # character sheet's are — a shared BlockCanvas rather than a fixed stack.
-        # Players and NPCs get a growable width just wider than one card, so their
-        # FlowLayout keeps at least one card per row and fits more as the window
-        # widens.
-        # Built from the registry rather than a literal list, so a mod can put a
-        # block in front of the GM the way it can add one to the sheet. The four
-        # base panels register themselves at this module's import (see
-        # register_base_gm_blocks); their order, sizes and default places all
-        # travel on their descriptors.
+        # The same BlockCanvas the sheet uses, built from the registry rather than a
+        # literal list so a mod can add a GM block the way it adds one to the sheet.
+        # The base panels register at this module's import (register_base_gm_blocks);
+        # their order, sizes and default places travel on their descriptors.
         descriptors = gm_block_descriptors()
         panels = [(d.key, d.title, d.factory(self)) for d in descriptors]
         for _key, _title, box in panels:
-            strip_groupbox_caption(box)  # the block's title bar carries the name now
+            strip_groupbox_caption(box)  # the block's title bar carries the name
         sizes = {d.key: d.size for d in descriptors}
         default_rows = gm_default_rows()
-        # Only a handful of blocks, so a top-aligned stack would leave a wide gap
-        # under the last one; let the bottom block (the NPC cards) stretch to fill
-        # the page instead.
         self._canvas = BlockCanvas(
             panels, sizes, default_rows, default_pinned=gm_default_pin_lines()
         )
@@ -305,11 +296,9 @@ class GMWindow(
         self._notices.add_card(self._build_trouble())
         self._notices.add_card(self._build_notice())
 
-        # The same compact mode a player's sheet has, over the same roller — and
-        # now over the same DiceRollerView, so this window's release_roller /
-        # restore_roller / compact_anchor are one line each, straight through to it.
-        # The mini window's caption follows `windowTitleChanged`, so it picks up
-        # the session name this window retitles itself with on its own.
+        # The same compact mode a player's sheet has, over the same DiceRollerView.
+        # The mini window's caption follows ``windowTitleChanged``, so it picks up
+        # the session name on its own.
         self._compact = CompactController(self, self, self._full)
 
         central = QWidget()
@@ -364,12 +353,10 @@ class GMWindow(
         self._copy_code_action = session_menu.addAction("Copy join code")
         self._copy_code_action.setEnabled(False)
         self._copy_code_action.triggered.connect(self._copy_code)
-        # The affordance that always works. The notice below carries a button
-        # too, but a notice can be dismissed and a corner read-out cannot be
-        # clicked — and the failure this answers can also arrive with no cue at
-        # all (a UPnP mapping the router quietly dropped raises nothing, because
-        # the listener is still perfectly happy). So there is always one place to
-        # go, reachable from the keyboard, whether or not the app noticed.
+        # The affordance that always works: a notice can be dismissed, the corner
+        # read-out cannot be clicked, and the failure can arrive with no cue at all
+        # (a UPnP mapping the router quietly dropped raises nothing). So there is
+        # always one place to go, reachable from the keyboard.
         self._reconnect_action = session_menu.addAction("Reconnect")
         self._reconnect_action.setEnabled(False)
         self._reconnect_action.triggered.connect(self.reconnect_session)
@@ -453,12 +440,9 @@ class GMWindow(
     def _build_status_strip(self) -> ToastCard:
         """The bottom strip: the hosting status line and the reachability advice.
 
-        Not a draggable block — the session controls moved to the launch dialog, so
-        all that stays on the board is this feedback: whether players can reach the
-        game, and the verbatim advice from ``discovery`` when they may not. The join
-        code itself is copied from **Session ▸ Copy join code**. It rides in a
-        dismissible :class:`ToastCard` so it can be closed and fades on its own once
-        read, rather than sitting on the board for the whole session.
+        Whether players can reach the game, and ``discovery``'s advice verbatim when
+        they may not. It rides in a dismissible :class:`ToastCard` that fades once
+        read, rather than sitting on the board all session.
         """
         notice = ToastCard()
 
@@ -531,11 +515,9 @@ class GMWindow(
         self._no_players.setEnabled(False)
         layout.addWidget(self._no_players)
 
-        # A drop target only so a *player's own* card dragged out of it and back
-        # reads as a cancelled drag rather than a refusal; there is no order to
-        # edit here. Anything else is refused visibly: it used to take every card
-        # this app can drag, light up green for an NPC and then silently drop it,
-        # which is the one thing `DropFeedback` exists to stop a target doing.
+        # A drop target only so a player's own card dragged out and back reads as a
+        # cancelled drag; there is no order to edit here. Anything else is refused
+        # visibly — it used to light up green for an NPC and then silently drop it.
         self._cards_container = CardDropFlow("gmPlayerFlow", accepts=_is_player_ref)
         self._cards_flow = self._cards_container.flow
         # A flow re-wraps on its own; the shared card width has to be re-measured,
@@ -546,13 +528,12 @@ class GMWindow(
         return box
 
     def _build_npcs_box(self) -> QGroupBox:
-        """The session's cast of NPCs, and the two ways to add one.
+        """The session's cast of NPCs, and the three ways to add one.
 
         An NPC is an ordinary character saved in the workspace ``gm_characters/``
         dir, so the GM's bestiary outlives any one session; what belongs to *this*
-        session is which of them are in it (``SessionState.npc_paths``). Hence three
-        buttons: write a new one from a blank sheet, throw one together from five
-        numbers, or bring an existing one in.
+        session is which of them are in it (``SessionState.npc_paths``). So: throw
+        one together from five numbers, write one on a blank sheet, or bring one in.
         """
         box = QGroupBox("NPCs")
         layout = QVBoxLayout(box)
@@ -581,12 +562,10 @@ class GMWindow(
         self._no_npcs.setEnabled(False)
         layout.addWidget(self._no_npcs)
 
-        # A drop target as well as a flow: the reorder gesture is a real drag now
-        # (it had to become one to reach the Scene), so the bar showing where a card
-        # will land is drawn by the container it will land in rather than guessed at
-        # by the card being dragged. Only an NPC's card, and *visibly* only that:
-        # it used to light up green for a player or a scene card and then drop them
-        # on the floor, which reads as a broken gesture rather than a refused one.
+        # A drop target as well as a flow: reordering is a real drag (it had to be,
+        # to reach the Scene), so the bar showing where a card lands is drawn by the
+        # container. Only an NPC's card, and visibly only that — it used to light up
+        # green for a player or a scene card and then drop it on the floor.
         self._npc_container = CardDropFlow(
             "gmNpcFlow", accepts=_is_npc_ref, merges=self._can_merge_npcs
         )
@@ -603,31 +582,22 @@ class GMWindow(
         """The GM's own roller beside the table's shared history.
 
         The same :class:`~mm_companion.ui.roller.view.DiceRollerView` a player's
-        Dice block holds — so it reflows to the room it is given and follows the
-        Normal / Compact / Extended preference exactly as theirs does — with the
-        two things only a GM gets: a **Hidden roll** switch, and this window's own
-        ``gm=True`` history in place of the private/shared pair the view would
-        otherwise swap between. A hidden roll is recorded and shown here, marked,
-        and never put on the wire — so it is not hidden by the players' apps
-        agreeing to ignore it, it simply never reaches them.
+        Dice block holds, with two GM-only things: a **Hidden roll** switch, and this
+        window's ``gm=True`` history in place of the view's private/shared pair. A
+        hidden roll is never put on the wire, so it does not rely on the players'
+        apps ignoring it.
 
         The history is this window's because it follows the bridge while there is
-        one and the *workspace's* saved log when there is not (see
-        :meth:`_refresh_rolls`), which is knowledge the view has no business
-        carrying. Everything else about the arrangement is the view's.
+        one and the workspace's saved log when there is not (see
+        :meth:`_refresh_rolls`).
         """
-        # Held so compact mode can take the roller out and put it back, and so the
-        # shrink button has something to float over; see :meth:`release_roller`
-        # and :meth:`compact_anchor`.
         self._rolls_box = box = QGroupBox("Rolls")
-        # The same declaration the sheet's Dice block makes, and for the same
-        # reason: the history grows into whatever height the block is given, so the
-        # roller takes it all rather than being held at its hint over a trailing
-        # stretch (see :meth:`~mm_companion.ui.block_frame.InnerScroll.set_section`).
-        # It cannot be derived — this box is a ``QGroupBox``, so ``Preferred``, and
-        # it is the history *inside* it that wants the room. Without it the block
-        # this window pins to the strip by default showed a roller stopped at ~650px
-        # with the rest of a full-height strip empty under it.
+        # As on the sheet's Dice block: the history grows into whatever height the
+        # block has, so the roller takes it all (see
+        # :meth:`~mm_companion.ui.block_frame.InnerScroll.set_section`). It cannot be
+        # derived — a ``QGroupBox`` is ``Preferred``; it is the history inside that
+        # wants the room. Without it the pinned roller stopped at ~650px with the
+        # rest of the strip empty.
         box.fills_height = True
         layout = QVBoxLayout(box)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -758,13 +728,7 @@ class GMWindow(
         self._show_notice("Join code copied — send it to your players.", theme.color("accent"))
 
     def _open_settings(self) -> None:
-        """Open the Settings window on the GM page (Settings ▸ Preferences).
-
-        The same window the character sheet opens, landing on the page this window
-        is the one that cares about. Imported here rather than at module scope, the
-        way the sheet's opener does it, and kept referenced so it is not collected
-        the moment this method returns.
-        """
+        """Open the Settings window on the GM page (Settings ▸ Preferences)."""
         from mm_companion.ui.settings import GMPage
 
         self._show_settings(GMPage.title)
@@ -824,15 +788,12 @@ class GMWindow(
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 (Qt override)
         """Leave the session and give the router its port back before going away.
 
-        Closing ends this GM Mode: the launcher lets the window go, and opening GM
-        Mode again goes back through the pre-stage to pick and connect to a session
-        afresh. A session on this machine is stored as it goes, so nothing is lost
-        by that; one hosted on a server survives rather more thoroughly — closing
-        this window disconnects the GM and leaves the table playing.
+        Closing ends this GM Mode; opening it again goes back through the launch
+        dialog. A session on this machine is stored as it goes; one on a server
+        keeps playing with the GM disconnected.
 
-        An NPC sheet with unsaved edits asks first, and if the GM cancels there,
-        this window stays open too: it is what keeps those sheets alive, and going
-        away without them would throw the edits the GM just chose to keep.
+        An NPC sheet with unsaved edits asks first. If the GM cancels there, this
+        window stays open too: it is what keeps those sheets alive.
         """
         for window in self._player_windows.values():
             window.close()
@@ -852,17 +813,14 @@ class GMWindow(
 # --------------------------------------------------------------------------
 # The base GM blocks
 #
-# The four panels the GM window has always had, now stated as descriptors so the
-# window builds itself from the same registry a mod extends. Registered at import
-# rather than in ``__init__``, mirroring ``register_base_blocks`` on the sheet
-# side: a mod's Python runs at startup (``mods.initialize_mods``) and must be able
-# to find the base set already there, whether or not a GM window has ever been
-# opened.
+# Stated as descriptors so the window builds itself from the registry a mod
+# extends. Registered at import, like ``register_base_blocks`` on the sheet side:
+# a mod's Python runs at startup (``mods.initialize_mods``) and must find the base
+# set already there, whether or not a GM window has been opened.
 # --------------------------------------------------------------------------
 
-# (key, title, the GMWindow method that builds it, row, col). The Scene comes
-# first because it is what a GM watches through a fight, while the two rosters
-# under it are where they go to change something.
+# (key, title, the GMWindow method that builds it, row, col, pinned). The Scene
+# comes first: it is what a GM watches through a fight.
 _BASE_GM_BLOCKS = [
     ("scene", "Scene", "_build_scene_box", 0, 0, False),
     ("players", "Players", "_build_players_box", 1, 0, False),

@@ -261,17 +261,14 @@ class RollerQuickRollsMixin:
         """Load a saved quick roll into the inputs and roll it immediately.
 
         A *named* chip also loads its name as a spec, so a saved roll reaches the
-        table under that name instead of anonymously. Its numbers stay in the
-        sliders where they have always been, so the spec carries no modifier of its
-        own — the chip is a caption, not a second bonus. That caption is **transient**
-        like :meth:`roll_spec`'s: the roll spends the sliders it names
-        (:meth:`_spend_extras`), so a chip left standing would be captioning numbers
-        that are no longer there.
+        table under that name. Its numbers stay in the sliders, so the spec carries
+        no modifier of its own: the chip is a caption, not a second bonus, and
+        **transient** like :meth:`roll_spec`'s, since the roll spends the sliders it
+        names (:meth:`_spend_extras`).
 
-        **The DC box is left exactly as it is.** A quick roll does not carry one
-        (:func:`~mm_companion.ui.roll_history.roll_parameters`), and the difficulty
-        in front of the player right now is a better answer than one saved with the
-        chip weeks ago — including the answer "none".
+        **The DC box is left as it is.** A quick roll carries none
+        (:func:`~mm_companion.ui.roll_history.roll_parameters`): the difficulty in
+        front of the player now beats one saved weeks ago.
         """
         self._bonus_spin.setValue(entry["bonus"])
         self._penalty_spin.setValue(entry["penalty"])

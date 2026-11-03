@@ -323,8 +323,7 @@ class Measure:
     what lets the Speed readout net several sources into one line: two Flight powers are
     one flight speed, and the Speed effect feeds the same ground line the character walks
     on. Effects sharing a mode are reconciled; effects in different modes are simply
-    different ways to get about and each keep a line. Defaults to the effect's own id, so
-    an effect that names none is its own mode and behaves exactly as it always did.
+    different ways to get about and each keep a line. Defaults to the effect's own id.
     """
 
     column: str

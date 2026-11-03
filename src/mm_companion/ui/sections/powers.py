@@ -6,26 +6,18 @@ its own window; saving there hands the finished
 :class:`~mm_companion.core.powers.Power` back through
 :attr:`~mm_companion.ui.power_constructor.PowerConstructorWindow.powerSaved`, which
 this section appends to the shared :class:`~mm_companion.core.character.Character`
-and shows as a *card*. Each card reads top-to-bottom like a stat-block entry: a
-header (name, assembled point cost, a ⚠ marker when the power breaks a Power Level
-cap), the free-text description, and a per-effect summary pairing each effect's extras
-and flaws with *its full game-term table* alongside them (Type / Range / Action /
-Duration / checks / measures — the same data the Power Constructor shows while
-building, rendered small and muted so it informs without shouting). A power that calls
-for dice closes with a footer listing one roll per line (the attack check, then the
-save it forces); a power that rolls nothing simply ends. Each card carries an edit
-button that reopens the constructor pre-loaded with that power — editing a deep copy
-that replaces the original in place on save — and a remove button.
+and shows as a *card*. Each card reads like a stat-block entry: a header (name,
+cost, a ⚠ marker when the power breaks a build rule), the description, a per-effect
+summary with each effect's modifiers and game terms, and, for a power that rolls, a
+dice footer with one roll per line. ✎ reopens the constructor on a deep copy that
+replaces the original on save; ✕ removes it.
 
-**The card is the on/off switch.** There is no small "Active" checkbox: clicking a
-card's body toggles a runtime-gated power (or, for a member of an array, makes it the
-live alternate), and the card's own appearance carries the state — a switched-off
-power stays fully readable but recedes, dimmed and a notch smaller, so a glance at the
-block tells you what is running. Flipping one *eases* between those two looks rather
-than cutting, and a card you can click says so before you touch it: an accent edge down
-its left side, and an accent border under the pointer — on exactly one card at a time,
-the innermost one a click would reach. Clicking the grip, ✎ or ✕ never toggles: those
-widgets consume the click themselves.
+**The card is the on/off switch.** Clicking a card's body toggles a runtime-gated
+power (or makes an array member the live alternate). A switched-off power stays
+readable but recedes, dimmed and a notch smaller, and flipping one *eases* between the
+two looks. A clickable card says so before you touch it: an accent edge down its left
+side, and an accent border under the pointer on the innermost card a click would
+reach. The grip, ✎ and ✕ consume their own clicks.
 
 Powers can be **grouped**. A character's ``powers`` is a tree of
 :data:`~mm_companion.core.powers.PowerNode` — leaf powers and
@@ -44,9 +36,8 @@ items from the same pieces (an item wraps a real ``Power``), so a change to how 
 looks or behaves reaches both.
 
 It follows the standard section contract (``data`` + ``character`` constructor,
-``changed`` signal, ``set_locked``) so it slots into the sheet like the others, and —
-because saved powers live on the model — a loaded character repopulates its list at
-construction.
+``changed`` signal, ``set_locked``). Its parts are mixins in
+:mod:`mm_companion.ui.sections.power_parts`.
 """
 
 from __future__ import annotations
@@ -347,17 +338,11 @@ class PowersSection(
             return
         with rebuilding(self):
             self._normalize_arrays()  # a valid active member per array before drawing
-            # The one refresh handler that *writes* the model, so it is also the one
-            # that owes the surrounding build scope a fresh gather — an array's active
-            # member is the branch whose boosts stand, so the write moves real numbers
-            # (see :mod:`mm_companion.core.rules.build_cache`).
-            #
-            # Insurance rather than a fix for anything today: the scope is opened per
-            # subscriber and this is the first thing the subscriber does, so nothing
-            # has been memoized yet when the write lands. Kept because that is a fact
-            # about *two* other files — how the bus scopes a handler, and that the
-            # normalize stays at the top of this one — and a line here is cheaper than
-            # both of them having to stay true.
+            # The one refresh handler that *writes* the model (an array's active
+            # member decides whose boosts stand), so it owes the build scope a fresh
+            # gather (see :mod:`mm_companion.core.rules.build_cache`). Insurance: today
+            # nothing is memoized yet when this runs, but that depends on how the bus
+            # scopes a handler and on this staying first.
             invalidate_build_cache()
             # Hand the on-screen progress over to the cards about to be built, and start
             # a fresh map — so a power that was removed or ungrouped leaves nothing
@@ -536,15 +521,9 @@ class PowersSection(
     def _arm_card_menu(self, card: DraggableCard, power: Power) -> None:
         """Arm the card's right-click menu — Extra Effort, then this power's counters.
 
-        Both are things a power can be *used for* rather than things it calls for, which
-        is why neither is in the dice footer: putting the counter rolls there gave every
-        attack card and every weapon in the Equipment block a die button for a case the
-        GM has to approve first, and Extra Effort is a decision before it is a number.
-        A right-click menu costs no card space and is where the app already puts a
-        card-adjacent action (the footer's own Pin menu).
-
-        A card with nothing to offer — an always-on Protection, which can neither be
-        readied nor pushed — gets no menu rather than an empty one.
+        Both are things a power can be *used for*, so neither is in the dice footer:
+        there they gave every attack and weapon a die button for a case the GM has to
+        approve first. A card with nothing to offer gets no menu.
         """
 
         if (
@@ -767,14 +746,10 @@ class PowersSection(
             effect_split.set_readout(effect_readout)
             effect_split.restate()
 
-        # A dialled effect is a range, not a switch: a dial over the ranks the wielder
-        # can hold it at, under the effect breakdown that explains what each notch is
-        # worth and above the dice, with the rest of the mid-play controls.
-        # Every dial stays at full strength while the card recedes: zero is off and
-        # sliding up wakes the power, so a dial is the one live control on a card that
-        # is showing itself switched off (:meth:`DraggableCard.keep_lit`). Only while it
-        # really is live — inside a switched-off Linked group it is inert, and an inert
-        # control recedes with everything else it cannot do.
+        # A dial over the ranks the wielder can hold an effect at, under the effect
+        # breakdown and above the dice. It stays at full strength while the card
+        # recedes, since picking a pip wakes the power (:meth:`DraggableCard.keep_lit`)
+        # — unless it sits inside a switched-off Linked group, where it is inert.
         for dial in self._rank_dials(power, parent, interactive, shared=share is not None):
             layout.addWidget(dial)
             if interactive:
@@ -814,12 +789,9 @@ class PowersSection(
         layout.addWidget(grip)
         grip.setVisible(not self._locked)
 
-        # Eliding, not plain: a QLabel reports its whole text as a minimum, so a
-        # card on a page the user drags was held open at the length of whatever the
-        # power was called — and a block narrower than that clipped its own buttons
-        # off rather than letting the card adapt. The name keeps its full text and
-        # offers it on hover, which is the bargain every other clipped label on the
-        # sheet strikes.
+        # Eliding: a plain QLabel reports its whole text as a minimum, which held the
+        # card open at the power's name and clipped its buttons off in a narrow
+        # block. The full name is on hover.
         name = ElidingLabel(power_display_name(power, self._data))
         # The size goes on the QFont, not into the stylesheet: a stylesheet font-size
         # would outrank the card's own font and so sit out the switched-off transition.
@@ -854,15 +826,10 @@ class PowersSection(
             )
             layout.addWidget(badge)
 
-        # A power that breaks any build rule carries a warning marker naming every
-        # breach; enforcement is a warning for now (see storage.pl_enforcement). This is
-        # the same walk over the same POWER_CHECKS registry the Power Constructor's
-        # warning band makes, so the two cannot disagree — before it, the card showed
-        # Power Level and a stunt's ceiling alone, and a character built under a
-        # different ruleset could carry an over-spent allocation, an over-budget imposed
-        # effect or an over-budget minion with nothing on the sheet saying so.
-        # Both markers are about the *build* — a breach, a bent rule — and the simple
-        # sheet is for playing one, so they stay on the edit sheet.
+        # A power that breaks any build rule carries a marker naming every breach
+        # (a warning for now: storage.pl_enforcement). The same walk over POWER_CHECKS
+        # the Power Constructor's warning band makes, so the two cannot disagree.
+        # Both markers are about the build, so the simple sheet leaves them out.
         violations = [] if self._simple else power_violations(power, self._character, self._data)
         if violations:
             warning = QLabel("⚠")
@@ -948,9 +915,7 @@ class PowersSection(
     def _rolls_block(self, power: Power) -> QWidget | None:
         """The card's dice footer, one line per roll; ``None`` when nothing is rolled.
 
-        A power that resolves without dice — a Protection, a permanent Enhanced Trait —
-        gets no footer at all rather than a line saying so: the absence *is* the answer,
-        and a placeholder on every passive power is pure noise.
+        A power that resolves without dice gets no footer at all.
 
         A pin names a roll by *which entry of* :func:`~mm_companion.core.rules.
         power_rolls` it is, so the footer is handed the power's id and turns a line

@@ -34,7 +34,7 @@ number — and the answer arrives back on
 animation covers the round trip, which is why it is a fixed 1.4 s rather than
 instant, and every *other* seat holds the roll a little longer than that
 (``session_bridge.PEER_ROLL_DELAY_MS``), so the roller sees the number first.
-Outside a session the panel rolls locally, exactly as before.
+Outside a session the panel rolls locally.
 
 Nothing here owns character state — it drives :mod:`mm_companion.core.dice`
 directly (no game rules live here) and persists quick rolls through
@@ -125,16 +125,11 @@ ROUTINE_HINT = (
 def d20_pixmap(ratio: float = 1.0, size: int | None = None) -> QPixmap:
     """The theme's d20 drawing, *size* pixels square, for a screen of *ratio*.
 
-    A thin wrapper over :func:`~mm_companion.ui.svg_assets.svg_pixmap`, which does
-    the loading, the aspect-ratio fitting and the caching. The die is not square,
-    so it is fitted into the square icon rather than stretched to it. The artwork
-    is vector, so *size* is what it is **rasterised** at rather than a bitmap
-    scaled to fit — which is why compact mode's smaller die is a second render
-    (one more entry in that function's cache) and not a scaled-down pixmap.
-
-    Both the size and which of the bundled drawings it is are theme tokens read
-    here at call time rather than held in constants — the point of a token is that
-    a preset switch changes it.
+    A thin wrapper over :func:`~mm_companion.ui.svg_assets.svg_pixmap`, which loads,
+    fits (the die is not square, so it is fitted rather than stretched) and caches.
+    The artwork is vector, so *size* is what it is **rasterised** at: compact mode's
+    smaller die is a second render, not a scaled-down pixmap. The size and the
+    drawing are theme tokens read at call time.
     """
     if size is None:
         size = int(theme.metric("die.size"))
@@ -161,9 +156,9 @@ def spec_caption(spec: RollSpec) -> str:
     the Bonus slider) or a named quick roll — reads as just its name rather than a
     bare ``+0``. Its DC, if it set one, is already visible in the DC box.
 
-    It is worded as a **state** rather than a label, because that is what it is: the
-    die is armed until the chip is cleared, and every later click of it quietly folds
-    this modifier in. A caption reading only "Athletics +9" was easy to skim past.
+    Worded as a **state**: the die is armed until the chip is cleared, and every
+    later click folds this modifier in. A caption reading only "Athletics +9" was
+    easy to skim past.
     """
 
     trait = f"{spec.label} {spec.modifier:+d}" if spec.modifier else spec.label
@@ -251,10 +246,8 @@ class DiceRollerPanel(
     and GM Mode embeds one with ``hidden_option=True`` so the GM can roll without
     it reaching anybody's history.
 
-    Its three parts **reflow to the space it is given** (see
-    :mod:`mm_companion.ui.reflow`): a column when it is narrow, a row once there is
-    width for all three side by side. That is what lets the Dice block work in a
-    short, wide bottom strip as well as in the tall, narrow right-hand one.
+    Its three parts **reflow** (see :mod:`mm_companion.ui.reflow`): a column when
+    narrow, a row once there is width for all three.
 
     Where the roll *comes from* depends on the session: with one live the panel
     asks the server and waits for the broadcast (see the module docstring);
@@ -508,25 +501,19 @@ class DiceRollerPanel(
     def _build_spec_chip(self) -> QWidget:
         """The strip naming what the sheet asked to roll — hidden until it does.
 
-        It sits *above* the sliders because it is what they now modify: the loaded
-        stat supplies the base number and the sliders are the situational extras on
-        top of it. The ``✕`` puts the panel back to a plain manual roll.
+        It sits *above* the sliders because it is what they modify: the loaded stat
+        supplies the base number and the sliders are the extras on top. The ``✕``
+        puts the panel back to a plain manual roll.
 
-        It is drawn **loudly** — an accent fill inside an accent border — rather than
-        as the plain framed strip it was, and the die wears a ring to match
-        (:meth:`_apply_die_style`). Both are the same guard: a chip left loaded arms
-        every later click of the die with a modifier and possibly a DC, so it has to
-        be the most obvious thing in the panel. Its own frame is dropped, since the
-        platform's ``StyledPanel`` edge would sit just inside the new border.
+        Drawn **loudly** (an accent fill inside an accent border), with a ring on the
+        die to match (:meth:`_apply_die_style`): a chip left loaded arms every later
+        click with a modifier and maybe a DC, so it must be the most obvious thing in
+        the panel. The stylesheet is scoped to the object name, since a bare rule
+        would reach the ``✕`` inside too.
 
-        The stylesheet is scoped to the object name: a bare rule on a widget reaches
-        its children too, and the ``✕`` inside would have grown the border as well.
-
-        The caption **elides** rather than wraps, and the chip never grows taller than
-        its one line. A wrapped caption asked for a second line through
-        height-for-width, which nothing above the Roll box passes on — so a long trait
-        in a narrow strip got one line's height for two and was drawn squashed. The
-        whole name is in the tooltip, and under the die in the readout.
+        The caption **elides** rather than wraps: a wrapped caption asked for a second
+        line through height-for-width, which nothing above the Roll box passes on, so
+        it was drawn squashed. The whole name is in the tooltip and the readout.
         """
 
         chip = QFrame()
@@ -758,11 +745,9 @@ class DiceRollerPanel(
         in, so the number it will roll against is visible rather than implied; a spec
         without one leaves the box exactly as the player left it.
 
-        Clearing the chip takes that DC back off again. It was left ticked, so every
-        later manual roll went on being graded against a difficulty belonging to a
-        trait that was no longer loaded — and the ✕ on the chip is precisely the
-        gesture for "forget what I loaded". Only a DC this method set is withdrawn;
-        one the player typed themselves is theirs.
+        Clearing the chip takes that DC off again (it used to stay, grading later
+        manual rolls against a trait no longer loaded). Only a DC this method set is
+        withdrawn; one the player typed is theirs.
         """
         if spec is not None and self._localizer is not None:
             spec = self._localizer(spec)
@@ -833,14 +818,11 @@ class DiceRollerPanel(
         The one public way in for the sheet: a double-clicked stat line, a power's
         🎲, or a follow-up chip on a history card all land here.
 
-        What it loads is **transient** — the chip is gone once the die settles
-        (:meth:`_settle_spec`). It has to be loaded at all because the roll is made
-        out of it: :meth:`_roll_parameters` folds in its modifier and its DC,
-        :meth:`_roll_label` is the name it travels under, and :attr:`localRoll`
-        hands it to the history card. But it must not *stay*, because a double-click
-        fires the single click first — so the pair is load → (load + roll) on one
-        spec, and the roller was left armed with a trait the player had only asked to
-        throw once. Loading is the sticky gesture; rolling is not.
+        What it loads is **transient**, gone once the die settles
+        (:meth:`_settle_spec`). It is loaded at all because the roll is made out of it
+        (:meth:`_roll_parameters`, :meth:`_roll_label`, :attr:`localRoll`). It must
+        not *stay*: a double-click fires the single click first, so the roller was
+        left armed with a trait the player had only asked to throw once.
         """
         if self._rolling:
             return False

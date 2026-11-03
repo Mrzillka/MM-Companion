@@ -160,23 +160,17 @@ class PowersTreeMixin:
     def _reseat_dynamic(self, node_id: str) -> None:
         """Make a node's Dynamic flag agree with the group it now sits in.
 
-        ``dynamic`` is a fact about a node's *place* — it means "a Dynamic member of the
-        array I am in" — and it was the one piece of build state a drag never touched.
-        Two things went wrong for it. A card dropped into a Dynamic array joined as a
-        plain 1-point alternate: it got no share dial, it stayed mutually exclusive with
-        siblings that were not, and it was mispriced, while the group's switch went on
-        reading *Dynamic array* because :func:`_group_mode` lights on **any** member. And
-        a card dragged *out* kept both the flag and its share, so dropping it into some
-        other array turned that array Dynamic without anyone saying so.
+        ``dynamic`` is a fact about a node's *place*, and a drag used to leave it
+        alone: a card dropped into a Dynamic array joined as a plain, mispriced
+        alternate, and one dragged out took the flag along and turned its next array
+        Dynamic (:func:`_group_mode` lights on **any** member).
 
-        So a node landing inside a Dynamic array joins it, and one landing anywhere else
-        stops claiming to be in one. Its **share** is only ever cleared, never invented:
-        joining an array gives a member the right to hold points, not the points.
+        So a node landing inside a Dynamic array joins it, and one landing elsewhere
+        stops claiming to. Its **share** is only cleared, never invented.
 
-        Scoped to the node that moved, deliberately. The same rule applied to every child
-        on every rebuild would quietly migrate a mixed array saved while Dynamic was a
-        per-member checkbox — which reads as what it is today precisely because nothing
-        migrates it (see ``docs/notes/powers.md``).
+        Scoped to the node that moved: applied on every rebuild it would migrate a
+        mixed array saved while Dynamic was a per-member checkbox (see
+        ``docs/notes/powers.md``).
         """
 
         located = self._locate(node_id)

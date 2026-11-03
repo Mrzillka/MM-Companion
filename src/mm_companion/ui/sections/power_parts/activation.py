@@ -61,11 +61,8 @@ class PowersActivationMixin:
         """
         if self._selectable_array_member(parent):
             # ...unless the array's points are split, when the pool decides who is
-            # running and selecting a member decides nothing. The click used to be armed
-            # anyway: the cursor promised something, `active_child_id` quietly moved, and
-            # nothing on screen changed. `_arm_activation` still tooltips *why*, because
-            # a card that has silently stopped being a control is worse than one that
-            # says it has.
+            # running. (The click used to stay armed: `active_child_id` quietly moved
+            # and nothing on screen changed.) `_arm_activation` still tooltips why.
             return "" if _pool_is_split(parent) else "select"
         if self._linked_ancestor(node) is not None:
             return ""
@@ -153,14 +150,11 @@ class PowersActivationMixin:
     ) -> None:
         """Put the card into its on/off look, easing there when the state just changed.
 
-        Every runtime setter ends in :meth:`_rebuild_list`, because flipping one power
-        can change the numbers printed on *another* card (switching off an Enhanced
-        Trait restates a Strength-Based Damage). So no card survives a toggle and there
-        is nothing to animate across it. Instead the section remembers, per node id, the
-        progress each card was last *showing* — and a freshly built card picks up from
-        exactly there and eases to its new target. Because the running animation writes
-        that progress back on every frame, a second click mid-transition resumes from
-        where the eye left off rather than snapping.
+        Every runtime setter ends in :meth:`_rebuild_list`, since flipping one power can
+        change numbers on *another* card, so no card survives a toggle. The section
+        remembers, per node id, the progress each card was last showing; a fresh card
+        picks up there and eases to its new target. The animation writes progress back
+        every frame, so a second click mid-transition does not snap.
 
         Called once the card's children exist, so the type scaling can see them.
         """

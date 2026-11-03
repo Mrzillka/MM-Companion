@@ -448,8 +448,7 @@ def _parse_integration(raw: dict, configurable: bool) -> Integration:
 
     ``apply``/``amountPerRank``/``amountFlat`` say which applier reads the record and
     what it is worth (see :mod:`mm_companion.core.rules.appliers`). All three default
-    to the historical rule — a ``bonus`` worth the effect's rank — so an effect that
-    states none of them, in this ruleset or a mod's, behaves exactly as before.
+    to a ``bonus`` worth the effect's rank.
     """
 
     affects = frozenset(a for a in raw.get("affects", "").split("|") if a)

@@ -93,22 +93,18 @@ class GMPlayersMixin:
         a dropped laptop is not a player leaving the fight, and their place in the
         turn order should be there when they redial.
 
-        Whether a seat *arrives* on it is the preference: on, **connecting** is
-        enough — the moment a seat comes online (a join, or a redial), not on every
-        roster, so an offline seat is never seated for them and a player the GM took
-        off the board stays off until they next connect. *all_connected* seats every
-        connected player at once, which is what turning the preference on means. Off,
-        the GM puts them there by hand and their card grows an eye to do it with.
+        Whether a seat *arrives* on it is the preference. On, a seat is seated the
+        moment it comes online (a join, or a redial), not on every roster, so a
+        player the GM took off the board stays off until they next connect;
+        *all_connected* seats every connected player at once, which is what turning
+        the preference on means. Off, the GM seats them by hand with the eye on
+        their card.
 
-        Turning the preference off does **not** clear whoever is already on the
-        board. "Put every player in the Scene automatically", unticked, says *from
-        now on I decide* — not *throw out the fight in progress*. What it changes
-        at once is that the eyes appear, so the GM can decide.
+        Turning the preference off does **not** clear the board: unticked, it says
+        *from now on I decide*, not *throw out the fight in progress*.
 
-        The preference is re-read here rather than once at startup. This runs on
-        every roster — a join, a leave, and every snapshot a player pushes — and
-        :meth:`changeEvent` catches the one case that would otherwise wait for one:
-        a GM who changes it in Settings and comes straight back to a quiet table.
+        :meth:`changeEvent` re-reads the preference for a GM who changes it in
+        Settings and comes back to a quiet table, where no roster would.
         """
         self._scene_auto_players = storage.gm_scene_auto_players()
         if connected is None:

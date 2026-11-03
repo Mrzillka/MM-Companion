@@ -489,8 +489,7 @@ def vehicle_entry(vehicle: StockVehicle, rules: VehicleRules) -> EquipmentEntry:
     Its movement effect is its own ``movement`` block when it has one, and otherwise
     the effect its :class:`VehicleClass` measures Speed in, at the printed speed rank.
     A vehicle whose class names no effect and that carries no block of its own (the
-    time machine) simply has no movement effect, which is the honest answer rather than
-    an invented one. The five platform traits are deliberately **not** folded in: they
+    time machine) has no movement effect. The five platform traits are **not** folded in: they
     are not effects, they cost points off their own table, and they are read straight
     off the :class:`StockVehicle` by the card that shows them.
     """

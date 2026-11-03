@@ -1,6 +1,6 @@
 """Hosting the session: the bridge, connecting, the relay fallback, and the trouble toast.
 
-Most of this is about reachability, which is genuinely hard. A home
+Most of this is about reachability, which is hard. A home
 connection is often not reachable from the internet at all — carrier-grade NAT,
 or an ISP router the user does not control — and the failure is silent unless
 someone says so. So:

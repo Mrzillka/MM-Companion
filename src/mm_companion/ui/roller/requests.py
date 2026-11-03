@@ -30,25 +30,16 @@ class RollerRequestsMixin:
     def _build_request_row(self, grid: QGridLayout, row: int) -> None:
         """The Request row: a trait, a difficulty, and a button that asks the table.
 
-        Below the roll's own controls because it is a different verb — everything
-        above rolls something *here*, and this asks somebody else to. It sits **on
-        the same grid** as the rows above it, cell for cell: the caption in the
-        caption column, the trait under the sliders, and the difficulty with its
-        button under the spin boxes. It used to span the slider and spin columns
-        as one free-running line, which lined up with nothing above it — the combo
-        overran the sliders, the DC box floated mid-cell — and read as a second,
-        broken form bolted under the first.
+        Below the roll's own controls because it is a different verb: everything
+        above rolls something *here*, this asks somebody else to. It sits **on the
+        same grid** as the rows above, cell for cell (it used to be one free-running
+        line that lined up with nothing and read as a broken second form).
 
-        The DC box is a plain spin box where **0 means no DC**, deliberately unlike
-        the Difficulty Class row above it. That row's checkbox exists because the
-        panel has to tell "no DC" from "DC 0" for a roll it grades; a request is
-        graded on the answerer's screen against whatever they end up rolling, and
-        "ask for a roll against DC 0" is not a thing anyone means. One control
-        beats two in a row that is already three wide.
+        The DC box is a plain spin box where **0 means no DC**, unlike the Difficulty
+        Class row: that checkbox tells "no DC" from "DC 0" for a roll the panel
+        grades, and nobody asks for a roll against DC 0.
 
-        The whole row is hidden until a host supplies traits
-        (:meth:`set_roll_choices`), so a roller with no ruleset behind it is the
-        panel it always was.
+        The row is hidden until a host supplies traits (:meth:`set_roll_choices`).
         """
 
         self._request_combo = QComboBox()
@@ -58,12 +49,10 @@ class RollerRequestsMixin:
         # roomier "— choose a trait —" would cost the block a hundred pixels of width
         # to say what the "Request" caption beside it already says.
         self._request_combo.setPlaceholderText("Trait…")
-        # A combo box asks to be as wide as its longest entry, and the longest here
-        # is a skill name the *ruleset* chose. Left alone that made the whole Dice
-        # block — and so the pinned strip holding it — demand half again the width
-        # it needs, for a row that is not even the point of the panel. So it shrinks
-        # and stretches instead, exactly as the Power Constructor's term combos do:
-        # the popup still shows every name in full, which is where they are read.
+        # A combo box asks to be as wide as its longest entry, a skill name the
+        # ruleset chose; left alone that made the Dice block (and the pinned strip)
+        # demand half again the width it needs. So it shrinks and stretches, like
+        # the Power Constructor's term combos; the popup still shows names in full.
         self._request_combo.setSizeAdjustPolicy(
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
@@ -132,12 +121,8 @@ class RollerRequestsMixin:
         :func:`~mm_companion.core.rules.pins.requested_roll_choices` returns — a
         list of titled groups of values, each carrying a template
         :class:`~mm_companion.core.rules.RollSpec`. The panel is handed the answer
-        rather than the game data, exactly as it is handed a localizer rather than
-        a character: it reads no ruleset, so a host that has none (or a mod with
-        nothing to offer) simply gets the panel as it was before this row existed.
-
-        The group titles go in as disabled items, the way the Power Constructor's
-        trait combo does it — a section heading in a combo box has no other home.
+        rather than the game data: it reads no ruleset. The group titles go in as
+        disabled items, as in the Power Constructor's trait combo.
         """
 
         self._request_combo.blockSignals(True)

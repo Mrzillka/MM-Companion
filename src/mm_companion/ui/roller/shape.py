@@ -42,12 +42,11 @@ class RollerShapeMixin:
             if self._box.itemAt(index).widget() is None:
                 self._box.takeAt(index)
         if row:
-            # Across a row the die keeps its fixed 180px and the other two share the
-            # slack. Each part is also top-aligned, so a short one (the Roll grid is
-            # a little over 100px tall) sits at the top of a tall strip instead of having its rows
-            # spread down the whole height. Note this is per *item*: the one-argument
-            # setAlignment places the layout inside its widget, which is not the same
-            # thing and would leave the parts stretched.
+            # Across a row the die keeps its fixed size and the other two share the
+            # slack. Each part is top-aligned, so a short one sits at the top of a
+            # tall strip rather than spreading its rows down it. Per *item*: the
+            # one-argument setAlignment places the layout inside its widget instead,
+            # which would leave the parts stretched.
             for part, stretch in zip(self.reflow_parts(), (1, 0, 1), strict=True):
                 self._box.setStretchFactor(part, stretch)
                 self._box.setAlignment(part, Qt.AlignmentFlag.AlignTop)

@@ -68,7 +68,7 @@ DEFAULT_PRESET = "balance"
 #: this is only the order the dialog lays them out in.
 STAT_ROWS = (
     (("attack", "Attack"), ("effect", "Effect")),
-    (("defence", "Defence"), ("toughness", "Toughness")),
+    (("defence", "Defense"), ("toughness", "Toughness")),
     (("fortitude", "Fortitude"), ("will", "Will")),
 )
 
@@ -193,8 +193,8 @@ class QuickNPCDialog(QDialog):
         # making a batch of them makes them all the same kind.
         self._minion = QCheckBox("Minion")
         self._minion.setToolTip(
-            "A minor character the rules make easier to defeat: a failed save is its "
-            "worst outcome, and heroes may take 10 against it."
+            "A minor character, easier to defeat: a failed save is its worst outcome, and heroes "
+            "may take 10 against it."
         )
         self._minion.setChecked(bool(_memory.get("minion", False)))
         form.addRow("", self._minion)
@@ -202,8 +202,8 @@ class QuickNPCDialog(QDialog):
         # the next dialog this run like the rest, since squads come in batches too.
         self._count = make_spin_box(1, SQUAD_MAX, value=int(_memory.get("count", 1)))
         self._count.setToolTip(
-            "How many to make. More than one makes a squad: “Thug 1”, “Thug 2”… with "
-            "these same numbers, grouped together on your board."
+            "How many to make. More than one makes a squad (Thug 1, Thug 2…) with the same "
+            "numbers, grouped on your board."
         )
         form.addRow("Make:", self._count)
         top.addLayout(form, stretch=1)

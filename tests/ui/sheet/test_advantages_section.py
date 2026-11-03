@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QDialog, QLineEdit, QSpinBox
 
 from mm_companion.core.character import AdvantageSelection, Character
@@ -416,3 +417,46 @@ def test_the_same_advantage_granted_twice_reads_as_two_rows(qapp: QApplication) 
     names = [name for name, _desc in _row_texts(section)]
     assert "Improved Critical 1 (Sword)" in names
     assert "Improved Critical 1 (Bow)" in names
+
+
+def test_the_picker_starts_empty_and_searchable(qapp: QApplication) -> None:
+    """Nothing is picked until the player picks: no Agile Grab waiting to be added."""
+    section = _section([])
+    combo = section._advantage_combo
+    assert combo.currentIndex() == -1
+    assert combo.isEditable()
+    assert combo.completer().filterMode() == Qt.MatchFlag.MatchContains
+    assert not section._advantage_add_button.isEnabled()
+
+    section._add_advantage()
+    assert section._character.advantages == []
+
+
+def test_picking_shows_what_the_advantage_does_before_adding(qapp: QApplication) -> None:
+    section = _section([])
+    _pick(section, "Benefit")
+    advantage = section._advantage_combo.currentData()
+    assert section._advantage_about.text() == advantage.description
+    assert section._advantage_add_button.isEnabled()
+
+
+def test_adding_clears_the_search_for_the_next_one(qapp: QApplication) -> None:
+    section = _section([])
+    _pick(section, "Benefit")
+    section._advantage_param_text.setText("Wealth")
+    section._add_advantage()
+    assert section._advantage_combo.currentIndex() == -1
+    assert section._advantage_about.text() == ""
+
+
+def test_the_remove_button_takes_off_the_selected_row(qapp: QApplication) -> None:
+    section = _section([AdvantageSelection("Benefit", 1, "Wealth")])
+    assert not section._remove_button.isEnabled()
+    table, row, _ = section._row_refs[0]
+    table.selectRow(row)
+    assert section._remove_button.isEnabled()
+
+    section._remove_button.click()
+
+    assert section._character.advantages == []
+    assert not section._remove_button.isEnabled()

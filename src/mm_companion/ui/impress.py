@@ -30,7 +30,7 @@ import uuid
 from dataclasses import dataclass, field
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QStandardItemModel, QValidator
+from PySide6.QtGui import QValidator
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -77,8 +77,10 @@ from mm_companion.ui.action_ui import (
     ActionRow,
     ActionWindow,
     BodyScroll,
+    ScenePicker,
     TargetsBox,
     fit_to_screen,
+    regrow,
 )
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import (
@@ -118,10 +120,10 @@ MODE_CAPTIONS = {
     MODE_REQUEST: "Request only",
 }
 MODE_HELP = (
-    "GM resolves: the GM rolls every NPC's resistance, each player targeted is asked to "
-    "roll theirs, and the conditions land on their own.\n\n"
-    "Request only: only the impress check is rolled. Its card in the history offers each "
-    "target a button to resist with, and they apply what it does themselves."
+    "**GM resolves:** the GM rolls every NPC's resistance, each player targeted is asked "
+    "to roll theirs, and the conditions are applied automatically.\n\n"
+    "**Request only:** only the impress check is rolled. Its card in the history gives "
+    "each target a button to resist with, and they apply the result themselves."
 )
 
 
@@ -137,44 +139,24 @@ def choice_caption(choice: TraitChoice) -> str:
 def _fill_impressions(
     combo: QComboBox, data: GameData, character: Character | None, current: str = ""
 ) -> None:
-    """List every impression, greying out the ones *character* may not make.
+    """List the impressions *character* can make, each with its outcomes as a tooltip.
 
-    Shown rather than hidden, so a player can see that Dazed exists and what it
-    would take — the tooltip names the advantage.
+    One that needs an advantage the character lacks (Dazed needs Dazing Interaction)
+    is left out rather than shown greyed: a list of things that cannot be picked is
+    noise in a dropdown. *current* stays selected if it is still on the list.
     """
     combo.blockSignals(True)
     combo.clear()
-    model = combo.model()
     for impression in data.impress.impressions:
-        combo.addItem(impression.name, impression.id)
-        index = combo.count() - 1
-        outcomes = " → ".join(impression_outcomes(data, impression))
-        tip = f"Success: {outcomes}" if outcomes else impression.name
         if not impression_allowed(character, data, impression):
-            advantage = next(
-                (a.name for a in data.advantages if a.id == impression.advantage),
-                impression.advantage,
-            )
-            tip = f"Needs the {advantage} advantage. {tip}"
-            if isinstance(model, QStandardItemModel):
-                item = model.item(index)
-                if item is not None:
-                    item.setEnabled(False)
-        combo.setItemData(index, tip, Qt.ItemDataRole.ToolTipRole)
+            continue
+        combo.addItem(impression.name, impression.id)
+        outcomes = " → ".join(impression_outcomes(data, impression))
+        tip = f"<b>{impression.name}</b><br>On a failed resistance: {outcomes}" if outcomes else ""
+        if tip:
+            combo.setItemData(combo.count() - 1, tip, Qt.ItemDataRole.ToolTipRole)
     wanted = combo.findData(current) if current else -1
-    if wanted >= 0 and not impression_allowed(character, data, data.impress.impressions[wanted]):
-        # Kept from another impresser who could make it; this one cannot.
-        wanted = -1
-    if wanted < 0:
-        wanted = next(
-            (
-                i
-                for i, imp in enumerate(data.impress.impressions)
-                if impression_allowed(character, data, imp)
-            ),
-            0,
-        )
-    combo.setCurrentIndex(wanted)
+    combo.setCurrentIndex(wanted if wanted >= 0 else 0)
     combo.blockSignals(False)
 
 
@@ -203,33 +185,33 @@ def _preselect_skill(combo: QComboBox, impression: Impression | None, data: Game
 # -- what the windows say, and what they keep behind a "?" ------------------------
 
 DIALOG_HELP = (
-    "You declare the impression, the skill you roll and who you are impressing. The GM "
+    "You choose the impression, the skill you roll and who you are impressing. The GM "
     "sets the situational modifiers and rolls.\n\n"
-    "The impression decides what success does and the skill decides what is rolled, so "
-    "any pairing is allowed. An impression that needs an advantage you lack is greyed "
-    "out — hover it to see which."
+    "The impression decides what success does and the skill decides what you roll, so "
+    "any pairing is allowed. Only impressions you can make are listed: some need an "
+    "advantage (Dazed needs Dazing Interaction)."
 )
 DIALOG_HELP_OFFLINE = (
-    "Not in a session: the check is rolled here with the modifiers you set, and its card "
-    "in the history offers each target a button to resist with."
+    "**Not in a session:** the check is rolled here with the modifiers you set, and its "
+    "card in the history gives each target a button to resist with."
 )
 GM_HELP = (
-    "Set who impresses whom, the situational modifiers, and an adjustment (a bonus or a "
-    "penalty) to the impresser's check. Roll, and the window stays open: each roll comes "
-    "back into its row as it is made.\n\n"
-    "Each target resists with its highest option unless you pick one. A player targeted "
-    "is asked to roll once the check is in, and picks how to resist then.\n\n"
-    "A target's own Adjust moves the check against that target alone."
+    "Set who impresses whom, the situational modifiers, and an adjustment to the "
+    "impresser's check. Roll, and the window stays open: each roll comes back into its "
+    "row as it is made.\n\n"
+    "**Resisting:** each target resists with its highest option unless you pick one. A "
+    "player is asked to roll once the check is in, and picks how to resist then.\n\n"
+    "**Adjust** on a target's row moves the check against that target alone."
 )
 
 
 def targets_help(data: GameData) -> str:
     """What the Targets box explains: picking them, and the group penalty."""
     return (
-        "Drag the card of everyone you are impressing off the Scene, or pick them from "
-        "Add.\n\n"
-        "More than one target is a group impression: one check, at "
-        f"{_signed(data.impress.group_penalty)} once, each target resisting it separately."
+        "**Picking targets:** drag cards from the scene below (or from the Scene block) "
+        "into this box, or right-click a card.\n\n"
+        "**Group impression:** more than one target means one check at "
+        f"{_signed(data.impress.group_penalty)}, and each target resists it separately."
     )
 
 
@@ -492,8 +474,9 @@ class ImpressDialog(QDialog):
     the resistance as a button for whoever is on the receiving end.
 
     Targets are picked the way an area's are: scene cards dragged into the field, or
-    picked off its Add button. Modeless, for the reason the area's dialog is — a modal
-    one swallows the press that starts dragging a card off the board behind it.
+    right-clicked off the scene copy under it. Modeless, for the reason the area's
+    dialog is — a modal one swallows the press that starts dragging a card off the
+    board behind it.
     """
 
     def __init__(
@@ -503,6 +486,7 @@ class ImpressDialog(QDialog):
         *,
         scene: list[dict] | None = None,
         own_player_id: str = "",
+        portraits: dict | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -549,17 +533,24 @@ class ImpressDialog(QDialog):
         self._mode_buttons: dict[str, QRadioButton] = {}
         self._modifiers: ModifiersPanel | None = None
         self.targets: TargetsBox | None = None
+        self.picker: ScenePicker | None = None
         if self._online:
             self.targets = TargetsBox(
                 "Targets",
                 "impressTargets",
                 resolve=self._resolve,
-                choices=lambda: list(self._names.items()),
                 placeholder="Drop the cards of everyone you are impressing here",
                 help_text=targets_help(data),
             )
             self.targets.field.changed.connect(self._sync)
-            layout.addWidget(self.targets, stretch=1)
+            layout.addWidget(self.targets)
+            # The scene, to pick the targets off: dragged up, or right-clicked.
+            self.picker = ScenePicker(data)
+            self.picker.add_destination("Impress this one", self.targets.field.add_ref)
+            self.picker.set_scene(
+                [e for e in scene or [] if str(e.get("ref", "")) in self._names], portraits
+            )
+            layout.addWidget(self.picker, stretch=1)
             mode_host, self._mode_buttons, group = mode_row(self)
             self._mode_buttons[MODE_RESOLVE].setChecked(True)
             group.buttonToggled.connect(lambda *_: self._sync())
@@ -666,6 +657,9 @@ class ImpressDialog(QDialog):
         self._sync()
 
     def _sync(self) -> None:
+        if self.picker is not None:
+            self.picker.set_placed(self.target_refs())
+            regrow(self)
         impression, skill = self.impression(), self.skill()
         self._outcome.setText(outcome_text(self._data, impression))
         count = len(self.target_refs())
@@ -825,6 +819,7 @@ class ImpressWindow(ActionWindow):
             columns=(("Resists with", "What each target rolls against the impress check"),),
             from_card=from_card,
             help_text=GM_HELP,
+            pick_label="Make a target",
             parent=parent,
         )
         self._attempt = attempt

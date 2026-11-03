@@ -41,7 +41,7 @@ from mm_companion.core.storage import DEFAULT_SETTINGS
 
 @pytest.fixture
 def goon(data: GameData) -> Character:
-    """A quick NPC: Attack 6, a Damage and an Affliction at rank 6, Defence 6."""
+    """A quick NPC: Attack 6, a Damage and an Affliction at rank 6, Defense 6."""
     return quick_npc(data, name="Goon", attack=6, effect=6, defence=6, toughness=6)
 
 
@@ -237,7 +237,7 @@ def test_the_npc_defaults_are_the_six_a_gm_asked_for(goon: Character, data: Game
         ("Damage rank", "6"),
         ("Damage", "+6"),
     ]
-    # Defence and the effect rank are read, never rolled; the saves and the attack are.
+    # Defense and the effect rank are read, never rolled; the saves and the attack are.
     assert [v.spec is not None for v in values] == [False, True, True, True, False, True]
 
 

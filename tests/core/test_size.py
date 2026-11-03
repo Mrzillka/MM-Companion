@@ -85,7 +85,7 @@ def test_a_medium_character_contributes_nothing_at_all(data) -> None:
     """Not "contributes zero" — nothing.
 
     A ``TraitBonus`` is a dataclass instance and therefore always truthy, so a zero
-    would paint a green arrow on every Medium sheet's Defence and Toughness and switch
+    would paint a green arrow on every Medium sheet's Defense and Toughness and switch
     the Skills block's "+" column on for everybody.
     """
     assert size_contributions(_char(data), data) == ()

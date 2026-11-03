@@ -21,9 +21,7 @@ from __future__ import annotations
 from PySide6.QtWidgets import (
     QCheckBox,
     QGroupBox,
-    QHBoxLayout,
     QLabel,
-    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -118,13 +116,6 @@ class SessionPage(SettingsPage):
         self._state.setWordWrap(True)
         column.addWidget(self._state)
         column.addWidget(self._build_minions())
-        buttons = QHBoxLayout()
-        self._save_button = QPushButton("Save")
-        self._save_button.setToolTip("Publish these to the session that is open now")
-        self._save_button.clicked.connect(self.save)
-        buttons.addWidget(self._save_button)
-        buttons.addStretch()
-        column.addLayout(buttons)
         self._status = QLabel()
         self._status.setWordWrap(True)
         column.addWidget(self._status)
@@ -175,7 +166,6 @@ class SessionPage(SettingsPage):
             check.setChecked(bool(values.get(key, True)))
             check.blockSignals(False)
         self._minions_box.setEnabled(live)
-        self._save_button.setEnabled(live)
         self._state.setText(IN_SESSION_TEXT if live else NO_SESSION_TEXT)
         self._state.setStyleSheet(muted_style(italic=True))
 

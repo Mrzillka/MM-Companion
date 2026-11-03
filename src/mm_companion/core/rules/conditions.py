@@ -486,7 +486,7 @@ def resistance_condition_effect(
     """The condition overlay for one resistance row (display-only).
 
     Toughness carries the Hit stacking penalty (a ``delta`` on Damage-resistance checks);
-    the active defenses Dodge and Defence carry Vulnerable/Defenseless halving/zeroing (an
+    the active defenses Dodge and Defense carry Vulnerable/Defenseless halving/zeroing (an
     ``op``). Other resistances get an inert effect.
     """
 

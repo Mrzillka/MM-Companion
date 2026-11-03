@@ -140,6 +140,51 @@ def test_an_untouched_window_offers_nothing_on_close(window, monkeypatch, restar
     assert restarts == []
 
 
+def test_one_bar_saves_every_page(window, page, monkeypatch) -> None:
+    """OK / Cancel / Apply act on every page; the pages have no Save of their own."""
+    from PySide6.QtWidgets import QPushButton
+
+    assert not any(b.text() == "Save" for b in window.findChildren(QPushButton))
+    assert not window._apply_button.isEnabled()
+
+    custom_theme(page)
+    page._editor._set_color("accent", "#010203")
+    window._refresh_apply()
+    assert window._apply_button.isEnabled()
+
+    assert window.apply()
+    assert not page.is_dirty()
+    assert not window._apply_button.isEnabled()
+
+
+def test_ok_keeps_the_edits_and_closes_without_asking(window, page, monkeypatch) -> None:
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: pytest.fail("asked"))
+    window.show()
+    monkeypatch.setattr(window, "_prompt_restart", lambda: False)
+    theme_id = custom_theme(page)
+    page._editor._set_color("accent", "#010203")
+
+    window._ok()
+
+    assert not window.isVisible()
+    theme.reset()
+    assert theme.available_themes()[theme_id].colors["accent"] == "#010203"
+
+
+def test_cancel_throws_the_edits_away_without_asking(window, page, monkeypatch) -> None:
+    monkeypatch.setattr(window, "_prompt_save", lambda _page: pytest.fail("asked"))
+    monkeypatch.setattr(window, "_prompt_restart", lambda: False)
+    window.show()
+    theme_id = custom_theme(page)
+    page._editor._set_color("accent", "#010203")
+
+    window._cancel()
+
+    assert not window.isVisible()
+    theme.reset()
+    assert theme.available_themes()[theme_id].colors["accent"] != "#010203"
+
+
 # -- picking a preset -----------------------------------------------------------
 
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import html
+
 from PySide6.QtCore import QEvent, QMimeData, QPoint, Qt, Signal
 from PySide6.QtGui import QCursor, QDrag, QEnterEvent, QMouseEvent
 from PySide6.QtWidgets import (
@@ -100,7 +102,39 @@ class DraggableCard(QFrame):
         self._lit: list[QWidget] = []
         # The simple sheet's tighter card (see :meth:`set_compact`).
         self._compact = False
+        # What a click on the card does, shown over its name rather than over the whole
+        # card (see :meth:`set_click_hint`).
+        self._click_hint = ""
+        self._hint_target: QWidget | None = None
         self._restyle()
+
+    def set_click_hint(self, text: str) -> None:
+        """Say what clicking the card does - on hover over its *name*, not the card.
+
+        A tooltip on the card itself would cover every pixel of it, numbers and all,
+        and pop up wherever the pointer rests. The name is where a player looks to
+        learn what a card is; the hint goes there (:meth:`set_hint_target`).
+        """
+        self._click_hint = text
+        self._apply_click_hint()
+
+    def set_hint_target(self, widget: QWidget) -> None:
+        """The label the click hint is shown over - the card's name."""
+        self._hint_target = widget
+        self._apply_click_hint()
+
+    def _apply_click_hint(self) -> None:
+        target = self._hint_target
+        if target is None or not self._click_hint:
+            return
+        name = target.text() if hasattr(target, "text") else ""
+        existing = target.toolTip() if not hasattr(target, "set_hover_text") else ""
+        lead = existing or (f"<b>{html.escape(name)}</b>" if name else "")
+        tip = f"{lead}<br>{html.escape(self._click_hint)}" if lead else self._click_hint
+        if hasattr(target, "set_hover_text"):
+            target.set_hover_text(tip)
+        else:
+            target.setToolTip(tip)
 
     def set_compact(self, compact: bool) -> None:
         """Wear the tight margins everywhere — the simple sheet's card.

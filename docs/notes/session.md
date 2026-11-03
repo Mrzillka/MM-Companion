@@ -145,7 +145,7 @@ The shape:
   field of its own and not `spec is None`: a **forced save** carries no spec
   either (the wielder never rolls their own target's save; it reaches the person
   who does as the attack's follow-up chip) but is perfectly well resolved.
-- **What a pin may *do* is the pin's answer.** A *derived* resistance (Defence —
+- **What a pin may *do* is the pin's answer.** A *derived* resistance (Defense —
   `derived` in `resistances.json`) resolves with no spec, as does an **effect rank**
   (`PIN_EFFECT`, `key` a power id and `index` which effect, or late-bound
   `select="first_damage"`): both are read, never thrown, and the tile says so by

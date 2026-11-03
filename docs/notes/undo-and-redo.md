@@ -5,7 +5,7 @@ Matters when adding a block, or a field to the model.
 Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
 
 `Ctrl+Z` walks the sheet back, `Ctrl+Shift+Z` / `Ctrl+Y` forward, and two bare
-menu-bar buttons `↶ ↷` sit immediately before the 🔒 (which stays the bar's last
+menu-bar buttons **Undo** and **Redo** sit immediately before the 🔒 (which stays the bar's last
 entry). Per window and in memory: closing the sheet discards the history.
 
 - **Snapshots, not commands.** ~60 places across eleven blocks write the model, and

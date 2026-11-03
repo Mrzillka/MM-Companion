@@ -8,7 +8,7 @@ the whole build again:
 
 * ``effective_ability`` is one gather, ``skill_bonus`` another;
 * ``skill_total`` is therefore two, and ``skill_modifiers`` a third;
-* ``resistance_total`` is two, and Dodge derives from Defence, so that pair is four.
+* ``resistance_total`` is two, and Dodge derives from Defense, so that pair is four.
 
 The Skills block asks for three of those per row. On a sheet with forty rows that is
 a hundred and sixty gathers of the whole build — for **one step of an ability spin

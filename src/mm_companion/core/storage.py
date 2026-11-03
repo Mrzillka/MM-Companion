@@ -184,7 +184,7 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # a GM clicks when the mook swings. The save it forces is the target's to roll
     # and arrives on their side as the attack's follow-up.
     #
-    # Defence and Toughness lead both lists because they are the pair a GM reads
+    # Defense and Toughness lead both lists because they are the pair a GM reads
     # together — how hard to hit, how hard to hurt.
     "gm_default_pins": {
         "player": [
@@ -668,6 +668,17 @@ def simple_sheet_on_open() -> bool:
 def set_simple_sheet_on_open(enabled: bool) -> None:
     """Record whether saved characters open in the simple sheet."""
     update_settings(simple_sheet_on_open=bool(enabled))
+
+
+def lock_hint_seen() -> bool:
+    """Whether the user has unlocked a sheet before, so the "how to edit" hint can stop."""
+    return load_settings().get("lock_hint_seen") is True
+
+
+def set_lock_hint_seen() -> None:
+    """Record that the user has found the lock."""
+    if not lock_hint_seen():
+        update_settings(lock_hint_seen=True)
 
 
 def simple_print_choices() -> dict[str, bool]:

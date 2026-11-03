@@ -680,8 +680,9 @@ def test_parking_a_vehicle_reads_as_parking_not_as_stowing(qapp, data) -> None:
     section = _section(data, char)
 
     tank, sword = char.equipment[0], char.equipment[1]
-    assert "park" in _card(section, tank).toolTip()
-    assert "stow" in _card(section, sword).toolTip()
+    assert "park" in _card(section, tank)._hint_target.toolTip()
+    assert "stow" in _card(section, sword)._hint_target.toolTip()
+    assert _card(section, sword).toolTip() == "", "the hint is over the name, not the card"
 
 
 # -- installations and custom platforms -------------------------------------------------
@@ -714,9 +715,10 @@ def test_opening_a_base_reads_as_opening_not_as_wearing(qapp, data) -> None:
     section = _section(data, char)
 
     base, tank, sword = char.equipment[0], char.equipment[1], char.equipment[2]
-    assert "close" in _card(section, base).toolTip()
-    assert "park" in _card(section, tank).toolTip()
-    assert "stow" in _card(section, sword).toolTip()
+    assert "close" in _card(section, base)._hint_target.toolTip()
+    assert "park" in _card(section, tank)._hint_target.toolTip()
+    assert "stow" in _card(section, sword)._hint_target.toolTip()
+    assert _card(section, sword).toolTip() == "", "the hint is over the name, not the card"
 
 
 def test_editing_a_platforms_traits_leaves_it_parked(qapp, data, monkeypatch) -> None:

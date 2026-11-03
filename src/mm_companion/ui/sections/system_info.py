@@ -76,6 +76,7 @@ from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import (
     ReflowingForm,
     discard_widget,
+    help_markup,
     make_spin_box,
     muted_style,
     tinted_style,
@@ -85,21 +86,19 @@ HERO_POINT_PIPS = 5
 #: The NPC sheet's minion box.
 MINION_CHECK_LABEL = "Minion"
 MINION_CHECK_HINT = (
-    "A minion is a minor character (thugs, bystanders, a horde): a failed save is its "
-    "worst outcome, its natural 20 is no critical, and heroes may take 10 against it. "
-    "Which of these rules apply is the session's choice, in the GM window's "
-    "Settings ▸ Session settings."
+    "**Minion:** a minor character (thugs, bystanders, a horde).\n- A failed save is its worst "
+    "outcome.\n- Its natural 20 is not a critical hit.\n- Heroes may take 10 against it.\n\nWhich "
+    "of these apply is set per session in the GM window: Settings ▸ Session settings."
 )
 SUMMONED_CHECK_LABEL = "Summoned"
 SUMMONED_CHECK_HINT = (
-    "A creature called up by a power, an advantage or a spell. Only a tag for now: "
+    "**Summoned:** a creature called up by a power, an advantage or a spell. Just a tag for now: "
     "its card and its Scene card say so."
 )
 INITIATIVE_TIP = f"Agility (or an Alternate Initiative ability) plus advantages\n{ROLL_TOOLTIP}"
 REACH_TIP = (
-    "How far this character can make close attacks — their size's own reach, plus "
-    "whatever an active effect stretches on top.\nShown only while something has moved "
-    "it off the reach their bought size gives."
+    "**Reach:** how far this character can make close attacks: their size's reach plus anything an "
+    "active effect adds.\n\nShown only while something has changed it from what their size gives."
 )
 
 
@@ -135,7 +134,6 @@ class HeroPointsWidget(QWidget):
         self._lit: set[int] = set()
         self._buttons: list[QPushButton] = []
         self._pip_size = int(theme.metric("column.hero-point"))
-        self.setToolTip("Click a pip to spend or gain a hero point")
 
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
@@ -169,6 +167,7 @@ class HeroPointsWidget(QWidget):
             button.setIconSize(QSize(self._pip_size, self._pip_size))
             button.setStyleSheet(self._style)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setToolTip("Click to spend or regain a Hero Point")
             button.clicked.connect(lambda _=False, i=index: self._on_click(i))
             self._buttons.append(button)
             # Before the trailing stretch, so the row stays left-aligned as it grows.
@@ -254,6 +253,7 @@ class SpeedWidget(QWidget):
         self._data = data
         self._metric = False
         self._lines: list = []
+        self._ground_tip = ""
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -326,7 +326,17 @@ class SpeedWidget(QWidget):
             # A line is a mode, so its own caption cannot say what granted it — two
             # Flight powers and a worn glider all land on one "Flight" row.
             label.setToolTip("From " + ", ".join(line.sources))
+        elif ground and self._ground_tip:
+            # Over the line itself, not the whole widget, which runs the block's width.
+            label.setToolTip(help_markup(self._ground_tip))
         return label
+
+    def set_ground_tip(self, text: str) -> None:
+        """What hovering the ground line explains: its columns, or a condition on it."""
+        if text == self._ground_tip:
+            return
+        self._ground_tip = text
+        self._redraw()
 
     def rendered_text(self) -> str:
         """Every speed row's caption, newline-joined — what the block actually reads.
@@ -505,10 +515,9 @@ def _compact(label: str) -> str:
 #: What the ground line's three columns are, which nothing on the sheet said. Shown
 #: whenever no condition has something more urgent to say in the same place.
 SPEED_TIP = (
-    "Distance covered in one round: a normal move / a move action spent dashing / "
-    "a full round spent running.\n"
-    "Every other line is a movement mode something active grants, which moves and "
-    "dashes but does not run."
+    "**Distance per round:** move / dash (a move action) / run (a full round).\n\n"
+    "Any other line is a movement mode something active grants: it moves and dashes "
+    "but does not run."
 )
 
 
@@ -623,8 +632,8 @@ class SystemInfoSection(QGroupBox):
             c.minimum if c else 0, c.maximum if c else 30, value=int(self._seed("power_level", 10))
         )
         self._power_level.setToolTip(
-            "The series Power Level this character is built to. It sets the point budget "
-            "beside it and every cap in the Limits row below."
+            "The series Power Level. It sets the point budget beside it and every limit in the "
+            "Limits row."
         )
         self._power_level.valueChanged.connect(self._on_power_level_changed)
         self._editable.append(self._power_level)
@@ -649,21 +658,21 @@ class SystemInfoSection(QGroupBox):
         # traits estimate to. Hidden until :meth:`set_npc_mode` asks.
         self._estimated_pl = QLabel("—")
         self._estimated_pl.setToolTip(
-            "Estimated from this build's Resistances and best attack — an NPC is not "
-            "budgeted, so its Power Level is read from what it can do, not what it costs."
+            "Estimated from this NPC's resistances and best attack. NPCs aren't built on a point "
+            "budget, so their Power Level comes from what they can do."
         )
         self._estimated_pl.hide()
         # Beside it on an NPC sheet, the GM's judgement of what the creature is: a
         # minion (PDF p25) is a minor character the rules make easier to defeat.
         # Hidden, never shown here: set_npc_mode does that once the row is parented.
         self._minion_check = QCheckBox(MINION_CHECK_LABEL)
-        self._minion_check.setToolTip(MINION_CHECK_HINT)
+        self._minion_check.setToolTip(help_markup(MINION_CHECK_HINT))
         self._minion_check.setChecked(self._character.minion)
         self._minion_check.toggled.connect(self._on_minion_toggled)
         self._minion_check.hide()
         # And the GM's "summoned" tag: a label for now, nothing reads it as a rule.
         self._summoned_check = QCheckBox(SUMMONED_CHECK_LABEL)
-        self._summoned_check.setToolTip(SUMMONED_CHECK_HINT)
+        self._summoned_check.setToolTip(help_markup(SUMMONED_CHECK_HINT))
         self._summoned_check.setChecked(self._character.summoned)
         self._summoned_check.toggled.connect(self._on_summoned_toggled)
         self._summoned_check.hide()
@@ -702,8 +711,10 @@ class SystemInfoSection(QGroupBox):
         if seed in [self._size_combo.itemText(i) for i in range(self._size_combo.count())]:
             self._size_combo.setCurrentText(seed)
         self._size_combo.setToolTip(
-            "The size this character is built at. It shifts their Defence, Toughness, "
-            "Damage and Speed limits, their Intimidation and Stealth, and their reach."
+            help_markup(
+                "**Size** this character is built at. It changes their Defense, Toughness, "
+                "Intimidation, Stealth and reach, and their Damage and Speed limits."
+            )
         )
         self._size_combo.currentTextChanged.connect(self._on_size_changed)
         guard_wheel(self._size_combo)
@@ -711,8 +722,8 @@ class SystemInfoSection(QGroupBox):
         self._size_effective = QLabel()
         self._size_effective.setStyleSheet(muted_style())
         self._size_effective.setToolTip(
-            "The size the character is at right now — an active Growth or Shrinking has "
-            "moved them off the size they were bought at."
+            "The size the character is right now: an active Growth or Shrinking has moved them "
+            "from the size they were bought at."
         )
         row.addWidget(self._size_combo)
         row.addWidget(self._size_effective)
@@ -744,7 +755,7 @@ class SystemInfoSection(QGroupBox):
         """
 
         self._reach = QLabel("—")
-        self._reach.setToolTip(REACH_TIP)
+        self._reach.setToolTip(help_markup(REACH_TIP))
         self._reach.setVisible(False)
         return self._reach
 
@@ -899,8 +910,10 @@ class SystemInfoSection(QGroupBox):
 
         self._extra_effort = QPushButton("Use…")
         self._extra_effort.setToolTip(
-            "Push past your limits (p20). The benefit is immediate; at the start of your "
-            "next turn you gain the next rung of the fatigue ladder."
+            help_markup(
+                "**Extra Effort:** push past your limits for an immediate benefit. At the start "
+                "of your next turn you take the next fatigue condition."
+            )
         )
         self._extra_effort.clicked.connect(self._show_extra_effort_menu)
         # What is currently pushed. A power's card carries an "Extra Effort" row saying
@@ -1338,7 +1351,7 @@ class SystemInfoSection(QGroupBox):
         self._refresh_effort_note()
         self.refresh_limits()
         self._speed.render_lines(condition_speed_lines(self._character, self._data))
-        self._speed.setToolTip(
+        self._speed.set_ground_tip(
             _speed_condition_tooltip(condition_speed_rank_mod(self._character, self._data))
         )
 

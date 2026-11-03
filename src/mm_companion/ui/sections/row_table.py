@@ -266,10 +266,20 @@ class AutoHeightTable(QTableWidget):
 
         A table that names none never hides anything and simply scrolls when it
         runs out of room, which is the right answer for one whose every column is
-        load-bearing. Call it once, after the columns exist.
+        load-bearing. Call it after the columns exist; calling it again with a
+        different order (because the *content* changed which columns can go) puts
+        back any column the new order no longer names.
         """
-        self._shed_order = tuple(columns)
+        columns = tuple(columns)
+        # A column the new order no longer names is not this table's to hide any
+        # more: put it back (unless it is absent for want of content).
+        for column in self._shed_order:
+            if column not in columns and 0 <= column < self.columnCount():
+                self.setColumnHidden(column, column in self._absent)
+        self._shed = tuple(column for column in self._shed if column in columns)
+        self._shed_order = columns
         self.sync_shed_columns()
+        self.updateGeometry()
 
     def set_column_absent(self, column: int, absent: bool) -> None:
         """Hide *column* for want of **content**, whatever the width says.

@@ -309,8 +309,8 @@ class ExtraEffortDialog(QDialog):
                 f"Shrug it off with Determination ({ranks} use{plural} per adventure)"
             )
             self._advantage.setToolTip(
-                "Determination removes the Fatigue as it arrives. The app tracks no "
-                "adventure, so how many uses are left is yours to keep."
+                "Determination removes the fatigue as it arrives. The app doesn't track "
+                "adventures, so keep count of the uses yourself."
             )
             self._advantage.show()
             layout.addWidget(self._advantage)

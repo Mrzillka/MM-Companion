@@ -187,6 +187,17 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   then says what it came to. The heading says only whose declaration it is, and is
   gone for the GM's own (`set_heading`).
 
+- **Creatures are picked off a copy of the scene, never a name list.**
+  `ScenePicker` (`ui/action_ui.py`) sits under an action's boxes, in the player's
+  dialogs and the GM's windows alike, drawing the board's own `SceneCard`s (portrait,
+  name, conditions; the GM hands its board over through `action_scene()`). A card is
+  dragged up into a box, right-clicked for the boxes it may go in, or double-clicked
+  into the first. Whoever is already in a box is left out of the copy and comes back
+  when taken out. The GM's table shows rows **only for who is in**; the primary target
+  of an area is a single-chip drop box (`TargetDropField`), and right-clicking a name
+  in the table makes it the primary. Dialogs grow as they fill (`regrow`), up to 85%
+  of the screen, and never shrink under the user.
+
 ## The wire (protocol v14)
 
 - `ActionRequest` (any seat → the GM alone, stamped with the sender, like
@@ -317,7 +328,8 @@ The second action on this layer, following the 4e rules (Area Effect extra, PDF 
 ### Declaring
 
 - `AreaDialog` takes scene cards dropped into a primary slot and an area field
-  (`TargetDropField`, a `CardDropFlow` of chips), or picked off an "Add" menu.
+  (`TargetDropField`, a `CardDropFlow` of chips). The cards come from the Scene block
+  or from the **scene copy** under the boxes (see below).
 - **It is modeless** (`show()`, not `exec()`). The cards are dragged off the Scene
   block on the same window, and a modal dialog swallows the press that starts the drag.
 - A player's scene cards are draggable now; only the GM's board takes the drop back.

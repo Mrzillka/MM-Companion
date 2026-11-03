@@ -133,6 +133,7 @@ from mm_companion.ui.widgets import (
     BOLD_STYLE,
     HeldRebuild,
     discard_widget,
+    help_markup,
     hline_separator,
     make_spin_box,
     muted_style,
@@ -151,36 +152,35 @@ EQUIPMENT_GROUP_MIME = "application/x-mm-equipment-group"
 #: What clicking an equipment card does. Unlike a power's, every item has a switch:
 #: wearing is a fact about the character whether or not the item grants a bonus.
 WEAR_HINT = (
-    "Click this card to wear or stow this item — a stowed item keeps its "
-    "Equipment Point price but grants nothing."
+    "Click the card to wear or stow this item. Stowed, it keeps its Equipment Point "
+    "cost but grants nothing."
 )
 
 #: The same switch on a platform, where "worn" is the wrong word for the same fact.
 #: A parked vehicle is not moving you, which is exactly what stowing does to a bonus.
 BOARD_HINT = (
-    "Click this card to board or park this vehicle — a parked vehicle keeps its "
-    "Equipment Point price but moves nobody."
+    "Click the card to board or park this vehicle. Parked, it keeps its Equipment "
+    "Point cost but moves nobody."
 )
 
 #: The same switch again on an installation, where neither of the other two words fits.
 #: A base you have shut down is still yours and still paid for; it is simply not doing
 #: anything for you this scene.
 PREMISES_HINT = (
-    "Click this card to open or close this installation — a closed installation keeps "
-    "its Equipment Point price but does nothing."
+    "Click the card to open or close this installation. Closed, it keeps its "
+    "Equipment Point cost but does nothing."
 )
 
 #: Why an item-granted advantage is not in the Advantages block, on the line's tooltip.
 GRANT_HINT = (
-    "Equipment grants its wielder this advantage only while the item is in use — it "
-    "is a trait of the item, not of the character, which is why it is written here "
-    "rather than in the Advantages block."
+    "Equipment grants this advantage only while the item is in use. It belongs to the item, which "
+    "is why it is listed here and not in the Advantages block."
 )
 
 #: Why an item's bonus is not on the sheet, on the annotation's tooltip.
 STACKING_HINT = (
-    "Equipment bonuses do not stack with each other or with powers — the best one "
-    "applies. Tick “stacks with other bonuses” on the item to opt it out."
+    "Equipment bonuses don't stack with each other or with powers: only the best applies. Tick "
+    "**stacks with other bonuses** on the item to opt it out."
 )
 
 
@@ -786,7 +786,7 @@ class EquipmentSection(HeldRebuild, TitledSection):
         card.set_compact(self._simple)
         card.set_clickable(True)
         platform = item_platform(item, self._data)
-        card.setToolTip(self._wear_hint(platform))
+        card.set_click_hint(self._wear_hint(platform))
         card.clicked.connect(lambda i=item: self._toggle_worn(i))
 
         # The *effective* build throughout: what the item does is its own build plus
@@ -926,8 +926,8 @@ class EquipmentSection(HeldRebuild, TitledSection):
             value=item.current_speed if item.current_speed is not None else spec.speed,
         )
         spin.setToolTip(
-            "The speed rank this vehicle is doing right now. Its Defense rank is that "
-            "rank plus its size modifier, so slowing down makes it easier to hit."
+            "The speed rank the vehicle is moving at right now. Its Defense is this rank plus its "
+            "size modifier, so slowing down makes it easier to hit."
         )
         spin.valueChanged.connect(lambda value, i=item: self._on_throttle(i, value))
         row.addWidget(spin)
@@ -1019,6 +1019,7 @@ class EquipmentSection(HeldRebuild, TitledSection):
         grip.setVisible(not self._locked)
 
         name = QLabel(item.name or "Equipment")
+        card.set_hint_target(name)
         # On the QFont, never in a stylesheet: a stylesheet font-size outranks the
         # card's own font and would sit out the stowed transition.
         font = name.font()
@@ -1196,7 +1197,7 @@ class EquipmentSection(HeldRebuild, TitledSection):
             label = QLabel(self._grant_text(item, grant))
             label.setWordWrap(True)
             label.setStyleSheet(muted_style())
-            label.setToolTip(GRANT_HINT)
+            label.setToolTip(help_markup(GRANT_HINT))
             layout.addWidget(label)
         return host
 
@@ -1245,8 +1246,8 @@ class EquipmentSection(HeldRebuild, TitledSection):
         label.setWordWrap(True)
         label.setStyleSheet(muted_style())
         label.setToolTip(
-            "The item's printed modifiers. This piece of gear has no effect of its own "
-            "for them to apply to, so they describe it rather than changing a number."
+            "The item's listed modifiers. It has no effect of its own for them to change, so they "
+            "only describe it."
         )
         layout.addWidget(label)
         return host
@@ -1292,7 +1293,7 @@ class EquipmentSection(HeldRebuild, TitledSection):
             label = QLabel(self._superseded_text(note))
             label.setWordWrap(True)
             label.setStyleSheet(tinted_style("tint.warning", bold=False))
-            label.setToolTip(STACKING_HINT)
+            label.setToolTip(help_markup(STACKING_HINT))
             layout.addWidget(label)
         return host
 

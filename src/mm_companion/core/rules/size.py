@@ -114,7 +114,7 @@ def size_contributions(char: Character, game_data: GameData) -> tuple[TraitContr
 
     **Zero amounts are never emitted**, and a Medium character emits nothing at all. A
     :class:`~.appliers.TraitBonus` is a dataclass instance and therefore always truthy,
-    so a 0 would paint a green ``→ N`` on every Medium sheet's Defence, Toughness and
+    so a 0 would paint a green ``→ N`` on every Medium sheet's Defense, Toughness and
     Strength, and would switch the Skills block's "+" column on for everyone.
     """
 
@@ -160,13 +160,13 @@ def size_resistance_shift(char: Character, game_data: GameData, key: str) -> int
     """How much size moved a resistance's **total**, following the same derivation.
 
     A mirror of :func:`~.derived.resistance_base`, and it has to be: the Size Table's
-    Defense column lands on the Defence trait, while the Power Level cap is written
+    Defense column lands on the Defense trait, while the Power Level cap is written
     against Dodge, which *derives* from it. Asking which contributions carry the trait's
     own name would find nothing on Dodge, raise its cap, and hand a large character a
     free point of defence that the Dodge + Toughness pair is meant to cost them.
 
     Followed properly, the paired cap needs no adjustment at all on the base ruleset:
-    Dodge reports −N through Defence, Toughness +N, and the pair sums to zero.
+    Dodge reports −N through Defense, Toughness +N, and the pair sums to zero.
     """
 
     own = size_trait_modifier(char, game_data, CATEGORY_RESISTANCE, key)

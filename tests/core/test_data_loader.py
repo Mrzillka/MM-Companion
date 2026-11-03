@@ -23,7 +23,7 @@ def test_resistances_link_to_known_traits() -> None:
     ability_keys = {a.key for a in data.abilities}
     resistance_keys = {r.key for r in data.resistances}
     for resistance in data.resistances:
-        if resistance.derived:  # combat stats (e.g. Defence) link to no base
+        if resistance.derived:  # combat stats (e.g. Defense) link to no base
             continue
         assert resistance.ability in ability_keys | resistance_keys
 

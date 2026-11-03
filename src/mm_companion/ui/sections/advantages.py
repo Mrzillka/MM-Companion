@@ -26,10 +26,11 @@ also draw from a shared per-character budget
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QResizeEvent
+from PySide6.QtGui import QBrush, QColor, QKeySequence, QResizeEvent, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
+    QCompleter,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -77,7 +78,7 @@ from mm_companion.ui.sections.row_table import (
 from mm_companion.ui.sections.stat_table import CONDITION_TINT
 from mm_companion.ui.sections.titled_section import TitledSection
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import make_spin_box, tinted_style
+from mm_companion.ui.widgets import make_spin_box, muted_style, tinted_style
 
 RANK_MIN, RANK_MAX = 1, 20
 
@@ -144,10 +145,31 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
 
         outer = QVBoxLayout(self)
 
+        # Searchable: the list is long, so typing filters it by any part of the
+        # name, and nothing is picked until the player picks something.
         self._advantage_combo = QComboBox()
+        self._advantage_combo.setEditable(True)
+        self._advantage_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         for advantage in data.advantages:
             label = f"{advantage.name} ({', '.join(advantage.types)})"
             self._advantage_combo.addItem(label, advantage)
+            if advantage.description:
+                self._advantage_combo.setItemData(
+                    self._advantage_combo.count() - 1,
+                    advantage.description,
+                    Qt.ItemDataRole.ToolTipRole,
+                )
+        completer = self._advantage_combo.completer()
+        completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self._advantage_combo.lineEdit().setPlaceholderText("Search advantages…")
+        self._advantage_combo.setCurrentIndex(-1)
+        # What the picked advantage does, read before it is added.
+        self._advantage_about = QLabel()
+        self._advantage_about.setWordWrap(True)
+        self._advantage_about.setStyleSheet(muted_style(italic=True))
+        self._advantage_about.hide()
         # Let the combo shrink and stretch so it uses whatever width its row has,
         # rather than pinning the row wide to its longest advantage name.
         self._advantage_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -192,6 +214,7 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         self._picker_row2 = QHBoxLayout()
         picker_vbox.addLayout(self._picker_row1)
         picker_vbox.addLayout(self._picker_row2)
+        picker_vbox.addWidget(self._advantage_about)
         self._picker_narrow: bool | None = None
         self._apply_picker_mode(False)
         outer.addWidget(self._picker_widget)
@@ -216,6 +239,13 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         self._sort_combo = self._sort.combo
         controls.addWidget(self._sort)
         controls.addStretch()
+        # Removing is also on a row's right-click menu and the Delete key; the button
+        # is what makes it findable.
+        self._remove_button = QPushButton("Remove")
+        self._remove_button.setToolTip("Remove the selected advantage (Delete)")
+        self._remove_button.clicked.connect(self._remove_selected)
+        self._remove_button.setEnabled(False)
+        controls.addWidget(self._remove_button)
         outer.addLayout(controls)
 
         # Chosen advantages fan out across a variable number of side-by-side
@@ -292,6 +322,8 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         # re-measured whenever the panel's width changes.
         table = AutoHeightTable(0, len(HEADERS), word_wrap=True)
         table.setHorizontalHeaderLabels(HEADERS)
+        delete = QShortcut(QKeySequence.StandardKey.Delete, table, self._remove_selected)
+        delete.setContext(Qt.ShortcutContext.WidgetShortcut)
         table.verticalHeader().setVisible(False)
         table.setWordWrap(True)
         # A block shows all of its content and lets the *page* scroll, and column 0
@@ -568,6 +600,7 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         if not rows:
             return
         self._selected = self._selection_at(table, next(iter(rows)))
+        self._remove_button.setEnabled(self._selected is not None)
         # Only one row highlights at a time, so clear the sibling panels.
         self._syncing_selection = True
         for other in self._tables:
@@ -587,6 +620,7 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         entry = self._row_refs.find(self._selected)
         if entry is None:
             self._selected = None
+            self._remove_button.setEnabled(False)
             return
         self._syncing_selection = True
         entry.table.selectRow(entry.row)
@@ -788,6 +822,10 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         advantage = self._advantage_combo.currentData()
         ranked = bool(advantage and advantage.ranked)
         self._advantage_rank.setEnabled(ranked)
+        self._advantage_add_button.setEnabled(advantage is not None)
+        about = advantage.description if advantage is not None else ""
+        self._advantage_about.setText(about)
+        self._advantage_about.setVisible(bool(about) and not self._locked)
         self._sync_parameter(advantage)
         if advantage is None:
             return
@@ -974,8 +1012,17 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         self._rebuild()
         self.refresh_cost()
         self.refresh_limits()
+        # Back to an empty search, ready for the next one.
+        self._advantage_combo.setCurrentIndex(-1)
+        self._advantage_combo.clearEditText()
         self._sync_rank_enabled()
         self.changed.emit()
+
+    def _remove_selected(self) -> None:
+        """Remove the highlighted row's advantage (the Remove button, the Delete key)."""
+        if self._locked or self._selected is None:
+            return
+        self.remove_advantage(self._selected)
 
     def _remove_label(self, table: AutoHeightTable, row: int) -> str | None:
         """How the row menu words its Remove entry — ``None`` while locked."""
@@ -1004,6 +1051,7 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
         self._character.advantages = remaining
         if self._selected is selection:
             self._selected = None
+            self._remove_button.setEnabled(False)
         self._rebuild()
         self.refresh_cost()
         self.refresh_limits()
@@ -1051,11 +1099,14 @@ class AdvantagesSection(ColumnFlowPanels, TitledSection):
             self._advantage_rank,
             self._advantage_add_button,
             self._sort,
+            self._remove_button,
         ):
             widget.setVisible(not locked)
         if locked:
             self._advantage_param.setVisible(False)
             self._advantage_param_text.setVisible(False)
+            self._advantage_about.setVisible(False)
         else:
             # Restore the right subject input for the current advantage.
             self._sync_parameter(self._advantage_combo.currentData())
+            self._advantage_about.setVisible(bool(self._advantage_about.text()))

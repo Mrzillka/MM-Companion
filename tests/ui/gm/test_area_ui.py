@@ -1260,3 +1260,60 @@ def test_an_npc_answering_an_area_card_gets_its_undo_in_the_table(
     undo.click()
     assert not [c for c in window._npc_state[mook].character.conditions if not c.provenance]
     assert not [b for b in table.findChildren(QPushButton) if b.text() == UNDO_MARK]
+
+
+# -- the scene copy under the boxes -------------------------------------------------------
+
+
+def test_the_dialog_offers_the_scene_as_cards_to_pick_from(qapp, data) -> None:
+    """No Add menu: the scene is copied under the boxes, minus one's own card."""
+    dialog = AreaDialog(data, creature(data, "Ana"), burst(), scene=SCENE, own_player_id="me")
+    picker = dialog.picker
+    assert picker.shown_refs() == ["s1", "s2"]
+    labels = [label for label, _add in picker.options("s1")]
+    assert labels == ["Put in the area", "Make the primary target"]
+
+    picker.options("s1")[1][1]("s1")  # right-click > Make the primary target
+    assert dialog.primary_ref() == "s1"
+    assert picker.shown_refs() == ["s2"], "a creature in a box leaves the copy"
+
+    picker._activate("s2")  # a double-click puts it in the area
+    assert dialog.target_refs() == ["s2"]
+    assert picker.shown_refs() == []
+
+    dialog.area.remove_ref("s2")
+    assert picker.shown_refs() == ["s2"], "taken back out, it comes back"
+
+
+def test_the_gm_window_shows_rows_only_for_who_is_in(qapp, data) -> None:
+    source, targets = _parties(data)
+    use = power_area_use(burst(), source.character, data)
+    attempt = AreaAttempt("act", use, primary="s1", source_name="Ana")
+    window = AreaWindow(data, attempt=attempt, source=source, targets=targets)
+    nova = window._row("s2")
+    assert nova.include.isHidden(), "not in the area: waits in the scene copy"
+    # The attacker cannot go in their own area, so the copy does not offer them.
+    assert window.picker.shown_refs() == ["s2"]
+
+    window.picker._activate("s2")
+    assert nova.include.isChecked() and not nova.include.isHidden()
+    assert window.picker.shown_refs() == []
+
+    nova.include.setChecked(False)
+    assert nova.include.isHidden() and window.picker.shown_refs() == ["s2"]
+
+
+def test_the_gm_picks_the_primary_off_the_scene_not_a_dropdown(qapp, data) -> None:
+    source, targets = _parties(data)
+    use = power_area_use(burst(), source.character, data)
+    attempt = AreaAttempt("act", use, source_name="Ana")
+    window = AreaWindow(data, attempt=attempt, source=source, targets=targets)
+    assert window.primary_ref() == ""
+
+    make_primary = dict(window.picker.options("s2"))["Make the primary target"]
+    make_primary("s2")
+
+    assert window.primary_ref() == "s2"
+    assert window._row("s2").include.isChecked(), "the primary is in the area too"
+    labels = [label for label, _act in window.row_menu_actions(window._row("s1"))]
+    assert labels[0] == "Make the primary target"

@@ -294,7 +294,12 @@ class DiceSection(QGroupBox):
         scene = bridge.scene() if bridge is not None else None
         own = bridge.own_player_id() if bridge is not None else ""
         dialog = ImpressDialog(
-            self._data, self._character, scene=scene, own_player_id=own, parent=self.window()
+            self._data,
+            self._character,
+            scene=scene,
+            own_player_id=own,
+            portraits=_portraits(bridge),
+            parent=self.window(),
         )
         dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         dialog.accepted.connect(lambda d=dialog, b=bridge: self._send_impress(d, b))
@@ -379,6 +384,7 @@ class DiceSection(QGroupBox):
             effect_index=index,
             scene=scene,
             own_player_id=own,
+            portraits=_portraits(bridge),
             parent=self.window(),
         )
         dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
@@ -490,3 +496,18 @@ class DiceSection(QGroupBox):
     def sync_dice_layout(self) -> None:
         """Re-read the roller's layout preference (the Settings page changed it)."""
         self.view.sync_dice_layout()
+
+
+def _portraits(bridge) -> dict:
+    """The scene's thumbnails, decoded, for an action dialog's copy of the board."""
+    source = getattr(bridge, "scene_portraits", None)
+    if source is None:
+        return {}
+    from mm_companion.ui.session_portrait import decode_portrait
+
+    decoded = {}
+    for ref, raw in source().items():
+        pixmap = decode_portrait(raw) if raw else None
+        if pixmap is not None:
+            decoded[ref] = pixmap
+    return decoded

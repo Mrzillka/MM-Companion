@@ -498,7 +498,7 @@ def build(target: str):
         sheet.system_info.refresh_derived()
         sheet._recompute_derived()  # the spent-PP total the pool shows
     elif target == "sheet-size":
-        # A Huge character's sheet: the Size Table reaching Defence, Toughness and the
+        # A Huge character's sheet: the Size Table reaching Defense, Toughness and the
         # skills, and the Speed readout netting two Flight powers into one line.
         from mm_companion.core.powers import Power, PowerEffectInstance
         from mm_companion.ui.main_window import MainWindow
@@ -1180,9 +1180,10 @@ def build(target: str):
         # that estimate move.
         win = NPCWindow()
         win.sheet.base_info._profile_fields["hero_name"].setText("Ogre")
-        for key, value in {"STR": 9, "STA": 9, "AGL": 1, "FGT": 4}.items():
-            if key in win.sheet.abilities._abilities:
-                win.sheet.abilities._abilities[key].setValue(value)
+        # Indexed, not filtered: a key the data no longer has should fail loudly here
+        # rather than quietly leave the picture showing less than it claims.
+        for key, value in {"STR": 9, "STA": 9, "AGL": 1, "ATK": 4}.items():
+            win.sheet.abilities._abilities[key].setValue(value)
     elif target == "array-cost":
         # An array of three effects in one power. The cards read 20 / 8 / 10 and the
         # total line reads a bare number with no working — the gap this branch closes.

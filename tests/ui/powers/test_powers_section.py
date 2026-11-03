@@ -1815,7 +1815,7 @@ def test_a_split_array_stops_arming_a_click_that_would_do_nothing(qapp: QApplica
     assert sec._activation_role(armour, group) == "select"
     card = sec._render_node(armour, group)
     assert card.is_clickable()
-    assert "siblings switch off" in card.toolTip()
+    assert "others switch off" in card._hint_target.toolTip()
 
     # Split, the pool decides who is running: the click is not armed at all — it used to
     # move active_child_id silently with nothing visible happening — but the card still
@@ -1824,8 +1824,8 @@ def test_a_split_array_stops_arming_a_click_that_would_do_nothing(qapp: QApplica
     assert sec._activation_role(armour, group) == ""
     card = sec._render_node(armour, group)
     assert not card.is_clickable()
-    assert "all running at once" in card.toolTip()
-    assert "siblings switch off" not in card.toolTip()
+    assert "all run at once" in card._hint_target.toolTip()
+    assert "others switch off" not in card._hint_target.toolTip()
 
 
 def test_a_split_array_still_dims_by_what_is_running_with_no_role_left(

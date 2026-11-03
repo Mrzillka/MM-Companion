@@ -74,6 +74,7 @@ from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import (
     BOLD_STYLE,
     discard_widget,
+    help_markup,
     make_spin_box,
     muted_style,
     tinted_style,
@@ -206,7 +207,7 @@ class PowerConstructorWindow(QMainWindow):
         # The palette opens wide enough for a brick's full cost subtitle, and can't be
         # dragged shut — it is the only way to add anything, so a collapsed palette
         # leaves the window with no visible way forward.
-        splitter.setSizes([330, 560, 340])
+        splitter.setSizes([330, 610, 290])
         splitter.setCollapsible(0, False)
         self.setCentralWidget(splitter)
 
@@ -230,6 +231,19 @@ class PowerConstructorWindow(QMainWindow):
         # item's hand-set price is the same kind of edit and opens it the same way.
         if power_is_homerule(self.power) or (self.item is not None and self._item_priced_by_hand()):
             self._dev_mode.setChecked(True)
+
+        # What the build looked like when the window opened, so a close can tell
+        # whether there is anything to lose.
+        self._saved = False
+        self._baseline = self._snapshot()
+
+    def _snapshot(self) -> dict:
+        """The build as saved data — what a close compares against to see edits."""
+        return self.item.to_dict() if self.item is not None else self.power.to_dict()
+
+    def has_unsaved_changes(self) -> bool:
+        """Whether the build differs from what the window opened with."""
+        return not self._saved and self._snapshot() != self._baseline
 
     @property
     def _noun(self) -> str:
@@ -605,8 +619,8 @@ class PowerConstructorWindow(QMainWindow):
         self._improvised_toggle.setChecked(False)
         self._improvised_toggle.setText(f"{self._COLLAPSED_GLYPH} Improvise this effect")
         self._improvised_toggle.setToolTip(
-            "What it would take to rig this power up with a skill check instead of "
-            "buying it, for a character with the Improvised Effect advantage."
+            "What it would take to pull off this power with a skill check instead of buying it, "
+            "for a character with the Improvised Effect advantage."
         )
         self._improvised_toggle.toggled.connect(self._on_improvised_toggled)
         outer.addWidget(with_help(self._improvised_toggle, IMPROVISE_HELP))
@@ -621,8 +635,8 @@ class PowerConstructorWindow(QMainWindow):
         trades.addWidget(QLabel("Prepare faster by"))
         self._improvised_saved = make_spin_box(0, 30, value=0, buttons=False, max_width=44)
         self._improvised_saved.setToolTip(
-            "Time ranks shaved off the preparation. Each one adds to the preparation DC, "
-            "and the preparation can never drop below the ruleset's minimum."
+            "Time ranks cut from the preparation. Each adds to the preparation DC, and the "
+            "preparation can't drop below the ruleset's minimum."
         )
         self._improvised_saved.valueChanged.connect(lambda _v: self._refresh_improvised())
         trades.addWidget(self._improvised_saved)
@@ -802,10 +816,11 @@ class PowerConstructorWindow(QMainWindow):
         layout.setSpacing(2)
         self._rank_dial = QCheckBox("Add a rank scale to the card")
         self._rank_dial.setToolTip(
-            "Let this power be used below its bought rank in play — a Damage 10 fired "
-            "at 5. It costs the same either way: what a power is worth is what it was "
-            "bought at, and dialling one down refunds nothing. A size effect starts "
-            "ticked, since a Growth 3 is a ladder rather than a single leap."
+            help_markup(
+                "**Use at a lower rank:** in play, this power can be used below the rank it was "
+                "bought at (a Damage 10 fired at 5). The cost stays the same.\n\nGrowth and "
+                "Shrinking start ticked: their ranks are a ladder you climb."
+            )
         )
         self._rank_dial.toggled.connect(self._on_rank_dial_toggled)
         layout.addWidget(self._rank_dial)
@@ -835,10 +850,11 @@ class PowerConstructorWindow(QMainWindow):
         # — a tooltip nobody knows is there is not documentation.
         caption = QLabel("Ranks each modifier applies to  \u24d8")
         caption.setToolTip(
-            "A modifier may cover part of an effect rather than all of it — a Blast 12 "
-            "whose top four ranks alone are Tiring pays for eight plain ranks and four "
-            "discounted ones. Widening a pair to the whole effect is how a band is taken "
-            "back off, and costs what it always did."
+            help_markup(
+                "**Partial modifiers:** an extra or flaw may cover only some of an effect's "
+                "ranks. A Blast 12 with Tiring on its top 4 ranks pays for 8 plain ranks and 4 "
+                "cheaper ones.\n\nSet a band back to the whole effect to remove it."
+            )
         )
         layout.addWidget(caption)
         self._rank_bands_host = QVBoxLayout()
@@ -1229,9 +1245,10 @@ class PowerConstructorWindow(QMainWindow):
 
         self._stacks = QCheckBox("Stacks with other bonuses")
         self._stacks.setToolTip(
-            "Equipment bonuses normally do not stack — with each other or with powers, "
-            "the best one applies. Tick this to add this item's bonus on top of the "
-            "winner instead. It is a homerule, and the item's card is badged ⌂ for it."
+            help_markup(
+                "**Homerule:** add this item's bonus on top of the best one. Normally equipment "
+                "bonuses don't stack, with each other or with powers. The item's card is marked ⌂."
+            )
         )
         self._stacks.toggled.connect(self._on_stacks_toggled)
         row.addWidget(self._stacks)
@@ -1270,8 +1287,8 @@ class PowerConstructorWindow(QMainWindow):
         for category in self._data.equipment_categories:
             self._attaches.addItem(category.title or category.id, category.id)
         self._attaches.setToolTip(
-            "Gear this can be fitted to. An accessory lives on its host rather than "
-            "loose on the sheet, and its price folds into the host's."
+            "Gear this can be fitted to. An accessory lives on its host instead of on the sheet, "
+            "and its cost is added to the host's."
         )
         self._attaches.currentIndexChanged.connect(self._on_attaches_changed)
         guard_wheel(self._attaches)
@@ -1346,7 +1363,7 @@ class PowerConstructorWindow(QMainWindow):
         """The game-terms breakdown in its own scrolling column.
 
         Normally read-only, it tints each stat a modifier changed (green better, red
-        worse). A **Dev mode (homerule)** check box pinned at its top turns the whole
+        worse). An **Edit by hand (house rules)** check box under it (Dev mode) turns the whole
         table editable in place: every game-term row becomes a combo you can pick or
         type into, with a before/after-modifiers order, plus derived-row and custom-row
         overrides and a whole-power cost override. Housed apart from the canvas so it
@@ -1356,19 +1373,17 @@ class PowerConstructorWindow(QMainWindow):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(4, 0, 0, 0)
 
-        head_row = QHBoxLayout()
         heading = QLabel("Game terms")
         heading.setStyleSheet(BOLD_STYLE)
-        head_row.addWidget(heading)
-        head_row.addStretch()
-        self._dev_mode = QCheckBox("Dev mode (homerule)")
+        layout.addWidget(heading)
+        # Below the table rather than beside its heading: it is a house-rule escape
+        # hatch, and a first look at the window should read the summary, not it.
+        self._dev_mode = QCheckBox("Edit by hand (house rules)")
         self._dev_mode.setToolTip(
-            "Edit this power's derived game terms, readouts, and point cost by hand. "
-            "A power with any override is flagged as homerule on its card."
+            "Edit this power's game terms, readouts and point cost by hand. A power with any "
+            "manual change is marked as homerule on its card."
         )
         self._dev_mode.toggled.connect(self._on_dev_mode_toggled)
-        head_row.addWidget(self._dev_mode)
-        layout.addLayout(head_row)
 
         self._terms = PowerTermsView()
         # An in-table override edit recomputes cost / PL warning, but must NOT rebuild
@@ -1380,6 +1395,7 @@ class PowerConstructorWindow(QMainWindow):
         scroll.setWidget(self._terms)
         guard_wheel(scroll)
         layout.addWidget(scroll, stretch=1)
+        layout.addWidget(self._dev_mode)
         return panel
 
     def _on_dev_mode_toggled(self, on: bool) -> None:
@@ -1515,7 +1531,14 @@ class PowerConstructorWindow(QMainWindow):
         self._warning.setVisible(bool(headline))
 
     def _save_power(self) -> None:
-        """Hand the assembled power — or item — to the host section, then close.
+        """Save the build (see :meth:`_try_save`) and close the window if it went through."""
+        if self._try_save():
+            self.close()
+
+    def _try_save(self) -> bool:
+        """Hand the assembled power — or item — to the host section.
+
+        Returns whether it was handed over.
 
         A power with no effects has nothing to cost or resolve, so it is rejected
         with a prompt rather than saved empty. An over-allocated Tier-4 effect (one
@@ -1536,14 +1559,14 @@ class PowerConstructorWindow(QMainWindow):
                     "Name this item",
                     "Give this item a name before saving it.",
                 )
-                return
+                return False
         elif not self.power.effects:
             QMessageBox.information(
                 self,
                 "Nothing to save",
                 "Add at least one effect before saving this power.",
             )
-            return
+            return False
         alloc = self._alloc_violations()
         if alloc:
             QMessageBox.warning(
@@ -1552,7 +1575,7 @@ class PowerConstructorWindow(QMainWindow):
                 f"This {self._noun} can't be saved because an effect allocates more ranks "
                 "than it has:\n\n• " + "\n• ".join(alloc),
             )
-            return
+            return False
         linked = self._linked_violations()
         if linked:
             QMessageBox.warning(
@@ -1561,7 +1584,7 @@ class PowerConstructorWindow(QMainWindow):
                 f"This {self._noun} can't be saved because its linked effects don't share "
                 "the same Range:\n\n• " + "\n• ".join(linked),
             )
-            return
+            return False
         violations = self._pl_violations()
         if violations and storage.pl_enforcement() == storage.PL_ENFORCE_BLOCK:
             QMessageBox.warning(
@@ -1570,13 +1593,38 @@ class PowerConstructorWindow(QMainWindow):
                 f"This {self._noun} can't be saved because it breaks Power Level caps:"
                 "\n\n• " + "\n• ".join(violations),
             )
-            return
+            return False
         if self.item is not None:
             self.itemSaved.emit(self.item)
         else:
             self.powerSaved.emit(self.power)
-        self.close()
+        self._saved = True
+        return True
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        """Ask before throwing away an unsaved build.
+
+        Only a close the user asked for (the title bar's ✕, Alt+F4) asks: a host
+        closing the window from code has already decided.
+        """
+        if event.spontaneous() and self.has_unsaved_changes() and not self._confirm_discard():
+            event.ignore()
+            return
         self.closed.emit()
         super().closeEvent(event)
+
+    def _confirm_discard(self) -> bool:
+        """Offer Save / Discard / Cancel; return True if the window may close."""
+        choice = QMessageBox.question(
+            self,
+            "Unsaved changes",
+            f"Save this {self._noun} before closing?",
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
+        )
+        if choice == QMessageBox.StandardButton.Save:
+            # A save that fails its checks leaves the window open.
+            return self._try_save()
+        return choice == QMessageBox.StandardButton.Discard

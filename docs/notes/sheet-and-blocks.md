@@ -804,7 +804,7 @@ band is not what they are about.
   `rules.trait_contributions` gathers the whole character (size, every power,
   advantages, gear, Extra Effort) and sits under every readout, so `skill_total` was
   two full gathers, `skill_modifiers` a third, `resistance_total` two (four for
-  Dodge, which derives from Defence) — and the Skills block asks three questions per
+  Dodge, which derives from Defense) — and the Skills block asks three questions per
   row. One step of an ability spin box cost well over a hundred gathers of the whole
   build. See `core/rules/build_cache.py` for the contract; the short version is
   **do not write the model inside a scope**.

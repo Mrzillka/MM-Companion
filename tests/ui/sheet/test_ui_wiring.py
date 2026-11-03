@@ -585,7 +585,7 @@ def test_hindered_condition_slows_the_ground_speed(qapp: QApplication) -> None:
 
     assert "-1 rank" in sheet.system_info._speed.rendered_text()
     assert theme.color("tint.worse") in sheet.system_info._speed.rendered_styles()
-    assert "slowed" in sheet.system_info._speed.toolTip()
+    assert "slowed" in sheet.system_info._speed._ground_tip
 
 
 def test_immobile_condition_marks_the_ground_speed_immobilised(qapp: QApplication) -> None:
@@ -639,7 +639,7 @@ def test_a_resistance_row_reads_as_ability_rank_and_total(qapp: QApplication) ->
 
 
 def test_a_resistance_with_no_trait_to_derive_from_shows_a_dash(qapp: QApplication) -> None:
-    """Defence is bought outright. A 0 in its Ability column would claim a base it
+    """Defense is bought outright. A 0 in its Ability column would claim a base it
     hasn't got; the total is still the number the game asks for."""
     data = load_game_data()
     sheet = CharacterSheet(data)
@@ -647,7 +647,7 @@ def test_a_resistance_with_no_trait_to_derive_from_shows_a_dash(qapp: QApplicati
 
     assert sheet.resistances._resistance_base["DEF"].text() == "—"
     assert sheet.resistances._resistance_total["DEF"].text() == "4"
-    # And Dodge derives from Defence, so its own Ability column followed that edit.
+    # And Dodge derives from Defense, so its own Ability column followed that edit.
     assert sheet.resistances._resistance_base["DODGE"].text() == "4"
 
 

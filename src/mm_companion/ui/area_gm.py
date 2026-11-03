@@ -421,6 +421,10 @@ class AreaController(QObject):
         window.dismissed.connect(lambda d=declared: self._on_dismissed(d))
         window.calledOff.connect(lambda d=declared: self._call_off(d))
         window.rollWaitingRequested.connect(declared.run.roll_waiting)
+        # The board's own cards for the scene copy, where the host can draw them.
+        scene = getattr(self._host, "action_scene", None)
+        if scene is not None:
+            window.set_scene_view(*scene())
         window.show()
         return window
 

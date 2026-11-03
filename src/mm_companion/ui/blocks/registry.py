@@ -199,7 +199,7 @@ _BASE_BLOCKS = [
     ),
     (
         "character_image",
-        "Character Image",
+        "Portrait",
         CharacterImageSection,
         0,
         2,

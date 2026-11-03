@@ -820,7 +820,7 @@ class GMWindow(QMainWindow):
         button_row = FlowContainer()
         buttons = FlowLayout(button_row, spacing=int(theme.metric("space.sm")))
         quick = QPushButton("Quick NPC…")
-        quick.setToolTip("A mook from five numbers — name, attack, effect, defence, toughness.")
+        quick.setToolTip("A mook from five numbers — name, attack, effect, defense, toughness.")
         quick.clicked.connect(self._quick_npc)
         buttons.addWidget(quick)
         create = QPushButton("Create NPC")
@@ -1247,6 +1247,18 @@ class GMWindow(QMainWindow):
         self._show_notice(text, colour)
 
     # -- the actions' two extra host methods (see AreaHost, ImpressHost) ----------
+
+    def action_scene(self) -> tuple[list[dict], dict]:
+        """The board as an action window's scene copy draws it: the wire entries, and
+        each one's decoded thumbnail by ref."""
+        entries = self._scene_payload()
+        portraits = {}
+        for entry in entries:
+            ref = str(entry.get("ref", ""))
+            pixmap = self._scene_board.portrait(ref)
+            if pixmap is not None:
+                portraits[ref] = pixmap
+        return entries, portraits
 
     def action_add_card(self, card) -> None:
         """Put an action's reminder — its Resolve button — in the GM's history."""
@@ -4164,7 +4176,7 @@ class GMWindow(QMainWindow):
         if entry.card is not None:
             entry.card.refresh_conditions()
             # And the pinned numbers, which a condition moves: a Vulnerable NPC's
-            # Defence chip must read what the GM should actually use. The chips
+            # Defense chip must read what the GM should actually use. The chips
             # resolve from the model, so this is only a matter of asking them to.
             # (A player's card gets this for free — a condition there comes back as
             # a fresh snapshot, which restates the whole card.)

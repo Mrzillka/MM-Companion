@@ -815,7 +815,7 @@ def power_level_violations(char: Character, game_data: GameData) -> list[str]:
     size moved in its inputs**, so being large is never paid for twice. That is
     :func:`~.size.size_skill_shift` per row and :func:`~.size.size_resistance_shift` per
     paired trait — the latter following the resistance *derivation* rather than the
-    contribution list, since the Size Table's Defense column lands on the Defence trait
+    contribution list, since the Size Table's Defense column lands on the Defense trait
     while the cap is written against Dodge. On the base ruleset the pair then cancels to
     zero all by itself (Dodge −N, Toughness +N), which is the arithmetic the book
     intends and the reason this is not simply "raise both caps".

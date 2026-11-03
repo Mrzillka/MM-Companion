@@ -125,21 +125,41 @@ class GMNpcConditionsMixin:
         if not recovery_succeeded(self._data, pending.spec, roll.get("degree")):
             self._show_notice(f"{who} is still {condition}.", theme.color("text.muted.rich"))
             return
-        removed, added = apply_recovery(
-            entry.character,
-            self._data,
-            pending.spec.recovers,
-            pending.spec.recovers_parameter or None,
+        added = self._shed_npc_recovery(
+            entry, pending.spec.recovers, pending.spec.recovers_parameter or None
         )
-        if not removed:
+        if added is None:
             return
-        self._after_npc_condition_change(entry, removed, applying=False)
-        if added:
-            self._after_npc_condition_change(entry, added, applying=True)
         text = f"{who} recovered from {condition}"
         if added:
             text += f" — now {self._change_names(added)}"
         self._show_notice(f"{text}.", theme.color("tint.better"))
+
+    def _shed_npc_recovery(
+        self, entry: _NpcEntry, condition_id: str, parameter: str | None
+    ) -> list[tuple[str, str | None]] | None:
+        """Shed what a made recovery check sheds on an NPC, through the path every NPC
+        condition change takes. What it turned into, or ``None`` if it was already gone."""
+        removed, added = apply_recovery(entry.character, self._data, condition_id, parameter)
+        if not removed:
+            return None
+        self._after_npc_condition_change(entry, removed, applying=False)
+        if added:
+            self._after_npc_condition_change(entry, added, applying=True)
+        return added
+
+    def turn_recover(
+        self, party, condition_id: str, parameter: str | None
+    ) -> list[tuple[str, str | None]] | None:
+        """An NPC made an end-of-turn recovery check (the Impress controller's host)."""
+        entry = self._npc_state.get(party.source)
+        if entry is None:
+            return None
+        return self._shed_npc_recovery(entry, condition_id, parameter)
+
+    def request_recovery(self, party, condition_id: str, parameter: str | None) -> None:
+        """Ask a player for an end-of-turn recovery check (the Impress controller's host)."""
+        self._request_player_recovery(party.source, condition_id, parameter)
 
     def _request_player_recovery(
         self, player_id: str, condition_id: str, parameter: object

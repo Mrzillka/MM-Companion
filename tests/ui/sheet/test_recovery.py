@@ -18,6 +18,7 @@ from mm_companion.core.rules import (
     apply_recovery,
     can_recover,
     damage_steps,
+    end_of_turn_recoveries,
     recovery_request,
     recovery_roll,
     recovery_succeeded,
@@ -55,6 +56,15 @@ def test_rest_and_bundled_members_offer_no_die(data) -> None:
     assert offered["staggered"] is True
     member = next(c for c in char.conditions if c.condition_id == "dazed")
     assert member.provenance == "staggered" and offered["dazed"] is False
+
+
+def test_a_turns_end_rolls_only_the_end_of_turn_checks(data) -> None:
+    char = Character.new_default(data)
+    apply_condition(char, "stunned", data)  # end of turn; bundles a Dazed member
+    apply_condition(char, "hit", data)  # once a minute
+    apply_condition(char, "fatigued", data)  # rest, not a roll
+
+    assert [c.condition_id for c in end_of_turn_recoveries(char, data)] == ["stunned"]
 
 
 def test_staggered_waits_until_nothing_worse_is_on(data) -> None:

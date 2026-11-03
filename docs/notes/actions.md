@@ -511,12 +511,18 @@ A trait roll clicked in the GM's history — a request card, or a save chip unde
 
 ## End of turn
 
-- A creature's card on the GM's board offers **End turn**. For now it does one thing:
+- A creature's card on the GM's board offers **End turn**. It does two things. First,
   every impression the table resolved onto that creature (`ImpressController._lingering`,
   remembered as each rung lands, with its DC and how the target resisted) is resisted
   again **against the original DC** — the server rolls an NPC's, a player is asked for
   each in turn (`Shake off Demoralized`). One that is made comes off; one that is
   failed stays. An impression whose conditions are already gone is forgotten unrolled.
+- Second, every condition on it whose `recoveryCheck` cadence is `end_of_turn` (Dazed,
+  Stunned — `end_of_turn_recoveries`) is rolled off, unless an impression put it there:
+  that one is shaken off as the impression, at its DC, and not rolled twice. An NPC's
+  checks are lines of the same server-rolled group, and a made one sheds through the
+  path the chip's 🎲 takes (`GMWindow._shed_npc_recovery`). A player gets the same
+  request card the chip's 🎲 sends, and their own app settles it.
 - The rolls land in their own table (`"<name>: end of turn"`) and the outcome on the
   notice. What it does not do yet is in the debts.
 
@@ -655,8 +661,9 @@ back, Roll enabled again. A result that wraps onto more lines grows the window
 
 These are in [the debts](debts.md):
 
-- End turn's other checks (Stunned recovery, Affliction overcome, Suffocation), and a
-  memory of impressions that outlives the GM's app;
+- End turn's other checks (Affliction overcome, Suffocation), knowing *why* a Dazed or
+  Stunned is on (only a damage-caused one is rolled off with Stamina), and a memory of
+  impressions that outlives the GM's app;
 - the area pieces left out: a Hero Point inside the table, and Nullify and Move Object
   areas.
 

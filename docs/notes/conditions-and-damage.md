@@ -98,6 +98,8 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   when its umbrella does. The roll is the trait's own roll builder against the DC, so
   its number is the sheet's, penalties and all; the spec carries `recovers`, and a
   made one sheds one instance (`decrement_condition`, so a Hit stack peels off one) via
-  `apply_recovery`. The **cadence** (end of turn, once a minute) stays the table's:
-  there is no turn clock, and the die is clicked when the time comes. Who applies the
+  `apply_recovery`. The **cadence** (end of turn, once a minute) is mostly the table's:
+  there is no turn clock, and the die is clicked when the time comes. The exception is
+  the GM's **End turn**, which rolls every `end_of_turn` check on the creature (see [the
+  actions notes](actions.md#end-of-turn)). Who applies the
   result is whoever owns the creature — see [the session notes](session.md).

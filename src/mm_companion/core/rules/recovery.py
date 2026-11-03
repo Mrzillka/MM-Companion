@@ -17,8 +17,9 @@ it. This module is the roll layer it was waiting for, and it is all data:
   needs two), and it sheds one instance (a Hit stack peels off one at a time, §5) or
   turns into ``becomes`` (Dying stabilises to Incapacitated).
 
-The cadence (end of turn, once a minute) is left to the table: the app has no turn
-clock, and a die the GM clicks when the time comes is the honest version of one.
+The cadence is mostly left to the table: the app has no turn clock. The one seam is
+the GM's **End turn** on a creature's card, which rolls every check whose cadence is
+``end_of_turn`` (:func:`end_of_turn_recoveries`).
 
 Nothing here knows who rolls. A spec carries :attr:`~.rolls.RollSpec.recovers`, and
 whoever owns the creature it was rolled for applies :func:`apply_recovery` when the
@@ -35,7 +36,9 @@ from .conditions import apply_condition, decrement_condition
 from .rolls import KIND_ABILITY, KIND_RESISTANCE, RollSpec, ability_roll, resistance_roll
 
 __all__ = [
+    "CADENCE_END_OF_TURN",
     "recovery_check",
+    "end_of_turn_recoveries",
     "can_recover",
     "recovery_roll",
     "recovery_request",
@@ -43,6 +46,9 @@ __all__ = [
     "apply_recovery",
     "recovery_hint",
 ]
+
+#: The cadence of a check made as a turn ends (Dazed, Stunned): what End turn rolls.
+CADENCE_END_OF_TURN = "end_of_turn"
 
 
 def recovery_check(record: Condition | None) -> RecoveryCheck | None:
@@ -76,6 +82,22 @@ def can_recover(char: Character | None, game_data: GameData, applied: AppliedCon
         if present & set(check.blocked_by):
             return False
     return True
+
+
+def end_of_turn_recoveries(char: Character, game_data: GameData) -> list[AppliedCondition]:
+    """The conditions on *char* its turn's end rolls off, in the order they were applied.
+
+    Each one whose recovery check is made at ``end_of_turn`` and is offered right now
+    (:func:`can_recover`): a bundled member or a blocked check is left out.
+    """
+    catalog = game_data.condition_catalog()
+    return [
+        applied
+        for applied in char.conditions
+        if (check := recovery_check(catalog.get(applied.condition_id))) is not None
+        and check.cadence == CADENCE_END_OF_TURN
+        and can_recover(char, game_data, applied)
+    ]
 
 
 def _trait_name(game_data: GameData, key: str) -> str:
@@ -196,7 +218,7 @@ def apply_recovery(
 def recovery_hint(check: RecoveryCheck) -> str:
     """One line on when the check is made and what it takes."""
     when = {
-        "end_of_turn": "at the end of each turn",
+        CADENCE_END_OF_TURN: "at the end of each turn",
         "start_of_turn": "at the start of each turn",
         "per_minute": "once a minute",
     }.get(check.cadence, "")

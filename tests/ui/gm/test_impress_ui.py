@@ -913,7 +913,90 @@ def test_end_of_turn_forgets_an_impression_already_taken_off(
     rolled: list = []
     monkeypatch.setattr(action_run, "resolve_group", lambda lines, **kw: rolled.append(lines))
     assert window._impress.end_turn(party) is None
-    assert rolled == [] and "no impression" in window._notice_label.text()
+    assert rolled == [] and "nothing to shake off" in window._notice_label.text()
+
+
+def _with_conditions(window: GMWindow, data, *condition_ids: str) -> tuple[str, ImpressParty]:
+    """A Mook on the board wearing *condition_ids*; its file name and its party."""
+    _thug, mook = _cast(window, data)
+    for condition_id in condition_ids:
+        window._apply_npc_condition(mook, condition_id, None)
+    _sources, targets = window.impress_parties()
+    return mook, next(p for p in targets if p.source == mook)
+
+
+def _rolling(monkeypatch, degrees: list[int]) -> list:
+    """Stand in for the server's group roll; the lines it was handed land in the list."""
+    seen: list = []
+
+    def fake(lines, **kwargs):
+        seen.append(lines)
+        return staged(0, 0, degrees)(lines, **kwargs)
+
+    monkeypatch.setattr(action_run, "resolve_group", fake)
+    return seen
+
+
+def test_end_of_turn_rolls_an_npcs_end_of_turn_recovery_checks(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    # Dazed is rolled off as a turn ends; a Hit only once a minute, so it is left alone.
+    mook, party = _with_conditions(window, data, "dazed", "hit")
+    seen = _rolling(monkeypatch, [1])
+    window._on_scene_action(party.ref, "end-turn")
+    ((line,),) = seen
+    assert line[1] == 10  # the record's DC
+    assert [c.condition_id for c in window._npc_state[mook].character.conditions] == ["hit"]
+    assert "recovers from Dazed" in window._notice_label.text()
+
+
+def test_end_of_turn_keeps_a_condition_whose_recovery_check_failed(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    mook, party = _with_conditions(window, data, "dazed")
+    _rolling(monkeypatch, [-1])
+    window._impress.end_turn(party)
+    assert [c.condition_id for c in window._npc_state[mook].character.conditions] == ["dazed"]
+    assert "still Dazed" in window._notice_label.text()
+
+
+def test_end_of_turn_shakes_an_impressions_condition_off_as_the_impression(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    """A Dazed an impression put on is resisted at the impression's DC, not rolled twice."""
+    from mm_companion.ui.impress_gm import _Lingering
+
+    mook, party = _with_conditions(window, data, "dazed")
+    window._impress._lingering[party.ref] = [
+        _Lingering(
+            data.impress.impression("demoralized"),
+            "skill:Intimidation",
+            19,
+            None,
+            [("dazed", None)],
+            "Thug",
+        )
+    ]
+    seen = _rolling(monkeypatch, [-1])
+    window._impress.end_turn(party)
+    ((line,),) = seen
+    assert line[1] == 19
+
+
+def test_end_of_turn_asks_a_player_for_their_end_of_turn_recovery_checks(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    from mm_companion.core.rules import apply_condition
+
+    character = Character()
+    apply_condition(character, "stunned", data)
+    nova = ImpressParty("s-nova", "Nova", PARTY_PLAYER, "p-nova", character)
+    requested: list = []
+    monkeypatch.setattr(window, "_request_roll", requested.append)
+    run = window._impress.end_turn(nova)
+    assert run is not None and run.closed  # nothing to ask in the run itself
+    (spec,) = requested
+    assert spec.recovers == "stunned" and spec.dc == 10
 
 
 def test_end_of_turn_asks_a_player_to_shake_each_impression_off(

@@ -82,15 +82,21 @@ Minions are in (see [the minions notes](minions.md)). These rules about them are
 
 ## End of turn does one thing so far
 
-A creature's card on the GM's board has an **End turn** item. All it does today is
-give every impression the GM's table put on that creature a new resistance check
-against its original DC (the book's "overcoming impressions"), and take off the ones
-that are made. It is the seam the rest of the turn economy should hang off:
+A creature's card on the GM's board has an **End turn** item. It gives every
+impression the GM's table put on that creature a new resistance check against its
+original DC (the book's "overcoming impressions"), and rolls every condition whose
+`recoveryCheck` is made at the end of a turn (Dazed, Stunned). It is the seam the rest
+of the turn economy should hang off:
 
-- **Other end-of-turn checks.** A creature Stunned by Damage makes a DC 10 Stamina
-  check to shake it; an Affliction is overcome with its `overcomeBy` resistance;
-  Suffocation forces a Fortitude check each turn. Each wants its rule as data (a
-  per-condition "check to end" record) and the button to roll them all.
+- **Other end-of-turn checks.** An Affliction is overcome with its `overcomeBy`
+  resistance against its own DC; Suffocation forces a Fortitude check each turn.
+- **It does not know why a condition is on.** Dazed and Stunned are rolled off with
+  DC 10 Stamina because their record says so, and the record means a *damage-caused*
+  one (`recoveryCheck.condition`). One an impression put on is recognised and shaken
+  off as the impression instead; one an Affliction put on is not, and End turn offers
+  it the Stamina check as well. The fix is the per-condition record below: written
+  when an impression or an Affliction lands a condition, it says how that condition is
+  shaken off, and a condition with none is the damage-caused one.
 - **What it remembers lives in the GM's app.** The impressions to shake off are kept in
   memory by `ImpressController` (`_lingering`), keyed by scene ref, from impressions the
   table *resolved* — a request-only one, or a condition put on by hand, is not

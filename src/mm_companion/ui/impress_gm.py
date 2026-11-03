@@ -20,7 +20,9 @@ out, and it is the only part of the action that touches the session:
   to resist with;
 * **end of turn** (a creature's card on the board, right-clicked): every impression this
   table put on that creature is resisted again against its original DC — the server
-  rolls an NPC's, a player is asked — and one that is made comes off.
+  rolls an NPC's, a player is asked — and one that is made comes off. Each condition
+  whose recovery check is made at the end of a turn (Dazed, Stunned) is rolled with
+  it: an NPC's in the same group, a player's as a request in the history.
 
 It reaches the GM window only through the small :class:`ImpressHost` surface, and the
 rolling and the asking are :mod:`mm_companion.ui.action_run`'s.
@@ -35,7 +37,7 @@ from typing import Protocol
 from PySide6.QtCore import QObject
 from PySide6.QtWidgets import QWidget
 
-from mm_companion.core.character import Character
+from mm_companion.core.character import AppliedCondition, Character
 from mm_companion.core.data_loader import GameData, Impression
 from mm_companion.core.rules import (
     BOOK_MINION_RULES,
@@ -45,12 +47,16 @@ from mm_companion.core.rules import (
     RollSpec,
     TraitChoice,
     best_choice,
+    end_of_turn_recoveries,
     impress_ask_resist_spec,
     impress_label,
     impress_rung,
     impress_spec,
     impression_outcomes,
     minion_save_spec,
+    recovery_request,
+    recovery_roll,
+    recovery_succeeded,
     resist_choices,
     resolve_rung,
     routine_impress_dc,
@@ -71,7 +77,7 @@ from mm_companion.ui.impress import (
     new_action_id,
 )
 from mm_companion.ui.roll_history import ActionCard
-from mm_companion.ui.sections.conditions import matching_condition
+from mm_companion.ui.sections.conditions import condition_display_name, matching_condition
 from mm_companion.ui.session_bridge import SessionBridge
 
 #: What the GM's history button says.
@@ -101,6 +107,17 @@ class ImpressHost(Protocol):
 
     def minion_rules(self) -> MinionRules:
         """The minion rules the open session plays by."""
+
+    def turn_recover(
+        self, party: ImpressParty, condition_id: str, parameter: str | None
+    ) -> list[tuple[str, str | None]] | None:
+        """Shed what a made recovery check sheds on an NPC: what it turned into, or
+        ``None`` if there was nothing to shed."""
+
+    def request_recovery(
+        self, party: ImpressParty, condition_id: str, parameter: str | None
+    ) -> None:
+        """Ask a player to roll their recovery check for one condition."""
 
 
 @dataclass
@@ -143,6 +160,16 @@ class _Lingering:
     resist: TraitChoice | None
     changes: list[tuple[str, str | None]]
     source_name: str
+
+
+@dataclass
+class _TurnRecovery:
+    """A condition an NPC's end of turn rolls off with its own recovery check."""
+
+    condition_id: str
+    parameter: str | None
+    name: str
+    spec: RollSpec
 
 
 class ImpressController(QObject):
@@ -656,11 +683,17 @@ class ImpressController(QObject):
     # -- the end of a turn -------------------------------------------------------------
 
     def end_turn(self, party: ImpressParty) -> ActionRun | None:
-        """*party*'s turn is over: resist each impression on it again, at its original DC.
+        """*party*'s turn is over: shake off what a turn's end shakes off.
 
-        One the creature makes comes off; one it fails stays another turn. An NPC's are
-        rolled by the server, a player is asked for each in turn. An impression whose
-        conditions are already gone (taken off by hand, healed) is forgotten unrolled.
+        Each impression on it is resisted again at its original DC: one the creature
+        makes comes off, one it fails stays another turn. An impression whose conditions
+        are already gone (taken off by hand, healed) is forgotten unrolled. Each condition
+        whose recovery check is made as a turn ends (Dazed, Stunned) is rolled too,
+        unless an impression put it there — that one is shaken off as the impression.
+
+        An NPC's rolls are one server-rolled group. A player is asked for each impression
+        in turn, and gets a request in the history for each recovery check, which their
+        own app settles.
         """
         character = party.character
         held = [
@@ -670,9 +703,10 @@ class ImpressController(QObject):
             or any(matching_condition(character, cid, p) for cid, p in linger.changes)
         ]
         self._lingering[party.ref] = held
-        if not held:
+        recoveries = self._turn_recoveries(party, held)
+        if not held and not recoveries:
             self._host.impress_notice(
-                f"{party.name}'s turn ends — no impression to shake off.", theme.color("accent")
+                f"{party.name}'s turn ends — nothing to shake off.", theme.color("accent")
             )
             return None
         run = ActionRun(
@@ -687,6 +721,8 @@ class ImpressController(QObject):
         self._turn_runs = [r for r in self._turn_runs if not r.closed]
         self._turn_runs.append(run)
         if party.kind == PARTY_PLAYER:
+            for recovery in recoveries:
+                self._host.request_recovery(party, recovery.condition_id, recovery.parameter)
             self._ask_shake_off(run, party, list(held))
             return run
         lines = []
@@ -701,12 +737,35 @@ class ImpressController(QObject):
                 kind=resist.kind if resist is not None else "",
             )
             lines.append(group_line(party.name, spec, title=run.title, dc=linger.dc))
+        for recovery in recoveries:
+            lines.append(group_line(party.name, recovery.spec, title=run.title))
         run.roll_group(
             lines,
-            list(held),
+            [*held, *recoveries],
             lambda pairs, r=run: self._shaken(r, party, pairs),
         )
         return run
+
+    def _turn_recoveries(self, party: ImpressParty, held: list[_Lingering]) -> list[_TurnRecovery]:
+        """The recovery checks *party*'s turn's end rolls, less what *held* covers."""
+        character = party.character
+        if character is None:
+            return []
+        covered = {change for linger in held for change in linger.changes}
+        catalog = self._data.condition_catalog()
+        out: list[_TurnRecovery] = []
+        for applied in end_of_turn_recoveries(character, self._data):
+            if (applied.condition_id, applied.parameter) in covered:
+                continue
+            if party.kind == PARTY_PLAYER:
+                spec = recovery_request(self._data, applied)
+            else:
+                spec = recovery_roll(character, self._data, applied)
+            if spec is None:
+                continue
+            name = condition_display_name(applied, catalog.get(applied.condition_id))
+            out.append(_TurnRecovery(applied.condition_id, applied.parameter, name, spec))
+        return out
 
     def _ask_shake_off(self, run: ActionRun, party: ImpressParty, queue: list[_Lingering]) -> None:
         """Ask a player to resist the next impression on them; the rest wait their turn."""
@@ -754,6 +813,9 @@ class ImpressController(QObject):
         """Each end-of-turn resistance is in: a made one takes its impression off."""
         said: list[str] = []
         for about, record in pairs:
+            if isinstance(about, _TurnRecovery):
+                said.append(self._recovered(party, about, record))
+                continue
             if not isinstance(about, _Lingering):
                 continue
             degree = record.get("degree")
@@ -775,6 +837,23 @@ class ImpressController(QObject):
             )
         if close:
             run.close()
+
+    def _recovered(self, party: ImpressParty, about: _TurnRecovery, record: dict) -> str:
+        """One end-of-turn recovery check is back: shed the condition if it was made."""
+        if not recovery_succeeded(self._data, about.spec, record.get("degree")):
+            return f"is still {about.name}"
+        added = self._host.turn_recover(party, about.condition_id, about.parameter)
+        if added is None:
+            return f"is no longer {about.name}"
+        text = f"recovers from {about.name}"
+        if added:
+            catalog = self._data.condition_catalog()
+            now = ", ".join(
+                condition_display_name(AppliedCondition(cid, p), catalog.get(cid))
+                for cid, p in added
+            )
+            text += f" — now {now}"
+        return text
 
     def _land(self, action: _Action, target: PlannedTarget, text: str, token: str) -> None:
         resolving = action.resolving

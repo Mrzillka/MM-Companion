@@ -87,6 +87,10 @@ KIND_BEST_OF = "best-of"
 #: :data:`KIND_BEST_OF`'s opposite: whichever of the candidates is *lowest* — an effect
 #: resisted by the worst of two (Alternate Resistance's worst-of choice).
 KIND_WORST_OF = "worst-of"
+#: The values of :attr:`RollSpec.pick` — which of a choice save's candidates the
+#: resisting creature rolls.
+PICK_BEST = "best"
+PICK_WORST = "worst"
 #: A power used as an **area**: not a die at all, but the footer line that opens the
 #: area window. Its :attr:`~RollSpec.trait_key` is the power's id (see
 #: :mod:`.area_attack`).
@@ -303,6 +307,12 @@ class RollSpec:
     #: effect in it at once, and each is resisted separately (p155); a Nullify's hit
     #: calls for the opposed check as well as any save.
     also: tuple[RollSpec, ...] = ()
+    #: On a power's save naming several traits (a :func:`best_of_key` in
+    #: :attr:`trait_key` — Alternate Resistance's "Fortitude or Will"): which of them the
+    #: target rolls, :data:`PICK_BEST` or :data:`PICK_WORST`. Its own field rather than
+    #: :data:`KIND_BEST_OF` / :data:`KIND_WORST_OF`, because the kind has to stay
+    #: :data:`KIND_POWER_SAVE` — that is how a pin or a team attack finds the save.
+    pick: str = ""
 
     def follow_ups(self) -> tuple[RollSpec, ...]:
         """Every roll this one provokes: :attr:`follow_up`, then :attr:`also`."""
@@ -360,6 +370,8 @@ class RollSpec:
             raw["recovers"] = self.recovers
         if self.recovers_parameter:
             raw["recovers_parameter"] = self.recovers_parameter
+        if self.pick:
+            raw["pick"] = self.pick
         if self.follow_up is not None:
             raw["follow_up"] = self.follow_up.to_dict()
         if self.also:
@@ -411,6 +423,7 @@ class RollSpec:
             ladder=SpecLadder.from_dict(raw.get("ladder")),
             recovers=str(raw.get("recovers", "")),
             recovers_parameter=str(raw.get("recovers_parameter", "")),
+            pick=str(raw.get("pick", "")),
             also=(
                 tuple(s for s in (cls.from_dict(a) for a in also) if s is not None)
                 if isinstance(also, list)
@@ -614,6 +627,8 @@ def follow_up_for_result(
     degree: int | None,
     game_data: GameData,
     total: int | None = None,
+    *,
+    added_success: bool = True,
 ) -> RollSpec | None:
     """*spec*'s follow-up as the roll that just happened leaves it, or ``None``.
 
@@ -634,11 +649,15 @@ def follow_up_for_result(
     Deterministic in the die and the degree, which is what lets every client at the
     table compute the same chip from the same broadcast roll without the server
     knowing any of these rules.
+
+    *added_success* false is a **minion's** roll (the record's ``minion``, PDF p25):
+    its natural 20 is no critical hit and raises no DC. Its natural 1 is still a graze.
     """
 
     if not follow_up_offered(spec, degree) or spec.follow_up is None:
         return None
     follow_up = spec.follow_up
+    natural_20 = die == 20 and added_success
     if spec.follow_up_always:
         # An area's save after the Dodge check: no critical, no graze — an area
         # effect makes no attack check (p195) — only the rank a made Dodge halves.
@@ -660,12 +679,12 @@ def follow_up_for_result(
         # No graze rule: a natural 1 here is simply a low total.
         if total is None:
             return replace(follow_up, dc_from_total=False)
-        dc = opposed_dc(total, die, game_data)
+        dc = opposed_dc(total, die if natural_20 or die != 20 else 0, game_data)
         label = follow_up.label
-        if die == 20:
+        if natural_20:
             label = f"{label} — natural 20, DC {dc}"
         return replace(follow_up, dc=dc, dc_from_total=False, label=label)
-    if die == 20:
+    if natural_20:
         bonus = game_data.system.critical_effect_bonus
         if bonus and follow_up.dc is not None:
             raised = follow_up.dc + bonus
@@ -691,6 +710,8 @@ def follow_ups_for_result(
     degree: int | None,
     game_data: GameData,
     total: int | None = None,
+    *,
+    added_success: bool = True,
 ) -> list[RollSpec]:
     """Every roll *spec* provokes, as the roll that just happened leaves each one.
 
@@ -702,7 +723,12 @@ def follow_ups_for_result(
     results = []
     for follow_up in spec.follow_ups():
         one = follow_up_for_result(
-            replace(spec, follow_up=follow_up, also=()), die, degree, game_data, total
+            replace(spec, follow_up=follow_up, also=()),
+            die,
+            degree,
+            game_data,
+            total,
+            added_success=added_success,
         )
         if one is not None:
             results.append(one)
@@ -733,6 +759,8 @@ def _own_trait_roll(spec: RollSpec, char: Character, game_data: GameData) -> Rol
         if any(a.key == key for a in game_data.abilities):
             return ability_roll(char, game_data, key)
     elif spec.kind in (KIND_RESISTANCE, KIND_POWER_SAVE, KIND_AREA_DODGE, ""):
+        if spec.kind == KIND_POWER_SAVE and is_choice_key(key):
+            return _best_own_roll(key, char, game_data, worst=rolls_worst(spec))
         if any(r.key == key for r in game_data.resistances):
             return resistance_roll(char, game_data, key)
         if spec.kind == KIND_POWER_SAVE:
@@ -751,6 +779,82 @@ def _own_trait_roll(spec: RollSpec, char: Character, game_data: GameData) -> Rol
         if any(t.key == key for t in game_data.system.derived_traits):
             return initiative_roll(char, game_data)
     return None
+
+
+def is_choice_key(key: str) -> bool:
+    """Whether *key* names several candidates (:func:`best_of_key`) rather than one trait.
+
+    A power's save phrased as a choice — Alternate Resistance's "Fortitude or Will" —
+    stays a :data:`KIND_POWER_SAVE`, because that kind is how a pin or a team attack
+    finds the save on a power; the candidates travel in its key and which one is rolled
+    in :attr:`~RollSpec.pick`.
+    """
+
+    return BEST_OF_SEPARATOR in key
+
+
+def rolls_worst(spec: RollSpec) -> bool:
+    """Whether a choice of several traits is rolled at the *lowest* of them.
+
+    A :data:`KIND_WORST_OF` spec, or a power's save whose :attr:`~RollSpec.pick` says so.
+    A choice save with no pick takes the better, as an area attack's does.
+    """
+
+    return spec.kind == KIND_WORST_OF or spec.pick == PICK_WORST
+
+
+def trait_named(name: str, game_data: GameData) -> tuple[str, str] | None:
+    """``(kind, trait key)`` of the trait a card's resistance phrase names, or ``None``.
+
+    A resistance first, then an ability, then a skill — Alternate Resistance may swap in
+    any of them.
+    """
+
+    wanted = name.strip().lower()
+    for resistance in game_data.resistances:
+        if resistance.name.lower() == wanted:
+            return KIND_RESISTANCE, resistance.key
+    for ability in game_data.abilities:
+        if ability.name.lower() == wanted:
+            return KIND_ABILITY, ability.key
+    for skill in game_data.skills:
+        if skill.name.lower() == wanted:
+            return KIND_SKILL, skill.name
+    return None
+
+
+def takes_the_worse(effect: PowerEffectInstance, game_data: GameData) -> bool:
+    """Whether a modifier choice on *effect* makes a choice of two the worse one."""
+
+    for selection in (*effect.extras, *effect.flaws):
+        for modifier_id, key, value in game_data.area.worst_of:
+            if selection.modifier_id == modifier_id and selection.config.get(key) == value:
+                return True
+    return False
+
+
+def save_choice(phrase: str, effect: PowerEffectInstance, game_data: GameData) -> tuple[str, str]:
+    """``(trait key, pick)`` of a save phrase naming several traits, or ``("", "")``.
+
+    ``"Fortitude or Will vs. 18"`` is resisted with the better of the two, or the worse
+    when Alternate Resistance says so — and which number that is depends on the sheet
+    that rolls it. The key lists the candidates (:func:`best_of_key`) and the pick says
+    which of them, so whoever clicks the save gets the right one of their own numbers
+    filled in rather than none at all.
+    """
+
+    names = phrase.partition(" vs")[0]
+    if " or " not in names.lower():
+        return "", ""
+    candidates = [
+        found
+        for found in (trait_named(part, game_data) for part in re.split(r"(?i) or ", names))
+        if found is not None
+    ]
+    if len(candidates) < 2:
+        return "", ""
+    pick = PICK_WORST if takes_the_worse(effect, game_data) else PICK_BEST
+    return best_of_key(candidates), pick
 
 
 def best_of_key(candidates: list[tuple[str, str]] | tuple[tuple[str, str], ...]) -> str:
@@ -836,7 +940,7 @@ def localize_spec(spec: RollSpec, char: Character | None, game_data: GameData) -
     # A Toughness save against Damage: the target's Impervious or Hardened decides what
     # the roll is for before it is made (the DC Penetrating leaves, a second die).
     spec = localized_damage_save(spec, char, game_data)
-    if spec.kind in (KIND_BEST_OF, KIND_WORST_OF):
+    if spec.kind in (KIND_BEST_OF, KIND_WORST_OF) or is_choice_key(spec.trait_key):
         # Which candidate won is worth saying: "Resist Demoralized (Will)".
         return replace(
             spec, modifier=spec.modifier + own.modifier, label=f"{spec.label} ({own.label})"
@@ -860,12 +964,8 @@ def trait_roll_for(spec: RollSpec, char: Character, game_data: GameData) -> Roll
 
     if not spec.trait_key:
         return None
-    if spec.kind in (KIND_BEST_OF, KIND_WORST_OF):
-        rolls = best_own_rolls(spec.trait_key, char, game_data)
-        if not rolls:
-            return None
-        pick = min if spec.kind == KIND_WORST_OF else max
-        return pick(rolls, key=lambda r: r.modifier)
+    if spec.kind in (KIND_BEST_OF, KIND_WORST_OF) or is_choice_key(spec.trait_key):
+        return _best_own_roll(spec.trait_key, char, game_data, worst=rolls_worst(spec))
     own = _own_trait_roll(spec, char, game_data)
     if own is None:
         return None
@@ -1009,6 +1109,10 @@ def _effect_roll_parts(
     save: RollSpec | None = None
     resistance_row = rows.get("resistance") or rows.get("effect_dc")
     if resistance_row is not None:
+        save_key = _save_key(resistance_row.value, game_data)
+        pick = ""
+        if not save_key:
+            save_key, pick = save_choice(resistance_row.value, effect, game_data)
         save = RollSpec(
             label=named(resistance_row.value),
             dc=numbers.dc,
@@ -1017,7 +1121,8 @@ def _effect_roll_parts(
             outcomes=effect_outcome_ladder(effect, game_data, base_effect),
             success_outcome=effect_success_outcome(effect, game_data, base_effect),
             rolled_by_target=True,
-            trait_key=_save_key(resistance_row.value, game_data),
+            trait_key=save_key,
+            pick=pick,
             ladder=_damage_measured(
                 effect_spec_ladder(effect, game_data, base_effect), effect, game_data, numbers.dc
             ),

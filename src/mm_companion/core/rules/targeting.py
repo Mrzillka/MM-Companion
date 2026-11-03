@@ -84,11 +84,15 @@ def outcome_rung(
     ladder: tuple[ResistanceOutcome, ...],
     degree: int | None,
     success: ResistanceOutcome | None = None,
+    *,
+    worst: bool = False,
 ) -> ResistanceOutcome | None:
     """The rung a resistance check of *degree* lands on, or ``None`` for none.
 
     The last rung covers every deeper failure, exactly as an effect's ladder does. A
     check that held lands on *success* (Damage's Hit), which is usually nothing.
+    *worst* lands any failure on the last rung — a minion's "maximum degree of
+    failure" (PDF p25), see :func:`~.minions.minion_rung`.
     """
 
     failures = failure_degrees(degree)
@@ -96,6 +100,8 @@ def outcome_rung(
         return success if degree is not None else None
     if not ladder:
         return None
+    if worst:
+        return ladder[-1]
     return ladder[min(failures, len(ladder)) - 1]
 
 

@@ -54,20 +54,20 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
   3. **Stylesheet** — geometry, the object-named block chrome, and the menu/tab
      classes the native Windows style paints from the *system* theme and which
      therefore ignore the palette.
-- **Four rules, each guarded by a test in `tests/test_theme_qss.py`:**
+- **Four rules, each guarded by a test in `tests/ui/theme/test_theme_qss.py`:**
   1. Never select a bare `QFrame`/`QLabel`/`QGroupBox`/`QScrollArea` — every
      nested separator and label inherits it. Use an object name or a class that
      names a whole component. The same goes for a widget's **own** inline sheet: a
      bare `border: …; background: …` on a widget reaches every child, a
      right-click `QMenu` parented to it included. Scope it (`#pinChip { … }`,
      `#specChip { … }`). Not test-guarded: an inline sheet is not in the built
-     stylesheet `tests/test_theme_qss.py` reads.
+     stylesheet `tests/ui/theme/test_theme_qss.py` reads.
   2. Never set `font-size` in a stylesheet. It outranks the widget's `QFont`,
      which is what the powers cards animate through; use
      `QFont.setPointSizeF(theme.font_size(...))`.
   3. A semantic tint must clear **3.0:1** against its background — for a
      `system` preset that means against *both* a light and a dark window, since
-     it cannot know which it is on. `tests/test_theme.py` enforces it per preset.
+     it cannot know which it is on. `tests/ui/theme/test_theme.py` enforces it per preset.
   4. **State a complex widget's box, give its arrow column back.** One
      `border`/`padding`/`background` on a `QSpinBox` or a `QComboBox` makes
      `QStyleSheetStyle` compute `SC_SpinBoxEditField` from the box's own padding
@@ -85,7 +85,7 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
      `Fusion` — so `theme.arrow_columns(app)` measures it once and `qss.build`
      takes it; there is deliberately no token. A `make_spin_box(buttons=False)` box
      carries `theme.ARROWLESS_PROPERTY` so the sheet hands the room straight back.
-     `tests/test_input_arrow_columns.py` clicks a real arrow, per preset, across
+     `tests/ui/widgets/test_input_arrow_columns.py` clicks a real arrow, per preset, across
      every base style Qt ships.
 - **A stated `QMenu` box needs a stated `QMenu::item` padding.** The styled presets
   give `QMenu` a border and background, which hands the items to `QStyleSheetStyle`,
@@ -103,7 +103,7 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
   unlit one. Adding the rule app-side would not fix it either, since Classic emits
   no widget chrome at all. So a segmented control carries its own widget-level
   stylesheet from tokens *every* preset defines — `_mode_toggle_style` in
-  `ui/sections/powers.py` is the worked example, the same bargain `ui/lock.py` and
+  `ui/sections/power_parts/widgets.py` is the worked example, the same bargain `ui/lock.py` and
   `CompactOverlayButton` strike. `QToolButton:checked` *is* in the sheet; push
   buttons are the gap.
 - **Two more of the same trap, both found by a *text* tool button.** The Notes
@@ -118,8 +118,8 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
   resting padding to correct, and its buttons carry the platform's 80px minimum so they
   had tens of pixels of slack to lose. `QToolButton`'s resting border is `focus.width`
   for the same reason, since it has no padding to give back. Guarded as rules in
-  `tests/test_theme_qss.py`; the *label* half is guarded again as paint in
-  `tests/test_button_paint.py`, which must build a **real** Notes block (a standalone
+  `tests/ui/theme/test_theme_qss.py`; the *label* half is guarded again as paint in
+  `tests/ui/theme/test_button_paint.py`, which must build a **real** Notes block (a standalone
   button reads fine even with the rule gone — the cascade it sits in is what matters)
   and is style-dependent, so it only bites on a real style, not under `offscreen`. The
   *ring* half has no paint test on purpose: two pixels is below what counting ink can
@@ -135,7 +135,7 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
   states no colour and keeps the platform's own painting, which is why the rule
   test skips a preset that states nothing rather than requiring it everywhere.
   Guarded twice, on the `test_input_arrow_columns` precedent: the *rule* in
-  `tests/test_theme_qss.py`, the *consequence* in `tests/test_menu_disabled_paint.py`,
+  `tests/ui/theme/test_theme_qss.py`, the *consequence* in `tests/ui/theme/test_menu_disabled_paint.py`,
   which paints the bar and measures the glyph's ink.
 - `ui/drop_feedback.py` — `DropFeedback` gives one drop target its idle / accept
   / **reject** styling from tokens. Use it in a `dragEnterEvent` instead of
@@ -165,13 +165,20 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
   caller's to say (`SettingsWindow(page=GMPage.title)`), which is how the GM window
   lands on its own rather than on the sheet's; a caller that names none gets the
   **first**, so the tuple's order is a decision and not an accident.
+- **One OK / Cancel / Apply bar saves every page.** Pages have no Save button of
+  their own: Apply calls `save()` on each dirty page, OK applies and closes (staying
+  open if a page's save did not take — a session that refused its rules), Cancel
+  closes without saving. Closing with the title bar's ✕ still asks page by page.
+  Apply's enabled state is *polled* (`is_dirty` every 250 ms) rather than signalled,
+  because pages change in too many ways (a pin dragged, a theme duplicated) for each
+  to announce.
 - The Themes page separates two things on purpose. **Picking** a preset writes
   through at once (`set_active_theme`), as the old menu did. **Editing** one is a
   draft: `TokenEditor` (`ui/settings/token_editor.py`) generates a form by walking
   the preset's token maps and choosing a widget from the *shape of each value* —
   never a hardcoded list, so a token added later or by a mod appears on its own.
   Each edit previews live through `theme.set_preview(draft, app)`, debounced;
-  nothing is written until Save, and `closeEvent` always calls `discard()` so a
+  nothing is written until OK or Apply, and `closeEvent` always calls `discard()` so a
   preview never outlives its window. A filter box above the form
   (`TokenEditor.set_filter`) matches every word against the token's own dotted
   name *and* its label and hint, folding away any group box it empties; it

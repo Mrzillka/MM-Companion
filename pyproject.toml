@@ -26,11 +26,12 @@ classifiers = [
     "Topic :: Games/Entertainment :: Role-Playing",
 ]
 dependencies = [
-    # Capped below 6.12 until the app is checked against it: 6.12.0 moves a spin
-    # box's arrow column by a pixel (tests/test_input_arrow_columns.py, which guards
-    # arrows that stop taking clicks) and aborts in garbage collection under the
-    # test suite. CI and the release builds both install from here.
-    "PySide6>=6.6,<6.12",
+    # 6.11.3 and 6.12.0 carry a Qt bug (QTBUG-151308): under any stylesheet a spin
+    # box with no buttons gets a 1px-wide text field, which hides every value in the
+    # sheet's rank grids and on a locked sheet. Qt's fix ships in 6.12.1, not in any
+    # 6.11. 6.12.0 also aborts in garbage collection under the test suite. CI and
+    # the release builds both install from here; see docs/notes/debts.md.
+    "PySide6>=6.6,<6.12,!=6.11.3",
 ]
 
 [project.optional-dependencies]
@@ -38,6 +39,9 @@ dev = [
     "pytest>=8.0",
     "pytest-qt>=4.4",
     "pytest-timeout>=2.3",
+    # Records what each test executes; the affected-tests skill runs only the tests
+    # a change can reach (.claude/skills/affected-tests).
+    "pytest-testmon>=2.1",
     "black>=24.0",
     "ruff>=0.5",
 ]
@@ -70,6 +74,10 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Pins the Qt platform and fonts in the environment before PySide6 is imported.
+"tests/conftest.py" = ["E402"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"

@@ -44,6 +44,7 @@ from .area import (
     evasion_negates,
 )
 from .defenses import damage_negated, penetrating_ranks, toughness_defense
+from .minions import BOOK_MINION_RULES, MinionRules, is_minion, minion_rung
 from .powers_cost import effect_resistance_dc_base, effect_size_rank_shift
 from .powers_terms import (
     effect_area_rank,
@@ -54,14 +55,11 @@ from .powers_terms import (
     effect_stat_rows,
 )
 from .rolls import (
-    KIND_ABILITY,
     KIND_AREA,
     KIND_AREA_DODGE,
     KIND_BEST_OF,
     KIND_POWER_CHECK,
     KIND_POWER_SAVE,
-    KIND_RESISTANCE,
-    KIND_SKILL,
     KIND_WORST_OF,
     LADDER_AREA,
     RollSpec,
@@ -71,6 +69,8 @@ from .rolls import (
     localize_spec,
     power_rolls,
     resistance_roll,
+    takes_the_worse,
+    trait_named,
 )
 from .targeting import (
     concrete_rung,
@@ -458,36 +458,6 @@ def power_offers_area(power: Power, game_data: GameData) -> bool:
     return any(_resisted(e, game_data) and effect_makes_attack(e, game_data) for e in power.effects)
 
 
-def _trait_named(name: str, game_data: GameData) -> tuple[str, str] | None:
-    """``(kind, trait key)`` of the trait a card's resistance phrase names, or ``None``.
-
-    A resistance first, then an ability, then a skill — Alternate Resistance may swap in
-    any of them.
-    """
-
-    wanted = name.strip().lower()
-    for resistance in game_data.resistances:
-        if resistance.name.lower() == wanted:
-            return KIND_RESISTANCE, resistance.key
-    for ability in game_data.abilities:
-        if ability.name.lower() == wanted:
-            return KIND_ABILITY, ability.key
-    for skill in game_data.skills:
-        if skill.name.lower() == wanted:
-            return KIND_SKILL, skill.name
-    return None
-
-
-def _takes_the_worse(effect: PowerEffectInstance, game_data: GameData) -> bool:
-    """Whether a modifier choice on *effect* makes a choice of two the worse one."""
-
-    for selection in (*effect.extras, *effect.flaws):
-        for modifier_id, key, value in game_data.area.worst_of:
-            if selection.modifier_id == modifier_id and selection.config.get(key) == value:
-                return True
-    return False
-
-
 def _resistance_of(
     effect: PowerEffectInstance, game_data: GameData, char: Character | None
 ) -> tuple[str, str, str]:
@@ -512,12 +482,12 @@ def _resistance_of(
         return KIND_POWER_SAVE, key, name or phrase
     candidates = [
         found
-        for found in (_trait_named(part, game_data) for part in phrase.split(" or "))
+        for found in (trait_named(part, game_data) for part in phrase.split(" or "))
         if found is not None
     ]
     if not candidates:
         return KIND_POWER_SAVE, "", phrase
-    kind = KIND_WORST_OF if _takes_the_worse(effect, game_data) else KIND_BEST_OF
+    kind = KIND_WORST_OF if takes_the_worse(effect, game_data) else KIND_BEST_OF
     return kind, best_of_key(candidates), phrase
 
 
@@ -1187,12 +1157,14 @@ def area_effect_rung(
     game_data: GameData,
     char: Character | None = None,
     rank: int | None = None,
+    rules: MinionRules = BOOK_MINION_RULES,
 ) -> ResistanceOutcome | None:
     """The rung of *effect*'s ladder a save of *degree* lands on (a made one: its Hit).
 
     Given the creature that saved, a Damage area is first measured against its
     Toughness defences (:mod:`.defenses`) at *rank* — the rank it resisted, halved by a
-    made Dodge (the area's own rank when not given).
+    made Dodge (the area's own rank when not given). A **minion** that failed lands
+    where the session's *rules* say (:func:`~.minions.minion_rung`).
     """
 
     base = _base(game_data, effect.effect_id)
@@ -1206,6 +1178,15 @@ def area_effect_rung(
             degree=degree,
         ):
             return None
+    if is_minion(char):
+        return minion_rung(
+            base.resistance_outcomes,
+            degree,
+            base.resistance_success,
+            game_data,
+            minion=True,
+            rules=rules,
+        )
     return outcome_rung(base.resistance_outcomes, degree, base.resistance_success)
 
 

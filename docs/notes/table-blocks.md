@@ -61,7 +61,7 @@ exactly these pieces.
   was a border drawn inside a border: `build_stat_table` sets `NoFrame` and
   Abilities and Resistances zero their layout margins, so the grid runs to the
   block's own edge. It moved the shedding thresholds — 18px more width is most of a
-  column at that size — which is why `tests/test_adaptive_blocks.py` names the
+  column at that size — which is why `tests/ui/canvas/test_adaptive_blocks.py` names the
   width it narrows to rather than repeating a number.
 - **A `fit_width` table's two widths are different questions.** `sizeHint` is the
   **whole** table — every column, header text included — and that is what Abilities
@@ -156,7 +156,7 @@ exactly these pieces.
   floors the name at, and the honest floor for a column of prose — `min_desc_width` is
   a comfort number, and using one as a floor is the confusion this split ends). Both
   are metrics and constants, because a floor may move with neither the **lock**
-  (`tests/test_lock_geometry.py`: a lock toggle may change a block's height, never its
+  (`tests/ui/canvas/test_lock_geometry.py`: a lock toggle may change a block's height, never its
   width) nor with anything the adaptive decisions themselves change.
   It is still a **ceiling**: the side-by-side tables would otherwise inflate the
   minimum to the full multi-column width, pinning the page wide and forcing at least

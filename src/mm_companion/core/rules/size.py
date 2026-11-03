@@ -114,7 +114,7 @@ def size_contributions(char: Character, game_data: GameData) -> tuple[TraitContr
 
     **Zero amounts are never emitted**, and a Medium character emits nothing at all. A
     :class:`~.appliers.TraitBonus` is a dataclass instance and therefore always truthy,
-    so a 0 would paint a green ``→ N`` on every Medium sheet's Defence, Toughness and
+    so a 0 would paint a green ``→ N`` on every Medium sheet's Defense, Toughness and
     Strength, and would switch the Skills block's "+" column on for everyone.
     """
 
@@ -160,13 +160,13 @@ def size_resistance_shift(char: Character, game_data: GameData, key: str) -> int
     """How much size moved a resistance's **total**, following the same derivation.
 
     A mirror of :func:`~.derived.resistance_base`, and it has to be: the Size Table's
-    Defense column lands on the Defence trait, while the Power Level cap is written
+    Defense column lands on the Defense trait, while the Power Level cap is written
     against Dodge, which *derives* from it. Asking which contributions carry the trait's
     own name would find nothing on Dodge, raise its cap, and hand a large character a
     free point of defence that the Dodge + Toughness pair is meant to cost them.
 
     Followed properly, the paired cap needs no adjustment at all on the base ruleset:
-    Dodge reports −N through Defence, Toughness +N, and the pair sums to zero.
+    Dodge reports −N through Defense, Toughness +N, and the pair sums to zero.
     """
 
     own = size_trait_modifier(char, game_data, CATEGORY_RESISTANCE, key)
@@ -357,6 +357,27 @@ class Reach:
 def feet_text(feet: float) -> str:
     """A distance with no trailing ``.0`` — reach lands on whole feet almost always."""
     return f"{feet:.1f}".rstrip("0").rstrip(".")
+
+
+def distance_text(feet: float) -> str:
+    """A worked-out distance in the measurement table's own words: ``"150 feet"``.
+
+    For a distance the table cannot label because it was multiplied rather than looked up
+    (a Ranged effect's rank × distance value). Inches under a foot and miles from one
+    mile up, as the table's labels are; ``""`` for nothing at all.
+    """
+
+    if feet <= 0:
+        return ""
+    if feet < 1:
+        inches = max(1, round(feet * 12))
+        return f"{inches} inch" if inches == 1 else f"{inches} inches"
+    if feet >= 5280:
+        miles = feet / 5280
+        text = f"{miles:,.0f}" if miles >= 10 else f"{miles:.1f}".rstrip("0").rstrip(".")
+        return f"{text} mile" if text == "1" else f"{text} miles"
+    text = f"{feet:,.1f}".rstrip("0").rstrip(".")
+    return f"{text} foot" if text == "1" else f"{text} feet"
 
 
 def reach_text(reach: Reach) -> str:

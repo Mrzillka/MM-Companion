@@ -32,6 +32,7 @@ from random import Random
 
 from mm_companion.core import storage
 from mm_companion.core.dice import (
+    ROUTINE_DIE,
     CheckResult,
     reroll_d20,
     resolve_check,
@@ -537,6 +538,8 @@ class SessionServer:
         spec: dict | None = None,
         player_id: str | None = None,
         reroll: bool = False,
+        routine: bool = False,
+        minion: bool = False,
     ) -> RollRecord:
         """Resolve a roll for the GM (or for *player_id*) and publish it.
 
@@ -556,6 +559,8 @@ class SessionServer:
             hidden=hidden,
             spec=spec,
             reroll=reroll,
+            routine=routine,
+            minion=minion,
         )
 
     def note(self, text: str, *, player_id: str | None = None) -> RollRecord:
@@ -700,7 +705,10 @@ class SessionServer:
             line["dc_offset"] = _clamp(line["dc_offset"], MAX_ROLL_MODIFIER)
             line["label"] = line["label"][:MAX_LABEL_CHARS]
         rolled = resolve_group(
-            [(line["bonus"] - line["penalty"], line["dc_offset"]) for line in checked],
+            [
+                (line["bonus"] - line["penalty"], line["dc_offset"], line["minion"])
+                for line in checked
+            ],
             lead_modifier=(
                 None if lead_line is None else lead_line["bonus"] - lead_line["penalty"]
             ),
@@ -732,6 +740,7 @@ class SessionServer:
                     hidden=hidden,
                     spec=line["spec"],
                     group=group,
+                    minion=line["minion"],
                 )
                 self._append_roll(record)
                 records.append(record)
@@ -1309,6 +1318,8 @@ class SessionServer:
                 hidden=message.hidden and slot.is_gm,
                 spec=message.spec,
                 reroll=message.reroll,
+                routine=message.routine,
+                minion=message.minion,
             )
         elif isinstance(message, NoteRequest):
             self._record_note(slot, message.text)
@@ -1407,6 +1418,8 @@ class SessionServer:
         hidden: bool,
         spec: dict | None = None,
         reroll: bool = False,
+        routine: bool = False,
+        minion: bool = False,
     ) -> RollRecord:
         bonus = _clamp(bonus, MAX_ROLL_MODIFIER)
         penalty = _clamp(penalty, MAX_ROLL_MODIFIER)
@@ -1418,9 +1431,16 @@ class SessionServer:
         spec = sanitize_spec(spec)
 
         result: CheckResult | None = None
-        die, natural = reroll_d20(self._rng) if reroll else (roll_d20(self._rng), True)
+        if routine:
+            # Take 10: nothing is rolled, and a 10 nobody rolled is never natural. A
+            # routine check cannot be lucky either, so a reroll flag is dropped.
+            die, natural, reroll = ROUTINE_DIE, False, False
+        else:
+            die, natural = reroll_d20(self._rng) if reroll else (roll_d20(self._rng), True)
         if dc is not None:
-            result = resolve_check(bonus - penalty, dc, roll=die, natural=natural)
+            result = resolve_check(
+                bonus - penalty, dc, roll=die, natural=natural, added_success=not minion
+            )
 
         with self._lock:
             record = self.state.record_roll(
@@ -1435,6 +1455,8 @@ class SessionServer:
                 spec=spec,
                 reroll=reroll,
                 natural=natural,
+                routine=routine,
+                minion=minion,
             )
             self._append_roll(record)
 

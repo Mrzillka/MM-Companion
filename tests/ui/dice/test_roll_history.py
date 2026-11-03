@@ -1,0 +1,779 @@
+"""The shared roll history: one log, rendered the same on every screen.
+
+The panel is a *view* over the session's log, so the tests here drive it the two
+ways it is really fed — a whole history when it attaches, and one roll at a time
+after that — and check the two things that are easy to get wrong: a roll that
+arrives twice must not double, and a hidden roll must be marked as hidden on the
+one screen that gets it at all.
+
+The GM's end runs against a real loopback session, because "the GM sees hidden
+rolls and players do not" is a property of the server, not of this widget.
+"""
+
+from __future__ import annotations
+
+import time
+
+import pytest
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton
+
+from mm_companion.core.session.model import new_session
+from mm_companion.ui.roll_history import (
+    HIDDEN_MARK,
+    HISTORY_FLOOR_HEIGHT,
+    MAX_CARDS,
+    MIN_HISTORY_HEIGHT,
+    MIN_HISTORY_WIDTH,
+    GroupTableCard,
+    NoteCard,
+    RollHistoryPanel,
+    degree_label,
+    quick_roll_key,
+    roll_parameters,
+)
+from mm_companion.ui.session_bridge import SessionBridge, set_active_session
+
+pytestmark = pytest.mark.usefixtures("workspace")
+
+
+@pytest.fixture(autouse=True)
+def _clear_active_session():
+    yield
+    set_active_session(None)
+
+
+@pytest.fixture
+def panel(qapp: QApplication) -> RollHistoryPanel:
+    return RollHistoryPanel()
+
+
+@pytest.fixture
+def hosting(qapp: QApplication) -> SessionBridge:
+    bridge = SessionBridge()
+    bridge.host(new_session("Table"), port=0, bind="127.0.0.1")
+    yield bridge
+    bridge.stop()
+
+
+def roll(seq: int = 1, **kwargs) -> dict:
+    """A roll record as the server broadcasts one."""
+    defaults = {
+        "seq": seq,
+        "player_id": "p1",
+        "player_name": "Aria",
+        "die": 12,
+        "bonus": 6,
+        "penalty": 0,
+        "dc": 15,
+        "degree": 1,
+        "critical": False,
+        "label": "",
+        "hidden": False,
+    }
+    return {**defaults, **kwargs}
+
+
+def card_text(panel: RollHistoryPanel) -> str:
+    """Everything the cards say, as one blob — enough for "does it mention X"."""
+    return "\n".join(text_of(card) for card in panel.cards())
+
+
+def text_of(card) -> str:
+    """One card's labels, joined."""
+    return "\n".join(label.text() for label in card.findChildren(QLabel))
+
+
+# -- grading (pure) ---------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "degree,critical,die,expected",
+    [
+        pytest.param(1, False, 10, "Success", id="one-degree"),
+        pytest.param(-2, False, 10, "Failure (2 degrees)", id="counts-degrees"),
+        pytest.param(4, True, 20, "Success (4 degrees) — Nat 20!", id="nat-20"),
+        pytest.param(-1, True, 1, "Failure — Nat 1!", id="nat-1"),
+        pytest.param(None, False, 10, "", id="no-grade-no-label"),
+    ],
+)
+def test_degree_label_reads_the_grade(degree, critical, die, expected) -> None:
+    assert degree_label(degree, critical, die) == expected
+
+
+def test_roll_parameters_are_what_a_quick_roll_needs() -> None:
+    """Its name and its numbers — and deliberately not its DC.
+
+    The name because a strip of chips reading +6, +4, +4 is a puzzle a few rolls
+    later; not the DC because the difficulty belongs to the situation in front of
+    the player, not to a roll they make often.
+    """
+    assert roll_parameters(roll(label="Athletics")) == {
+        "name": "Athletics",
+        "bonus": 6,
+        "penalty": 0,
+    }
+
+
+# -- rendering --------------------------------------------------------------
+
+
+def test_an_empty_panel_says_so(panel: RollHistoryPanel) -> None:
+    assert panel.cards() == []
+    assert panel._empty.isVisibleTo(panel)
+
+
+def test_a_roll_renders_who_what_and_how_it_went(panel: RollHistoryPanel) -> None:
+    panel.add_roll(roll(label="Perception"))
+
+    text = card_text(panel)
+    assert "Aria" in text
+    assert "Perception" in text
+    assert "18" in text  # die 12 + net modifier 6
+    assert "DC 15" in text
+    assert "Success" in text
+    assert not panel._empty.isVisibleTo(panel)
+
+
+def test_an_ungraded_roll_shows_no_degree(panel: RollHistoryPanel) -> None:
+    panel.add_roll(roll(dc=None, degree=None))
+
+    text = card_text(panel)
+    assert "Success" not in text and "Failure" not in text
+
+
+def test_the_newest_roll_is_on_top(panel: RollHistoryPanel) -> None:
+    panel.add_roll(roll(seq=1, player_name="Aria"))
+    panel.add_roll(roll(seq=2, player_name="Bo"))
+
+    assert "Bo" in text_of(panel.cards()[0])
+    assert len(panel.cards()) == 2
+
+
+def test_a_repeated_roll_is_not_shown_twice(panel: RollHistoryPanel) -> None:
+    panel.add_roll(roll(seq=7))
+    panel.add_roll(roll(seq=7))
+
+    assert len(panel.cards()) == 1
+
+
+def test_a_replacement_history_starts_over(panel: RollHistoryPanel) -> None:
+    panel.add_roll(roll(seq=1, player_name="Aria"))
+    panel.set_rolls([roll(seq=1, player_name="Aria"), roll(seq=2, player_name="Bo")])
+
+    assert len(panel.cards()) == 2
+    assert "Bo" in card_text(panel)
+
+
+def test_the_list_is_capped(panel: RollHistoryPanel) -> None:
+    for seq in range(MAX_CARDS + 20):
+        panel.add_roll(roll(seq=seq))
+
+    assert len(panel.cards()) == MAX_CARDS
+
+
+def test_a_hidden_roll_is_marked(panel: RollHistoryPanel) -> None:
+    panel.add_roll(roll(hidden=True))
+
+    assert HIDDEN_MARK in card_text(panel)
+
+
+def test_a_name_cannot_smuggle_markup(panel: RollHistoryPanel) -> None:
+    panel.add_roll(roll(player_name="<b>huge</b>"))
+
+    assert "&lt;b&gt;huge&lt;/b&gt;" in card_text(panel)
+
+
+# -- the save button --------------------------------------------------------
+
+
+def test_only_your_own_roll_can_be_saved(panel: RollHistoryPanel) -> None:
+    panel._own_id = "p1"
+    panel.add_roll(roll(seq=1, player_id="p1"))
+    panel.add_roll(roll(seq=2, player_id="p2"))
+
+    buttons = panel.findChildren(QPushButton)
+    assert len(buttons) == 1
+
+
+def test_saving_reports_the_parameters(panel: RollHistoryPanel) -> None:
+    seen: list[dict] = []
+    panel.saveToggled.connect(seen.append)
+    panel._own_id = "p1"
+    panel.add_roll(roll())
+
+    panel.cards()[0].star.click()
+
+    assert seen == [{"name": "", "bonus": 6, "penalty": 0}]
+
+
+def test_a_saved_rolls_star_is_lit_and_a_full_strip_disables_the_rest(
+    panel: RollHistoryPanel,
+) -> None:
+    panel._own_id = "p1"
+    panel.add_roll(roll(seq=1, player_id="p1"))  # +6 vs DC 15
+    star = panel.cards()[0].star
+
+    assert star.is_saved() is False
+    assert star.isEnabled() is True
+
+    # That roll is now in the strip, so its star lights up...
+    panel.set_quick_roll_state({quick_roll_key({"bonus": 6, "penalty": 0})}, True)
+    assert star.is_saved() is True
+
+    # ...and with the strip full, a card that is *not* in it cannot be saved.
+    panel.set_quick_roll_state({quick_roll_key({"bonus": 1, "penalty": 0})}, False)
+    assert star.is_saved() is False
+    assert star.isEnabled() is False
+
+
+def test_a_card_built_after_the_strip_was_told_starts_out_lit(panel: RollHistoryPanel) -> None:
+    # The state is remembered, not just applied: a roll arriving later has to agree
+    # with the chips already in the strip.
+    panel._own_id = "p1"
+    panel.set_quick_roll_state({quick_roll_key({"bonus": 6, "penalty": 0})}, True)
+
+    panel.add_roll(roll(seq=1, player_id="p1"))
+
+    assert panel.cards()[0].star.is_saved() is True
+
+
+def test_the_history_asks_for_two_cards_and_settles_for_one(panel: RollHistoryPanel) -> None:
+    """Width is a real minimum; height is only what it asks for.
+
+    The height has to give, because the history is the elastic part of the Dice
+    block — when the roll panel above it grows, this is what finds the room rather
+    than the block growing past the window. The width does not: the roller's
+    row/column reflow reads it as a genuine floor.
+    """
+    assert panel._scroll.minimumWidth() == MIN_HISTORY_WIDTH
+    assert panel._scroll.minimumHeight() == HISTORY_FLOOR_HEIGHT
+    assert panel.sizeHint().height() == MIN_HISTORY_HEIGHT
+
+
+# -- deferring one's own roll until the die settles -------------------------
+
+
+def _awaiting(panel: RollHistoryPanel, player_id: str = "p1") -> None:
+    """Put *panel* in the state it is in while its roller's die is in the air."""
+    panel._own_id = player_id
+    panel.set_defer_own(True)
+    panel.set_awaiting_own(True)
+
+
+def test_a_deferred_own_roll_is_held_until_released(panel: RollHistoryPanel) -> None:
+    _awaiting(panel)
+
+    # Our own roll is held back...
+    panel.add_roll(roll(seq=1, player_id="p1"))
+    assert panel.cards() == []
+    # ...while another player's lands at once (no local animation to wait for).
+    panel.add_roll(roll(seq=2, player_id="p2"))
+    assert len(panel.cards()) == 1
+
+    # Releasing it (the roller's die has settled) finally shows it.
+    panel.release_roll(roll(seq=1, player_id="p1"))
+    assert len(panel.cards()) == 2
+
+
+def test_a_released_roll_is_not_shown_twice(panel: RollHistoryPanel) -> None:
+    _awaiting(panel)
+    panel.add_roll(roll(seq=1, player_id="p1"))
+
+    panel.release_roll(roll(seq=1, player_id="p1"))
+    panel.release_roll(roll(seq=1, player_id="p1"))  # a second cue must not double it
+
+    assert len(panel.cards()) == 1
+
+
+def test_an_own_roll_is_not_held_when_no_die_is_in_the_air(panel: RollHistoryPanel) -> None:
+    """The whole bug: only a roll something is waiting for may be held.
+
+    Nothing but the roller's reveal releases a held roll, so one held outside a
+    tumble would never be shown to the person who made it.
+    """
+    panel._own_id = "p1"
+    panel.set_defer_own(True)  # paired with a roller, but it is not rolling
+
+    panel.add_roll(roll(seq=1, player_id="p1"))
+
+    assert len(panel.cards()) == 1
+
+
+def test_a_reconnects_replayed_log_still_shows_ones_own_rolls(panel: RollHistoryPanel) -> None:
+    """A redial re-sends the whole log; our own rolls must survive the repaint.
+
+    This is what took a player's rolls away for the rest of the evening: the
+    ``Welcome`` after a blip replays the log, and every own roll in it used to be
+    deferred again with no die left to release any of them.
+    """
+    _awaiting(panel)
+    panel.add_roll(roll(seq=1, player_id="p1"))
+    panel.release_roll(roll(seq=1, player_id="p1"))
+    panel.set_awaiting_own(False)
+
+    panel.set_rolls([roll(seq=1, player_id="p1"), roll(seq=2, player_id="p2")])
+
+    assert len(panel.cards()) == 2
+
+
+def test_giving_up_on_a_roll_flushes_what_was_held(panel: RollHistoryPanel) -> None:
+    """A record that lands after the roller gave up still has to appear.
+
+    The roller stops waiting at ``SESSION_ROLL_TIMEOUT_MS`` and never reveals that
+    roll, so closing the window is the only thing left to show it.
+    """
+    _awaiting(panel)
+    panel.add_roll(roll(seq=1, player_id="p1"))
+    assert panel.cards() == []
+
+    panel.set_awaiting_own(False)  # the roller abandoned it
+
+    assert len(panel.cards()) == 1
+
+
+def test_a_flush_shows_held_rolls_oldest_first(panel: RollHistoryPanel) -> None:
+    """Cards go in at the top, so a flush out of seq order would read backwards."""
+    _awaiting(panel)
+    panel.add_roll(roll(seq=2, player_id="p1"))
+    panel.add_roll(roll(seq=1, player_id="p1"))
+
+    panel.set_awaiting_own(False)
+
+    assert [card.seq for card in panel.cards()] == [2, 1]
+
+
+# -- the remove button (GM only) --------------------------------------------
+
+
+def test_only_a_gm_panel_shows_a_remove_button(qapp: QApplication) -> None:
+    gm_panel = RollHistoryPanel(gm=True)
+    gm_panel.add_roll(roll(seq=1, player_id="p2"))
+    assert any(b.text() == "✕" for b in gm_panel.findChildren(QPushButton))
+
+    player_panel = RollHistoryPanel()
+    player_panel.add_roll(roll(seq=1, player_id="p2"))
+    assert not any(b.text() == "✕" for b in player_panel.findChildren(QPushButton))
+
+
+def test_remove_roll_drops_the_matching_card(qapp: QApplication) -> None:
+    panel = RollHistoryPanel(gm=True)
+    panel.add_roll(roll(seq=1))
+    panel.add_roll(roll(seq=2))
+
+    panel.remove_roll(1)
+
+    assert [card.seq for card in panel.cards()] == [2]
+    # The seq is forgotten, so the same roll could legitimately be re-added later.
+    assert 1 not in panel._seen
+
+
+def test_removing_the_last_card_shows_the_empty_state(qapp: QApplication) -> None:
+    panel = RollHistoryPanel(gm=True)
+    panel.add_roll(roll(seq=1))
+    panel.remove_roll(1)
+    assert panel.cards() == []
+    assert panel._empty.isVisibleTo(panel)
+
+
+def test_an_offline_roll_can_be_struck_with_no_session(qapp: QApplication) -> None:
+    """A roll made before hosting (no bridge) still removes locally off its ✕."""
+    panel = RollHistoryPanel(gm=True)
+    seen: list[int] = []
+    panel.rollRemovedLocally.connect(seen.append)
+    panel.add_roll(roll(seq=-1))  # a pre-hosting roll's negative id
+
+    button = next(b for b in panel.findChildren(QPushButton) if b.text() == "✕")
+    button.click()
+
+    assert panel.cards() == []
+    assert seen == [-1]
+
+
+def test_a_roll_without_any_id_shows_no_remove_button(qapp: QApplication) -> None:
+    panel = RollHistoryPanel(gm=True)
+    no_seq = {k: v for k, v in roll().items() if k != "seq"}
+    panel.add_roll(no_seq)
+    assert not any(b.text() == "✕" for b in panel.findChildren(QPushButton))
+
+
+def test_the_gm_removing_a_roll_clears_it_for_a_player(
+    qapp: QApplication, hosting: SessionBridge
+) -> None:
+    gm_panel = RollHistoryPanel(gm=True)
+    gm_panel.attach(hosting)
+    player = SessionBridge()
+    player_panel = RollHistoryPanel()
+    try:
+        player.join(_code_for(hosting), "Aria")
+        player_panel.attach(player)
+
+        record = hosting.server.roll(label="oops", bonus=1)
+        _pump(qapp, lambda: len(player_panel.cards()) == 1)
+        assert len(gm_panel.cards()) == 1
+
+        # The GM strikes it; the removal fans out over the session to both panels.
+        hosting.remove_roll(record.seq)
+        _pump(qapp, lambda: player_panel.cards() == [] and gm_panel.cards() == [])
+
+        assert gm_panel.cards() == []
+        assert player_panel.cards() == []
+    finally:
+        player_panel.detach()
+        player.stop()
+
+
+# -- the reveal button (GM only, hidden rolls only) ---------------------------
+
+
+def _show_buttons(panel: RollHistoryPanel) -> list[QPushButton]:
+    # Not hidden, rather than visible: the panel is never shown. A table builds its Show
+    # once and hides it while it holds nothing hidden.
+    return [b for b in panel.findChildren(QPushButton) if b.text() == "Show" and not b.isHidden()]
+
+
+def test_only_a_gms_hidden_roll_offers_show(qapp: QApplication) -> None:
+    gm_panel = RollHistoryPanel(gm=True)
+    gm_panel.add_roll(roll(seq=1, hidden=True))
+    gm_panel.add_roll(roll(seq=2))
+    assert len(_show_buttons(gm_panel)) == 1
+
+    player_panel = RollHistoryPanel()
+    player_panel.add_roll(roll(seq=1, hidden=True))
+    assert _show_buttons(player_panel) == []
+
+
+def test_revealing_redraws_the_gms_card_in_place(qapp: QApplication) -> None:
+    panel = RollHistoryPanel(gm=True)
+    panel.add_roll(roll(seq=1, hidden=True, label="Ambush"))
+    panel.add_roll(roll(seq=2))
+
+    panel.reveal_roll(roll(seq=1, hidden=False, label="Ambush"))
+
+    assert [card.seq for card in panel.cards()] == [2, 1]  # same place, not the top
+    assert _show_buttons(panel) == []
+    assert HIDDEN_MARK not in card_text(panel)
+
+
+def test_a_revealed_roll_arrives_on_a_players_panel(qapp: QApplication) -> None:
+    panel = RollHistoryPanel()
+    panel.add_roll(roll(seq=2))
+
+    panel.reveal_roll(roll(seq=1, label="Ambush"))
+
+    assert [card.seq for card in panel.cards()] == [1, 2]
+    assert "Ambush" in card_text(panel)
+
+
+def test_the_gm_revealing_a_roll_reaches_a_player(
+    qapp: QApplication, hosting: SessionBridge
+) -> None:
+    gm_panel = RollHistoryPanel(gm=True)
+    gm_panel.attach(hosting)
+    player = SessionBridge()
+    player_panel = RollHistoryPanel()
+    try:
+        player.join(_code_for(hosting), "Aria")
+        player_panel.attach(player)
+
+        hosting.server.roll(label="Ambush", dc=15, hidden=True)
+        hosting.server.roll(label="open", bonus=1)
+        _pump(qapp, lambda: len(player_panel.cards()) == 1)
+
+        _show_buttons(gm_panel)[0].click()
+        _pump(qapp, lambda: len(player_panel.cards()) == 2)
+
+        assert "Ambush" in card_text(player_panel)
+        assert _show_buttons(gm_panel) == []
+        assert len(gm_panel.cards()) == 2
+    finally:
+        player_panel.detach()
+        player.stop()
+
+
+def test_an_off_air_reveal_redraws_and_reports(qapp: QApplication) -> None:
+    panel = RollHistoryPanel(gm=True)
+    seen: list[int] = []
+    panel.rollRevealedLocally.connect(seen.append)
+    panel.add_roll(roll(seq=3, hidden=True))
+
+    _show_buttons(panel)[0].click()
+
+    assert seen == [3]
+    assert _show_buttons(panel) == []
+
+
+def test_a_hidden_table_offers_one_show_for_all_its_rolls(qapp: QApplication) -> None:
+    """A group's rolls land as one table card, and the GM must be able to show it too.
+
+    The table had no Show at all, so a hidden impression or area — every NPC's save
+    in one card — could never be shown to the table.
+    """
+    panel = RollHistoryPanel(gm=True)
+    seen: list[int] = []
+    panel.rollRevealedLocally.connect(seen.append)
+    panel.add_roll(roll(seq=1, group="g", hidden=True, label="Thug: Will"))
+    panel.add_roll(roll(seq=2, group="g", hidden=True, label="Mook: Will"))
+    (table,) = panel.cards()
+    assert isinstance(table, GroupTableCard)
+    assert HIDDEN_MARK in table.lines()[0]
+
+    (show,) = _show_buttons(panel)
+    show.click()
+
+    assert seen == [1, 2]
+    assert _show_buttons(panel) == []
+    assert HIDDEN_MARK not in table.lines()[0]
+    assert len(panel.cards()) == 1  # still the one table
+
+
+def test_a_players_table_offers_no_show(qapp: QApplication) -> None:
+    panel = RollHistoryPanel()
+    panel.add_roll(roll(seq=1, group="g", hidden=True))
+    assert _show_buttons(panel) == []
+
+
+def test_showing_a_hidden_table_reaches_a_player(
+    qapp: QApplication, hosting: SessionBridge
+) -> None:
+    gm_panel = RollHistoryPanel(gm=True)
+    gm_panel.attach(hosting)
+    player = SessionBridge()
+    player_panel = RollHistoryPanel()
+    try:
+        player.join(_code_for(hosting), "Aria")
+        player_panel.attach(player)
+
+        hosting.server.group_roll(
+            "ambush",
+            [{"label": "Thug: Will", "bonus": 2}, {"label": "Mook: Will", "bonus": 0}],
+            dc=15,
+            hidden=True,
+        )
+        hosting.server.roll(label="open", bonus=1)
+        _pump(qapp, lambda: len(player_panel.cards()) == 1)
+
+        _show_buttons(gm_panel)[0].click()
+
+        def tables() -> list[GroupTableCard]:
+            return [c for c in player_panel.cards() if isinstance(c, GroupTableCard)]
+
+        _pump(qapp, lambda: len(tables()) == 1 and len(tables()[0].records) == 2)
+
+        rows = " ".join(tables()[0].lines())
+        assert "Thug" in rows and "Mook" in rows
+        assert _show_buttons(gm_panel) == []
+    finally:
+        player_panel.detach()
+        player.stop()
+
+
+# -- following a session ----------------------------------------------------
+
+
+def test_attaching_seeds_from_the_history_already_there(
+    qapp: QApplication, panel: RollHistoryPanel, hosting: SessionBridge
+) -> None:
+    hosting.server.roll(label="before the panel existed", bonus=3)
+
+    panel.attach(hosting)
+
+    assert len(panel.cards()) == 1
+    assert "before the panel existed" in card_text(panel)
+
+
+def test_an_attached_panel_follows_new_rolls(
+    qapp: QApplication, panel: RollHistoryPanel, hosting: SessionBridge
+) -> None:
+    panel.attach(hosting)
+
+    hosting.server.roll(label="live", bonus=2)
+    qapp.processEvents()
+
+    assert len(panel.cards()) == 1
+    assert "live" in card_text(panel)
+
+
+def test_attaching_twice_does_not_double_the_rolls(
+    qapp: QApplication, panel: RollHistoryPanel, hosting: SessionBridge
+) -> None:
+    panel.attach(hosting)
+    panel.attach(hosting)
+
+    hosting.server.roll(label="once", bonus=0)
+    qapp.processEvents()
+
+    assert len(panel.cards()) == 1
+
+
+def test_detaching_stops_the_feed(
+    qapp: QApplication, panel: RollHistoryPanel, hosting: SessionBridge
+) -> None:
+    panel.attach(hosting)
+    panel.detach()
+
+    hosting.server.roll(label="unseen", bonus=0)
+    qapp.processEvents()
+
+    assert panel.cards() == []
+
+
+def test_the_gm_sees_its_own_hidden_roll(
+    qapp: QApplication, panel: RollHistoryPanel, hosting: SessionBridge
+) -> None:
+    panel.attach(hosting)
+
+    hosting.server.roll(label="behind the screen", hidden=True)
+    qapp.processEvents()
+
+    assert len(panel.cards()) == 1
+    assert HIDDEN_MARK in card_text(panel)
+
+
+def test_a_players_panel_never_receives_a_hidden_roll(
+    qapp: QApplication, hosting: SessionBridge
+) -> None:
+    """The exclusion is the server's, not the widget's — a player is never sent one."""
+    player = SessionBridge()
+    panel = RollHistoryPanel()
+    try:
+        player.join(
+            _code_for(hosting),
+            "Aria",
+        )
+        panel.attach(player)
+        hosting.server.roll(label="behind the screen", hidden=True)
+        hosting.server.roll(label="in the open", bonus=1)
+        _pump(qapp, lambda: len(panel.cards()) >= 1)
+    finally:
+        player.stop()
+
+    assert len(panel.cards()) == 1
+    assert "in the open" in card_text(panel)
+    assert "behind the screen" not in card_text(panel)
+
+
+def _code_for(hosting: SessionBridge):
+    from mm_companion.core.session.discovery import JoinCode
+
+    host, port = hosting.server.address
+    return JoinCode(host=host, port=port, token=hosting.server.state.host_token)
+
+
+def _pump(qapp: QApplication, done, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not done() and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.01)
+    qapp.processEvents()
+
+
+def test_a_note_is_shown_as_text_not_as_markup(qapp) -> None:
+    """The sentence comes off the wire from another player.
+
+    A QLabel defaults to AutoText, so a note containing markup rendered as HTML on
+    every screen at the table — which is why every other peer-supplied string in
+    this module is escaped.
+    """
+    card = NoteCard({"player_name": "Volt", "text": "<b>not bold</b>"}, show_author=True)
+
+    label = next(child for child in card.findChildren(QLabel) if "not bold" in child.text())
+    assert label.textFormat() == Qt.TextFormat.PlainText
+
+
+def test_a_reroll_is_named_on_its_card(qapp: QApplication) -> None:
+    panel = RollHistoryPanel()
+    panel.add_roll(roll(seq=1, label="Athletics", reroll=True))
+    assert "Athletics (reroll)" in card_text(panel)
+
+
+def test_a_reveal_that_did_not_reach_the_server_changes_nothing(qapp: QApplication) -> None:
+    """In a session only the server's answer redraws the card."""
+
+    class _Dropping:
+        in_session = True
+
+        def reveal_roll(self, seq: int) -> bool:
+            return False  # the socket is going down
+
+    panel = RollHistoryPanel(gm=True)
+    seen: list[int] = []
+    panel.rollRevealedLocally.connect(seen.append)
+    panel.add_roll(roll(seq=3, hidden=True))
+    panel._bridge = _Dropping()
+
+    _show_buttons(panel)[0].click()
+
+    assert seen == []
+    assert len(_show_buttons(panel)) == 1  # still hidden on this screen too
+    panel._bridge = None
+
+
+# -- narrow cards ------------------------------------------------------------------
+
+LONG_SAVE = (
+    "Toughness vs. Thug's Fire Burst (half) — no effect at all with Evasion 2, "
+    "and a good deal more besides"
+)
+
+
+def test_a_long_roll_button_wraps_rather_than_widening_its_card(qapp) -> None:
+    from mm_companion.core.rules import RollSpec
+    from mm_companion.ui.roll_history import MIN_HISTORY_WIDTH, RequestCard, SessionRollCard
+    from mm_companion.ui.widgets import WrappingButton
+
+    follow = RollSpec(label=LONG_SAVE, dc=20, trait_key="TOUGHNESS")
+    roll = {
+        "seq": 5,
+        "player_name": "Gamemaster",
+        "label": "Thug: Fire Burst",
+        "die": 12,
+        "bonus": 8,
+        "penalty": 0,
+        "dc": 18,
+        "degree": 1,
+        "hidden": True,
+        "spec": RollSpec(label="Attack", follow_up=follow).to_dict(),
+    }
+    card = SessionRollCard(roll, own=True, can_remove=True)
+    card.set_undo(("t", lambda: None))
+    request = RequestCard(
+        {"seq": 6, "kind": "request", "player_name": "GM", "spec": follow.to_dict()},
+        can_remove=True,
+    )
+    for built in (card, request):
+        (button,) = built.findChildren(WrappingButton)
+        assert "besides" in button.text()
+        assert built.minimumSizeHint().width() < MIN_HISTORY_WIDTH
+        # Narrower means taller, never clipped.
+        assert button.heightForWidth(120) > button.heightForWidth(2000)
+
+
+def test_a_narrow_history_never_scrolls_sideways(qapp) -> None:
+    from mm_companion.core.rules import RollSpec
+    from mm_companion.ui.roll_history import MIN_HISTORY_WIDTH
+
+    panel = RollHistoryPanel(gm=True)
+    follow = RollSpec(label=LONG_SAVE, dc=20, trait_key="TOUGHNESS")
+    panel.add_roll(
+        {
+            "seq": 5,
+            "kind": "roll",
+            "player_name": "Gamemaster",
+            "label": "Thug: Fire Burst",
+            "die": 12,
+            "bonus": 8,
+            "penalty": 0,
+            "dc": 18,
+            "degree": 1,
+            "hidden": True,
+            "spec": RollSpec(label="Attack", follow_up=follow).to_dict(),
+        }
+    )
+    panel.add_roll({"seq": 6, "kind": "request", "player_name": "GM", "spec": follow.to_dict()})
+    panel.resize(MIN_HISTORY_WIDTH, 500)
+    panel.show()
+    for _ in range(5):
+        qapp.processEvents()
+    assert panel._scroll.horizontalScrollBar().maximum() == 0
+    panel.close()

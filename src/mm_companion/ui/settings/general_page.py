@@ -31,7 +31,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QRadioButton,
     QVBoxLayout,
     QWidget,
@@ -120,7 +119,6 @@ class GeneralPage(SettingsPage):
         column.addWidget(self._build_heading())
         column.addWidget(self._build_dice_layout())
         column.addStretch()
-        column.addLayout(self._build_actions())
         column.addWidget(self._build_status())
 
         self._load()
@@ -229,14 +227,6 @@ class GeneralPage(SettingsPage):
         # answer changes.
         self._buttons.buttonToggled.connect(lambda *_: self._set_status(""))
         return panel
-
-    def _build_actions(self) -> QHBoxLayout:
-        row = QHBoxLayout()
-        self._save_button = QPushButton("Save")
-        self._save_button.clicked.connect(self.save)
-        row.addWidget(self._save_button)
-        row.addStretch()
-        return row
 
     def _build_status(self) -> QWidget:
         self._status = QLabel()

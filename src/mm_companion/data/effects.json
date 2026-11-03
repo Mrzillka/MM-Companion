@@ -11,7 +11,7 @@
     "traitSourceKey": {
       "traits": "The traits a power can buy up or down: abilities, non-derived resistances, skills",
       "boost_traits": "As 'traits', plus advantages - what an Enhanced Trait may raise or a Reduced Trait lower",
-      "all_traits": "As 'traits', plus the derived stats that can be rolled but not bought (Defence, Initiative) - for a field asking what is CHECKED rather than what is changed"
+      "all_traits": "As 'traits', plus the derived stats that can be rolled but not bought (Defense, Initiative) - for a field asking what is CHECKED rather than what is changed"
     },
     "implicitModifiersNote": "implicitModifiers lists modifier ids the effect carries as part of its own definition rather than as a player's choice. core.rules folds them into the effect's BASE game terms, untinted, before any attached modifier — so they read as part of the record, cost nothing (they never sit on the instance) and render no chip. Only their 'overrides' and 'grantsAttack' apply; stepping/checkBonus/checkNote are for attached modifiers. Today's sole use: an attacking effect implicitly has the 'attack' extra, which is what supplies its 'Attack vs. Defense' check — which is why these effects declare 'check': null of their own.",
     "effectTypeNote": "effectType is the CATALOG TAXONOMY: it groups the constructor's effect palette and seeds the Type game-term row. It is not what makes an effect an attack — the 'attack' modifier is (see implicitModifiersNote), and that modifier overrides the effective Type row. So an offensive Control effect files under Control in the palette while its card reads Type 'Attack'.",
@@ -445,7 +445,7 @@
       },
       "reach": {
         "perRankDistanceRank": 1,
-        "note": "Each rank extends the character's reach by the distance value at rank 1 (the extension actions are performed at with no check penalty; the same distance twice over carries -2 and three times over -5)."
+        "note": "Each rank extends the character's reach by the distance value at rank 1, at which actions take no check penalty. Stretching further, to rank x distance rank 2, carries -2, and full extension, rank x distance rank 3, carries -5 (core book p117)."
       },
       "description": "Stretches your limbs or body to extend your reach."
     },

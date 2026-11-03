@@ -9,11 +9,14 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
 - `DiceSection` (`ui/sections/dice.py`) is the d20 roller **as a block**, and it is the
   one block whose descriptor sets `default_pinned` — a die that scrolls away with the
   page is no use mid-fight, so it starts in the strip. There is no standalone roller
-  window any more (no `Tools` menu, no launcher button): `ui/dice_roller.py` now offers
-  `DiceRollerPanel` (the roll controls — GM Mode embeds one with `hidden_option=True`),
-  `LocalRollHistory` (the private list of one's own rolls), and `DiceRollerView` (a
-  panel plus **whichever history is right** — the private one alone, the table's shared
-  `RollHistoryPanel` in a session), which is what the block hosts. Two ways it is
+  window any more (no `Tools` menu, no launcher button): `ui/dice_roller.py` offers
+  `DiceRollerPanel` (the roll controls — GM Mode embeds one with `hidden_option=True`;
+  its shape, Request row and quick rolls are mixins in `ui/roller/`, while the rolling
+  stays in `dice_roller.py`, where the test suite patches `roll_d20`), and `ui/roller/`
+  holds `LocalRollHistory` (the private list of one's own rolls, in `history.py`) and
+  `DiceRollerView` (a panel plus **whichever history is right** — the private one
+  alone, the table's shared `RollHistoryPanel` in a session — in `view.py`), which is
+  what the block hosts. Two ways it is
   unlike its neighbours: it is **not a view over the character** (it drives `core.dice`
   and `core.storage` directly), so it publishes nothing on the bus — a roll must never
   mark the sheet dirty, though it does **serve** `roll-requested`, see "Rolling from
@@ -46,6 +49,30 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   comes back. `set_rolls` also re-reads `own_player_id()` before repainting, since
   `attach` runs once per join and a redial that failed to reclaim the old seat returns
   under a new `player_id`.
+- **Everyone else's screen waits for the roller's die.** The server answers the
+  moment the die is clicked and broadcasts to every seat at once, so the table used to
+  read a number ~1.4 s before the player whose die it was. `SessionBridge` therefore
+  holds **another seat's** die roll for `PEER_ROLL_DELAY_MS` (1.8 s: the tumble plus a
+  beat) before raising `rollAdded`, and holds whatever arrives behind it — a note, a
+  removal, a reveal — behind it, so the log keeps its order (`_on_feed`). It is done
+  in the bridge, not the history, because the GM window's attack, area and Impress
+  flows listen to `rollAdded` too and must not act on a roll before its card shows.
+  Not held: one's own roll (the panel's tumble covers it), a `group` roll (the GM
+  rolling for several creatures, with no die tumbling anywhere), and a fresh
+  `historyReplaced`, which drops whatever is still waiting since it already holds it.
+  One's own roll that lands right behind a held peer roll still waits its turn: the
+  die just tumbles a fraction longer, which is cheaper than two screens disagreeing
+  about the order of the log.
+  The bridge's event callbacks run on socket threads, so all four roll signals go
+  through the internal `_feed` signal to reach the GUI thread, where the timer lives.
+  Tests turn it off (`_peer_rolls_land_at_once` in `tests/ui/conftest.py`).
+- **The readout under the die does not decide the die's width.** A word-wrapped
+  `QLabel` prefers a width worked out from its text, and beside the quick rolls
+  (compact) or in a row the die part takes exactly its preferred width — so every roll
+  slid the die sideways and re-wrapped the text, worst with a long session label.
+  `ReadoutLabel.sizeHint` reports the width of a **template result** (`readout_html`
+  with two-digit numbers and a several-degree natural-1 failure), measured in the same
+  markup and fonts, so it follows the theme and never the roll.
 - **A card is as narrow as its longest word, and widens only when it has room.** Every
   roll button on a card is a `WrappingButton` (`roll_button`), and the small buttons
   (☆, Show, ↶, ✕, the private card's −) sit beside the card's first line
@@ -252,7 +279,7 @@ mini strip, `Esc`, or that same button leaves.
   splitter's layout meanwhile, and they never go parentless, so the no-visible-
   orphan rule still holds; the caller's own `adopt` is the one re-parent, which is
   why `adopt` and `release_roller` each carry half of this note.
-  `tests/test_compact_mode.py` counts `ParentChange` events and insists on exactly
+  `tests/ui/dice/test_compact_mode.py` counts `ParentChange` events and insists on exactly
   one per part per direction — the property, not the arrangement, which the tests
   either side of it already pin.
 - **And the private history is capped, at last.** `LocalRollHistory` had no cap at
@@ -385,7 +412,7 @@ mini strip, `Esc`, or that same button leaves.
   things, so it goes on sitting beside the mini roller too, and `✕` is how you say
   otherwise. What `suspend_windows` actually clears is the narrower case: the blocks a
   user explicitly sent behind, which are the ones not being read. Do not "fix" the
-  test at `tests/test_compact_mode.py` that calls `set_block_on_top(…, False)` first —
+  test at `tests/ui/dice/test_compact_mode.py` that calls `set_block_on_top(…, False)` first —
   that call is the point of it.
 - The **flag** matters more than what it hides, and that is the other reason
   `suspend_windows` is called on every entry regardless: `_windows_suspended` is what
@@ -483,7 +510,7 @@ drawn squashed, and a tall compact window stretched it the other way.
   `skill_roll`, `initiative_roll`, `power_rolls`. Each folds in the **displayed**
   (condition-adjusted) number, so what is rolled always matches what the sheet
   shows, while the build math itself stays condition-free. Pure Python — provable
-  without a display (`tests/test_roll_specs.py`).
+  without a display (`tests/core/test_roll_specs.py`).
 - Two things a spec deliberately does *not* know, because this character's sheet
   cannot see them: an attack's **DC** (the target's Defense — `dc` stays `None` and
   the roller's DC box supplies it) and a save's **modifier** (the target's
@@ -614,7 +641,7 @@ ask for a check nobody had provoked.
 - **The choices are `rules/pins.requested_roll_choices(data)`** — a third
   character-free list beside `default_pin_choices`, and smaller again: abilities,
   resistances, skills and initiative, being exactly the four kinds `localize_spec`
-  can answer. **No Defence DC** (it resolves to no spec — it is a difficulty), and
+  can answer. **No Defense DC** (it resolves to no spec — it is a difficulty), and
   **no powers or equipment** (a pin names a power by an id belonging to one
   character, so there is nothing honest to localize on anyone else's sheet). Labels
   are full names rather than `pin_label`'s chip abbreviations: these are read in a
@@ -651,7 +678,7 @@ of NPCs — often fewer. Two answers, and they are independent.
   (`roll_history.roll_headline`: `21 (d20 12 +9) vs DC 15 · Success (2 degrees)`)
   rather than a line of its own, and `tighten_card` packs every card's margins. Both
   histories build their number line from the one function — `LocalRollHistory`'s
-  `RollCard` converts its roll with `dice_roller.local_record` first — so the private
+  `RollCard` converts its roll with `roller.history.local_record` first — so the private
   and the shared card cannot drift apart again.
 - **Every new entry pops up in a corner of the screen** (`ui/toasts.py`,
   `RollToaster`): a frameless, always-on-top window that never takes focus, stacking
@@ -676,7 +703,7 @@ of NPCs — often fewer. Two answers, and they are independent.
   role reads as see-through there, so its colours are resolved to `#rrggbb`
   (`toasts._solid`) before they are written.
 - `tests/conftest.py` sets `toasts.SUPPRESSED` for every test, or every roll a test
-  makes would pop a real window on the developer's desktop; `tests/test_toasts.py`
+  makes would pop a real window on the developer's desktop; `tests/ui/dice/test_toasts.py`
   lifts it for its own.
 
 ## The Action row

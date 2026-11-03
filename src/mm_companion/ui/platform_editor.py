@@ -69,7 +69,13 @@ from mm_companion.core.rules import (
     vehicle_size_row,
 )
 from mm_companion.ui import theme
-from mm_companion.ui.widgets import BOLD_STYLE, make_spin_box, muted_style, tinted_style
+from mm_companion.ui.widgets import (
+    BOLD_STYLE,
+    help_markup,
+    make_spin_box,
+    muted_style,
+    tinted_style,
+)
 
 #: How far past the printed tables the boxes let a platform go. The size tables stop at
 #: rank 5 (vehicles) and 11 (installations) and are extended arithmetically by the rules
@@ -174,9 +180,11 @@ class PlatformEditorDialog(QDialog):
             self._impervious = make_spin_box(0, MAX_TRAIT_RANK, value=self._impervious_rank())
             self._impervious.valueChanged.connect(self._sync)
             self._impervious.setToolTip(
-                "Impervious Toughness stops damage below its rank outright. An "
-                "installation's Toughness may reach twice the series Power Level, but "
-                "its Impervious may not."
+                help_markup(
+                    "**Impervious Toughness** ignores damage below its rank. An installation's "
+                    "Toughness may go up to twice the Power Level, but its Impervious rank may "
+                    "not."
+                )
             )
             form.addRow("Impervious", self._impervious)
             return
@@ -190,9 +198,9 @@ class PlatformEditorDialog(QDialog):
             self._class.setCurrentIndex(index)
         self._class.currentIndexChanged.connect(self._sync)
         self._class.setToolTip(
-            "The medium it travels through — and so which movement effect its Speed "
-            "rank is a rank of. An Exotic vehicle names none, and its Speed reaches "
-            "the sheet only if its build carries a movement effect of its own."
+            "The medium the vehicle travels through, which decides what kind of movement its "
+            "Speed is. An Exotic vehicle has none: its Speed counts only if its build has a "
+            "movement effect."
         )
         form.addRow("Class", self._class)
 
@@ -201,8 +209,8 @@ class PlatformEditorDialog(QDialog):
         self._size_note = QLabel()
         self._size_note.setStyleSheet(muted_style())
         self._size.setToolTip(
-            "Chosen first: Size sets the Strength, Toughness and Defense a vehicle "
-            "gets for nothing, and none of the three can be taken below it."
+            "Pick this first: size sets the free Strength, Toughness and Defense a vehicle gets, "
+            "and none of the three can go below it."
         )
         form.addRow("Size", self._row(self._size, self._size_note))
 
@@ -223,8 +231,8 @@ class PlatformEditorDialog(QDialog):
         self._defense_note = QLabel()
         self._defense_note.setStyleSheet(muted_style())
         self._defense.setToolTip(
-            "A vehicle's size makes it easier to hit. Each −1 bought back off that "
-            "penalty costs a point; it never rises above zero."
+            "Size makes a vehicle easier to hit. Each point spent takes 1 off that Defense "
+            "penalty, up to 0."
         )
         form.addRow("Defense", self._row(self._defense, self._defense_note))
 
@@ -233,9 +241,8 @@ class PlatformEditorDialog(QDialog):
         self._speed_note = QLabel()
         self._speed_note.setStyleSheet(muted_style())
         self._speed.setToolTip(
-            "Speed is not a trait off the table — it is a movement effect, and it is "
-            "priced as one through the build. Zero means the vehicle has no movement "
-            "rank of its own."
+            "Speed isn't bought off this table: it is a movement effect, priced through the "
+            "build. 0 means the vehicle has no movement rank of its own."
         )
         form.addRow("Speed", self._row(self._speed, self._speed_note))
         # The baselines the boxes currently reflect, so a size change can move each

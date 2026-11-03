@@ -498,7 +498,7 @@ def build(target: str):
         sheet.system_info.refresh_derived()
         sheet._recompute_derived()  # the spent-PP total the pool shows
     elif target == "sheet-size":
-        # A Huge character's sheet: the Size Table reaching Defence, Toughness and the
+        # A Huge character's sheet: the Size Table reaching Defense, Toughness and the
         # skills, and the Speed readout netting two Flight powers into one line.
         from mm_companion.core.powers import Power, PowerEffectInstance
         from mm_companion.ui.main_window import MainWindow
@@ -1045,6 +1045,121 @@ def build(target: str):
             win._apply_npc_damage(names[0], 2)
             win._apply_npc_damage(names[1], 1)
             win._apply_npc_damage(names[1], 1)
+    elif target == "gm-squad":
+        # An NPC group on the GM's board: a four-thug squad from Quick NPC × 4, one
+        # of them down and one dead (dimmed rows, "2 up · 2 down" in the header),
+        # beside a loose card, so the frame can be judged against a normal card.
+        from mm_companion.core import library
+        from mm_companion.core.data_loader import load_game_data
+        from mm_companion.core.npc import quick_npc
+        from mm_companion.ui import npc_icons
+        from mm_companion.ui.gm_window import GMWindow
+
+        data = load_game_data()
+        win = GMWindow(bind="127.0.0.1")
+        ogre = quick_npc(
+            data,
+            name="Ogre",
+            attack=9,
+            effect=9,
+            defence=9,
+            toughness=9,
+            image_path=npc_icons.store_icon(npc_icons.NPC_ICONS[1].id),
+        )
+        win._register_npc(library.save_character(ogre, directory=win._npc_dir()))
+        thug = quick_npc(
+            data,
+            name="Thug",
+            attack=4,
+            effect=4,
+            defence=4,
+            toughness=3,
+            image_path=npc_icons.store_icon(npc_icons.NPC_ICONS[0].id),
+        )
+        thug.minion = True
+        win._make_squad(thug, 4)
+        members = next(iter(win._group_cards.values())).members
+        win._apply_npc_condition(members[1], "incapacitated", None)
+        win._apply_npc_condition(members[3], "dead", None)
+        win.resize(1100, 1100)
+        win.show()
+        _pump(_app())
+        bar = win._scroll.verticalScrollBar()
+        bar.setValue(bar.maximum())
+    elif target == "gm-team":
+        # A squad's Team Attack window, rolled for real off the air: each thug's check
+        # beside its name, what they combined to, and the Brute's save.
+        from mm_companion.core import library
+        from mm_companion.core.data_loader import load_game_data
+        from mm_companion.core.npc import quick_npc
+        from mm_companion.ui.gm_window import SCENE_NPC, GMWindow
+
+        data = load_game_data()
+        gm = GMWindow(bind="127.0.0.1")
+        brute = quick_npc(data, name="Brute", attack=6, effect=6, defence=4, toughness=6)
+        path = library.save_character(brute, directory=gm._npc_dir())
+        gm._register_npc(path)
+        gm._set_in_scene(SCENE_NPC, path.name, True)
+        thug = quick_npc(data, name="Thug", attack=6, effect=5, defence=4, toughness=3)
+        thug.minion = True
+        gm._make_squad(thug, 4)
+        group_id = next(iter(gm._group_cards))
+        gm._apply_npc_condition(gm._group_cards[group_id].members[3], "incapacitated", None)
+        gm.show()
+        win = gm._team_attack(group_id)
+        win._gm_owner = gm  # keep the GM window alive for the shot
+        win.roll()
+    elif target in ("gm-team-check", "gm-group-check"):
+        # A squad's team check (or group check) of Will, rolled for real off the air.
+        from mm_companion.core.data_loader import load_game_data
+        from mm_companion.core.npc import quick_npc
+        from mm_companion.ui.gm_window import GMWindow
+
+        data = load_game_data()
+        gm = GMWindow(bind="127.0.0.1")
+        thug = quick_npc(data, name="Thug", attack=6, effect=5, defence=4, toughness=3)
+        gm._make_squad(thug, 4)
+        group_id = next(iter(gm._group_cards))
+        gm.show()
+        win = gm._group_check(group_id, "team" if target == "gm-team-check" else "group")
+        win._gm_owner = gm  # keep the GM window alive for the shot
+        win.set_trait("WILL")
+        win.set_dc(12)
+        win.roll()
+    elif target == "gm-aimed":
+        # An aimed attack waiting in the GM's history: a player's Blast at a Thug, its
+        # die in, with the Accept / Decline card the GM answers it from.
+        from mm_companion.core import library
+        from mm_companion.core.character import Character
+        from mm_companion.core.data_loader import load_game_data
+        from mm_companion.core.npc import quick_npc
+        from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
+        from mm_companion.core.rules import power_rolls, targetable_attack
+        from mm_companion.ui.attack_targets import AttackDeclaration, aimed_spec
+        from mm_companion.ui.gm_window import SCENE_NPC, GMWindow
+
+        data = load_game_data()
+        win = GMWindow(bind="127.0.0.1")
+        thug = quick_npc(data, name="Thug", attack=4, effect=4, defence=4, toughness=3)
+        path = library.save_character(thug, directory=win._npc_dir())
+        win._register_npc(path)
+        win._set_in_scene(SCENE_NPC, path.name, True)
+        hero = Character.new_default(data)
+        blast = PowerEffectInstance("damage", rank=8)
+        blast.extras.append(ModifierSelection("ranged", config={"from": "close"}))
+        spec = next(
+            s
+            for s in power_rolls(Power(name="Blast", effects=[blast]), hero, data)
+            if targetable_attack(s)
+        )
+        ref = win._scene_entry_for(SCENE_NPC, path.name).ref
+        aimed = aimed_spec(spec, "a1", "Thug", "Ana")
+        win._attack.declare("p1", AttackDeclaration("a1", ref, "Thug", aimed, "Ana").to_dict())
+        win._attack.take_roll(
+            {"kind": "roll", "die": 14, "bonus": 6, "penalty": 0, "spec": aimed.to_dict()}
+        )
+        win.resize(1100, 800)
+        win.show()
     elif target == "gm-settings":
         # The GM Mode settings page, reached the way a GM reaches it: build the GM
         # window and fire its own Settings ▸ Preferences… handler, so the shot is of
@@ -1065,9 +1180,10 @@ def build(target: str):
         # that estimate move.
         win = NPCWindow()
         win.sheet.base_info._profile_fields["hero_name"].setText("Ogre")
-        for key, value in {"STR": 9, "STA": 9, "AGL": 1, "FGT": 4}.items():
-            if key in win.sheet.abilities._abilities:
-                win.sheet.abilities._abilities[key].setValue(value)
+        # Indexed, not filtered: a key the data no longer has should fail loudly here
+        # rather than quietly leave the picture showing less than it claims.
+        for key, value in {"STR": 9, "STA": 9, "AGL": 1, "ATK": 4}.items():
+            win.sheet.abilities._abilities[key].setValue(value)
     elif target == "array-cost":
         # An array of three effects in one power. The cards read 20 / 8 / 10 and the
         # total line reads a bare number with no working — the gap this branch closes.
@@ -1669,6 +1785,11 @@ def main(argv: list[str] | None = None) -> int:
             "gm-collapsed",
             "gm-scene",
             "gm-cast",
+            "gm-squad",
+            "gm-aimed",
+            "gm-team",
+            "gm-team-check",
+            "gm-group-check",
             "gm-settings",
             "npc",
             "array-cost",

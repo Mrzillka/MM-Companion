@@ -73,7 +73,7 @@ from mm_companion.ui.pinned import (
     PinSlot,
     is_vertical_strip,
 )
-from mm_companion.ui.widgets import discard_widget
+from mm_companion.ui.widgets import discard_widget, help_markup
 
 #: Floor for the strip's thickness while nothing is pinned. The handle's own size
 #: hint wins when it is bigger, so a preset with larger type can't clip its icon.
@@ -118,9 +118,11 @@ class PinnedHandle(QToolButton):
         self.setAutoRaise(True)
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         self.setToolTip(
-            "The pinned strip — blocks here stay put while the page scrolls.\n"
-            "Drag a block onto it to pin it, drag this pin to move the strip to\n"
-            "another edge, or click for options."
+            help_markup(
+                "**Pinned strip:** blocks here stay put while the page scrolls.\n- Drag a block "
+                "here to pin it.\n- Drag this pin to move the strip to another edge.\n- Click for "
+                "options."
+            )
         )
         self._press: QPoint | None = None
         self._dragging = False

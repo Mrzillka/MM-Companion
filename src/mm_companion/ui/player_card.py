@@ -288,8 +288,9 @@ class PlayerCard(QFrame):
         self.pins.set_character(character)
         self._portrait.set_clickable(True)
         # The same hover summary an NPC card gives, so the GM can read a player's
-        # numbers without opening a window for them.
-        self.setToolTip(
+        # numbers without opening a window for them - over the character's name, not
+        # the whole card, so it does not pop up over every chip and button on it.
+        self._character_label.setToolTip(
             character_summary_html(character, self._data, library.display_name(character))
         )
 

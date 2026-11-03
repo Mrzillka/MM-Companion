@@ -27,7 +27,7 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   `PinnedBoard`) is hidden while the simple one is up. **The sheet is locked** while it
   is up — every play-time control is one that already survives the lock — and the lock
   is put back as it was on the way out. `MainWindow` disables the 🔒 while simple; the
-  bar switch sits *before* ↶ ↷ so the three glyphs stay the bar's closing cluster (a
+  bar switch sits *before* Undo / Redo so the three stay the bar's closing cluster (a
   test pins that).
 - **The edit page's layout is not read while the simple sheet is up**
   (`BlockCanvas.set_sizes_held`). A splitter that has never been laid out reports
@@ -289,8 +289,8 @@ paper the dots are drawn but are not a control.
 
 ## Tests
 
-`tests/test_simple_layout.py` (the presets and the roll-chip split, pure) and
-`tests/test_simple_sheet.py` (borrowing and giving back, the lock, every play control on
+`tests/ui/simple/test_simple_layout.py` (the presets and the roll-chip split, pure) and
+`tests/ui/simple/test_simple_sheet.py` (borrowing and giving back, the lock, every play control on
 the page, undo, the bus, compact mode, the floated windows, NPCs, no window flash,
 reflow, and printing: palette, page breaks, the copy leaving the sheet alone).
 Screenshot it with `driver.py simple-sheet` / `simple-sheet-custom` /

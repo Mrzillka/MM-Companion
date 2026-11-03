@@ -18,25 +18,25 @@ data-first; nothing below names a trait, an effect or a column in Python.
   the same reason.) The DAG is `appliers` → `runtime` → **`size`** → `derived` →
   `powers_cost` → …
 - **Which trait each Size Table column modifies is `sizeEffects` in
-  `measurements.json`** — Defence, Toughness, Intimidation, Stealth. `size_contributions`
+  `measurements.json`** — Defense, Toughness, Intimidation, Stealth. `size_contributions`
   emits one `TraitContribution` per non-zero column into `derived.trait_contributions`,
   so it flows for free into every total, roll, pin, GM chip and PL check. The defense
-  column targets **`DEF`, not `DODGE`**: Dodge derives from Defence, so one contribution
+  column targets **`DEF`, not `DODGE`**: Dodge derives from Defense, so one contribution
   reaches the Dodge row, the Defense DC and the card — and targeting Dodge as well would
   double it.
 - **Zero is never emitted, and a Medium character emits nothing at all.** A `TraitBonus`
   is a dataclass instance and therefore always truthy, so `apply_stat_effects`'
   `if not bonus` is always False: a 0 would paint a green `→ N` on every Medium sheet's
-  Defence and Toughness, and `SkillModifiers.has_flat_modifier` is `grants is not None`,
+  Defense and Toughness, and `SkillModifiers.has_flat_modifier` is `grants is not None`,
   which would switch the Skills block's "+" column on for everybody and force a rebuild.
 - **A bonus is no longer always a bonus.** `stat_table.bonus_tint(amount)` picks the
   colour from the sign and both Total columns format `:+d`, or a large character's
-  −1 Defence reads green as an improvement. `WORSE_TINT` is its own name beside
+  −1 Defense reads green as an improvement. `WORSE_TINT` is its own name beside
   `CONDITION_TINT` even though they resolve to the same token today: one is a passing
   state, the other is what the character is.
 - **A Power Level cap moves by exactly what size moved in its inputs**, so being large is
   never paid for twice. `size_resistance_shift` mirrors the resistance *derivation*
-  rather than the contribution list — the contribution is on Defence while the cap is
+  rather than the contribution list — the contribution is on Defense while the cap is
   written against Dodge, and a naïve "sum the size mods on the pair" finds only
   Toughness, raises the cap, and hands a large character a free point of defence. Done
   right, the Dodge + Toughness pair cancels to zero all by itself.
@@ -102,7 +102,7 @@ data-first; nothing below names a trait, an effect or a column in Python.
   labelled from these steps, so the player can stop on any rank and the label simply
   repeats the category where the table ran out — the pip scale opens a wider gap where a
   repeated category changes, so the stretch of a ladder spent at one size is visible.
-- **`_RankDial` is the rank scale on the card** (`ui/sections/powers.py`): one pip per
+- **`_RankDial` is the rank scale on the card** (`ui/sections/power_parts/widgets.py`): one pip per
   rank (`ui/rank_pips.py`'s `RankPips`, a single painted widget) and a label naming it,
   under the effect's term grid and above the dice footer with the rest of the mid-play
   controls. It has been two other things. A strip of checkable buttons, one per rung,

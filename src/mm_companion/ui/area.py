@@ -49,8 +49,10 @@ from mm_companion.core.powers import Power
 from mm_companion.core.rules import (
     AREA_MODE_REQUEST,
     AREA_MODE_RESOLVE,
+    BOOK_MINION_RULES,
     AreaAttempt,
     AreaUse,
+    MinionRules,
     RollSpec,
     area_attack_spec,
     area_capable_builds,
@@ -66,6 +68,7 @@ from mm_companion.core.rules import (
     find_area_power,
     power_area_use,
     power_area_uses,
+    routine_total,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.action_ui import (
@@ -75,10 +78,11 @@ from mm_companion.ui.action_ui import (
     ActionRow,
     ActionWindow,
     BodyScroll,
+    ScenePicker,
     TargetDropField,
     TargetsBox,
-    add_button,
     fit_to_screen,
+    regrow,
 )
 from mm_companion.ui.impress import PARTY_PLAYER, ImpressParty, mode_row
 from mm_companion.ui.wheel_guard import guard_wheel
@@ -99,7 +103,6 @@ __all__ = [
     "AreaTarget",
     "AreaWindow",
     "TargetDropField",
-    "add_button",
     "use_summary",
 ]
 
@@ -145,50 +148,55 @@ def use_summary(use: AreaUse, data: GameData) -> str:
 
 #: How an area attack works, behind the "?" of both windows.
 AREA_HELP = (
-    "Everyone in the area makes a Dodge check against the Dodge DC. Making it halves "
-    "the rank they resist the effect at, rounded up; Evasion adds to that Dodge.\n\n"
-    "The area may be aimed at one creature, the primary target, with an attack check "
-    "against its Defense. A hit means no Dodge for it: it resists at full rank. An area "
-    "with no attack check hits its primary target without one.\n\n"
-    "A free use (any attack used as an area) has its rank capped at the Power Level."
+    "**Dodge:** everyone in the area makes a Dodge check against the area's Dodge DC. "
+    "Success halves the rank they resist the effect at (rounded up). Evasion adds to "
+    "that Dodge.\n\n"
+    "**Primary target:** the area may be aimed at one creature with an attack check "
+    "against its Defense. On a hit it gets no Dodge and resists at full rank. An area "
+    "with no attack check always hits its primary target.\n\n"
+    "**Free use:** any attack used as an area has its rank capped at the Power Level."
 )
 AREA_HELP += (
-    "\n\nAn area Healing has no Dodge and no primary target: one check is made, and each "
-    "degree of success takes a condition off everyone in the area."
+    "\n\n**Healing:** an area Healing has no Dodge and no primary target. One check is "
+    "made, and each degree of success removes a condition from everyone in the area."
 )
 AREA_MODE_HELP = (
-    "GM resolves: the GM rolls every NPC's Dodge and save, each player caught is asked to "
-    "roll theirs, and the conditions land on their own.\n\n"
-    "Request only: the history gets a Dodge card and a save card — the save at full rank "
-    "or at half — and everyone caught rolls from them and applies what it does."
+    "**GM resolves:** the GM rolls every NPC's Dodge and save, each player caught is "
+    "asked to roll theirs, and the conditions are applied automatically.\n\n"
+    "**Request only:** the history gets a Dodge card and a save card (full or half "
+    "rank). Everyone caught rolls from them and applies the result themselves."
 )
 HEAL_HELP = (
-    "Everyone the area reaches. One check is made, and each degree of success takes a "
-    "condition off each of them, least severe first."
+    "Everyone the area reaches. One check is made, and each degree of success removes "
+    "a condition from each of them, least severe first."
 )
 DIALOG_HELP = (
-    "Drop cards off the Scene into the boxes, or pick them from Add. The GM checks "
-    "the attack, sets each creature's cover, and resolves it.\n\n" + AREA_HELP
+    "**Picking targets:** drag cards from the scene under the boxes (or from the Scene "
+    "block) into them, or right-click a card. The GM checks the attack, sets each "
+    "creature's cover and resolves the rest.\n\n" + AREA_HELP
 )
 DIALOG_HELP_OFFLINE = (
-    "Not in a session: the attack is rolled here, and the history is left a request to "
-    "dodge for whoever is caught.\n\n" + AREA_HELP
+    "**Not in a session:** the attack is rolled here, and the history gets a Dodge "
+    "request for whoever is caught.\n\n" + AREA_HELP
 )
 PRIMARY_HELP = (
-    "The creature the area is aimed at, if any. Roll the attack against its Defense, "
-    "and Hit is ticked from the result, or tick Hit to call it yourself. A primary "
-    "target that is hit makes no Dodge check and resists at full rank.\n\n"
+    "The creature the area is aimed at, if any. Roll the attack against its Defense and "
+    "Hit is ticked from the result, or tick Hit yourself. A primary target that is hit "
+    "makes no Dodge check and resists at full rank.\n\n"
     "With no primary target the area is aimed at a point, and everyone in it dodges."
 )
 CAUGHT_HELP = (
-    "Everyone else the area catches. Each makes a Dodge check against the Dodge DC, and "
-    "resists the effect at half rank if they make it."
+    "Everyone else the area catches. Each makes a Dodge check against the Dodge DC; on "
+    "a success they resist at half rank."
 )
 GM_BOX_HELP = (
-    "Tick a creature to put it in the area, or drop its card here from the Scene. Cover "
-    "adds to its Dodge check; Adjust (a bonus or a penalty) counts on both its Dodge "
-    "and its save.\n\n"
-    "NPCs are rolled for. A player in the area is asked to roll from their own sheet."
+    "**Putting creatures in:** drag a card from the scene under the table (or from the "
+    "Scene block) into it, or right-click the card. Right-click a name in the table to "
+    "make it the primary target; untick it to take it back out."
+    "\n\n**Cover** adds to the creature's Dodge check. **Adjust** (a bonus or a "
+    "penalty) counts on both its Dodge and its save."
+    "\n\nNPCs are rolled for. A player in the area is asked to roll from their own "
+    "sheet."
 )
 
 
@@ -218,6 +226,7 @@ class AreaDialog(QDialog):
         effect_index: int = 0,
         scene: list[dict] | None = None,
         own_player_id: str = "",
+        portraits: dict | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -255,6 +264,7 @@ class AreaDialog(QDialog):
 
         self.primary: TargetDropField | None = None
         self.area: TargetDropField | None = None
+        self.picker: ScenePicker | None = None
         self._mode_buttons: dict[str, QRadioButton] = {}
         if self._online:
             if not heals:
@@ -262,7 +272,6 @@ class AreaDialog(QDialog):
                     "Primary target",
                     "areaPrimary",
                     resolve=self._resolve,
-                    choices=self._choices,
                     single=True,
                     placeholder="Drop a card here to aim the area at someone (optional)",
                     help_text=PRIMARY_HELP,
@@ -273,7 +282,6 @@ class AreaDialog(QDialog):
                 "In the area" if heals else "Caught in the area",
                 "areaTargets",
                 resolve=self._resolve,
-                choices=self._choices,
                 placeholder=(
                     "Drop the cards of everyone in the area here"
                     if heals
@@ -282,12 +290,21 @@ class AreaDialog(QDialog):
                 help_text=HEAL_HELP if heals else CAUGHT_HELP,
             )
             self.area = area_box.field
-            layout.addWidget(area_box, stretch=1)
+            layout.addWidget(area_box)
             if self.primary is not None:
                 self.primary.changed.connect(lambda: self._dedupe(self.primary, self.area))
                 self.area.changed.connect(lambda: self._dedupe(self.area, self.primary))
             else:
                 self.area.changed.connect(self._sync)
+            # The scene, to pick everyone off: dragged up into a box, or right-clicked.
+            self.picker = ScenePicker(data)
+            self.picker.add_destination("Put in the area", self.area.add_ref)
+            if self.primary is not None:
+                self.picker.add_destination("Make the primary target", self.primary.add_ref)
+            self.picker.set_scene(
+                [e for e in scene or [] if str(e.get("ref", "")) in self._names], portraits
+            )
+            layout.addWidget(self.picker, stretch=1)
             if not heals:
                 mode_host, self._mode_buttons, group = mode_row(self, AREA_MODE_HELP)
                 self._mode_buttons[AREA_MODE_RESOLVE].setChecked(True)
@@ -387,9 +404,6 @@ class AreaDialog(QDialog):
 
     # -- reacting ----------------------------------------------------------
 
-    def _choices(self) -> list[tuple[str, str]]:
-        return list(self._names.items())
-
     def _resolve(self, ref: str) -> tuple[str, str] | None:
         name = self._names.get(ref)
         return None if name is None else (ref, name)
@@ -403,6 +417,9 @@ class AreaDialog(QDialog):
         self._sync()
 
     def _sync(self) -> None:
+        if self.picker is not None:
+            self.picker.set_placed([*self.target_refs(), self.primary_ref()])
+            regrow(self)
         use = self._use
         if use is None:
             self._summary.setText("This power has nothing to use on an area.")
@@ -525,6 +542,7 @@ class AreaWindow(ActionWindow):
             from_card=from_card,
             help_text=AREA_HELP,
             box_help=GM_BOX_HELP,
+            pick_label="Put in the area",
             parent=parent,
         )
         self.attempt = attempt
@@ -534,6 +552,8 @@ class AreaWindow(ActionWindow):
         self._attack: tuple[int, int] | None = None
         self._attack_rerolled = False
         self._asked_attack = False
+        #: The session's minion rules: an attack on a minion primary may be routine.
+        self._minion_rules = BOOK_MINION_RULES
 
         setup = QWidget()
         form = QFormLayout(setup)
@@ -577,12 +597,14 @@ class AreaWindow(ActionWindow):
 
         self._primary_box = QGroupBox("Primary target")
         primary_layout = QGridLayout(self._primary_box)
-        self._primary = QComboBox()
-        guard_wheel(self._primary)
-        self._primary.addItem("None — aimed at a point", "")
-        for party in self._targets:
-            self._primary.addItem(party.name, party.ref)
-        self._primary.setCurrentIndex(max(0, self._primary.findData(attempt.primary)))
+        self._primary = TargetDropField(
+            "gmAreaPrimary",
+            resolve=self._resolve_party,
+            single=True,
+            placeholder="None: aimed at a point. Drop a card here, or right-click one below.",
+        )
+        if attempt.primary:
+            self._primary.add_ref(attempt.primary)
         self._hit = QCheckBox("Hit")
         self._hit.setToolTip("A primary target that is hit makes no Dodge check: full rank.")
         self._hit.setChecked(attempt.use.attack is None)
@@ -607,6 +629,11 @@ class AreaWindow(ActionWindow):
         self.add_section(self._mode_host, after_targets=True)
 
         self.build_rows(lambda _party: [], set(attempt.targets) | ({attempt.primary} - {""}))
+        self.picker.add_destination(
+            "Make the primary target",
+            self.set_primary,
+            lambda ref: not self.heals() and self._can_include(ref),
+        )
         self._fill_powers()
         self._sync_attacker()
 
@@ -615,10 +642,12 @@ class AreaWindow(ActionWindow):
         self._power.currentIndexChanged.connect(self._on_build)
         self._rank_adjust.valueChanged.connect(lambda _v: self.sync())
         self._attack_adjust.valueChanged.connect(lambda _v: self._on_attack_adjust())
-        self._primary.currentIndexChanged.connect(self._on_primary)
+        self._primary.changed.connect(self._on_primary)
         self._hit.toggled.connect(lambda _on: self.sync())
         self._roll_attack.clicked.connect(self._emit_attack)
         mode_group.buttonToggled.connect(lambda _button, on: on and self.sync())
+        # A minion primary a routine attack hits is hit before anything is rolled.
+        self._judge_hit()
         self.sync()
 
     def make_row(self, party, cells: list[QWidget]) -> ActionRow:
@@ -790,6 +819,9 @@ class AreaWindow(ActionWindow):
         )
         self.setWindowTitle(f"{ACTION_NAME}: {use.power_name}")
         self.set_heading(self._heading_text())
+        # Another power may have an attack check where this one had none, or no
+        # longer reach a routine hit: Hit is judged afresh.
+        self._judge_hit()
         self.sync()
 
     # -- the parties -----------------------------------------------------------
@@ -820,19 +852,35 @@ class AreaWindow(ActionWindow):
     def primary_ref(self) -> str:
         if self.heals():
             return ""
-        return str(self._primary.currentData() or "")
+        refs = self._primary.refs()
+        return refs[0] if refs else ""
+
+    def _resolve_party(self, ref: str) -> tuple[str, str] | None:
+        party = self._party(ref)
+        return None if party is None else (party.ref, party.name)
+
+    def row_menu_actions(self, row):
+        actions = super().row_menu_actions(row)
+        if not self.heals() and row.party.ref != self.primary_ref():
+            actions.insert(0, ("Make the primary target", lambda: self.set_primary(row.party.ref)))
+        return actions
 
     def primary_name(self) -> str:
         row = self._row(self.primary_ref())
         return row.party.name if row is not None else ""
 
     def set_primary(self, ref: str) -> None:
-        self._primary.setCurrentIndex(max(0, self._primary.findData(ref)))
+        if ref:
+            self._primary.add_ref(ref)
+        else:
+            self._primary.clear_refs()
 
     def hit(self) -> bool:
         return bool(self.primary_ref()) and self._hit.isChecked()
 
     def set_hit(self, hit: bool) -> None:
+        """Tick or untick Hit as the GM's own call, which nothing re-judges."""
+        self._hit_by_hand = True
         self._hit.setChecked(hit)
 
     def set_attack(self, total: int, die: int, *, reroll: bool = False) -> None:
@@ -849,13 +897,54 @@ class AreaWindow(ActionWindow):
         self._judge_hit()
         self.sync()
 
+    def set_minion_rules(self, rules: MinionRules) -> None:
+        """The session's minion rules, which decide whether a routine attack counts."""
+        self._minion_rules = rules
+        self._judge_hit()
+        self.sync()
+
+    def routine_attack(self) -> int | None:
+        """The attack's routine result against a minion primary, or ``None``.
+
+        A non-minion may attack a minion as a routine check (PDF p25): 10 plus the
+        attack, the GM's adjustment in. ``None`` when there is no attack check, the
+        primary is not a minion, the attacker is one, or the session plays without it.
+        """
+        use = self.attempt.use
+        row = self._row(self.primary_ref())
+        if use.attack is None or row is None or not self._minion_rules.routine_attacks:
+            return None
+        if not row.party.minion or self._source.minion:
+            return None
+        return routine_total(use.attack) + self._attack_adjust.value()
+
     def _judge_hit(self) -> None:
-        """Tick Hit from the attack's total, the GM's adjustment in, against the Defense."""
+        """Tick Hit from the attack's total, the GM's adjustment in, against the Defense.
+
+        Against a minion the routine result counts too: the attacker would have taken
+        10 had the roll been worse, so a hit either way is a hit — and one the routine
+        result makes needs no roll at all.
+        """
         dc = self._defense_dc()
-        if self._attack is None or dc is None:
+        if self._attack is None:
+            # Nothing rolled yet: only a routine attack on a minion can be a hit, and it
+            # stops being one the moment the primary, the adjustment or the session's
+            # rules say otherwise. An area with no attack check at all is always a hit,
+            # and a tick the GM set by hand is theirs.
+            if self._hit_by_hand:
+                return
+            if self.attempt.use.attack is None:
+                self._hit.setChecked(True)
+                return
+            routine = self.routine_attack()
+            self._hit.setChecked(dc is not None and routine is not None and routine >= dc)
             return
+        if dc is None:
+            return
+        routine = self.routine_attack()
         self._hit_by_hand = False
-        self._hit.setChecked(self._attack[0] + self._attack_adjust.value() >= dc)
+        rolled = self._attack[0] + self._attack_adjust.value()
+        self._hit.setChecked(rolled >= dc or (routine is not None and routine >= dc))
 
     def _defense_dc(self) -> int | None:
         row = self._row(self.primary_ref())
@@ -941,9 +1030,19 @@ class AreaWindow(ActionWindow):
             # Nothing to add: the combo reads "aimed at a point", or Hit is already ticked.
             self._attack_note.setText("")
         elif self._attack is None:
-            waiting = f" — waiting for {self._source.name}'s roll" if self._asked_attack else ""
-            self._attack_note.setText(f"Attack {_signed(use.attack)}, not rolled yet{waiting}.")
-            self._attack_note.setStyleSheet(muted_style(italic=True))
+            routine = self.routine_attack()
+            dc = self._defense_dc()
+            if routine is not None and dc is not None and routine >= dc:
+                # A minion primary a routine attack hits: nothing needs rolling.
+                self._attack_note.setText(
+                    f"Routine attack {routine} vs. Defense DC {dc} hits the minion — "
+                    "no roll needed."
+                )
+                self._attack_note.setStyleSheet(tinted_style("tint.better", bold=False))
+            else:
+                waiting = f" — waiting for {self._source.name}'s roll" if self._asked_attack else ""
+                self._attack_note.setText(f"Attack {_signed(use.attack)}, not rolled yet{waiting}.")
+                self._attack_note.setStyleSheet(muted_style(italic=True))
         else:
             total, die = self._attack
             adjust = self._attack_adjust.value()

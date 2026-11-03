@@ -7,6 +7,34 @@
     "_criticals": "A natural 20 on an attack is a critical hit: the effect it lands gains criticalEffectBonus to its resistance DC. A natural 1 that still hits is a graze, and the target resists at criticalMissResistanceBonus.",
     "criticalEffectBonus": 5,
     "criticalMissResistanceBonus": 5,
+    "_minions": "Minions (PDF p25). impressBonus is what a routine Impress check against minions gains (PDF p201). ceiling is the condition a minion's failed saves stop at: no escalation carries one past it. Which minion rules apply is the GM's choice per session, not data.",
+    "minions": {
+      "impressBonus": 5,
+      "ceiling": "incapacitated"
+    },
+    "_teamAttack": "Team Attack (PDF p201). Attacks combine when they share an effect and a resistance and their ranks are within rankSpread. The hits' largest rank is the primary; the other hits' total degrees of success raise its rank by the bonus of the highest step reached (the book names one degree, +2, and three, +5; two reads as one). An attack with no attack check counts one degree. Any critical among them adds criticalBonus once.",
+    "teamAttack": {
+      "rankSpread": 5,
+      "steps": [
+        { "degrees": 1, "bonus": 2 },
+        { "degrees": 3, "bonus": 5 }
+      ],
+      "criticalBonus": 5
+    },
+    "_teamCheck": "Team checks (PDF p18). Each helper rolls against helperDc; every degree of success they score gives the leader bonusPerDegree on their check.",
+    "teamCheck": {
+      "helperDc": 10,
+      "bonusPerDegree": 1
+    },
+    "_groupCheck": "Group checks (PDF p18). Everyone rolls; if at least successShare of them succeed, all succeed at the lowest degree of success among them. Added successes and failures (natural 20s and 1s) are counted after that and move the whole group's degree. The book does not say what a failed group lands on; it reads as the least severe failure among them.",
+    "groupCheck": {
+      "successShare": 0.5
+    },
+    "_defeat": "The conditions that take a creature out of the fight, for how its card looks: down (Incapacitated; Dying includes it) dims it, dead dims it further. Dead outranks down.",
+    "defeat": {
+      "down": ["incapacitated"],
+      "dead": ["dead"]
+    },
     "trait_keys": {
       "attack": "ATK",
       "defense": "DEF",
@@ -108,12 +136,15 @@
     "_linkedAttackBonus": "Linked effects use a single attack check (PDF p157, printed p155), and the book does not say at which bonus when theirs differ, nor does any published ruling. first (the first attacking effect on the card, the lead), highest, or lowest.",
     "linkedAttackBonus": "first",
     "derived_traits": [
-      { "key": "DEF", "label": "Defence" },
+      { "key": "DEF", "label": "Defense" },
       { "key": "initiative", "label": "Initiative" }
     ],
+    "_ranged_distance": "A Ranged effect reaches rank x distance value: short range is the effect rank times the distance at distanceValue (distance rank 1), and each step reads one distance rank further (medium rank x distance rank 2, long rank x distance rank 3). Core book p104 (PDF p106) and p198. multiplyByRank false would make the effect rank itself the distance rank instead.",
     "ranged_distance": {
       "rangeValue": "Ranged",
       "rankSource": "effect_rank",
+      "multiplyByRank": true,
+      "distanceValue": 1,
       "offset": 0,
       "steps": [0, 1, 2],
       "stepLabels": ["short", "medium", "long"]

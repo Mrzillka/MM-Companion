@@ -28,6 +28,7 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QVBoxLayout, Q
 
 from mm_companion.core.character import AppliedCondition
 from mm_companion.core.data_loader import Condition, GameData
+from mm_companion.core.rules import DEFEAT_NONE, defeat_state
 from mm_companion.core.session.protocol import (
     DISPOSITION_ENEMY,
     DISPOSITION_FRIENDLY,
@@ -41,9 +42,10 @@ from mm_companion.ui.card_chips import (
     _ConditionChip,
     start_card_drag,
 )
+from mm_companion.ui.defeat_look import apply_defeat_look, defeated_pixmap
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.sections.conditions import condition_display_name, condition_tooltip
-from mm_companion.ui.widgets import discard_widget
+from mm_companion.ui.widgets import discard_widget, muted_style
 
 #: How wide one card's column is, so a row of them lines up in the flow. Stated
 #: rather than measured, unlike a GM card (whose ``body_width_hint`` is), and
@@ -85,6 +87,25 @@ GM_DISPOSITIONS: tuple[str, ...] = (
 def entry_ref(entry: dict) -> str:
     """The opaque handle a scene entry answers to."""
     return str(entry.get("ref", ""))
+
+
+#: What a minion's scene card says under its name (protocol v18's ``minion``).
+MINION_BADGE = "Minion"
+
+
+#: What a summoned creature's scene card says under its name.
+SUMMONED_BADGE = "Summoned"
+
+
+def entry_summoned(entry: dict) -> bool:
+    """Whether the GM tagged this entry as summoned."""
+    return entry.get("summoned") is True
+
+
+def entry_minion(entry: dict) -> bool:
+    """Whether this entry is a minion — only ever said when it is, and when the GM's
+    session lets the table see it."""
+    return entry.get("minion") is True
 
 
 def entry_disposition(entry: dict) -> str:
@@ -214,6 +235,11 @@ class SceneCard(QFrame):
         #: What this creature is to the table; :meth:`set_entry` reads it off the
         #: wire and :meth:`_restyle` paints the edge with it.
         self._disposition = DISPOSITION_ENEMY
+        self._minion = False
+        self._summoned = False
+        #: Out of the fight or not, and the portrait as given (see :meth:`set_portrait`).
+        self._defeat = DEFEAT_NONE
+        self._portrait_pixmap: QPixmap | None = None
 
         self._data = data
         self._gm = gm
@@ -293,6 +319,18 @@ class SceneCard(QFrame):
         header.addWidget(self._badge)
         layout.addLayout(header)
 
+        # A minion is a minor character the rules make easier to defeat (PDF p25): a
+        # hero may take 10 against it and a failed save is its worst. A word rather
+        # than a colour, for the reason "(you)" is one. Only ever hidden here — the
+        # card may not have a parent yet — and set_entry decides.
+        self._minion_label = QLabel()
+        self._minion_label.setStyleSheet(muted_style(italic=True))
+        minion_font = self._minion_label.font()
+        minion_font.setPointSizeF(theme.font_size("size.terms"))
+        self._minion_label.setFont(minion_font)
+        self._minion_label.hide()
+        layout.addWidget(self._minion_label)
+
         self._chips = FlowContainer()
         self._chip_flow = FlowLayout(self._chips)
         layout.addWidget(self._chips)
@@ -365,6 +403,14 @@ class SceneCard(QFrame):
         self._turn_label.setText("" if self._turn is None else str(self._turn))
         self._turn_label.setVisible(self._turn is not None)
         self._disposition = entry_disposition(entry)
+        self._minion = entry_minion(entry)
+        self._summoned = entry_summoned(entry)
+        # One muted line under the name says what the creature is to the rules.
+        badges = [
+            b for b, on in ((MINION_BADGE, self._minion), (SUMMONED_BADGE, self._summoned)) if on
+        ]
+        self._minion_label.setText(" · ".join(badges))
+        self._minion_label.setVisible(bool(badges))
         self._restyle()
         # A player's entry carries their id; an NPC's carries nothing that says
         # what it stands for, which is the whole point of an opaque ref.
@@ -372,9 +418,35 @@ class SceneCard(QFrame):
         self._badge.set_initiative(self._initiative)
         self._show_conditions(entry.get("conditions") or [])
         self._name.setToolTip(self._hover_text(name))
+        self._refresh_defeat(entry.get("conditions") or [])
+
+    def _refresh_defeat(self, conditions: list) -> None:
+        """Fade the card, and grey its picture, while the creature is down or dead.
+
+        Read off the entry's condition ids, which every seat has — so the players'
+        boards dim a downed thug exactly as the GM's does.
+        """
+        ids = [str(c.get("id", "")) for c in conditions if isinstance(c, dict)]
+        state = defeat_state(ids, self._data)
+        if state == self._defeat:
+            return
+        self._defeat = state
+        apply_defeat_look(self, state)
+        self.set_portrait(self._portrait_pixmap)
+
+    @property
+    def defeat(self) -> str:
+        """Whether the creature is out of the fight (``rules.defeat_state``'s answer)."""
+        return self._defeat
 
     def set_portrait(self, pixmap: QPixmap | None) -> None:
-        """Show a decoded thumbnail, or fall back to the placeholder."""
+        """Show a decoded thumbnail, or fall back to the placeholder.
+
+        The thumbnail as given is kept, so a creature that gets up again is shown in
+        colour once more; while it is down or dead it is shown in grey.
+        """
+        self._portrait_pixmap = pixmap
+        pixmap = defeated_pixmap(pixmap, self._defeat)
         if pixmap is None or pixmap.isNull():
             self._thumb.setText("?")
             self._thumb.setPixmap(QPixmap())
@@ -399,6 +471,16 @@ class SceneCard(QFrame):
     def turn(self) -> int | None:
         """This entry's place in the turn order, or ``None``."""
         return self._turn
+
+    @property
+    def minion(self) -> bool:
+        """Whether this entry said it is a minion."""
+        return self._minion
+
+    @property
+    def summoned(self) -> bool:
+        """Whether the GM tagged this entry as summoned."""
+        return self._summoned
 
     def condition_chips(self) -> list[_ConditionChip]:
         """The chips themselves, in order."""
@@ -460,6 +542,10 @@ class SceneCard(QFrame):
         pointer sits over a condition chip is answering a question nobody asked.
         """
         parts = [f"{name} (you)" if self._own else name, DISPOSITION_LABELS[self._disposition]]
+        if self._minion:
+            parts.append(MINION_BADGE)
+        if self._summoned:
+            parts.append(SUMMONED_BADGE)
         if self._turn is not None:
             parts.append(f"Turn {self._turn}")
         if self._initiative is not None:

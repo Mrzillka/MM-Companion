@@ -428,6 +428,11 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   open at the length of whatever the power was called, and a block narrower than that
   clipped its own buttons off rather than letting the card adapt. Equipment gets all of
   it for nothing, since an item's card is drawn by the same code.
+- **Closing the constructor by hand asks before losing a build.** The window snapshots
+  the build's `to_dict()` when it opens; a ✕ (a *spontaneous* close) on a build that
+  differs offers Save / Discard / Cancel. A close from code — a host tearing it down, a
+  test — never asks. Save goes through `_try_save`, the checks without the `close()`,
+  because a `close()` re-entered from inside `closeEvent` is ignored by Qt.
 - **The constructor forwards rolls; it does not make them.** It is a window, not a sheet
   block, so it is not on the block bus — `PowerConstructorWindow.rollRequested` is
   connected by the `PowersSection` that opened it, which hands the request on exactly as
@@ -599,11 +604,14 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   quintuple a discount the book charges once. Because the discount belongs to no card,
   `power_cost_formula` renders the working (`98 − 20 Removable`) into the constructor's
   total line — otherwise a power costs visibly less than the cards above it for no
-  stated reason. Its *Short-Term Only* option takes 1 off the flaw's own value through
-  a new `costDelta` on a config option, which unlike the `costValue`/`flat`/`ranked`
-  overrides beside it is **summed across every field** rather than first-wins; the sum
-  is floored at 0, because the rules say Short-Term Only may leave no discount at all
-  rather than turning a flaw into a bonus.
+  stated reason. Its *Short-Term Only* option is "a 1-point **flat** reduction in the
+  value of the flaw" (p160): a 20-point Removable power is discounted 4 → 3, to 17. It
+  is a `flatDelta` on the config option, added to the power-scope term's *total* once
+  (`PowerScopeTerm.flat_delta`) — not a `costDelta`, which shades the per-5-points
+  *rate* and so turned plain Removable's 1-per-5 into no discount at all. Both are
+  **summed across every field** rather than first-wins, and floored at 0, because the
+  rules say Short-Term Only may leave no discount at all rather than turning a flaw into
+  a bonus.
 - **`as_trait`**: Enhanced Trait's base cost is "as trait" — it costs whatever the
   traits it raises cost to buy. Each allocated row is priced at its own
   `trait_rate` and the fractions are summed **unrounded**, then rounded once, so a
@@ -907,8 +915,12 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   `character_reach` already walks the live powers for exactly this effect, so a card
   restating the total would double the power standing on it — and it reads
   `effect_current_rank`, the same dialled rank `reach_extension_feet` reads, so a
-  turned-down Elongation shortens on the card and on the block together. (The older
-  kinds read the bought `effect.rank`; that predates this and is left alone.)
+  turned-down Elongation shortens on the card and on the block together. **Every kind
+  now reads the dialled rank.** The older ones (`state`, `measure_offsets`,
+  `thresholds`, `points_per_rank`, `rank_scaled`, `capped_rank_bonus`) read the bought
+  `effect.rank`, and since a readout keyed `range` replaces the Range row — which
+  already followed the dial — Communication 4 turned down to 1 still promised
+  "Worldwide". A fixed `fromRank` is still fixed.
 - **A Rank range is not always a distance, and a readout can say so.** The generic rule
   turns a `"Rank"` range into the distance at the effect's rank, which is right for
   Teleport and wrong for Communication and Remote Sensing, whose ranks buy a *band* (same
@@ -929,6 +941,12 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   a `format`, and `rank_scaled` takes a `max`; `fixed` is a row the rules state outright.
   And a modifier may set where its range **starts** (`rangeRank`): Thrown's short range is
   distance rank 2 + Strength (p155), not the effect's rank — 2 with no wielder.
+- **A Ranged effect reaches rank × distance value, not its rank as a distance rank.**
+  Short is rank × distance rank 1, medium × 2, long × 3 (p104, p198), and Extended /
+  Diminished Range move that distance rank by one a rank. The card once read Blast 10 as
+  distance rank 10 (a mile) and let the two modifiers shift it; see
+  `mm-powers-architecture.md` §10. Thrown is the exception the book makes: a plain
+  distance rank, unmultiplied. Elongation's bands are the same rank × distance rank 1/2/3.
 - **A modifier is taken once unless the ruleset says otherwise.** `repeatable` in
   `modifiers.json` / `effect_modifiers.json` is what `EffectCard.attach_modifier` reads,
   and only seven records carry it: **Limited**, **Quirk**, **Feature**, the **Custom** pair,
@@ -948,7 +966,9 @@ Powers are the most complex part, and are split the same core/data/ui way. Read
   and `power_linked_range_violations`. Whether a PL breach merely warns or blocks
   the save is the single app-wide seam `core.storage.pl_enforcement()`
   (`"warn"` / `"block"`), so it can become a settings toggle later.
-- **UI**: `PowersSection` ("Add Power") launches the standalone
+- **UI**: `PowersSection` (`ui/sections/powers.py`: construction, rendering and the
+  cards; editing the tree, spending uses, activation, the Dynamic share dial and the
+  rank dials are mixins in `ui/sections/power_parts/`) ("Add Power") launches the standalone
   `ui/power_constructor/window.py::PowerConstructorWindow` — a drag-and-drop
   brick-builder (a palette of Effect/Extra/Flaw bricks → an effect-card canvas,
   a `PowerModeBar` for the structure once ≥2 effects). It hands the finished

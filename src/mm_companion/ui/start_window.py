@@ -1,9 +1,9 @@
 """The launcher: the first window the user sees.
 
-Four action buttons on the left (Create New Character, Open Existing, Open GM
-Mode, Exit) beside a scrollable area of character cards on the right. Cards are
+Action buttons on the left (Create New Character, Open from File…, Open GM
+Mode, Join Session, …) beside a scrollable area of character cards on the right. Cards are
 read from :func:`~mm_companion.core.library.list_saved_characters`; clicking a
-card — or "Open Existing" — loads that character into a read-only sheet. The
+card — or "Open from File…" — loads that character into a read-only sheet. The
 library refreshes whenever a sheet is saved or closed, so newly saved characters
 appear without restarting.
 """
@@ -37,6 +37,7 @@ from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.main_window import MainWindow
 from mm_companion.ui.session_bridge import SessionBridge
 from mm_companion.ui.version_badge import VersionBadge
+from mm_companion.ui.widgets import muted_style
 
 CARD_IMAGE_SIZE = 120
 CHARACTER_FILTER = "Character files (*.json)"
@@ -151,7 +152,8 @@ class StartWindow(QMainWindow):
         create_button.clicked.connect(self._create_new_character)
         column.addWidget(create_button)
 
-        open_button = QPushButton("Open Existing")
+        open_button = QPushButton("Open from File…")
+        open_button.setToolTip("Open a character file from anywhere on disk")
         open_button.clicked.connect(self._open_existing)
         column.addWidget(open_button)
 
@@ -214,9 +216,7 @@ class StartWindow(QMainWindow):
         self._cards_container = FlowContainer()
         self._cards_flow = FlowLayout(self._cards_container)
 
-        self._empty_label = QLabel("No characters yet")
-        self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._empty_label.setEnabled(False)
+        self._empty_state = self._build_empty_state()
 
         # One host for the scroll area's whole life, with the grid and the empty state
         # taking turns inside it. ``QScrollArea.setWidget`` *deletes* whatever it was
@@ -229,13 +229,37 @@ class StartWindow(QMainWindow):
         host = QWidget()
         self._library_stack = QStackedLayout(host)
         self._library_stack.addWidget(self._cards_container)
-        self._library_stack.addWidget(self._empty_label)
+        self._library_stack.addWidget(self._empty_state)
 
         self._library = QScrollArea()
         self._library.setWidgetResizable(True)
         self._library.setWidget(host)
         self._populate_cards()
         return self._library
+
+    def _build_empty_state(self) -> QWidget:
+        """What the library shows with nothing saved: a way forward, not a blank."""
+        panel = QWidget()
+        column = QVBoxLayout(panel)
+        column.addStretch()
+        label = QLabel("No characters yet")
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setEnabled(False)
+        column.addWidget(label)
+        hint = QLabel("Saved characters show up here. Click one to open it.")
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint.setWordWrap(True)
+        hint.setStyleSheet(muted_style(italic=True))
+        column.addWidget(hint)
+        row = QHBoxLayout()
+        row.addStretch()
+        create = QPushButton("Create your first character")
+        create.clicked.connect(self._create_new_character)
+        row.addWidget(create)
+        row.addStretch()
+        column.addLayout(row)
+        column.addStretch()
+        return panel
 
     def _populate_cards(self) -> None:
         """(Re)fill the library from the store, or show the empty state."""
@@ -248,7 +272,7 @@ class StartWindow(QMainWindow):
 
         summaries = list_saved_characters()
         if not summaries:
-            self._library_stack.setCurrentWidget(self._empty_label)
+            self._library_stack.setCurrentWidget(self._empty_state)
             return
 
         for summary in summaries:
@@ -298,17 +322,27 @@ class StartWindow(QMainWindow):
 
     def _open_sheet(self, window: MainWindow) -> None:
         """Show a sheet window, hide the launcher, and track it for cleanup."""
-        window.closed.connect(lambda w=window: self._on_sheet_closed(w))
-        window.saved.connect(self._populate_cards)
-        self._child_windows.append(window)
+        self._track_sheet(window)
         self.hide()
         window.show()
+
+    def _track_sheet(self, window: MainWindow) -> None:
+        """Follow a sheet window, and any sheet opened from it (File ▸ New / Open).
+
+        The launcher comes back only when the last of them closes.
+        """
+        window.closed.connect(lambda w=window: self._on_sheet_closed(w))
+        window.saved.connect(self._populate_cards)
+        window.childOpened.connect(self._track_sheet)
+        self._child_windows.append(window)
 
     def _on_sheet_closed(self, window: MainWindow) -> None:
         """Drop a closed sheet, refresh the library, and bring the launcher back."""
         if window in self._child_windows:
             self._child_windows.remove(window)
         self._populate_cards()
+        if any(isinstance(w, MainWindow) and w.isVisible() for w in self._child_windows):
+            return
         self.show()
         self.raise_()
         self.activateWindow()

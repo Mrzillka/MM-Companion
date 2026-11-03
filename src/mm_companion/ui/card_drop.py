@@ -33,7 +33,7 @@ from PySide6.QtWidgets import QLabel
 
 from mm_companion.ui import theme
 from mm_companion.ui.card_chips import SCENE_MIME
-from mm_companion.ui.drop_feedback import DropFeedback, DropIndicator
+from mm_companion.ui.drop_feedback import DropFeedback, DropIndicator, DropRegion
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.widgets import discard_widget, muted_style
 
@@ -46,9 +46,19 @@ class CardDropFlow(FlowContainer):
 
     #: ``(ref, index)`` — a card was dropped at *index* among these cards.
     dropped = Signal(str, int)
+    #: ``(ref, card)`` — a card was dropped *onto* another card (see *merges*).
+    merged = Signal(str, object)
 
-    def __init__(self, name: str, parent=None, *, accepts=None) -> None:
+    #: How much of a card's width, at each side, still means "beside it" when merging
+    #: is on: the middle of a card is "onto it", its edges are the reorder they always
+    #: were.
+    MERGE_EDGE = 0.25
+
+    def __init__(self, name: str, parent=None, *, accepts=None, merges=None) -> None:
         super().__init__(parent)
+        #: ``(ref, card) -> bool``: whether dropping *ref* onto *card* combines the two.
+        #: Without one a drop anywhere is a reorder, as it always was.
+        self._merges = merges
         #: An optional narrowing of what this flow will take, given the dragged
         #: reference. Without one every board takes every card, which is right for
         #: the two that reorder — but the Players block accepts a drop only so a
@@ -64,6 +74,7 @@ class CardDropFlow(FlowContainer):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._feedback = DropFeedback(self, f"#{name}")
         self._indicator = DropIndicator(self)
+        self._region = DropRegion(self)
         #: What the flow says while it holds nothing. See :meth:`set_placeholder`.
         self._placeholder: QLabel | None = None
 
@@ -184,7 +195,14 @@ class CardDropFlow(FlowContainer):
         if not self._ref(event):
             return
         event.acceptProposedAction()
-        self.show_indicator(self.drop_index(event.position().toPoint()))
+        point = event.position().toPoint()
+        target = self.merge_target(self._ref(event), point)
+        if target is not None:
+            self._indicator.hide_indicator()
+            self._region.move_to(target.geometry())
+            return
+        self._region.hide_indicator()
+        self.show_indicator(self.drop_index(point))
 
     def dragLeaveEvent(self, event) -> None:  # noqa: N802 (Qt override)
         self.clear_feedback()
@@ -196,12 +214,38 @@ class CardDropFlow(FlowContainer):
         if not ref:
             return
         event.acceptProposedAction()
-        self.dropped.emit(ref, self.drop_index(event.position().toPoint()))
+        point = event.position().toPoint()
+        target = self.merge_target(ref, point)
+        if target is not None:
+            self.merged.emit(ref, target)
+            return
+        self.dropped.emit(ref, self.drop_index(point))
+
+    def merge_target(self, ref: str, point):
+        """The card *ref* would combine with if dropped at *point*, or ``None``.
+
+        Only the middle of a card counts, and only when the owner's *merges* says the
+        two combine — the edges stay the reorder, so both gestures live on one board.
+        """
+        if self._merges is None or not ref:
+            return None
+        for index in range(self.flow.count()):
+            item = self.flow.itemAt(index)
+            widget = item.widget() if item is not None else None
+            if widget is None or not widget.geometry().contains(point):
+                continue
+            geo = widget.geometry()
+            edge = int(geo.width() * self.MERGE_EDGE)
+            if not (geo.left() + edge <= point.x() <= geo.right() - edge):
+                return None
+            return widget if self._merges(ref, widget) else None
+        return None
 
     def clear_feedback(self) -> None:
         """Take the highlight and the bar down — the drag left, or landed."""
         self._feedback.clear()
         self._indicator.hide_indicator()
+        self._region.hide_indicator()
 
     def drop_index(self, point) -> int:
         """Which slot in the laid-out flow *point* falls in."""

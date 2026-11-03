@@ -242,9 +242,9 @@
         "kind": "reach_extension",
         "label": "Reach",
         "bands": [
-          { "label": "Reach", "multiple": 1, "note": "no check penalty" },
-          { "label": "Stretched", "multiple": 2, "note": "-2 to checks" },
-          { "label": "Full extension", "multiple": 3, "note": "-5 to checks" }
+          { "label": "Reach", "distanceRank": 1, "note": "no check penalty" },
+          { "label": "Stretched", "distanceRank": 2, "note": "-2 to checks" },
+          { "label": "Full extension", "distanceRank": 3, "note": "-5 to checks" }
         ]
       }
     ],

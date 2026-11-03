@@ -535,7 +535,7 @@ class BlockCanvas(QWidget):
         Every frame is reparented on the way, which is why nothing here may leave
         one visible while it is between homes: a parentless visible widget *is* a
         top-level window, and a page of a dozen blocks rebuilding would flash a
-        dozen of them (see ``tests/test_window_flash.py``). Frames are hidden
+        dozen of them (see ``tests/ui/sheet/test_window_flash.py``). Frames are hidden
         before they are let go and shown once they are placed; containers are shed
         through ``discard_widget``, which hides before it unparents.
         """

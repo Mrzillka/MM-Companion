@@ -5,6 +5,10 @@ The window knows nothing about what any of them configure — it picks names out
 unsaved work and whether what it did needs a relaunch. Adding another area of
 settings is an entry in that tuple.
 
+One OK / Cancel / Apply bar acts on every page at once: Apply keeps each page's
+unsaved edits, OK does the same and closes, Cancel throws them away. Closing with
+the title bar's ✕ asks, page by page.
+
 Which page it opens *on* is the caller's to say (``page=``), so a window that has
 its own page — the GM window — lands there rather than making its way past the
 one the sheet cares about.
@@ -15,14 +19,16 @@ while a character sheet is open beside it is the point, not an accident.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
+
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
+    QDialogButtonBox,
     QHBoxLayout,
     QListWidget,
     QMainWindow,
     QMessageBox,
-    QPushButton,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -47,11 +53,22 @@ DEFAULT_SIZE = (900, 640)
 class SettingsWindow(QMainWindow):
     """Application settings, one page per area."""
 
-    def __init__(self, parent: QWidget | None = None, *, page: str = "") -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        page: str = "",
+        extra_pages: Sequence[Callable[[QWidget], SettingsPage]] = (),
+    ) -> None:
+        """*extra_pages* are builders of pages only the opener has — the GM window's
+        Session page, bound to its session — listed after :data:`PAGES`."""
         super().__init__(parent)
         self.setWindowTitle("Settings")
         self.resize(*DEFAULT_SIZE)
         self._restart_on_close = False
+        # Set by OK and Cancel, which have already said what happens to the edits,
+        # so the close they trigger does not ask again.
+        self._close_decided = False
 
         central = QWidget()
         outer = QVBoxLayout(central)
@@ -61,7 +78,7 @@ class SettingsWindow(QMainWindow):
         self._nav.setFixedWidth(int(theme.metric("column.settings.nav")))
         self._stack = QStackedWidget()
         self._pages: list[SettingsPage] = []
-        for page_class in PAGES:
+        for page_class in (*PAGES, *extra_pages):
             built = page_class(self)
             self._pages.append(built)
             self._nav.addItem(built.title)
@@ -85,11 +102,44 @@ class SettingsWindow(QMainWindow):
 
     def _build_bottom_bar(self) -> QHBoxLayout:
         bar = QHBoxLayout()
-        bar.addStretch()
-        close_button = QPushButton("Close")
-        close_button.clicked.connect(self.close)
-        bar.addWidget(close_button)
+        Std = QDialogButtonBox.StandardButton
+        self._buttons = QDialogButtonBox(Std.Ok | Std.Cancel | Std.Apply)
+        self._buttons.button(Std.Ok).clicked.connect(self._ok)
+        self._buttons.button(Std.Cancel).clicked.connect(self._cancel)
+        self._apply_button = self._buttons.button(Std.Apply)
+        self._apply_button.clicked.connect(self.apply)
+        bar.addWidget(self._buttons)
+        # Apply is live only while some page has something to apply. Pages change in
+        # many ways (a pin dragged, a theme duplicated), so rather than every page
+        # announcing each one, the bar looks — is_dirty is a cheap comparison.
+        self._dirty_timer = QTimer(self)
+        self._dirty_timer.setInterval(250)
+        self._dirty_timer.timeout.connect(self._refresh_apply)
+        self._dirty_timer.start()
+        self._refresh_apply()
         return bar
+
+    def _refresh_apply(self) -> None:
+        self._apply_button.setEnabled(any(page.is_dirty() for page in self._pages))
+
+    def apply(self) -> bool:
+        """Keep every page's unsaved edits. Returns whether all of them took."""
+        for page in self._pages:
+            if page.is_dirty():
+                page.save()
+        self._refresh_apply()
+        return not any(page.is_dirty() for page in self._pages)
+
+    def _ok(self) -> None:
+        # A page whose save did not take (a session that refused the rules) keeps
+        # the window open, with its own status line saying why.
+        if self.apply():
+            self._close_decided = True
+            self.close()
+
+    def _cancel(self) -> None:
+        self._close_decided = True
+        self.close()
 
     # -- closing ----------------------------------------------------------------
 
@@ -100,8 +150,9 @@ class SettingsWindow(QMainWindow):
         the user something that has no life outside this window — a live theme
         preview, which would otherwise keep dressing the app until it restarted.
         """
+        self._dirty_timer.stop()
         for page in self._pages:
-            if page.is_dirty() and self._prompt_save(page):
+            if not self._close_decided and page.is_dirty() and self._prompt_save(page):
                 page.save()
             page.discard()
         if any(page.needs_restart() for page in self._pages) and self._prompt_restart():

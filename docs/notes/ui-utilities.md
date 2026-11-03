@@ -91,6 +91,17 @@ through rather than reinvent. When building new sheet widgets, use it:
   mechanic works, read once and scrolled past every time after, does not. Settings,
   the pickers, the action windows and the constructor's Extended section all moved
   their paragraphs there.
+- **Help text has a little markup: `help_markup(text)`.** `**bold**`, `*italic*`, a
+  blank line for a paragraph, a newline for a line break, `- ` for a bullet; everything
+  else is escaped. `HelpButton` and `help_tooltip` go through it, and any tooltip longer
+  than a line should too: lead with the term in bold (`**Minion:** …`), then what it
+  does. Rich text is also what makes Qt wrap a tooltip at all.
+- **A tooltip goes on the text it explains, never on a container.** A tooltip on a card,
+  a group box or a full-width row pops up wherever the pointer rests on it, numbers and
+  all. A card's click hint goes over its name (`DraggableCard.set_click_hint` with
+  `set_hint_target`); a row's explanation goes on its label; a player's or NPC's stat
+  summary goes on the name. A tooltip of more than two sentences on a control is a
+  sign it belongs behind a `HelpButton` instead.
 - **`discard_widget(w)` is how a rebuilt block sheds a child** — never a bare
   `setParent(None)` + `deleteLater()`, which is what all thirty-five sites used to
   be. It hides first, and that order is the whole point. `setParent(None)` makes a
@@ -108,7 +119,7 @@ through rather than reinvent. When building new sheet widgets, use it:
   settling its visibility; in a constructor that may run before the widget is
   parented, only ever `hide()` — a fresh widget is made visible by the parent it is
   added to, so showing it is not yours to do (`ui/damage_row.py`). Both roads to
-  the flash are watched by `tests/test_window_flash.py`, which drives the refresh
+  the flash are watched by `tests/ui/sheet/test_window_flash.py`, which drives the refresh
   paths behind an application-wide event filter and fails on any `Show` delivered
   to a parentless widget — the symptom, not either cause, so a third road fails
   there too.
@@ -139,7 +150,7 @@ through rather than reinvent. When building new sheet widgets, use it:
   the queued call would have done: walking the layouts top-down, it shows each widget
   that is hidden only because nobody has shown it yet (not `WA_WState_ExplicitShowHide`,
   and never a window). Freezing the paint could not have covered this: the paint freeze
-  is on the block, and the fold was in the page. `tests/test_click_repaint.py`.
+  is on the block, and the fold was in the page. `tests/ui/sheet/test_click_repaint.py`.
 - Tests build real windows, and `conftest.py` tears them down after each one.
   `processEvents()` alone does **not** run deferred deletions, so the teardown also
   sends `QEvent.Type.DeferredDelete` explicitly — without it every window built all
@@ -171,7 +182,7 @@ recommendations now, so the rule rests entirely on the blocks themselves — the
 Equipment block wraps its three "Add…" buttons in a `FlowContainer` rather than being
 360px wide unlocked against 240 locked, and any block that grows sideways on a toggle
 has to do the same.
-`tests/test_lock_geometry.py` asserts the invariance per block, on the *frame*.
+`tests/ui/canvas/test_lock_geometry.py` asserts the invariance per block, on the *frame*.
 `BlockFrame.set_locked` raises the geometry invalidation and `CharacterSheet.set_locked`
 recomputes the page's minimum, since a lock toggle is not an `arrangement_changed` and
 the page's minimum is an explicit number behind a `QScrollArea` — the same link

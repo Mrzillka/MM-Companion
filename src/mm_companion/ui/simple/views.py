@@ -92,7 +92,7 @@ from mm_companion.ui.simple.widgets import (
     make_rollable,
     rollable_style,
 )
-from mm_companion.ui.widgets import attach_context_removal, rebuilding
+from mm_companion.ui.widgets import attach_context_removal, help_markup, rebuilding
 
 
 def _vbox(widget: QWidget, spacing: str = "simple.spacing") -> QVBoxLayout:
@@ -298,8 +298,10 @@ class SystemView(_View):
         effort.setSpacing(int(theme.metric("space.sm")))
         self.effort_button = QPushButton("Extra Effort…")
         self.effort_button.setToolTip(
-            "Push past your limits (p20). The benefit is immediate; at the start of your "
-            "next turn you gain the next rung of the fatigue ladder."
+            help_markup(
+                "**Extra Effort:** push past your limits for an immediate benefit. At the start "
+                "of your next turn you take the next fatigue condition."
+            )
         )
         self.effort_button.clicked.connect(self._show_effort_menu)
         effort.addWidget(self.effort_button)

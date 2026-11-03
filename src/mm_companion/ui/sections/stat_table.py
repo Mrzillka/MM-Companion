@@ -76,7 +76,7 @@ def bonus_tint(amount: int) -> str:
     """Which tint a standing modifier of *amount* reads in.
 
     Contributions are no longer all bonuses: the Size Table hands a large character
-    −1 Defence and −2 Stealth, and painting those the same green as a power boost
+    −1 Defense and −2 Stealth, and painting those the same green as a power boost
     says the opposite of what happened.
     """
 
@@ -228,7 +228,7 @@ def build_stat_table(
     separated = False
     for entry in entries:
         if entry.derived and not separated:
-            # The derived traits (Attack, Defence) are not bought like the rest, and
+            # The derived traits (Attack, Defense) are not bought like the rest, and
             # the rule between them says so — spanned, since a table has no other way
             # to draw across its columns.
             table.setSpan(row, 0, 1, len(HEADERS))
@@ -380,36 +380,33 @@ def apply_stat_effects(
     totals: dict,
     bonuses: dict,
     cond_effects: dict[str, ConditionEffect] | None = None,
-    *,
-    always: bool = False,
-) -> None:
-    """Fill or clear each trait's Total cell from power bonuses and conditions.
+) -> bool:
+    """Fill each trait's Total cell from its rank, power bonuses and conditions.
 
-    The cell reads ``→ N``, where ``N`` is the rank spin box's value plus any standing
+    Every cell carries a number: the rank spin box's value plus any standing
     modifier, then a condition overlay (a Hit penalty on Toughness, a halved/zeroed
-    active defense, a scoped check penalty). A modifier tints by its **sign**
-    (:func:`bonus_tint`) — a power boost green, a large creature's −1 Defence red;
-    any condition tints it red regardless, struck through when the overlay reports the trait lost
-    (``ConditionEffect.trait_lost`` — Disabled/Debilitated in the base data). A trait
-    with neither keeps an empty cell, exactly as the Skills table's "+" column does.
+    active defense, a scoped check penalty). A modifier tints the cell by its
+    **sign** (:func:`bonus_tint`) — a power boost green, a large creature's −1
+    Defense red; any condition tints it red regardless, struck through when the
+    overlay reports the trait lost (``ConditionEffect.trait_lost``). An unmodified
+    trait's total is just its rank, untinted.
 
-    *always* fills every cell with the plain number instead, arrow and all dropped.
-    It is what a table that has **shed its Rank column** asks for: the arrow means
-    "and this is what it became", which needs the thing it became it *from* to be on
-    the row — with Rank gone, an unmodified trait would show nothing whatsoever.
+    Returns whether any trait is modified at all — when none is, the column only
+    repeats the Rank column, and a caller may leave it out.
     """
 
     cond_effects = cond_effects or {}
+    modified = False
     for key, item in totals.items():
         bonus = bonuses.get(key)
         effect = cond_effects.get(key)
         total = spins[key].value() + (bonus.amount if bonus else 0)
         if not bonus and not (effect is not None and effect.active):
-            paint_stat_cell(item, str(total) if always else "", None, None)
+            paint_stat_cell(item, str(total), None, None)
             continue
-
-        shown = _overlaid(total, effect)
-        paint_stat_cell(item, str(shown) if always else f"→ {shown}", bonus, effect)
+        modified = True
+        paint_stat_cell(item, str(_overlaid(total, effect)), bonus, effect)
+    return modified
 
 
 def apply_value_column(
@@ -424,7 +421,7 @@ def apply_value_column(
     rather than an "and here is what changed": every cell carries one at all times,
     so it is written plainly (no ``→``), and *values* is what ``core.rules``
     computed rather than anything the widget added up. A key mapped to ``None`` has
-    no number to show — Defence derives from nothing — and reads as a dash.
+    no number to show — Defense derives from nothing — and reads as a dash.
 
     Tint and tooltip are the same bargain the Total column strikes: a modifier
     colours the cell by its sign and names its sources on hover, an active condition

@@ -703,7 +703,7 @@ def resistance_total(char: Character, game_data: GameData, key: str) -> int:
 
     The base is the linked trait's value (:func:`resistance_base`) — Stamina for
     Toughness/Fortitude, Awareness for Will, the Defense trait for Dodge; derived
-    resistances with no linked trait (Defence itself) have base 0. On top of that sit
+    resistances with no linked trait (Defense itself) have base 0. On top of that sit
     the ranks bought above the base and any power boost (Protection → Toughness). A
     power that raises the linked trait therefore raises the total too.
     """

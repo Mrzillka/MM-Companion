@@ -303,8 +303,8 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         self._reset_button.setText("↺")
         self._reset_button.setAutoRaise(True)
         self._reset_button.setToolTip(
-            "Put every skill back in the ruleset's own order, including any that were "
-            "removed. Ranks a removal dropped do not come back."
+            "Restore the ruleset's skill order, including removed skills. Ranks lost when a skill "
+            "was removed don't come back."
         )
         self._reset_button.clicked.connect(self.reset_skills)
         controls.addWidget(self._reset_button)

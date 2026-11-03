@@ -10,6 +10,7 @@ resolve their theme tokens in one place instead of a dozen f-strings.
 from __future__ import annotations
 
 import html
+import re
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from functools import wraps
@@ -406,14 +407,36 @@ def hline_separator() -> QFrame:
 HELP_SHOW_MS = 30000
 
 
-def help_tooltip(text: str) -> str:
-    """*text* as a tooltip that wraps: a blank line starts a paragraph.
+_BOLD = re.compile(r"\*\*(.+?)\*\*")
+_ITALIC = re.compile(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])")
 
-    Qt wraps a tooltip only when it is rich text, and a plain paragraph shown as one
-    long line runs off the screen — so the text is escaped and set as HTML.
+
+def help_markup(text: str) -> str:
+    """*text* as tooltip HTML, with a little markup for writing help in plain strings.
+
+    A blank line starts a paragraph and a single newline breaks the line; ``**bold**``
+    and ``*italic*`` do what they say, and a line starting ``- `` is a bullet. Everything
+    else is escaped, so a ``<`` in game text stays a ``<``. Qt wraps a tooltip only when
+    it is rich text, which is the other reason every tooltip goes through here.
     """
     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
-    return "".join("<p>" + html.escape(p).replace("\n", "<br>") + "</p>" for p in paragraphs)
+    out = []
+    for paragraph in paragraphs:
+        lines = []
+        for line in paragraph.split("\n"):
+            line = html.escape(line.strip(), quote=False)
+            if line.startswith("- "):
+                line = "• " + line[2:]
+            line = _BOLD.sub(r"<b>\1</b>", line)
+            line = _ITALIC.sub(r"<i>\1</i>", line)
+            lines.append(line)
+        out.append("<p>" + "<br>".join(lines) + "</p>")
+    return "".join(out)
+
+
+def help_tooltip(text: str) -> str:
+    """*text* as a wrapping tooltip — see :func:`help_markup` for what it may contain."""
+    return help_markup(text)
 
 
 class HelpButton(QToolButton):
@@ -540,7 +563,12 @@ def attach_context_removal(widget: QWidget, on_remove: Callable[[], None], *, wh
     _ContextRemoval(widget, on_remove)
     hint = f"Right-click to remove {what}."
     existing = widget.toolTip()
-    widget.setToolTip(f"{existing}\n\n{hint}" if existing else hint)
+    if existing.lstrip().startswith("<"):
+        # A rich tooltip (a condition's rule entry) gets the gesture as a muted last line.
+        muted = theme.color("text.muted")
+        widget.setToolTip(f"{existing}<p style='color:{muted}'>{html.escape(hint)}</p>")
+    else:
+        widget.setToolTip(f"{existing}\n\n{hint}" if existing else hint)
 
 
 # -- a grip to drag by -------------------------------------------------------------
@@ -636,6 +664,26 @@ def discard_widget(widget: QWidget) -> None:
     widget.hide()
     widget.setParent(None)
     widget.deleteLater()
+
+
+def grow_to_fit(window: QWidget) -> None:
+    """Make a small window tall enough for its text again, after a label grew.
+
+    A word-wrapped label's height depends on its width, which a layout's minimum
+    size does not account for — so a dialog whose result line gains a line squeezes
+    the rows above it instead of growing. Taller only, never wider or shorter: a
+    window the GM has sized stays as wide as they left it.
+    """
+    layout = window.layout()
+    if layout is None:
+        return
+    layout.activate()
+    if layout.hasHeightForWidth():
+        need = layout.totalHeightForWidth(window.width())
+    else:
+        need = layout.totalSizeHint().height()
+    if window.height() < need:
+        window.resize(window.width(), need)
 
 
 def resurface(window: QWidget) -> None:

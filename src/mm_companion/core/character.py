@@ -216,6 +216,18 @@ class Character:
     #: the rules name that are *not* effects — Strength, and one mode of movement (p21).
     #: Written only when something is pushed, so an untouched sheet adds nothing.
     extra_effort: dict[str, int] = field(default_factory=dict)
+    #: A GM's judgement about an NPC: this creature is a **minion** (PDF p25), one of
+    #: the minor characters the rules make easier to defeat — a failed save is its
+    #: worst outcome, its natural 20 is no added success, and heroes may take 10
+    #: against it. Only an NPC is ever made one ("player characters are never
+    #: minions"); the rules it switches on are the session's (see
+    #: :class:`~.rules.minions.MinionRules`). Written only when set.
+    minion: bool = False
+    #: A GM's tag on an NPC: this creature was **summoned** (by a Summon effect, a
+    #: Minion advantage, a spell). Only a label today — on the card, the sheet and the
+    #: Scene — so a GM can tell the conjured from the hired; nothing reads it as a rule
+    #: yet. Named apart from the Summon *effect*. Written only when set.
+    summoned: bool = False
 
     @classmethod
     def new_default(cls, game_data: GameData) -> Character:
@@ -303,6 +315,10 @@ class Character:
                 if any(state.files for state in self.notes.values())
                 else {}
             ),
+            # Omitted while False, so every save written before minions existed (and
+            # every player's sheet) round-trips byte-for-byte.
+            **({"minion": True} if self.minion else {}),
+            **({"summoned": True} if self.summoned else {}),
         }
 
     @classmethod
@@ -373,6 +389,8 @@ class Character:
                 str(key): NotesState.from_dict(value)
                 for key, value in (raw.get("notes") or {}).items()
             },
+            minion=raw.get("minion") is True,
+            summoned=raw.get("summoned") is True,
         )
 
     def restore(self, raw: dict, *, keep_runtime: bool = True) -> None:

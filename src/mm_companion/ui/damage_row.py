@@ -27,12 +27,22 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QToolButton, QWidget
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
-from mm_companion.core.rules import DamageStep, damage_step_summary, damage_steps
+from mm_companion.core.rules import (
+    BOOK_MINION_RULES,
+    DamageStep,
+    MinionRules,
+    damage_step_summary,
+    damage_steps,
+    minion_step,
+)
 from mm_companion.ui import theme
 
 #: What the row is captioned. The ladder is the *damage* ladder, and "Hit" is the
 #: one thing every rung on it has in common.
 ROW_LABEL = "Hit:"
+#: What the one failure button of a **minion**'s row reads: any failed save is its
+#: worst (PDF p25), so the degrees collapse into one.
+MINION_FAIL_LABEL = "✗"
 
 
 #: How strongly the deepest rung of the ladder is filled, and how strongly the
@@ -82,6 +92,8 @@ class DamageRow(QWidget):
         self._character: Character | None = None
         self._steps = damage_steps(data)
         self._buttons: list[QToolButton] = []
+        #: The session's minion rules — read when the creature is a minion.
+        self._rules = BOOK_MINION_RULES
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -145,6 +157,26 @@ class DamageRow(QWidget):
         self._character = character
         self.refresh()
 
+    def set_minion_rules(self, rules: MinionRules) -> None:
+        """The session's minion rules changed: restate the row for them."""
+        self._rules = rules
+        self.refresh()
+
+    def collapsed_to_worst(self) -> bool:
+        """Whether the row shows a minion's two buttons: the made save and one failure.
+
+        A minion that fails takes the worst degree whatever it rolled, so 1/2/3 would
+        be three buttons doing the same thing. The last one stays — it *is* the worst
+        rung, and the index it emits is the one the window applies.
+        """
+        return bool(
+            self._character is not None and self._character.minion and self._rules.worst_degree
+        )
+
+    def visible_labels(self) -> list[str]:
+        """The buttons a GM would see, in order — what the tests assert on."""
+        return [b.text() for b in self._buttons if not b.isHidden()]
+
     def refresh(self) -> None:
         """Re-derive every tooltip from the character's *current* conditions.
 
@@ -153,13 +185,25 @@ class DamageRow(QWidget):
         "Hit + Stunned — escalated" on one that has already been dazed.
 
         """
+        worst_only = self.collapsed_to_worst()
+        deepest = max((s.index for s in self._steps), default=0)
         for button, step in zip(self._buttons, self._steps, strict=True):
-            button.setToolTip(self._tooltip(step))
+            # Hidden and shown on a child of this row, never on a parentless widget,
+            # so neither call can flash a window (see the note above).
+            button.setHidden(worst_only and 0 < step.index < deepest)
+            failure = worst_only and step.index == deepest and step.index > 0
+            button.setText(MINION_FAIL_LABEL if failure else step.label)
+            button.setToolTip(self._tooltip(step, minion_failure=failure))
 
-    def _tooltip(self, step: DamageStep) -> str:
-        head = "Save made" if step.index == 0 else f"{step.index} degree(s) of failure"
+    def _tooltip(self, step: DamageStep, *, minion_failure: bool = False) -> str:
+        if minion_failure:
+            head = "Save failed (a minion takes the worst degree)"
+        else:
+            head = "Save made" if step.index == 0 else f"{step.index} degree(s) of failure"
         if self._character is None:
             return f"{head} — {step.caption}"
+        if self._character.minion:
+            step = minion_step(step, self._data, self._rules)
         return f"{head} — {damage_step_summary(self._character, step, self._data)}"
 
 

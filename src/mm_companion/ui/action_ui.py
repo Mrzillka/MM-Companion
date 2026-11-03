@@ -9,8 +9,9 @@ Both run the same way at a table, so they are built from the same pieces:
   table rather than asking; a player whose answer is no sends the action **bare** and
   the GM sets it up.
 * **The target picker** a player's dialog takes scene cards into
-  (:class:`TargetDropField`, :class:`TargetsBox`), and the drop box the GM's window
-  takes them into (:class:`ActionDropBox`).
+  (:class:`TargetDropField`, :class:`TargetsBox`), the drop box the GM's window
+  takes them into (:class:`ActionDropBox`), and the **copy of the scene** under them
+  both (:class:`ScenePicker`) that the cards are dragged - or right-clicked - out of.
 * **The GM's window** (:class:`ActionWindow`): who is involved and what each rolls,
   in a table of rows, set up, then rolled — and after that the same window is where
   each roll comes back and what it did is shown, until everything is in.
@@ -25,7 +26,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import replace
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -47,7 +48,9 @@ from mm_companion.core import storage
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.rules import (
+    BOOK_MINION_RULES,
     KIND_BEST_OF,
+    MinionRules,
     RollSpec,
     best_own_rolls,
     localize_spec,
@@ -56,9 +59,11 @@ from mm_companion.ui import theme
 from mm_companion.ui.card_chips import SCENE_MIME
 from mm_companion.ui.card_drop import CardDropFlow
 from mm_companion.ui.drop_feedback import DropFeedback
+from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import (
     HelpButton,
+    discard_widget,
     make_signed_spin_box,
     muted_style,
     tinted_style,
@@ -75,6 +80,10 @@ KIND_OUTCOME = "outcome"
 #: for actions, which the GM publishes and every seat reads.
 TABLE_MOD_ID = "mm-companion.table"
 TABLE_ACTIONS_KEY = "actions"
+#: The session's own settings, which the GM sets on the Session settings page and
+#: which belong to this session alone: stored with it on the server, replayed to every
+#: seat, and forgotten when it is (see :func:`session_minion_rules`).
+TABLE_SESSION_KEY = "session"
 
 
 def signed(value: int) -> str:
@@ -107,6 +116,43 @@ def publish_table_rules(bridge) -> bool:
             {"players_choose": storage.gm_players_choose_actions()},
         )
     )
+
+
+def session_minion_rules(bridge) -> MinionRules:
+    """Which minion rules the open session plays by — the book's when it never said.
+
+    Read off the session's shared state, where the GM's Session settings page
+    published them. They are the *session's*, not the GM's: a new session starts from
+    the book (every rule on), and with no session open there is nothing to read, so
+    the book's rules apply then too.
+    """
+    # In a session, blips included; a hosting server that has stopped still holds the
+    # state it had, and reading that would carry one session's rules past its end.
+    if bridge is None or not getattr(bridge, "in_session", False):
+        return BOOK_MINION_RULES
+    try:
+        entry = bridge.mod_state(TABLE_MOD_ID).get(TABLE_SESSION_KEY, {})
+    except AttributeError:
+        return BOOK_MINION_RULES
+    raw = entry.get("minions") if isinstance(entry, dict) else None
+    return MinionRules.from_dict(raw)
+
+
+def publish_minion_rules(bridge, rules: MinionRules) -> bool:
+    """Store *rules* as the open session's (the GM's Session settings page's Save).
+
+    The rest of the session's settings entry is kept as it is, so a later setting
+    added beside the minion rules is not wiped by saving these.
+    """
+    if bridge is None:
+        return False
+    try:
+        current = bridge.mod_state(TABLE_MOD_ID).get(TABLE_SESSION_KEY, {})
+    except AttributeError:
+        current = {}
+    entry = dict(current) if isinstance(current, dict) else {}
+    entry["minions"] = rules.to_dict()
+    return bool(bridge.set_mod_state(TABLE_MOD_ID, TABLE_SESSION_KEY, entry))
 
 
 def sets_up_own_actions(bridge) -> bool:
@@ -260,44 +306,12 @@ class TargetDropField(CardDropFlow):
         return list(self._chips)
 
 
-def add_button(
-    choices: Callable[[], list[tuple[str, str]]],
-    add: Callable[[str], object],
-    *,
-    everyone: bool = False,
-) -> QPushButton:
-    """An "Add" button listing the scene, for when the board is not to hand.
-
-    With *everyone* the menu also offers the whole scene at once — a crowd caught in
-    one area, or a room of mooks impressed together.
-    """
-    button = QPushButton("Add")
-    button.setToolTip("Pick a creature off the scene — or drag its card in")
-    menu = QMenu(button)
-
-    def add_all() -> None:
-        for ref, _name in choices():
-            add(ref)
-
-    def fill() -> None:
-        menu.clear()
-        entries = choices()
-        if not entries:
-            menu.addAction("Nobody else is on the scene").setEnabled(False)
-            return
-        if everyone and len(entries) > 1:
-            menu.addAction("Everyone on the scene", add_all)
-            menu.addSeparator()
-        for ref, name in entries:
-            menu.addAction(name, lambda r=ref: add(r))
-
-    menu.aboutToShow.connect(fill)
-    button.setMenu(menu)
-    return button
-
-
 class TargetsBox(QGroupBox):
-    """A titled drop field with its Add button — one way of picking, in every dialog."""
+    """A titled drop field - one way of putting creatures in, in every dialog.
+
+    The cards come from a :class:`ScenePicker` under the boxes (dragged, or
+    right-clicked), or straight off the Scene block.
+    """
 
     def __init__(
         self,
@@ -305,7 +319,6 @@ class TargetsBox(QGroupBox):
         name: str,
         *,
         resolve: Callable[[str], tuple[str, str] | None],
-        choices: Callable[[], list[tuple[str, str]]],
         single: bool = False,
         placeholder: str = "",
         help_text: str = "",
@@ -314,12 +327,214 @@ class TargetsBox(QGroupBox):
         layout = QHBoxLayout(self)
         self.field = TargetDropField(name, resolve=resolve, single=single, placeholder=placeholder)
         layout.addWidget(self.field, stretch=1)
-        layout.addWidget(
-            add_button(choices, self.field.add_ref, everyone=not single),
-            alignment=Qt.AlignmentFlag.AlignTop,
-        )
         if help_text:
             layout.addWidget(HelpButton(help_text), alignment=Qt.AlignmentFlag.AlignTop)
+
+
+def regrow(window: QWidget, *, share: float = 0.85) -> None:
+    """Let *window* grow to show what it now holds - never shrink, never past the screen.
+
+    For a dialog whose boxes fill up as creatures are put in: without it the new chips
+    wrap into a box that stays the height it opened at, and scroll out of sight.
+    Deferred a turn, so the layout has taken in what changed before it is measured.
+    """
+
+    def grow() -> None:
+        if not window.isVisible():
+            return
+        screen = window.screen() or QGuiApplication.primaryScreen()
+        hint = window.sizeHint()
+        width, height = window.width(), window.height()
+        if screen is not None:
+            room = screen.availableGeometry()
+            hint = QSize(
+                min(hint.width(), int(room.width() * share)),
+                min(hint.height(), int(room.height() * share)),
+            )
+        if hint.width() > width or hint.height() > height:
+            window.resize(max(width, hint.width()), max(height, hint.height()))
+
+    QTimer.singleShot(0, grow)
+
+
+_PICK_CARD: type | None = None
+
+
+def _pick_card_class() -> type:
+    """A scene card for a :class:`ScenePicker`: dragged out, or right-clicked, never edited.
+
+    Made on first use: the scene card's module reaches the sheet's sections, whose
+    Dice block imports this module, so importing it at the top would be a cycle.
+    """
+    global _PICK_CARD
+    if _PICK_CARD is None:
+        # The sections package first: imported cold, the scene card's module reaches
+        # it half-way through its own import and the package then reaches back.
+        import mm_companion.ui.sections  # noqa: F401
+        from mm_companion.ui.scene_card import SceneCard
+
+        class _PickCard(SceneCard):
+            menuRequested = Signal(str, QPoint)
+            activated = Signal(str)
+
+            def contextMenuEvent(self, event) -> None:  # noqa: N802 (Qt override)
+                self.menuRequested.emit(self.ref, event.globalPos())
+                event.accept()
+
+            def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 (Qt override)
+                self.activated.emit(self.ref)
+                event.accept()
+
+        _PICK_CARD = _PickCard
+    return _PICK_CARD
+
+
+#: What the scene copy says about itself, once, above its cards.
+PICKER_HINT = "Drag a card into a box above, or right-click it."
+PICKER_EMPTY = "Everyone on the scene is already in."
+PICKER_NOBODY = "Nobody else is on the scene."
+
+
+class ScenePicker(QGroupBox):
+    """A copy of the scene, under an action's boxes, to pick its creatures off.
+
+    The same cards the Scene block shows - portrait, name, conditions - so a creature
+    is recognised the way it is on the board. A card is **dragged** into a box above
+    (it carries the same reference a Scene card does, so every box that takes one
+    takes these), **right-clicked** for a menu of the boxes it can go in, or
+    **double-clicked** into the first of them. A creature already in a box is left
+    out of the copy, and comes back when it is taken out again.
+
+    The boxes are given with :meth:`add_destination`; what is in them, with
+    :meth:`set_placed`. The picker never decides who may go where itself.
+    """
+
+    def __init__(self, data: GameData, title: str = "Scene", parent: QWidget | None = None) -> None:
+        super().__init__(title, parent)
+        self._data = data
+        self._entries: list[dict] = []
+        self._portraits: dict = {}
+        self._placed: set[str] = set()
+        self._locked = False
+        self._destinations: list[tuple[str, Callable[[str], object], Callable[[str], bool]]] = []
+        self._cards: dict = {}
+        layout = QVBoxLayout(self)
+        self._hint = QLabel(PICKER_HINT)
+        self._hint.setStyleSheet(muted_style(italic=True))
+        self._hint.setWordWrap(True)
+        layout.addWidget(self._hint)
+        self._host = FlowContainer()
+        self._flow = FlowLayout(self._host)
+        layout.addWidget(self._host)
+        self._empty = QLabel(PICKER_NOBODY)
+        self._empty.setStyleSheet(muted_style(italic=True))
+        layout.addWidget(self._empty)
+
+    # -- what it shows ---------------------------------------------------------
+
+    def set_scene(self, entries: list[dict], portraits: dict | None = None) -> None:
+        """The board to copy: wire entries (``ref``, ``name``, conditions, ...) and
+        their decoded thumbnails by ref."""
+        self._entries = [entry for entry in entries if str(entry.get("ref", ""))]
+        self._portraits = dict(portraits or {})
+        wanted = {str(entry["ref"]) for entry in self._entries}
+        for ref in [r for r in self._cards if r not in wanted]:
+            discard_widget(self._cards.pop(ref))
+        for entry in self._entries:
+            ref = str(entry["ref"])
+            card = self._cards.get(ref)
+            if card is None:
+                card = _pick_card_class()(
+                    entry, self._data, self._host, portrait=self._portraits.get(ref)
+                )
+                card.hide()
+                card.menuRequested.connect(self._show_menu)
+                card.activated.connect(self._activate)
+                self._cards[ref] = card
+            else:
+                card.set_entry(entry)
+                card.set_portrait(self._portraits.get(ref))
+        self._restate()
+
+    def add_destination(
+        self,
+        label: str,
+        add: Callable[[str], object],
+        available: Callable[[str], bool] | None = None,
+    ) -> None:
+        """A box a card can go in: *label* is its right-click entry, *add* puts a ref in,
+        and *available* says whether this ref may go there at all."""
+        self._destinations.append((label, add, available or (lambda _ref: True)))
+        self._restate()
+
+    def set_placed(self, refs) -> None:
+        """Who is already in a box, and so is left out of the copy."""
+        placed = set(refs)
+        if placed != self._placed:
+            self._placed = placed
+            self._restate()
+
+    def set_locked(self, locked: bool) -> None:
+        """Once the action is rolled nobody else goes in: the copy goes away."""
+        self._locked = locked
+        self.setVisible(not locked)
+
+    def card(self, ref: str):
+        return self._cards.get(ref)
+
+    def shown_refs(self) -> list[str]:
+        """The creatures the copy is offering, in board order."""
+        return [ref for ref in self._order() if self._offers(ref)]
+
+    # -- picking ---------------------------------------------------------------
+
+    def options(self, ref: str) -> list[tuple[str, Callable[[str], object]]]:
+        """The boxes *ref* can go in, as ``(label, add)``."""
+        return [(label, add) for label, add, ok in self._destinations if ok(ref)]
+
+    def build_menu(self, ref: str) -> QMenu:
+        menu = QMenu(self)
+        for label, add in self.options(ref):
+            menu.addAction(label, lambda a=add, r=ref: a(r))
+        return menu
+
+    def _show_menu(self, ref: str, pos: QPoint) -> None:
+        if not self._locked and self.options(ref):
+            self.build_menu(ref).exec(pos)
+
+    def _activate(self, ref: str) -> None:
+        options = self.options(ref)
+        if options and not self._locked:
+            options[0][1](ref)
+
+    # -- laying out --------------------------------------------------------------
+
+    def _order(self) -> list[str]:
+        return [str(entry["ref"]) for entry in self._entries]
+
+    def _offers(self, ref: str) -> bool:
+        return ref not in self._placed and bool(self.options(ref))
+
+    def _restate(self) -> None:
+        while self._flow.count():
+            self._flow.takeAt(0)
+        shown = 0
+        for ref in self._order():
+            card = self._cards.get(ref)
+            if card is None:
+                continue
+            if self._offers(ref):
+                self._flow.addWidget(card)
+                card.show()
+                shown += 1
+            else:
+                card.hide()
+        self._host.setVisible(shown > 0)
+        self._hint.setVisible(shown > 0)
+        self._empty.setText(PICKER_EMPTY if self._cards else PICKER_NOBODY)
+        self._empty.setVisible(shown == 0)
+        self._host.updateGeometry()
+        self.updateGeometry()
 
 
 class ActionDropBox(QGroupBox):
@@ -405,9 +620,14 @@ class ActionRow:
 
 #: How a creature is put in an action's table, behind the "?" on it.
 BOX_HELP = (
-    "Tick a creature to put it in, or drop its card here from the Scene. Adjust is a "
-    "bonus (+) or penalty (-) to that creature's own part in the action."
+    "**Putting creatures in:** drag a card from the scene under the table (or from the "
+    "Scene block) into it, or right-click the card. Untick one to take it back out."
+    "\n\n**Adjust** is a bonus (+) or penalty (-) to that creature's own part in the "
+    "action."
 )
+#: What the table says while nobody is in it yet.
+NONE_IN = "Nobody is in yet: pick them off the scene below."
+
 
 #: The phases a GM's window goes through.
 PHASE_SETUP = "setup"
@@ -460,6 +680,7 @@ class ActionWindow(QDialog):
         from_card: bool = False,
         help_text: str = "",
         box_help: str = BOX_HELP,
+        pick_label: str = "Put in",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -509,8 +730,11 @@ class ActionWindow(QDialog):
         # its own under it, spanning the table, so a long outcome never squeezes a column.
         self._grid.setColumnStretch(1, 1)
         box_layout.addLayout(self._grid)
-        self.box.setToolTip(box_help)
         self._body.addWidget(self.box)
+        # Everyone not in yet, as cards to drag up into the table or right-click in.
+        self.picker = ScenePicker(data)
+        self.picker.add_destination(pick_label, self.include_ref, self._can_include)
+        self._body.addWidget(self.picker)
         # A window taller than what it holds — dragged so, or left so by a section that
         # folded — keeps the slack under the last section rather than spreading it
         # between every one of them.
@@ -574,7 +798,16 @@ class ActionWindow(QDialog):
         self._footer.addWidget(widget)
 
     def build_rows(self, make_cells: Callable[[object], list[QWidget]], wanted: set[str]) -> None:
-        """A row per creature on the scene, its own cells from *make_cells*."""
+        """A row per creature on the scene, its own cells from *make_cells*.
+
+        Only the rows of creatures that are *in* show; everyone else waits as a card
+        in the scene copy under the table, and comes up into it when picked.
+        """
+        self._none_in = QLabel(NONE_IN)
+        self._none_in.setStyleSheet(muted_style(italic=True))
+        self._grid.addWidget(
+            self._none_in, 2 * len(self._targets) + 1, 0, 1, 2 + len(self._columns)
+        )
         for number, party in enumerate(self._targets):
             index = 1 + 2 * number
             row = self.make_row(party, make_cells(party))
@@ -587,12 +820,61 @@ class ActionWindow(QDialog):
             self._grid.addWidget(row.result, index + 1, 1, 1, tail)
             row.result.hide()
             row.include.setChecked(party.ref in wanted)
-            row.include.toggled.connect(lambda on, r=row: self.on_include(r, on))
+            row.include.toggled.connect(lambda on, r=row: self._on_include_toggled(r, on))
             row.modifier.valueChanged.connect(lambda _v: self.sync())
-        if not self._rows:
-            empty = QLabel("Nobody is on the scene.")
-            empty.setStyleSheet(muted_style(italic=True))
-            self._grid.addWidget(empty, 1, 0, 1, 2 + len(self._columns))
+            row.include.setToolTip("Untick to take this creature back out")
+            row.include.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            row.include.customContextMenuRequested.connect(
+                lambda pos, r=row: self._show_row_menu(r, pos)
+            )
+        self.picker.set_scene([{"ref": p.ref, "name": p.name} for p in self._targets])
+        self._restate_rows()
+
+    def set_scene_view(self, entries: list[dict], portraits: dict | None = None) -> None:
+        """The board's own cards for the scene copy - conditions, portraits - in place of
+        the bare names it starts with. Only creatures in this action's table are kept."""
+        refs = {party.ref for party in self._targets}
+        known = [entry for entry in entries if str(entry.get("ref", "")) in refs]
+        missing = [
+            {"ref": p.ref, "name": p.name}
+            for p in self._targets
+            if p.ref not in {str(e.get("ref", "")) for e in known}
+        ]
+        self.picker.set_scene(known + missing, portraits)
+
+    def _on_include_toggled(self, row: ActionRow, on: bool) -> None:
+        self._restate_rows()
+        self.on_include(row, on)
+
+    def _restate_rows(self) -> None:
+        """Show the rows of who is in, offer everyone else in the scene copy."""
+        included = [row for row in self._rows if row.include.isChecked()]
+        for row in self._rows:
+            on = row.include.isChecked()
+            for widget in (row.include, *row.cells, row.modifier):
+                widget.setVisible(on)
+            row.result.setVisible(on and bool(row.result.text()))
+        self._none_in.setVisible(not included)
+        self._none_in.setText(NONE_IN if self._rows else "Nobody is on the scene.")
+        self.picker.set_placed(row.party.ref for row in included)
+        if self.isVisible():
+            regrow(self)
+
+    def _can_include(self, ref: str) -> bool:
+        row = self._row(ref)
+        return self.phase == PHASE_SETUP and row is not None and row.include.isEnabled()
+
+    def row_menu_actions(self, row: ActionRow) -> list[tuple[str, Callable[[], object]]]:
+        """What a right-click on a row's name offers. Overridden to offer more."""
+        return [("Take out", lambda: row.include.setChecked(False))]
+
+    def _show_row_menu(self, row: ActionRow, pos) -> None:
+        if self.phase != PHASE_SETUP or not row.include.isEnabled():
+            return
+        menu = QMenu(self)
+        for label, act in self.row_menu_actions(row):
+            menu.addAction(label, act)
+        menu.exec(row.include.mapToGlobal(pos))
 
     def make_row(self, party, cells: list[QWidget]) -> ActionRow:
         """The row object for *party* — an action may keep more on it."""
@@ -660,6 +942,7 @@ class ActionWindow(QDialog):
         for row in self._rows:
             for widget in row.inputs():
                 widget.setEnabled(False)
+        self.picker.set_locked(True)
 
     def start_running(self) -> None:
         """Rolled: lock everything set up, and wait for the rolls to come back."""

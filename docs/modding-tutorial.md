@@ -298,7 +298,7 @@ After toggling a mod at runtime, invalidate the parse cache:
 
 You don't need the GUI to prove a mod loads. Point the workspace at your mod, load
 the merged data, and assert your records are present — the same thing
-`tests/test_mod_loading.py` does for the shipped samples:
+`tests/core/test_mod_loading.py` does for the shipped samples:
 
 ```python
 import os, shutil

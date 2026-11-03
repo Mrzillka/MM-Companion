@@ -176,7 +176,7 @@ A `select` field can fill itself from the game data instead of listing `options`
 | `source` | Offers |
 | --- | --- |
 | `traits` | every trait a power can raise or lower — abilities, non-derived resistances, skills |
-| `all_traits` | the same plus the derived numeric stats from `system.json`'s `derived_traits` (Defence, Initiative) — for a field asking what the player *checks*, not what the power changes |
+| `all_traits` | the same plus the derived numeric stats from `system.json`'s `derived_traits` (Defense, Initiative) — for a field asking what the player *checks*, not what the power changes |
 
 ## Data + Python: register a new mechanic
 

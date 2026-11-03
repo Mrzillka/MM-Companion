@@ -10,7 +10,7 @@ deliberately not here.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from ..character import AppliedCondition, Character
@@ -442,13 +442,51 @@ def debilitated_traits(character: Character, game_data: GameData) -> frozenset[s
     return frozenset(names)
 
 
+#: What :func:`defeat_state` answers: still in the fight, down, or dead.
+DEFEAT_NONE = ""
+DEFEAT_DOWN = "down"
+DEFEAT_DEAD = "dead"
+
+
+def defeat_state(condition_ids: Iterable[str], game_data: GameData) -> str:
+    """Whether a creature with *condition_ids* is out of the fight, and how far.
+
+    :data:`DEFEAT_DEAD` when any of them (or anything one includes) is in
+    ``system.defeat.dead``, else :data:`DEFEAT_DOWN` for ``system.defeat.down`` (Dying
+    includes Incapacitated, so it is down), else :data:`DEFEAT_NONE`. Takes bare ids so
+    a Scene entry off the wire — which carries ids, not a :class:`Character` — reads
+    the same as a sheet; includes are expanded from the catalog because the wire may
+    have dropped a member row.
+    """
+
+    catalog = game_data.condition_catalog()
+    present: set[str] = set()
+    for cid in condition_ids:
+        present.add(cid)
+        condition = catalog.get(cid)
+        if condition is not None:
+            present.update(expand_includes(condition, catalog))
+    defeat = game_data.system.defeat
+    if present.intersection(defeat.dead):
+        return DEFEAT_DEAD
+    if present.intersection(defeat.down):
+        return DEFEAT_DOWN
+    return DEFEAT_NONE
+
+
+def character_defeat_state(character: Character, game_data: GameData) -> str:
+    """:func:`defeat_state` for a character's own conditions."""
+
+    return defeat_state((c.condition_id for c in character.conditions), game_data)
+
+
 def resistance_condition_effect(
     character: Character, game_data: GameData, res_key: str
 ) -> ConditionEffect:
     """The condition overlay for one resistance row (display-only).
 
     Toughness carries the Hit stacking penalty (a ``delta`` on Damage-resistance checks);
-    the active defenses Dodge and Defence carry Vulnerable/Defenseless halving/zeroing (an
+    the active defenses Dodge and Defense carry Vulnerable/Defenseless halving/zeroing (an
     ``op``). Other resistances get an inert effect.
     """
 

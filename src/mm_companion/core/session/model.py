@@ -221,6 +221,13 @@ class RollRecord:
     #: player's roller to know that a record bearing their name is not the answer
     #: to the die *they* threw.
     group: str = ""
+    #: A **routine check** (take 10): no die was rolled, and :attr:`die` reads
+    #: :data:`~mm_companion.core.dice.ROUTINE_DIE`. Stamped by the server, like
+    #: :attr:`reroll`, so a 10 nobody rolled is never shown as one that came up.
+    routine: bool = False
+    #: Rolled **as a minion** (PDF p25): a natural 20 on it is no added success and
+    #: no critical, so it raises no save's DC. Stamped by the server from the request.
+    minion: bool = False
     timestamp: str = field(default_factory=utc_now)
 
     @property
@@ -252,6 +259,8 @@ class RollRecord:
             "mod_id": self.mod_id,
             "group": self.group,
             "reroll": self.reroll,
+            "routine": self.routine,
+            "minion": self.minion,
             "timestamp": self.timestamp,
         }
 
@@ -278,6 +287,8 @@ class RollRecord:
             mod_id=str(raw.get("mod_id", "")),
             group=str(raw.get("group", "")),
             reroll=bool(raw.get("reroll", False)),
+            routine=raw.get("routine") is True,
+            minion=raw.get("minion") is True,
             timestamp=str(raw.get("timestamp", "")) or utc_now(),
         )
 
@@ -298,12 +309,16 @@ class RollRecord:
         group: str = "",
         reroll: bool = False,
         natural: bool = True,
+        routine: bool = False,
+        minion: bool = False,
     ) -> RollRecord:
         """Build a record from a resolved check (``None`` when no DC was set).
 
         ``natural`` is false for a re-roll's lifted die, which is never a natural
-        1 or 20 (see :func:`~mm_companion.core.dice.reroll_d20`).
+        1 or 20 (see :func:`~mm_companion.core.dice.reroll_d20`), and for a routine
+        check's 10. A *minion*'s 20 is no critical, with or without a DC.
         """
+        unchecked = natural and (die == 1 or (die == 20 and not minion))
         return cls(
             seq=seq,
             player_id=player_id,
@@ -313,12 +328,14 @@ class RollRecord:
             penalty=penalty,
             dc=None if result is None else result.dc,
             degree=None if result is None else result.degree,
-            critical=(natural and die in (1, 20)) if result is None else result.critical,
+            critical=unchecked if result is None else result.critical,
             label=label,
             hidden=hidden,
             spec=spec,
             group=group,
             reroll=reroll,
+            routine=routine,
+            minion=minion,
         )
 
 
@@ -472,6 +489,8 @@ class SessionState:
         group: str = "",
         reroll: bool = False,
         natural: bool = True,
+        routine: bool = False,
+        minion: bool = False,
     ) -> RollRecord:
         """Build a :class:`RollRecord` from a resolved check and append it.
 
@@ -492,6 +511,8 @@ class SessionState:
             group=group,
             reroll=reroll,
             natural=natural,
+            routine=routine,
+            minion=minion,
         )
         self.rolls.append(record)
         self.touch()

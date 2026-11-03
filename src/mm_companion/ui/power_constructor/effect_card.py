@@ -218,8 +218,8 @@ class EffectCard(QFrame):
         if self._rank_synced:
             self._rank.setReadOnly(True)
             self._rank.setToolTip(
-                "Set by the traits below - an Enhanced Trait's rank is the ranks it "
-                "allocates, and its cost comes from the traits themselves."
+                "Set by the traits below: an Enhanced Trait's rank is the ranks it allocates, and "
+                "its cost comes from those traits."
             )
         self._rank.valueChanged.connect(self._on_rank_changed)
         header.addWidget(self._rank)
@@ -289,23 +289,21 @@ class EffectCard(QFrame):
         guard_wheel(self._attack_skill)
         if self._focus_options:
             self._attack_skill_check.setToolTip(
-                "Link this effect's attack to a Close/Ranged Combat focus or specialization "
-                "— that row's total replaces the character's Attack for this effect's roll "
-                "and PL cap."
+                "Roll this attack with a Close or Ranged Combat skill focused on it. That skill's "
+                "total replaces Attack for the roll and for the Power Level cap."
             )
         else:
             self._attack_skill_check.setEnabled(False)
             self._attack_skill_check.setToolTip(
-                "This character has no Close or Ranged Combat focus or specialization to "
-                "link to. Add one in the Skills block (Close Combat or Ranged Combat, "
-                "focused or specialized on this attack) and it will be offered here."
+                "No Close or Ranged Combat focus to link. Add one in the Skills block (Close or "
+                "Ranged Combat, focused on this attack) and it will be offered here."
             )
 
         # Seed from the instance: a stored link ticks the box and selects its focus.
         linked = bool(self.instance.attack_skill)
         self._attack_skill_check.setChecked(linked)
         # Hidden, never shown, until it is in a layout: a parentless visible widget is a
-        # top-level window (see CLAUDE.md, tests/test_window_flash.py). Both this and the
+        # top-level window (see CLAUDE.md, tests/ui/sheet/test_window_flash.py). Both this and the
         # host below are put right once they have a parent.
         self._attack_skill.hide()
         if linked:

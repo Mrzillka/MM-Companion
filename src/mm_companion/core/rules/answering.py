@@ -27,6 +27,7 @@ from ..character import AppliedCondition, Character
 from ..data_loader import GameData, ResistanceOutcome
 from .defenses import damage_negated, toughness_defense
 from .derived import skill_usable
+from .minions import BOOK_MINION_RULES, MinionRules, is_minion, minion_rung
 from .rolls import (
     KIND_SKILL,
     LADDER_AREA,
@@ -80,19 +81,26 @@ def answer_rung(
     degree: int | None,
     char: Character | None = None,
     game_data: GameData | None = None,
+    rules: MinionRules = BOOK_MINION_RULES,
 ) -> ResistanceOutcome | None:
     """The rung a roll of *degree* lands on (a made one: the ladder's success rung).
 
     Given the creature that rolled, a damage ladder is first measured against its
     Toughness defences (:mod:`.defenses`): an Impervious rank the attack does not
     exceed, or two degrees of success on a Hardened one, and nothing lands at all — not
-    even the Hit a made save otherwise costs.
+    even the Hit a made save otherwise costs. A **minion** that failed lands where the
+    session's *rules* say (:func:`~.minions.minion_rung`): the worst rung, no further
+    than the ceiling.
     """
 
     if char is not None and game_data is not None and ladder.kind == LADDER_DAMAGE:
         defense = toughness_defense(char, game_data)
         if damage_negated(defense, rank=ladder.rank, penetrating=ladder.penetrating, degree=degree):
             return None
+    if game_data is not None and is_minion(char):
+        return minion_rung(
+            ladder.rungs, degree, ladder.success, game_data, minion=True, rules=rules
+        )
     return outcome_rung(ladder.rungs, degree, ladder.success)
 
 

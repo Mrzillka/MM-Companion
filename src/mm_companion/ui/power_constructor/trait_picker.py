@@ -147,7 +147,7 @@ def _fill_trait_combo(
     Reduced Trait flaw's "which trait goes down", Check Required's "which check").
 
     With ``derived`` the list also covers the numeric stats that are computed rather
-    than bought — the derived Defence aggregate and the ``derived_traits`` named in
+    than bought — the derived Defense aggregate and the ``derived_traits`` named in
     ``system.json`` (Initiative). Those can be *checked* but not raised, so they belong
     in Check Required's "which check" picker and not in a trait-boosting one.
 
@@ -169,7 +169,7 @@ def _fill_trait_combo(
         combo.addItem(f"  {ability.name}", ability.key)
     combo.addItem("Resistances", None)
     for res in game_data.resistances:
-        if derived or not res.derived:  # the derived Defence aggregate can't be bought
+        if derived or not res.derived:  # the derived Defense aggregate can't be bought
             combo.addItem(f"  {res.name}", res.key)
     combo.addItem("Skills", None)
     for skill in game_data.skills:

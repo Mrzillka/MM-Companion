@@ -106,7 +106,11 @@ The shape:
   trade-off is written out on that method.
 - `src/mm_companion/ui/` — Qt: `session_bridge.py` (`SessionBridge`, the **only**
   place core `on_event` callbacks become signals; module-level
-  `active_session()`/`live_session()`), `connection_indicator.py`, `gm_window.py`,
+  `active_session()`/`live_session()`), `connection_indicator.py`, `gm_window.py`
+  (the GM window's frame; its parts are mixins under `ui/gm/`, one per concern —
+  `hosting`, `players`, `scene`, `npc_board`, `npc_groups`, `npc_conditions`,
+  `rolls`, `actions`, `pins` — sharing state through `self`; a test that patches a
+  name the GM code imports patches it on the mixin module that uses it),
   `ui/npc_window.py`, `ui/player_card.py`, `ui/roll_history.py`,
   `ui/scene_card.py`/`ui/scene_board.py`/`ui/card_drop.py`/`ui/card_chips.py`, and
   `session_player.py`/`session_dialogs.py`. `SessionBridge.joined` follows the
@@ -145,7 +149,7 @@ The shape:
   field of its own and not `spec is None`: a **forced save** carries no spec
   either (the wielder never rolls their own target's save; it reaches the person
   who does as the attack's follow-up chip) but is perfectly well resolved.
-- **What a pin may *do* is the pin's answer.** A *derived* resistance (Defence —
+- **What a pin may *do* is the pin's answer.** A *derived* resistance (Defense —
   `derived` in `resistances.json`) resolves with no spec, as does an **effect rank**
   (`PIN_EFFECT`, `key` a power id and `index` which effect, or late-bound
   `select="first_damage"`): both are read, never thrown, and the tile says so by
@@ -725,6 +729,25 @@ The shape:
   Bumped for the v13 reason: a v16 server strips both keys without a word, so an
   Impervious NPC would take a Hit from an attack it is immune to. **Redeploy the hub**
   with the release that ships it.
+- **Protocol v18 brings minions and the routine check** ([minions](minions.md)).
+  - `RollRequest.routine` (take 10: the server sets the die to `ROUTINE_DIE`, never
+    natural, and drops a reroll) and `RollRequest.minion` (a natural 20 that is no added
+    success) are both stamped on the `RollRecord`.
+  - A group line's `minion` is kept by `sanitize_group_line`.
+  - A scene entry's `minion` badge is whitelisted by `sanitize_scene`, and only when it
+    is true.
+  - A scene entry's `summoned` tag rides the same way (additive, no bump of its own).
+  - Bumped for the v13 reason: a v17 server ignores the request fields without a word,
+    so a hero taking 10 would roll a d20 and a minion's 20 would crit. **Redeploy the
+    hub** with the release.
+  - The session's *rules* for minions need no bump: they ride the shared-state
+    channel as the core app's `"session"` entry.
+- **Protocol v19 carries a choice save's `pick`** (`"best"` or `"worst"`): which of the
+  traits a "Fortitude or Will" save names the target rolls (see
+  [actions](actions.md)). One more whitelisted spec text key. Bumped for the v13
+  reason: a v18 server strips it without a word, so a worst-of save clicked on the
+  target's card would roll their better number. v18 never shipped, so the hub goes
+  from v17 to v19 in one redeploy.
 - **A join code is version 2, and a public-server session's is 24 characters.**
   Version 1 spelled the relay URL out byte by byte and came to 130 characters for
   a session on the hub. `discovery.encode_join_code` now packs every field as
@@ -767,7 +790,7 @@ The shape:
   headless-testable** (Qt only in `ui/`), **no new dependencies** (PySide6 + the
   stdlib), and **nothing new under `data/`** — the session layer is MIT code, not
   OGL content. Verify with the fast, window-free files (`tests/test_session_*.py`,
-  `tests/test_headless_server.py`); the GUI ones need `QT_QPA_PLATFORM=offscreen`.
+  `tests/session/test_headless_server.py`); the GUI ones need `QT_QPA_PLATFORM=offscreen`.
 
 ## Notices float over the window
 

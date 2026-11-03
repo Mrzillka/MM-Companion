@@ -448,7 +448,7 @@ class CompactPage(QWidget):
         re-parented widget against the application stylesheet, and a history a few
         hundred rolls long is over a thousand of them, so each extra re-parent is
         hundreds of milliseconds of frozen window. See
-        :meth:`~mm_companion.ui.dice_roller.DiceRollerView.release_roller`.
+        :meth:`~mm_companion.ui.roller.view.DiceRollerView.release_roller`.
         """
         self._body_box.addWidget(panel)
         self._body_box.addWidget(history, stretch=1)

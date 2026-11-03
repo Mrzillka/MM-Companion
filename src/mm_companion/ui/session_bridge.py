@@ -28,20 +28,34 @@ being threaded through every constructor.
 from __future__ import annotations
 
 import threading
+from collections import deque
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QElapsedTimer, QObject, QTimer, Signal
 
 from mm_companion.core import mods, storage
 from mm_companion.core.session import client as session_client
 from mm_companion.core.session import discovery, store
 from mm_companion.core.session import relay as session_relay
 from mm_companion.core.session import server as session_server
-from mm_companion.core.session.model import SessionState, new_session
+from mm_companion.core.session.model import KIND_ROLL, SessionState, new_session
 from mm_companion.core.session.net import DEFAULT_PORT
 from mm_companion.core.session.protocol import sanitize_mod_payload
 
 #: How long :meth:`SessionBridge.stop` waits for a publish still in flight.
 _PUBLISH_JOIN_TIMEOUT = 10.0
+
+#: How long another seat's die roll is held before this screen shows it, in ms. The
+#: roller's die tumbles for ``dice_roller.ROLL_DURATION_MS`` (1.4 s) while the server's
+#: answer is already on its way to everyone, so without this the whole table read the
+#: number before the player who rolled it. The tumble plus a short beat, so the roller
+#: always sees their own result first.
+PEER_ROLL_DELAY_MS = 1800
+
+# What travels on :attr:`SessionBridge._feed` — the four roll-log signals, in order.
+_FEED_ADDED = "added"
+_FEED_REMOVED = "removed"
+_FEED_REVEALED = "revealed"
+_FEED_REPLACED = "replaced"
 
 
 class SessionBridgeError(Exception):
@@ -116,6 +130,16 @@ class SessionBridge(QObject):
     #: payload)``. Raised on a player's side only.
     actionPrompted = Signal(str, str, object)
 
+    #: Internal: one change to the roll log, ``(what, payload)``, on its way to the
+    #: public roll signals. Emitted from whichever thread the event arrived on, so the
+    #: slot runs on the GUI thread, where a peer's roll can be held on a timer
+    #: (:data:`PEER_ROLL_DELAY_MS`) and everything behind it held in order.
+    _feed = Signal(str, object)
+
+    #: The delay a peer's die roll is held for — a class attribute so tests can turn it
+    #: off (``None``) or shorten it, the way ``GMWindow.SPARE_NPC_DELAY_MS`` is.
+    PEER_ROLL_DELAY_MS: int | None = PEER_ROLL_DELAY_MS
+
     #: A player took a seat (``{"player": ..., "new": bool}``), host side only.
     playerJoined = Signal(object)
     #: A player's socket ended (``{"player": ...}``), host side only.
@@ -160,6 +184,15 @@ class SessionBridge(QObject):
         # The reachability probe, indirected so a test can swap the network for a
         # canned answer without patching the discovery module globally.
         self._publish_session = discovery.publish_session
+        # Roll-log changes waiting their turn: ``(due, what, payload)``, oldest first,
+        # due on :attr:`_feed_clock`. See :meth:`_on_feed`.
+        self._held_feed: deque[tuple[int, str, object]] = deque()
+        self._feed_clock = QElapsedTimer()
+        self._feed_clock.start()
+        self._feed_timer = QTimer(self)
+        self._feed_timer.setSingleShot(True)
+        self._feed_timer.timeout.connect(self._drain_feed)
+        self._feed.connect(self._on_feed)
 
     # -- state -------------------------------------------------------------
 
@@ -286,6 +319,8 @@ class SessionBridge(QObject):
         hidden: bool = False,
         spec: dict | None = None,
         reroll: bool = False,
+        routine: bool = False,
+        minion: bool = False,
     ) -> bool:
         """Put one roll to the session, whichever end of it this app is on.
 
@@ -300,7 +335,9 @@ class SessionBridge(QObject):
         description of the roll (a serialized
         :class:`~mm_companion.core.rules.RollSpec`), which travels so that the
         *other* seats can act on it — see ``docs/mm-session-architecture.md``.
-        ``reroll`` asks the server for a lucky re-roll (a die of 11-20).
+        ``reroll`` asks the server for a lucky re-roll (a die of 11-20). ``routine``
+        takes 10 instead of rolling, and ``minion`` rolls as a minion, whose natural
+        20 is no added success (both protocol v18).
         """
         if self._server is not None:
             self._server.roll(
@@ -311,6 +348,8 @@ class SessionBridge(QObject):
                 hidden=hidden,
                 spec=spec,
                 reroll=reroll,
+                routine=routine,
+                minion=minion,
             )
             return True
         if self._client is not None:
@@ -322,6 +361,8 @@ class SessionBridge(QObject):
                 hidden=hidden,
                 spec=spec,
                 reroll=reroll,
+                routine=routine,
+                minion=minion,
             )
         return False
 
@@ -691,7 +732,7 @@ class SessionBridge(QObject):
         self._server = server
         self._relay = transport
         _remember_session(state.id)
-        self.historyReplaced.emit(server.history())
+        self._feed.emit(_FEED_REPLACED, server.history())
         self.rosterChanged.emit(server.roster())
         return address
 
@@ -858,6 +899,70 @@ class SessionBridge(QObject):
                 target=reachability.release, name="session-unpublish", daemon=True
             ).start()
 
+    # -- the roll feed -----------------------------------------------------
+
+    def _on_feed(self, what: str, payload: object) -> None:
+        """Pass one roll-log change on — now, or once a peer's die has had time to land.
+
+        Another seat's die roll is held for :attr:`PEER_ROLL_DELAY_MS`: the server
+        answers the moment the die is clicked, and the roller's die then tumbles before
+        showing it, so the rest of the table used to read the number first. Whatever
+        arrives behind a held roll waits behind it, so every screen sees the log in the
+        order it was written. A fresh history (a join, a reconnect) replaces whatever is
+        still waiting, since it already holds all of it.
+        """
+        if what == _FEED_REPLACED:
+            self._held_feed.clear()
+            self._feed_timer.stop()
+            self.historyReplaced.emit(payload)
+            return
+        delay = self._peer_delay(what, payload)
+        if not self._held_feed and delay <= 0:
+            self._emit_feed(what, payload)
+            return
+        due = self._feed_clock.elapsed() + delay
+        if self._held_feed:
+            due = max(due, self._held_feed[-1][0])
+        self._held_feed.append((due, what, payload))
+        self._schedule_feed()
+
+    def _peer_delay(self, what: str, payload: object) -> int:
+        """How long *payload* waits: a peer's die roll the delay, anything else none.
+
+        A group roll is the GM rolling for several creatures at once, with no die
+        tumbling at anybody's seat, so it is not held.
+        """
+        delay = type(self).PEER_ROLL_DELAY_MS
+        if not delay or what != _FEED_ADDED or not isinstance(payload, dict):
+            return 0
+        if payload.get("kind", KIND_ROLL) != KIND_ROLL or payload.get("group"):
+            return 0
+        if str(payload.get("player_id", "")) == self.own_player_id():
+            return 0
+        return int(delay)
+
+    def _schedule_feed(self) -> None:
+        if not self._held_feed:
+            return
+        wait = self._held_feed[0][0] - self._feed_clock.elapsed()
+        self._feed_timer.start(max(0, int(wait)))
+
+    def _drain_feed(self) -> None:
+        """Pass on everything whose time has come, oldest first, then wait for the rest."""
+        now = self._feed_clock.elapsed()
+        while self._held_feed and self._held_feed[0][0] <= now:
+            _due, what, payload = self._held_feed.popleft()
+            self._emit_feed(what, payload)
+        self._schedule_feed()
+
+    def _emit_feed(self, what: str, payload: object) -> None:
+        if what == _FEED_ADDED:
+            self.rollAdded.emit(payload)
+        elif what == _FEED_REMOVED:
+            self.rollRemoved.emit(int(payload))
+        elif what == _FEED_REVEALED:
+            self.rollRevealed.emit(payload)
+
     # -- event translation -------------------------------------------------
 
     def _on_server_event(self, kind: str, payload: dict) -> None:
@@ -876,11 +981,11 @@ class SessionBridge(QObject):
                 str(payload.get("player_id", "")), payload.get("character", {})
             )
         elif kind == session_server.EVENT_ROLL:
-            self.rollAdded.emit(payload)
+            self._feed.emit(_FEED_ADDED, payload)
         elif kind == session_server.EVENT_ROLL_REMOVED:
-            self.rollRemoved.emit(int(payload.get("seq", 0)))
+            self._feed.emit(_FEED_REMOVED, int(payload.get("seq", 0)))
         elif kind == session_server.EVENT_ROLL_REVEALED:
-            self.rollRevealed.emit(payload)
+            self._feed.emit(_FEED_REVEALED, payload)
         elif kind == session_server.EVENT_SCENE:
             self.sceneChanged.emit(payload.get("entries", []))
         elif kind == session_server.EVENT_SCENE_PORTRAIT:
@@ -916,7 +1021,7 @@ class SessionBridge(QObject):
         if kind == session_client.EVENT_CONNECTED:
             self.connected.emit(payload)
             self.rosterChanged.emit(payload.get("roster", []))
-            self.historyReplaced.emit(payload.get("history", []))
+            self._feed.emit(_FEED_REPLACED, payload.get("history", []))
             # The welcome carries the board; its pictures follow as their own
             # messages, so a card may draw its placeholder for a beat first.
             self.sceneChanged.emit(payload.get("scene", []))
@@ -927,11 +1032,11 @@ class SessionBridge(QObject):
         elif kind == session_client.EVENT_ROSTER:
             self.rosterChanged.emit(payload.get("players", []))
         elif kind == session_client.EVENT_ROLL:
-            self.rollAdded.emit(payload)
+            self._feed.emit(_FEED_ADDED, payload)
         elif kind == session_client.EVENT_ROLL_REMOVED:
-            self.rollRemoved.emit(int(payload.get("seq", 0)))
+            self._feed.emit(_FEED_REMOVED, int(payload.get("seq", 0)))
         elif kind == session_client.EVENT_ROLL_REVEALED:
-            self.rollRevealed.emit(payload)
+            self._feed.emit(_FEED_REVEALED, payload)
         elif kind == session_client.EVENT_SCENE:
             self.sceneChanged.emit(payload.get("entries", []))
         elif kind == session_client.EVENT_SCENE_PORTRAIT:

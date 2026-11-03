@@ -28,7 +28,17 @@ the same targeting layer. An area power, or any attack switched to the free area
 is aimed by dropping scene cards into a window. The GM resolves the NPCs' Dodge checks
 and saves in two server-rolled stages, and each caught player gets a request to roll.
 Both actions land in the history as one table per group (see
-[the actions notes](docs/notes/actions.md)).
+[the actions notes](docs/notes/actions.md)). Any NPC can be made a **minion**: its
+failed saves land their worst, its natural 20 is no critical, and heroes may take 10
+against it. Which of those rules apply is set per session on the GM window's
+Session settings page (see [the minions notes](docs/notes/minions.md)). NPCs can be
+kept in **groups** — a squad from Quick NPC × N, or cards dropped onto each other —
+drawn as one framed card of rows (see [the NPC groups notes](docs/notes/npc-groups.md)).
+A creature that is down or dead fades on every board. Any attack can be **aimed**:
+right-click it, pick a creature off the Scene, and the GM accepts it and the app judges
+the hit and lands the save (see [the actions notes](docs/notes/actions.md#aimed-attacks)).
+A group can make a **team attack** (members combine their attacks on one target), a
+**team check** or a **group check**.
 
 ## Commands
 
@@ -44,14 +54,18 @@ pip install -e ".[dev]"
 - Host a session headless: `python -m mm_companion.server` (or the
   `mm-companion-server` console script; `--help` for options). Run the public
   relay: `python -m mm_companion.relay`. Both are Qt-free and stdlib-only.
-- Run tests: `pytest`
-- Run a single test: `pytest tests/test_data_loader.py::test_load_game_data_is_cached`
+- Run the tests a change can affect: `python .claude/skills/affected-tests/affected.py`
+  (the `affected-tests` skill) — use this while working.
+- Run all tests (~16 min): `pytest` — required before a feature is called done
+  or merged into `develop`.
+- Run a single test: `pytest tests/core/test_data_loader.py::test_load_game_data_is_cached`
 - Format: `black .` (line length 100)
 - Lint: `ruff check .`
 
-CI runs `ruff check .`, `black --check .`, and `xvfb-run -a pytest` across
-Python 3.10–3.13. GUI tests need a display server; CI provides one via
-`xvfb-run`. Run all three locally before pushing.
+CI runs `ruff check .`, `black --check .`, and `pytest` across Python 3.10–3.13.
+Tests need no display: `tests/conftest.py` puts Qt on its offscreen platform with
+pinned fonts and screen, identically locally and on CI (see
+[the testing notes](docs/notes/testing.md)). Run all three locally before pushing.
 
 ## Architecture: the core / data / ui split
 
@@ -59,7 +73,7 @@ The single most important convention. The package is layered and the
 dependency direction is strictly **`ui` → `core` → `data`**:
 
 - `src/mm_companion/core/` — rules engine. Pure Python, **no PySide6 imports**,
-  must not import `ui`: `data_loader.py` (game content), `dice.py` (d20
+  must not import `ui`: `data_loader/` (game content), `dice.py` (d20
   resolution / degrees of success), `character.py` (the mutable `Character`
   state model, now carrying a `powers` list), `powers.py` (the assembled-power
   data model — `Power`, `PowerEffectInstance`, `ModifierSelection`),
@@ -88,7 +102,7 @@ several of them are the only record of a bug that shaped it.
 
 | Working notes | Read before touching |
 | --- | --- |
-| [Data loading and game content](docs/notes/data-and-content.md) | `core/data_loader.py`, `GameData`, or adding a content file |
+| [Data loading and game content](docs/notes/data-and-content.md) | `core/data_loader/`, `GameData`, or adding a content file |
 | [Conditions and the damage ladder](docs/notes/conditions-and-damage.md) | conditions, damage resolution, or the display overlay they drive |
 | [The workspace, the launcher and saved characters](docs/notes/workspace-and-files.md) | startup, settings, saving/loading, images, the character library |
 | [The character sheet: blocks, canvas and layout](docs/notes/sheet-and-blocks.md) | adding a block, the page, the pinned strip, layout persistence |
@@ -101,10 +115,13 @@ several of them are the only record of a bug that shaped it.
 | [The Notes block](docs/notes/notes-block.md) | Notes, or adding a block there can be more than one of |
 | [The session layer](docs/notes/session.md) | GM Mode or online play |
 | [Actions against other characters](docs/notes/actions.md) | Impress, area attacks, `actions.json`, the history's table card, or resolving one check against several targets |
+| [Minions](docs/notes/minions.md) | the minion flag, the Session settings page, or any check resolved against a creature that might be a minion |
+| [NPC groups (squads)](docs/notes/npc-groups.md) | the GM's NPC board, Quick NPC, Copy, or treating several NPCs as one |
 | [The theme layer](docs/notes/theme.md) | writing any colour, size, radius or border |
 | [The table blocks](docs/notes/table-blocks.md) | Abilities, Resistances, Advantages or Skills |
 | [Shared UI utilities and view modes](docs/notes/ui-utilities.md) | adding widgets, or the lock |
 | [The mod pipeline](docs/notes/mods.md) | data loading, startup, or a `register_*` seam |
+| [Testing](docs/notes/testing.md) | adding a test file, a `conftest.py`, or changing how tests run |
 | [Accepted debts](docs/notes/debts.md) | picking up agreed work that is not done yet |
 
 Alongside them, `docs/` holds the longer-form documents the notes refer back to:
@@ -141,7 +158,7 @@ notes file that owns it.
   a top-level window, so showing one flashes a real window on screen and is slow to
   realize. Add it to a layout before setting its visibility, only ever `hide()` in a
   constructor that may run before parenting, and shed it with `discard_widget`, which
-  hides before it unparents. This has bitten twice; `tests/test_window_flash.py`
+  hides before it unparents. This has bitten twice; `tests/ui/sheet/test_window_flash.py`
   watches for it.
 - **Width adapts; height scrolls.** The page is a user-resizable grid: any block
   can be dragged to any size, past the point where its content fits. Across, a

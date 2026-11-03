@@ -48,8 +48,7 @@ def _modifier_config_cost(modifier: Modifier, selection) -> int | None:
     set, leaving the modifier's own ``cost_value``.
 
     :func:`_config_cost_delta` is then added on top of whichever number that is — so a
-    second field can shade the price the first one set, which is what Removable's
-    Short-Term Only does to its tier.
+    second field can shade the price the first one set (Area's Emanation on its shape).
     """
 
     override = None
@@ -71,14 +70,30 @@ def _modifier_config_cost(modifier: Modifier, selection) -> int | None:
     return max(0, base + delta)
 
 
+def _config_flat_delta(modifier: Modifier, selection) -> int:
+    """Total ``flat_delta`` of the options currently chosen, across all config fields.
+
+    The twin of :func:`_config_cost_delta` for a power-scope modifier's *total* rather
+    than its rate: Short-Term Only takes 1 point off Removable's whole discount (p160).
+    """
+
+    total = 0
+    for cfg in modifier.config_fields:
+        chosen = selection.config.get(cfg.key)
+        values = chosen if isinstance(chosen, list) else [chosen]
+        for option in cfg.options:
+            if option.flat_delta and option.value in values:
+                total += option.flat_delta
+    return total
+
+
 def _config_cost_delta(modifier: Modifier, selection) -> int:
     """Total ``cost_delta`` of the options currently chosen, across **all** config fields.
 
     Unlike the first-wins overrides beside it this one is a sum: the delta shades a
     magnitude another field decided, so several of them have to be able to stack. Floored
     at zero by the caller — a flaw's magnitude is unsigned (the sign comes from its
-    category), and the rules let Short-Term Only take Removable's value all the way down
-    to "no discount at all" (p160) rather than to a bonus.
+    category), so a delta may take it to nothing but never turn it into its opposite.
     """
 
     total = 0
@@ -1557,7 +1572,8 @@ class PowerScopeTerm:
 
     ``magnitude`` is what one unit of it is worth (Easily Removable's 2), ``units`` how
     many units the power's own cost bought (``ceil(gross / cost_per_points)``, or 1 for a
-    modifier charged once), and ``amount`` the signed points it adds — negative for a
+    modifier charged once), ``flat_delta`` what a config choice adds to that total once
+    (Short-Term Only's −1), and ``amount`` the signed points it adds — negative for a
     flaw. Kept as a record rather than a bare number because the constructor shows the
     working: a −20 that appears from nowhere on a 98-point armour looks like a bug.
     """
@@ -1566,6 +1582,13 @@ class PowerScopeTerm:
     magnitude: int
     units: int
     amount: int
+    flat_delta: int = 0
+
+
+def _scope_amount(sign: int, magnitude: int, units: int, flat_delta: int) -> int:
+    """A power-scope term's signed points: the rate times its units, shaded flat, ≥ 0."""
+
+    return sign * max(0, magnitude * units + flat_delta)
 
 
 def power_scope_terms(
@@ -1599,11 +1622,13 @@ def power_scope_terms(
                     if modifier.cost_per_points > 0
                     else 1
                 )
+                flat_delta = _config_flat_delta(modifier, selection)
                 term = PowerScopeTerm(
                     modifier=modifier,
                     magnitude=magnitude,
                     units=units,
-                    amount=sign * magnitude * units,
+                    amount=_scope_amount(sign, magnitude, units, flat_delta),
+                    flat_delta=flat_delta,
                 )
                 previous = best.get(modifier.id)
                 if previous is None or abs(term.amount) > abs(previous.amount):
@@ -1786,7 +1811,8 @@ def group_scope_note(group: PowerGroup, game_data: GameData, char: Character | N
             if dearest.modifier.cost_per_points > 0
             else 1
         )
-        combined = (-1 if dearest.amount < 0 else 1) * dearest.magnitude * units
+        sign = -1 if dearest.amount < 0 else 1
+        combined = _scope_amount(sign, dearest.magnitude, units, dearest.flat_delta)
         if separate == combined:
             continue
         notes.append(

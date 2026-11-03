@@ -410,7 +410,8 @@ The windows and widgets:
 - **`gm_window.py`** — the GM's console: host controls, the join code with a Copy
   button, the reachability advice, the **Players** grid, the **NPCs** grid, and a
   **Rolls** box (an embedded roller with a Hidden-roll switch beside the shared
-  history).
+  history). Its parts are mixins under `ui/gm/` (hosting, players, scene, the NPC
+  board, rolls, actions, pins); `GMWindow` assembles them.
 - **`player_card.py`** — one card per connected player (never the GM's own seat):
   portrait (the transmitted thumbnail, else a placeholder), name, PL, hero points,
   condition chips (each with a hover hint), and a "+" that fast-applies a

@@ -106,3 +106,7 @@ class NPCWindow(MainWindow):
     def _new_child(self, character: Character, path: Path) -> MainWindow:
         """File ▸ Open from an NPC window opens another NPC, not a character sheet."""
         return NPCWindow(character=character, path=path)
+
+    def _new_blank(self) -> MainWindow:
+        """File ▸ New from an NPC window opens a blank NPC."""
+        return NPCWindow()

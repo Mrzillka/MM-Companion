@@ -26,7 +26,7 @@ clear the 4.5:1 small-text threshold on both at once (light wants a darker
 shade, dark a lighter one), so those tints are balanced for the best achievable
 worst case and land at ~3.2:1. A ``"styled"`` preset *does* know its own
 surfaces, declares them as ``surface.*`` tokens, and is held to the same 3.0:1
-bar against those instead — where it can comfortably do better. ``tests/test_theme.py``
+bar against those instead — where it can comfortably do better. ``tests/ui/theme/test_theme.py``
 enforces this per preset; keep any retune inside that envelope.
 """
 
@@ -104,7 +104,7 @@ def measurement_backdrops(theme: Theme) -> tuple[str, ...]:
     got, so it is held to the bar on a light *and* a dark one. A ``styled``
     preset declares its own surfaces and is measured against those instead.
 
-    One definition because two callers need to agree: ``tests/test_theme.py``
+    One definition because two callers need to agree: ``tests/ui/theme/test_theme.py``
     enforces the floor per preset, and the Settings window warns the user in the
     moment they pick a colour that would fail it.
     """

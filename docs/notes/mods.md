@@ -18,7 +18,7 @@ authoring guide is `docs/modding.md`; the shape:
   Manager; later applies later and wins). Manifest `priority` only *seeds* where a
   newly-added mod first lands (enabled mods not yet in `mod_order` trail the ordered
   ones by ascending `priority`).
-- **Merge loader** (`core/data_loader.py`): `load_game_data()` gathers the active
+- **Merge loader** (`core/data_loader/`, `merge.py`): `load_game_data()` gathers the active
   mods' content in load order and **deep-merges by record id** (`_deep_merge` —
   a later mod overrides only the fields it supplies and appends new ids; plain
   lists like `options` are replaced wholesale), then parses one `GameData`. Cached
@@ -73,5 +73,5 @@ authoring guide is `docs/modding.md`; the shape:
 - Four living examples ship under `docs/sample-mods/`: `campaign-notes` (data-only),
   `flat-bonus-readouts` (data+Python — a new readout kind) and `field-kit`
   (data+Python — a piece of gear and the stat-applier seam), all three exercised
-  end-to-end by `tests/test_mod_loading.py`; plus `guardian-kit`, the finished mod
+  end-to-end by `tests/core/test_mod_loading.py`; plus `guardian-kit`, the finished mod
   built step by step in `docs/modding-tutorial.md`.

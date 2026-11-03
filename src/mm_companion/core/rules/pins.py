@@ -1,7 +1,7 @@
 """Pinned parameters: the handful of numbers a GM wants on a card, resolved.
 
 A GM reads the same four or five numbers off a creature every round — its
-Defence, what it hits with, what its attack forces a save against — and reads
+Defense, what it hits with, what its attack forces a save against — and reads
 them off *different* creatures. So the set is per-card and the GM chooses it, and
 a :class:`PinRef` is how a choice is written down.
 
@@ -76,7 +76,7 @@ PIN_RESISTANCE = "resistance"
 PIN_SKILL = "skill"
 PIN_INITIATIVE = "initiative"
 PIN_POWER = "power"
-#: The DC an attacker must beat — ``10 + Defence``. Its own kind rather than a
+#: The DC an attacker must beat — ``10 + Defense``. Its own kind rather than a
 #: dressed-up resistance pin, because it is a *different number*: the Resistances
 #: table (and so the resistance pin) shows the rank, and a chip that quietly
 #: showed 10 more than the row it was pinned from would be a trap. It is here at
@@ -184,7 +184,7 @@ class PinnedValue:
     """A resolved pin: what to write on the chip, and what a click rolls.
 
     ``spec`` is ``None`` for a value that is simply *read* rather than rolled (a
-    Defence DC is a difficulty, nobody throws it) — such a chip renders normally
+    Defense DC is a difficulty, nobody throws it) — such a chip renders normally
     and ignores clicks. ``missing`` is the other thing: the pin found nothing at
     all, so the chip renders muted with :data:`MISSING_VALUE` and is there only to
     be removed. The two are kept apart because conflating them would either grey
@@ -340,9 +340,9 @@ def _from_resistance(
     spec = resistance_roll(char, game_data, ref.key)
     shown = spec.modifier if with_conditions else resistance_total(char, game_data, ref.key)
     # Unsigned: a defence is a number to beat, not a bonus to add. Writing "+12"
-    # on a Defence chip invites it into the wrong side of an attack roll.
+    # on a Defense chip invites it into the wrong side of an attack roll.
     #
-    # A *derived* resistance (Defence) is read and never rolled: it is what an
+    # A *derived* resistance (Defense) is read and never rolled: it is what an
     # attacker rolls against, so a chip that threw it would throw a check nobody
     # makes. The data says which ones are (``derived`` in resistances.json).
     return PinnedValue(
@@ -765,7 +765,7 @@ def requested_roll_choices(game_data: GameData) -> list[PinGroup]:
     A third character-free list beside :func:`default_pin_choices`, and a smaller
     one again, because a request is answered on somebody else's sheet:
 
-    * **no Defence DC** — it resolves to no
+    * **no Defense DC** — it resolves to no
       :class:`~mm_companion.core.rules.rolls.RollSpec` at all (it is a difficulty,
       not a roll), so there would be nothing to put in the recipient's roller;
     * **no powers or equipment** — a pin names a power by an id that belongs to

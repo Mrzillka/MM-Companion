@@ -37,7 +37,7 @@ from mm_companion.core.session.protocol import (
 from mm_companion.ui import dice_roller
 from mm_companion.ui.blocks.bus import BUILD_CHANGED, EDITED
 from mm_companion.ui.character_sheet import CharacterSheet
-from mm_companion.ui.dice_roller import DiceRollerView
+from mm_companion.ui.roller.view import DiceRollerView
 from mm_companion.ui.session_bridge import SessionBridge, active_session, set_active_session
 from mm_companion.ui.session_dialogs import (
     NO_CHARACTER,

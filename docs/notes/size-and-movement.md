@@ -102,7 +102,7 @@ data-first; nothing below names a trait, an effect or a column in Python.
   labelled from these steps, so the player can stop on any rank and the label simply
   repeats the category where the table ran out — the pip scale opens a wider gap where a
   repeated category changes, so the stretch of a ladder spent at one size is visible.
-- **`_RankDial` is the rank scale on the card** (`ui/sections/powers.py`): one pip per
+- **`_RankDial` is the rank scale on the card** (`ui/sections/power_parts/widgets.py`): one pip per
   rank (`ui/rank_pips.py`'s `RankPips`, a single painted widget) and a label naming it,
   under the effect's term grid and above the dice footer with the rest of the mid-play
   controls. It has been two other things. A strip of checkable buttons, one per rung,

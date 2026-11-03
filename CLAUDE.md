@@ -73,7 +73,7 @@ The single most important convention. The package is layered and the
 dependency direction is strictly **`ui` → `core` → `data`**:
 
 - `src/mm_companion/core/` — rules engine. Pure Python, **no PySide6 imports**,
-  must not import `ui`: `data_loader.py` (game content), `dice.py` (d20
+  must not import `ui`: `data_loader/` (game content), `dice.py` (d20
   resolution / degrees of success), `character.py` (the mutable `Character`
   state model, now carrying a `powers` list), `powers.py` (the assembled-power
   data model — `Power`, `PowerEffectInstance`, `ModifierSelection`),
@@ -102,7 +102,7 @@ several of them are the only record of a bug that shaped it.
 
 | Working notes | Read before touching |
 | --- | --- |
-| [Data loading and game content](docs/notes/data-and-content.md) | `core/data_loader.py`, `GameData`, or adding a content file |
+| [Data loading and game content](docs/notes/data-and-content.md) | `core/data_loader/`, `GameData`, or adding a content file |
 | [Conditions and the damage ladder](docs/notes/conditions-and-damage.md) | conditions, damage resolution, or the display overlay they drive |
 | [The workspace, the launcher and saved characters](docs/notes/workspace-and-files.md) | startup, settings, saving/loading, images, the character library |
 | [The character sheet: blocks, canvas and layout](docs/notes/sheet-and-blocks.md) | adding a block, the page, the pinned strip, layout persistence |

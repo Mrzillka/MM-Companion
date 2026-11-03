@@ -57,7 +57,7 @@ entry). Per window and in memory: closing the sheet discards the history.
 - **A change pushed in from outside the window is absorbed, never recorded** —
   `undo.absorbing(sheet)` around the GM's condition/hero-point commands
   (`session_player.py`) and the damage rung replayed onto an open NPC sheet
-  (`gm_window._after_npc_condition_change`, where the card's entry and the sheet are
+  (`GMWindow._after_npc_condition_change`, in `ui/gm/npc_conditions.py`, where the card's entry and the sheet are
   two different `Character` objects kept in step by replaying settled ids). Absorb
   commits any pending local edit first, so that stays undoable, and then **replays
   the change onto every state already in the history**: without that, "not

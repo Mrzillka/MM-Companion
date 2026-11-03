@@ -4,7 +4,13 @@ Matters when touching the data loader or adding a content file.
 
 Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
 
-- `core/data_loader.py` is the *only* entry point for game content. It parses
+- `core/data_loader/` is the *only* entry point for game content. It is a package:
+  the records sit in topic modules (`traits`, `power_records`, `system_records`,
+  `equipment_records`, `game_data`), the parsers in `parsing_content` and
+  `parsing_rules`, the mod merge in `merge`, and `__init__` builds and caches
+  `GameData` and re-exports every public record, so callers import from
+  `mm_companion.core.data_loader` and never from a submodule. A new record goes in
+  the module for its topic and gets a line in `__init__`'s re-exports. It parses
   the bundled JSON into frozen dataclasses (`Field`, `Characteristic`,
   `Ability`, `Resistance`, `Skill`, `Advantage`, `Condition` + its mechanical
   sub-records (`ConditionParameter`, `Debilitation`, `DefenseMod`, `AttackMods`,

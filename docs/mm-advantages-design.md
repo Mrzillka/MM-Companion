@@ -318,7 +318,7 @@ advantage with two "sub-targets."
 
 The chosen subject is stored on the character as `AdvantageSelection.parameter` (a plain
 string). *What* to ask for is data, not code: an advantage in `advantages.json` may carry a
-`parameter` object that the loader parses into a `ParameterSpec` (`core/data_loader.py`) and the
+`parameter` object that the loader parses into a `ParameterSpec` (`core/data_loader/`) and the
 Advantages block renders as either a dropdown or a free-text field:
 
 ```json

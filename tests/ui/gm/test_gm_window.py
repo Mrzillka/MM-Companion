@@ -26,6 +26,7 @@ from PySide6.QtGui import QContextMenuEvent, QDragEnterEvent, QDropEvent, QMouse
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
+    QFileDialog,
     QGroupBox,
     QLabel,
     QMenu,
@@ -52,12 +53,14 @@ from mm_companion.core.rules import (
 from mm_companion.core.session import discovery, store
 from mm_companion.core.session import server as server_mod
 from mm_companion.core.session.model import new_session
-from mm_companion.core.session.protocol import sanitize_snapshot
+from mm_companion.core.session.protocol import MAX_SCENE_ENTRIES, sanitize_snapshot
 from mm_companion.ui import card_chips, dice_roller, player_card, theme
 from mm_companion.ui import gm_window as gm_window_module
 from mm_companion.ui.block_sizes import load_block_sizes
 from mm_companion.ui.blocks import gm_registry
 from mm_companion.ui.drop_feedback import DropFeedback
+from mm_companion.ui.gm import model as gm_model
+from mm_companion.ui.gm import scene as gm_scene
 from mm_companion.ui.gm_window import SCENE_NPC, SCENE_PLAYER, GMWindow
 from mm_companion.ui.npc_card import NPCCard
 from mm_companion.ui.npc_quick_dialog import QuickNPC, QuickNPCDialog
@@ -1617,9 +1620,7 @@ def test_an_existing_npc_can_be_brought_into_the_session(
     window: GMWindow, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     path = write_npc("Ogre")
-    monkeypatch.setattr(
-        gm_window_module.QFileDialog, "getOpenFileName", lambda *a, **k: (str(path), "")
-    )
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(path), ""))
 
     window._add_existing_npc()
 
@@ -1988,10 +1989,10 @@ def test_copying_an_npc_numbers_the_copy_off_its_base(window: GMWindow) -> None:
 
 
 def test_next_copy_name_is_base_aware() -> None:
-    assert gm_window_module._next_copy_name("Goon", set()) == "Goon-2"
-    assert gm_window_module._next_copy_name("Goon", {"Goon-2"}) == "Goon-3"
-    assert gm_window_module._next_copy_name("Goon-2", {"Goon-2"}) == "Goon-3"
-    assert gm_window_module._next_copy_name("Goon-7", {"Goon-2", "Goon-3"}) == "Goon-4"
+    assert gm_model._next_copy_name("Goon", set()) == "Goon-2"
+    assert gm_model._next_copy_name("Goon", {"Goon-2"}) == "Goon-3"
+    assert gm_model._next_copy_name("Goon-2", {"Goon-2"}) == "Goon-3"
+    assert gm_model._next_copy_name("Goon-7", {"Goon-2", "Goon-3"}) == "Goon-4"
 
 
 def register_npcs(window: GMWindow, *names: str) -> None:
@@ -2101,7 +2102,7 @@ def test_rolling_an_entrys_initiative_uses_its_modifier_and_shows_a_badge(
     path = write_agile_npc("Ogre", agility=3)
     window._register_npc(path)
     window._set_in_scene(SCENE_NPC, path.name, True)
-    monkeypatch.setattr(gm_window_module, "roll_d20", lambda *a, **k: 15)
+    monkeypatch.setattr(gm_scene, "roll_d20", lambda *a, **k: 15)
     (ref,) = window._scene_board.ordered_refs()
 
     window._scene_board.card(ref)._badge.clicked.emit()
@@ -2118,7 +2119,7 @@ def test_a_rolled_initiative_survives_a_refresh_of_the_cast(
     path = write_agile_npc("Ogre", agility=0)
     window._register_npc(path)
     window._set_in_scene(SCENE_NPC, path.name, True)
-    monkeypatch.setattr(gm_window_module, "roll_d20", lambda *a, **k: 12)
+    monkeypatch.setattr(gm_scene, "roll_d20", lambda *a, **k: 12)
     window._roll_entry_initiative(window._scene_board.ordered_refs()[0])
 
     window._refresh_npcs()
@@ -3139,19 +3140,19 @@ def test_collapse_all_shrinks_every_card_and_says_what_it_will_do(
 ) -> None:
     quick_npc_file(window, name="Goon")
     quick_npc_file(window, name="Brute")
-    assert window._collapse_all_button.text() == gm_window_module.COLLAPSE_ALL
+    assert window._collapse_all_button.text() == gm_model.COLLAPSE_ALL
 
     window._collapse_all_button.click()
 
     assert all(card.collapsed for card in npc_cards(window))
     # The caption is a readout of the board as well as the next action.
-    assert window._collapse_all_button.text() == gm_window_module.EXPAND_ALL
+    assert window._collapse_all_button.text() == gm_model.EXPAND_ALL
     assert len(storage.gm_collapsed_cards()) == 2
 
     window._collapse_all_button.click()
 
     assert not any(card.collapsed for card in npc_cards(window))
-    assert window._collapse_all_button.text() == gm_window_module.COLLAPSE_ALL
+    assert window._collapse_all_button.text() == gm_model.COLLAPSE_ALL
     assert storage.gm_collapsed_cards() == {}
 
 
@@ -3163,7 +3164,7 @@ def test_one_card_still_open_means_collapse_all(window: GMWindow) -> None:
 
     first._collapse_button.click()
 
-    assert window._collapse_all_button.text() == gm_window_module.COLLAPSE_ALL
+    assert window._collapse_all_button.text() == gm_model.COLLAPSE_ALL
     window._collapse_all_button.click()
     assert all(card.collapsed for card in npc_cards(window))
 
@@ -3718,7 +3719,7 @@ def test_a_new_scene_takes_two_clicks_and_opens_no_dialog(
     """The button asks in its own caption instead of stopping the table with a
     modal, which is the wrong thing to do in the middle of a round."""
     monkeypatch.setattr(
-        gm_window_module.QMessageBox,
+        QMessageBox,
         "question",
         lambda *a, **k: pytest.fail("New scene must not open a dialog"),
     )
@@ -3857,7 +3858,7 @@ def test_a_board_past_the_wires_limit_says_so(qapp: QApplication, window: GMWind
     silently and by *insertion* order — which is not the order the board reads in,
     so what falls off can be a creature at the top of the initiative. The GM's own
     board shows all of it either way."""
-    limit = gm_window_module.MAX_SCENE_ENTRIES
+    limit = MAX_SCENE_ENTRIES
     names = _npc_files(window, *[f"Mook {n}" for n in range(limit + 2)])
     start_hosting(qapp, window, canned())
     for name in names[:limit]:

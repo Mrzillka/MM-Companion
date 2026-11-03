@@ -103,7 +103,7 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
   unlit one. Adding the rule app-side would not fix it either, since Classic emits
   no widget chrome at all. So a segmented control carries its own widget-level
   stylesheet from tokens *every* preset defines — `_mode_toggle_style` in
-  `ui/sections/powers.py` is the worked example, the same bargain `ui/lock.py` and
+  `ui/sections/power_parts/widgets.py` is the worked example, the same bargain `ui/lock.py` and
   `CompactOverlayButton` strike. `QToolButton:checked` *is* in the sheet; push
   buttons are the gap.
 - **Two more of the same trap, both found by a *text* tool button.** The Notes

@@ -41,11 +41,12 @@ from mm_companion.core.rules import (
 from mm_companion.ui import theme
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.power_constructor.canvas import MODE_ARRAY_DYNAMIC
+from mm_companion.ui.sections.power_parts.helpers import _share_index
+from mm_companion.ui.sections.power_parts.widgets import _RankDial
 from mm_companion.ui.sections.powers import (
     PowersSection,
     _DraggableCard,
     _ModeToggle,
-    _RankDial,
     _RollLine,
 )
 
@@ -697,7 +698,7 @@ def _effect_array_sheet(qapp: QApplication):
 
 
 def test_an_array_power_gets_a_picker_for_the_effect_it_is_using(qapp: QApplication) -> None:
-    from mm_companion.ui.sections.powers import _EffectSelector
+    from mm_companion.ui.sections.power_parts.widgets import _EffectSelector
 
     sheet, _char, power = _effect_array_sheet(qapp)
     (selector,) = sheet.powers.findChildren(_EffectSelector)
@@ -711,7 +712,7 @@ def test_an_array_power_gets_a_picker_for_the_effect_it_is_using(qapp: QApplicat
 
 
 def test_picking_an_effect_is_runtime_not_a_build_change(qapp: QApplication) -> None:
-    from mm_companion.ui.sections.powers import _EffectSelector
+    from mm_companion.ui.sections.power_parts.widgets import _EffectSelector
 
     sheet, _char, power = _effect_array_sheet(qapp)
     runtime: list[int] = []
@@ -727,7 +728,7 @@ def test_picking_an_effect_is_runtime_not_a_build_change(qapp: QApplication) -> 
 
 
 def test_only_an_array_power_gets_the_picker(qapp: QApplication) -> None:
-    from mm_companion.ui.sections.powers import _EffectSelector
+    from mm_companion.ui.sections.power_parts.widgets import _EffectSelector
 
     sheet, _char, power = _effect_array_sheet(qapp)
     power.structure = STRUCTURE_INDEPENDENT
@@ -742,7 +743,7 @@ def test_only_an_array_power_gets_the_picker(qapp: QApplication) -> None:
 
 
 def test_the_effect_picker_survives_the_lock(qapp: QApplication) -> None:
-    from mm_companion.ui.sections.powers import _EffectSelector
+    from mm_companion.ui.sections.power_parts.widgets import _EffectSelector
 
     sheet, _char, _power = _effect_array_sheet(qapp)
     sheet.set_locked(True)
@@ -1504,8 +1505,8 @@ def test_the_share_dials_groove_is_its_whole_ladder_however_little_is_left(
 
     # Flight 3 costs 6, so two points a rank — and the ceiling is what says how far up.
     assert sec._share_steps(flight, 6, 0) == [0, 2, 4, 6]
-    assert sec._share_index([0, 2, 4, 6], 3) == 1  # 3 points can only pay for the 2 notch
-    assert sec._share_index([0, 2, 4, 6], 0) == 0
+    assert _share_index([0, 2, 4, 6], 3) == 1  # 3 points can only pay for the 2 notch
+    assert _share_index([0, 2, 4, 6], 0) == 0
 
     # A stored share that is not a notch is shown rather than rounded away, or the pool
     # would go on charging a point the card had stopped displaying.

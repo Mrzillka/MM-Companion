@@ -9,11 +9,14 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
 - `DiceSection` (`ui/sections/dice.py`) is the d20 roller **as a block**, and it is the
   one block whose descriptor sets `default_pinned` — a die that scrolls away with the
   page is no use mid-fight, so it starts in the strip. There is no standalone roller
-  window any more (no `Tools` menu, no launcher button): `ui/dice_roller.py` now offers
-  `DiceRollerPanel` (the roll controls — GM Mode embeds one with `hidden_option=True`),
-  `LocalRollHistory` (the private list of one's own rolls), and `DiceRollerView` (a
-  panel plus **whichever history is right** — the private one alone, the table's shared
-  `RollHistoryPanel` in a session), which is what the block hosts. Two ways it is
+  window any more (no `Tools` menu, no launcher button): `ui/dice_roller.py` offers
+  `DiceRollerPanel` (the roll controls — GM Mode embeds one with `hidden_option=True`;
+  its shape, Request row and quick rolls are mixins in `ui/roller/`, while the rolling
+  stays in `dice_roller.py`, where the test suite patches `roll_d20`), and `ui/roller/`
+  holds `LocalRollHistory` (the private list of one's own rolls, in `history.py`) and
+  `DiceRollerView` (a panel plus **whichever history is right** — the private one
+  alone, the table's shared `RollHistoryPanel` in a session — in `view.py`), which is
+  what the block hosts. Two ways it is
   unlike its neighbours: it is **not a view over the character** (it drives `core.dice`
   and `core.storage` directly), so it publishes nothing on the bus — a roll must never
   mark the sheet dirty, though it does **serve** `roll-requested`, see "Rolling from
@@ -675,7 +678,7 @@ of NPCs — often fewer. Two answers, and they are independent.
   (`roll_history.roll_headline`: `21 (d20 12 +9) vs DC 15 · Success (2 degrees)`)
   rather than a line of its own, and `tighten_card` packs every card's margins. Both
   histories build their number line from the one function — `LocalRollHistory`'s
-  `RollCard` converts its roll with `dice_roller.local_record` first — so the private
+  `RollCard` converts its roll with `roller.history.local_record` first — so the private
   and the shared card cannot drift apart again.
 - **Every new entry pops up in a corner of the screen** (`ui/toasts.py`,
   `RollToaster`): a frameless, always-on-top window that never takes focus, stacking

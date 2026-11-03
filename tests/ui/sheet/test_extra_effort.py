@@ -48,7 +48,7 @@ from mm_companion.core.rules import (
 )
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.extra_effort import ExtraEffortDialog, character_effort_menu
-from mm_companion.ui.sections import powers as powers_module
+from mm_companion.ui.sections.power_parts import uses as powers_uses
 from mm_companion.ui.sections.powers import _DraggableCard
 
 
@@ -356,7 +356,7 @@ def test_pushing_from_a_card_charges_the_fatigue_and_writes_it_down(
     data = load_game_data()
     char, blast = _hero()
     sheet = CharacterSheet(data, char)
-    monkeypatch.setattr(powers_module, "ExtraEffortDialog", _AcceptedDialog)
+    monkeypatch.setattr(powers_uses, "ExtraEffortDialog", _AcceptedDialog)
 
     assert sheet.powers.use_extra_effort(
         _rank_increase(data), blast, blast.effects[0], "Fire Blast"
@@ -376,7 +376,7 @@ def test_a_cancelled_dialog_spends_nothing(
     data = load_game_data()
     char, blast = _hero()
     sheet = CharacterSheet(data, char)
-    monkeypatch.setattr(powers_module, "ExtraEffortDialog", _CancelledDialog)
+    monkeypatch.setattr(powers_uses, "ExtraEffortDialog", _CancelledDialog)
 
     assert (
         sheet.powers.use_extra_effort(_rank_increase(data), blast, blast.effects[0], "Blast")
@@ -393,7 +393,7 @@ def test_the_hero_point_route_moves_the_pips_in_the_block_that_owns_them(
     char, blast = _hero()
     sheet = CharacterSheet(data, char)
     sheet.system_info.set_hero_points(3)
-    monkeypatch.setattr(powers_module, "ExtraEffortDialog", _HeroPointDialog)
+    monkeypatch.setattr(powers_uses, "ExtraEffortDialog", _HeroPointDialog)
 
     sheet.powers.use_extra_effort(_rank_increase(data), blast, blast.effects[0], "Fire Blast")
 
@@ -410,7 +410,7 @@ def test_clearing_from_a_card_takes_the_ranks_back(
     data = load_game_data()
     char, blast = _hero()
     section = CharacterSheet(data, char).powers
-    monkeypatch.setattr(powers_module, "ExtraEffortDialog", _AcceptedDialog)
+    monkeypatch.setattr(powers_uses, "ExtraEffortDialog", _AcceptedDialog)
     section.use_extra_effort(_rank_increase(data), blast, blast.effects[0], "Fire Blast")
 
     assert "Clear Extra Effort" in _card_menu_labels(section, blast)
@@ -692,7 +692,7 @@ def test_a_stunt_is_built_first_and_charged_on_the_way_back(
     assert sheet.powers.use_extra_effort(stunt_use, blast, blast.effects[0], "Damage")
     assert sheet.powers._windows and char.conditions == []
 
-    monkeypatch.setattr(powers_module, "ExtraEffortDialog", _AcceptedDialog)
+    monkeypatch.setattr(powers_uses, "ExtraEffortDialog", _AcceptedDialog)
     built = _stunt_of(blast, rank=2)
     built.stunt_of = ""  # what the constructor hands back knows nothing about stunts
     assert sheet.powers._on_stunt_saved(built, stunt_use, blast, blast.effects[0], "Damage")
@@ -711,7 +711,7 @@ def test_cancelling_the_cost_drops_the_build_rather_than_giving_it_away(
     data = load_game_data()
     char, blast = _hero()
     sheet = CharacterSheet(data, char)
-    monkeypatch.setattr(powers_module, "ExtraEffortDialog", _CancelledDialog)
+    monkeypatch.setattr(powers_uses, "ExtraEffortDialog", _CancelledDialog)
 
     saved = sheet.powers._on_stunt_saved(
         _stunt_of(blast), extra_effort_use(data, "power_stunt"), blast, blast.effects[0], "Damage"

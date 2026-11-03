@@ -18,7 +18,7 @@ authoring guide is `docs/modding.md`; the shape:
   Manager; later applies later and wins). Manifest `priority` only *seeds* where a
   newly-added mod first lands (enabled mods not yet in `mod_order` trail the ordered
   ones by ascending `priority`).
-- **Merge loader** (`core/data_loader.py`): `load_game_data()` gathers the active
+- **Merge loader** (`core/data_loader/`, `merge.py`): `load_game_data()` gathers the active
   mods' content in load order and **deep-merges by record id** (`_deep_merge` —
   a later mod overrides only the fields it supplies and appends new ids; plain
   lists like `options` are replaced wholesale), then parses one `GameData`. Cached

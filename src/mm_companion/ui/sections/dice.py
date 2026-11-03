@@ -9,7 +9,7 @@ sets ``default_pinned``, so a fresh sheet opens with the die already beside the
 page instead of scrolling away under it.
 
 The block is a thin wrapper: all of the behaviour is
-:class:`~mm_companion.ui.dice_roller.DiceRollerView` (the roll column plus the
+:class:`~mm_companion.ui.roller.view.DiceRollerView` (the roll column plus the
 private history, swapped for the table's shared one in a session), stacked
 vertically to suit a narrow strip.
 
@@ -57,8 +57,8 @@ from mm_companion.ui.attack_targets import (
     SceneTarget,
     aimed_spec,
 )
-from mm_companion.ui.dice_roller import DiceRollerView
 from mm_companion.ui.impress import IMPRESS_ACTION, KIND_IMPRESS, ImpressDialog, new_action_id
+from mm_companion.ui.roller.view import DiceRollerView
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.session_bridge import SessionBridge, live_session
 from mm_companion.ui.toasts import notify_window
@@ -470,7 +470,7 @@ class DiceSection(QGroupBox):
 
     def release_roller(self) -> tuple[QWidget, QWidget]:
         """Lend the roller out to a compact window — see
-        :meth:`~mm_companion.ui.dice_roller.DiceRollerView.release_roller`.
+        :meth:`~mm_companion.ui.roller.view.DiceRollerView.release_roller`.
 
         This block keeps answering the bus while the roller is away: a stat row
         clicked on the sheet behind still loads into the mini window's chip,

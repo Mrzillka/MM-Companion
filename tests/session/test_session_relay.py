@@ -672,6 +672,9 @@ def test_hosting_fails_when_the_relay_is_not_there():
 
 # --------------------------------------------------------------------------
 # TLS
+#
+# The relay is dialled at 127.0.0.1, which the test certificate also names: on
+# Windows ``localhost`` tries ::1 first and waits ~2 s per connection to fall back.
 # --------------------------------------------------------------------------
 
 
@@ -685,7 +688,7 @@ def test_a_session_runs_over_a_tls_relay(tls_cert):
     running = _run(relay_box)
     state = new_session("Encrypted")
     port = relay_box.address[1]
-    url = relay_url(f"mmrelay://localhost:{port}", state.id)
+    url = relay_url(f"mmrelay://127.0.0.1:{port}", state.id)
     server = SessionServer(
         state,
         transport=RelayTransport(url, ssl_context=client_context),
@@ -720,7 +723,7 @@ def test_a_relay_with_an_untrusted_certificate_is_refused(tls_cert):
     try:
         # The default context verifies against the system store, which has never
         # heard of this certificate — exactly what a player's app would do.
-        transport = RelayTransport(relay_url(f"mmrelay://localhost:{relay_box.address[1]}", "s1"))
+        transport = RelayTransport(relay_url(f"mmrelay://127.0.0.1:{relay_box.address[1]}", "s1"))
         with pytest.raises(RelayError):
             transport.connect()
     finally:
@@ -748,7 +751,7 @@ def test_a_relay_is_trusted_through_the_system_bundle_when_openssl_found_none(
     running = _run(relay_box)
     state = new_session("Deck")
     port = relay_box.address[1]
-    url = relay_url(f"mmrelay://localhost:{port}", state.id)
+    url = relay_url(f"mmrelay://127.0.0.1:{port}", state.id)
     server = SessionServer(state, transport=RelayTransport(url), persist=False)
     try:
         server.start()

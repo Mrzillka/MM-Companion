@@ -121,7 +121,7 @@ def _git_for_windows_openssl() -> str | None:
 
 @pytest.fixture(scope="session")
 def tls_cert(tmp_path_factory):
-    """A throwaway self-signed certificate for ``localhost``.
+    """A throwaway self-signed certificate for ``localhost`` and ``127.0.0.1``.
 
     Generated rather than checked in — a private key in the repository is a
     liability, and a checked-in certificate expires. Skips where openssl is not

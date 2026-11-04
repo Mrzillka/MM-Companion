@@ -16,9 +16,10 @@ engine debts live in [the debts file](debts.md); this file only orders them.
 certificate-renewal hook restart `mm-sessions` too (see [the session
 notes](session.md)). Neither reaches the VPS by itself:
 
-- **The hook** is copied to the box by `deploy/deploy.sh`. Install it before the
-  next renewal, **about 2026-11-22** (the certificate is valid to 2026-12-22).
-  This one does not wait for a release: it covers the 0.9.4 hub already running.
+- **The hook** was installed on the box by hand on 2026-11-04, so the 0.9.4 hub
+  already running is covered for the next renewal. Careful: `deploy/deploy.sh`
+  reinstalls the hook from the box's `main` checkout, so running it before this
+  branch reaches `main` puts the old hook back.
 - **The hub code** goes out with the next release and redeploy.
 
 ### Conditions remember how they come off (#20b)

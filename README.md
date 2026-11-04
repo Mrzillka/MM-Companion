@@ -114,6 +114,12 @@ release, then run it. No Python is required. During setup you can add a desktop
 shortcut and optionally choose a **Portable** install (a single folder that keeps
 its data beside itself).
 
+The installer is not code-signed yet, so Windows SmartScreen may say *"Windows
+protected your PC"* the first time. Click **More info ▸ Run anyway**. The
+installer is built by the public GitHub Actions workflow in
+[`.github/workflows/release.yml`](.github/workflows/release.yml) from the tagged
+source.
+
 User data — settings, saved characters, and installed mods — lives in the per-user
 workspace at `%APPDATA%\MM-Companion` (or a `data\` folder beside the exe for a
 Portable install), so it is never overwritten by an upgrade. See

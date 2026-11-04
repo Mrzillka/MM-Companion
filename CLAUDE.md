@@ -123,6 +123,7 @@ several of them are the only record of a bug that shaped it.
 | [The mod pipeline](docs/notes/mods.md) | data loading, startup, or a `register_*` seam |
 | [Testing](docs/notes/testing.md) | adding a test file, a `conftest.py`, or changing how tests run |
 | [Accepted debts](docs/notes/debts.md) | picking up agreed work that is not done yet |
+| [The road to 1.0](docs/notes/road-to-1.0.md) | planning what to do next, or anything for the public launch |
 
 Alongside them, `docs/` holds the longer-form documents the notes refer back to:
 the rules design (`mm-core-mechanics`, `mm-skills-design`, `mm-advantages-design`,

@@ -49,6 +49,15 @@ The shape:
   (`HOST_STATE_*`), the host-side twin of the client's `EVENT_STATE`. Both ladders
   now read their delays from `net.py` — one cadence for a table, and a host and a
   player giving up at different times would be a puzzle to reason about.
+- **A hub never gives up, because nobody is there to press Reconnect.** When the
+  window runs out, the ladder parks at `unreachable` and waits for the GM's button.
+  On the headless hub that meant a relay down for more than five minutes (a
+  certificate renewal restarts it) left every table unjoinable until someone ran
+  `systemctl restart mm-sessions`. It happened on 2026-09-26. Now
+  `SessionHub._repair`, run on every janitor pass, calls `reconnect()` on any
+  session parked at `unreachable`. It also re-hosts sessions that failed to
+  register at boot because the relay was not listening yet; those used to be
+  skipped until the next restart.
 - **`relisten` is emphatically not `stop` then `start`, and that is the whole
   design.** `stop` says goodbye to every peer first
   (`Kicked(REASON_SESSION_CLOSED)`) precisely so a client can tell a deliberate end

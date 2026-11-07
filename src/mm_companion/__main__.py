@@ -9,12 +9,14 @@ import os
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QtMsgType, qInstallMessageHandler
 from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import QApplication, QSplashScreen
 
+from mm_companion import __version__
+from mm_companion.core import diagnostics
 from mm_companion.core.mods import initialize_mods
-from mm_companion.core.storage import ensure_workspace
+from mm_companion.core.storage import ensure_workspace, get_workspace
 from mm_companion.ui import theme
 from mm_companion.ui.app_icon import app_icon
 from mm_companion.ui.start_window import StartWindow
@@ -49,9 +51,33 @@ def _apply_portable_home() -> None:
         os.environ["MM_COMPANION_HOME"] = str(exe_dir / "data")
 
 
+def _route_qt_messages() -> None:
+    """Send Qt's own warnings to the errors log as well as the console.
+
+    Qt reports the faults that come before a crash — a widget painted by two
+    painters, a recursive repaint, a layout asked to do the impossible — as
+    warnings on stderr, which a windowed build does not have. Debug and info
+    chatter stays out; repeats are counted rather than written again.
+    """
+
+    def handler(kind: QtMsgType, context, message: str) -> None:  # noqa: ANN001
+        if kind in (QtMsgType.QtWarningMsg, QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg):
+            diagnostics.log_message(
+                f"Qt {kind.name.removeprefix('Qt').removesuffix('Msg')}: {message}"
+            )
+        if sys.stderr is not None:
+            print(message, file=sys.stderr)
+
+    qInstallMessageHandler(handler)
+
+
 def main() -> int:
     # Redirect the workspace for a portable install before anything reads it.
     _apply_portable_home()
+    # Before anything else can fail: a windowed build has no console, so this is
+    # the only record an error or a crash will leave (see core.diagnostics).
+    diagnostics.install(get_workspace().logs_dir, version=__version__)
+    _route_qt_messages()
 
     app = QApplication(sys.argv)
     # The application icon is Qt's default for every top-level window, so no

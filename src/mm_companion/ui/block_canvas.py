@@ -44,6 +44,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mm_companion.core import diagnostics
 from mm_companion.ui import layout_tree as lt
 from mm_companion.ui import theme
 from mm_companion.ui.block_frame import BlockFrame, BlockWindow
@@ -209,6 +210,22 @@ def _widget_tree(roots: list[QWidget]) -> set[int]:
     return seen
 
 
+def _shape(node: lt.Node | None) -> object:
+    """What of *node* decides which widgets render it — and nothing else.
+
+    The sizes are what the widgets are *read for*, so they cannot be part of the
+    question; which tab is active and the order of a group's tabs do not change
+    the widgets either (a tab click and a tab reorder both edit the tree without a
+    rebuild). Two trees with the same shape are rendered by the same splitters in
+    the same places, so sizes read off one can be written into the other.
+    """
+    if node is None:
+        return None
+    if isinstance(node, lt.Leaf):
+        return tuple(sorted(node.keys))
+    return (node.orientation, tuple(_shape(child) for child in node.children))
+
+
 def _forget_sizes(node: lt.Node | None) -> lt.Node | None:
     """*node* with every remembered proportion dropped, keeping its shape."""
     if node is None or isinstance(node, lt.Leaf):
@@ -316,6 +333,10 @@ class BlockCanvas(QWidget):
         # The blocks currently washed as "release to close" — see _warn_closing.
         self._warned: set[str] = set()
         self._row_widgets: list[QWidget] = []
+        # The shape of the page tree those rows were built from (see _shape). The
+        # sizes on the rows are only true of *that* tree; once the tree has moved on
+        # without a rebuild they describe something else, and are not read back.
+        self._rendered_shape: object = None
         # The page's view. Rows with a height the user dragged keep it; the rest
         # are as tall as their content, exactly as every row used to be.
         self._stack = RowStack(self)
@@ -530,7 +551,7 @@ class BlockCanvas(QWidget):
     # -- rendering -----------------------------------------------------------
 
     def _relayout(self) -> None:
-        """Rebuild the page from the tree.
+        """Rebuild the page from the tree — and never leave it half built.
 
         Every frame is reparented on the way, which is why nothing here may leave
         one visible while it is between homes: a parentless visible widget *is* a
@@ -538,7 +559,22 @@ class BlockCanvas(QWidget):
         dozen of them (see ``tests/ui/sheet/test_window_flash.py``). Frames are hidden
         before they are let go and shown once they are placed; containers are shed
         through ``discard_widget``, which hides before it unparents.
+
+        That ordering is also the danger. A rebuild that raised part way left every
+        frame it had already hidden *hidden*, with nothing left to show it again —
+        the page went blank around whatever happened not to have been touched yet,
+        and in the installed app, which has no console, without a word. So a failed
+        rebuild is written down and repaired (:meth:`_recover`) rather than left
+        where it stopped.
         """
+        try:
+            self._render()
+        except Exception:  # noqa: BLE001 - any failure here strands live blocks
+            diagnostics.log_exception("Rebuilding the page failed; repairing it")
+            self._recover()
+
+    def _render(self) -> None:
+        """The rebuild proper (see :meth:`_relayout`, which is what to call)."""
         # A rebuild ends every gesture in flight, so nothing may still be offering
         # to close a block — the dividers that raised the warning are about to go.
         self._clear_close_warnings()
@@ -604,6 +640,79 @@ class BlockCanvas(QWidget):
             self._layout.addWidget(self._stack)
         self._region_mark.raise_()
         self._indicator.raise_()  # last, so the seam reads over the wash
+        self._rendered_shape = _shape(self._page)
+
+    def _recover(self) -> None:
+        """Put every block back somewhere it can be seen, after a rebuild failed.
+
+        Two tries, each from a clean slate — every frame rescued to the canvas,
+        every group and row container let go — so nothing of the failed attempt is
+        reused: first the tree as it stands with anything impossible taken out of it
+        (:meth:`_repair_model`), then the default arrangement. A block that is
+        somewhere odd is better than a block that is nowhere.
+        """
+        for attempt in (self._repair_model, self._model_from_defaults):
+            try:
+                attempt()
+                self._clear_rendering()
+                self._render()
+                return
+            except Exception:  # noqa: BLE001 - see _relayout
+                diagnostics.log_exception("Repairing the page failed")
+
+    def _clear_rendering(self) -> None:
+        """Take every docked frame out of whatever holds it, and drop the holders."""
+        for keys in list(self._groups):
+            self._release_group(keys)
+        for key, frame in self._frames.items():
+            if key in self._windows:
+                continue
+            frame.hide()
+            frame.setParent(self)
+        if self._board is not None:
+            self._board.invalidate()
+        self._stack.set_rows([], [])
+        for row in self._row_widgets:
+            if not isinstance(row, BlockFrame):
+                discard_widget(row)
+        self._row_widgets = []
+        self._rendered_shape = None
+
+    def _repair_model(self) -> None:
+        """Make the tree name every block exactly once, and only blocks that exist.
+
+        The invariant :meth:`_validate` enforces on a saved layout, re-established on
+        the live one: a key with no frame is dropped, a block named twice keeps its
+        place on the page, and a block named nowhere — not on the page, in the strip,
+        in a window or among the closed — gets a row of its own at the end.
+        """
+        known = set(self._frames)
+        elsewhere = set(self._windows) | self._hidden
+        page: lt.Node | None = self._page
+        for key in lt.keys(page):
+            if key not in known or key in elsewhere:
+                page = lt.remove(page, key)
+        on_page = set(lt.keys(page))
+        region = self._region
+        for key in lt.keys(region):
+            if key not in known or key in elsewhere or key in on_page:
+                region = lt.remove(region, key)
+        self._region = lt.normalize(region)
+        placed = on_page | set(lt.keys(self._region)) | elsewhere
+        for key in self._frames:
+            if key not in placed:
+                page = lt.append_row(page, key)
+        self._set_page(page)
+
+    def _model_from_defaults(self) -> None:
+        """Replace the tree with the default arrangement, keeping windows and closed blocks."""
+        parsed = self._validate(self.default_arrangement())
+        if parsed is not None:
+            page, (edge, _extent, root), _floating, _hidden, _anchors = parsed
+            self._set_page(page)
+            self._region = root
+            self._pin_edge = edge
+        self._repair_model()
 
     def _settled(self) -> None:
         """One gesture is over: tell anyone laying out, and anyone remembering."""
@@ -792,8 +901,17 @@ class BlockCanvas(QWidget):
         The handles are dragged by the user, not by us, so the sizes are only true
         on the widgets until somebody asks. Pulling them in here is what makes a
         resize survive a save, an undo step, or the next rebuild.
+
+        **Only while the widgets still describe the tree.** A gesture that changes
+        the tree several times before it rebuilds — :meth:`close_blocks` detaching a
+        row's worth of blocks one by one — asks again after the first change, and by
+        then the rows on screen were built for a tree that is gone: row *n* of the
+        widgets is no longer row *n* of the tree. Read anyway, a row's sizes landed
+        on a different row, and a row that had disappeared raised ``IndexError`` out
+        of the middle of the gesture. The sizes were taken in before the first change
+        (every caller reads before it edits), so there is nothing left to lose.
         """
-        if self._sizes_held:
+        if self._sizes_held or _shape(self._page) != self._rendered_shape:
             return
         heights = self._stack.heights()
         page = self._page
@@ -812,7 +930,10 @@ class BlockCanvas(QWidget):
             # default box, and the tree still holds the real ones (see
             # GridSplitter.has_real_sizes).
             return page
-        node = lt.at(page, path)
+        try:
+            node = lt.at(page, path)
+        except IndexError:
+            return page  # the widgets were built for a different tree
         if isinstance(node, lt.Split) and widget.count() == len(node.children):
             page = lt.set_sizes(page, path, widget.sizes()) or page
             for index in range(widget.count()):
@@ -853,9 +974,13 @@ class BlockCanvas(QWidget):
         if self._board is None or self._sizes_held:
             return
         region = self._region
-        for path, widget in self._board.panel.split_paths():
-            region = self._absorb_sizes(region, path, widget) if region is not None else region
-        self._region = lt.normalize(region)
+        # Only while the strip on screen was built for this tree — see
+        # _remember_sizes, which has the same rule for the same reason.
+        if _shape(region) == _shape(self._board.panel.region()):
+            for path, widget in self._board.panel.split_paths():
+                if region is not None:
+                    region = self._absorb_sizes(region, path, widget)
+            self._region = lt.normalize(region)
         # The thickness the strip was *asked* for, not the one its blocks forced on
         # it — see PinnedBoard.desired_extent.
         extent = self._board.desired_extent()
@@ -2151,7 +2276,47 @@ class BlockCanvas(QWidget):
         if suspended:
             # A drag in flight when the window shrank would be aiming at a page
             # that is no longer there; see :meth:`accepts_drops`.
-            self._end_drag()
+            self.end_gestures()
+
+    def end_gestures(self) -> None:
+        """Stop every gesture on the page and the strip, deciding nothing by it.
+
+        For the moment the page is put out of sight — compact mode, the simple
+        sheet — with a hand still on something. Each kind of gesture ends the way
+        its own *release* would have, minus anything only a release may decide:
+
+        * a block dragged by its title bar stops looking for a place to land (it
+          stays where it is, floating if it had torn out);
+        * a row grip or a divider keeps the size it reached, and closes nothing for
+          being small at that moment — closing is only ever a release's call;
+        * a resize still settling is recorded now rather than 250 ms later, when the
+          page it measured may be hidden or rebuilt.
+
+        Without this, each of them carried on as if the button were still down: the
+        page stayed frozen at the height a grip drag began at, a divider kept its
+        "release to close" warning, and the next stray release on it closed whatever
+        the old drag had last warned about.
+        """
+        self._stack.cancel_drag()
+        for splitter in self._splitters():
+            splitter.cancel_drag()
+        self._end_drag()
+        self._stop_grip_autoscroll()
+        self._clear_close_warnings()
+        if self._size_settle.isActive():
+            self._size_settle.stop()
+            self._flush_sizes()
+
+    def _splitters(self) -> list[GridSplitter]:
+        """Every divider-bearing splitter on the page and in the strip."""
+        found: dict[int, GridSplitter] = {}
+        roots: list[QWidget] = [self]
+        if self._board is not None:
+            roots.append(self._board)
+        for root in roots:
+            for splitter in root.findChildren(GridSplitter):
+                found[id(splitter)] = splitter
+        return list(found.values())
 
     def accepts_drops(self) -> bool:
         """Whether a dragged block may land on the page or the pinned strip now.

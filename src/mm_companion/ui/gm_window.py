@@ -97,7 +97,7 @@ from mm_companion.ui.impress_gm import ImpressController
 from mm_companion.ui.npc_group import NPCGroupCard
 from mm_companion.ui.npc_window import NPCWindow
 from mm_companion.ui.pin_picker import PinPickerDialog
-from mm_companion.ui.pinned_panel import PinnedBoard
+from mm_companion.ui.pinned_panel import PinnedBoard, attach_strip_menu
 from mm_companion.ui.player_card import PlayerCard
 from mm_companion.ui.roll_history import RollHistoryPanel
 from mm_companion.ui.roller.view import DiceRollerView
@@ -375,6 +375,7 @@ class GMWindow(
             action.toggled.connect(lambda visible, k=key: self._on_block_toggled(k, visible))
             self._block_actions[key] = action
         view_menu.addSeparator()
+        attach_strip_menu(view_menu.addMenu("Pinned Strip"), self._board.panel)
         view_menu.addAction("Reset Layout").triggered.connect(self._reset_layout)
         self._canvas.block_visibility_changed.connect(self._on_block_visibility_changed)
 
@@ -660,6 +661,10 @@ class GMWindow(
     def suspend_windows(self, suspended: bool) -> None:
         """Stand this window's floated blocks down while it is compact (pinned ones stay)."""
         self._canvas.set_windows_suspended(suspended)
+
+    def end_gestures(self) -> None:
+        """Stop any drag on the GM board before compact mode hides it."""
+        self._canvas.end_gestures()
 
     def sync_dice_layout(self) -> None:
         """Re-read the roller's layout preference (see ``MainWindow.sync_dice_layout``)."""

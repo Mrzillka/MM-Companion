@@ -123,6 +123,16 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   suspend_windows` asks the simple sheet to hide them again. Compact mode itself works
   from the simple sheet unchanged: it borrows the roller *out of the Dice section*,
   wherever that section is, and gives it back there.
+- **A switch is all or nothing.** The simple page is built **before** the edit page
+  is hidden (`_enter_simple`), and `SimpleSheet.activate` gives back everything it
+  had borrowed if the build raises — so a failure leaves the edit page up, not a blank
+  window with the borrowed blocks missing from both views. `set_simple` catches it,
+  logs it, falls back through `_back_to_edit_page` (each step on its own; the lock is
+  put back) and emits `simpleChanged` with **what is showing**, not what was asked
+  for, so the menu's label stays true. A rebuild that fails while the page is up
+  (`_rebuild`, off a timer with no caller to tell) stands the page down and emits
+  `failed`, and the sheet goes back to the edit page. `_teardown` walks every
+  *borrowed* section, boxed or not, and `_give_back` returns each on its own.
 - A request for a block the Custom preset does not show (a roll with the roller closed)
   reveals it on the edit page as before and then **rebuilds the simple page**
   (`SimpleSheet.reveal`), rather than raising a floated window that is hidden.

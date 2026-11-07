@@ -31,6 +31,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QWidget
 from mm_companion.core.session import client as session_client
 from mm_companion.core.session import server as session_server
 from mm_companion.ui import theme
+from mm_companion.ui.paint import painting
 from mm_companion.ui.theme.tokens import is_literal_color
 from mm_companion.ui.widgets import muted_style, tinted_style
 
@@ -102,14 +103,14 @@ class StatusDot(QWidget):
         return self.palette().color(QPalette.ColorRole.PlaceholderText)
 
     def paintEvent(self, event) -> None:  # noqa: ARG002 - Qt's signature
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(self._colour())
-        size = min(self.width(), self.height())
-        left = (self.width() - size) // 2
-        top = (self.height() - size) // 2
-        painter.drawEllipse(left, top, size, size)
+        with painting(self) as painter:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(self._colour())
+            size = min(self.width(), self.height())
+            left = (self.width() - size) // 2
+            top = (self.height() - size) // 2
+            painter.drawEllipse(left, top, size, size)
 
 
 class ConnectionIndicator(QWidget):

@@ -78,7 +78,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from mm_companion.core import storage
+from mm_companion.core import diagnostics, storage
 from mm_companion.ui import theme
 from mm_companion.ui.frameless import apply_window_flags, describe_on_top, size_grip_row
 from mm_companion.ui.widgets import ElidingLabel
@@ -615,12 +615,30 @@ class CompactController(QObject):
         # before the first thing that would invalidate it — the un-maximize below
         # moves the block with the window, and the loan hides it outright.
         roller_rect = QRect(anchor.mapToGlobal(QPoint(0, 0)), anchor.size())
+        # A hand still on a divider or a title bar is about to lose the page it was
+        # dragging on: end that gesture first, the way its own release would have.
+        end_gestures = getattr(self._surface, "end_gestures", None)
+        if callable(end_gestures):
+            end_gestures()
         roller = self._surface.release_roller()
         if roller is None:
             return
         panel, history = roller
         self._roller = (panel, history)
+        try:
+            self._shrink(panel, history, roller_rect)
+        except Exception:  # noqa: BLE001 - a half-made switch is a blank window
+            diagnostics.log_exception("Entering compact mode failed")
+            self._undo_enter()
+            return
+        self.compactChanged.emit(True)
 
+    def _shrink(self, panel: QWidget, history: QWidget, roller_rect: QRect) -> None:
+        """Everything :meth:`enter` does once the roller is in hand."""
+        # Nothing from an earlier visit may be mistaken for this one's: a failure
+        # before these are re-measured is undone against what they say.
+        self._normal_geometry = None
+        self._was_maximized = False
         # Captured before anything moves, so what the window is remembered at on
         # close is the shape the user actually left it in (see :meth:`saved_geometry`).
         self._normal_state = self._window.saveGeometry()
@@ -653,7 +671,20 @@ class CompactController(QObject):
         # :meth:`_animate_to`. Everything else about being compact is true from
         # this moment; only the picture waits.
         self._animate_to(self._compact_target(preferences, roller_rect), on_finished=self.page.show)
-        self.compactChanged.emit(True)
+
+    def _undo_enter(self) -> None:
+        """Put the full window back after :meth:`_shrink` failed part way.
+
+        The failure can have come at any step, so this assumes nothing about which
+        ones ran and undoes each on its own (see :meth:`_restore_full_window`).
+        """
+        self._settle_animation()
+        self._compact = False
+        self._escape.setEnabled(False)
+        self._attempt("restoring the frame", self._apply_flags, frameless=False, on_top=False)
+        if self._normal_geometry is not None:
+            self._attempt("restoring the size", self._window.setGeometry, self._normal_geometry)
+        self._restore_full_window()
 
     def leave(self) -> None:
         """Give the full window back, and the roller with it."""
@@ -687,18 +718,39 @@ class CompactController(QObject):
         """
         if self._roller is None:
             return
-        panel, _history = self._roller
-        self._roller = None
-        self.page.release()
-        self._surface.restore_roller()
-        self.button.attach(self._anchor())
-        panel.set_compact(False)
+        self._restore_full_window()
+
+    def _restore_full_window(self) -> None:
+        """Give the roller back and the sheet its window, one independent step at a time.
+
+        Shared by the ordinary way out and by a way in that failed. Each step is
+        attempted on its own and a failure is written down, never allowed to stop the
+        rest: the menu bar and the sheet coming back are the whole point, and a
+        roller that could not be re-seated is a smaller fault than a window with
+        nothing in it.
+        """
+        roller, self._roller = self._roller, None
+        panel = roller[0] if roller is not None else None
+        self._attempt("releasing the mini roller", self.page.release)
+        if roller is not None:
+            self._attempt("giving the roller back", self._surface.restore_roller)
+        self._attempt("moving the compact button", lambda: self.button.attach(self._anchor()))
+        if panel is not None:
+            self._attempt("restyling the roller", panel.set_compact, False)
         self.page.hide()
         self._window.menuBar().show()
         self._content.show()
-        self._suspend_windows(False)
+        self._attempt("bringing the block windows back", self._suspend_windows, False)
         if self._was_maximized:
             self._window.showMaximized()
+
+    @staticmethod
+    def _attempt(what: str, step: Callable[..., object], *args: object, **kwargs: object) -> None:
+        """Run one step of a transition; record a failure rather than stop at it."""
+        try:
+            step(*args, **kwargs)
+        except Exception:  # noqa: BLE001 - see _restore_full_window
+            diagnostics.log_exception(f"Compact mode: {what} failed")
 
     def _suspend_windows(self, suspended: bool) -> None:
         """Stand the surface's floated block windows down, if it has any.

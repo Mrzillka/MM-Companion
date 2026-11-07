@@ -114,6 +114,11 @@ through rather than reinvent. When building new sheet widgets, use it:
   block redraws its speed rows, and each discarded row flashed. Unparenting before
   the delete still matters for the reason it always did — a widget still parented
   to a container keeps painting until the delete is serviced, leaving a ghost.
+- **Open a `QPainter` with `ui.paint.painting(device)`**, never `QPainter(self)` left for
+  Python to end. A paint that raises keeps its frame alive in the traceback PySide
+  holds on to, the frame keeps the painter, and the painter stays *active* on a widget
+  Qt has finished painting — from there the window can stop drawing altogether.
+  `painting` ends it in a `finally`. Every paint in the app goes through it.
 - **Never `setVisible(True)` on a widget that has no parent yet**, for the mirror
   of that reason. Build the host first and add the child to a layout *before*
   settling its visibility; in a constructor that may run before the widget is
@@ -138,7 +143,11 @@ through rather than reinvent. When building new sheet widgets, use it:
   visibly empty and refill on every redraw, and it puts the page's scroll position
   back — twice, because Qt clamps the bar to the shrunken block's maximum while it
   is short and only recomputes the range on the layout pass that follows. It was
-  `preserved_scroll` when it only did the second half.
+  `preserved_scroll` when it only did the second half. **It restores the widget's own
+  setting, not `updatesEnabled()`**, which is also false while an *ancestor* is
+  frozen: Qt makes an explicit `setUpdatesEnabled(False)` sticky
+  (`WA_ForceUpdatesDisabled`, which a parent re-enabling passes over), so a rebuild
+  nested inside another used to leave its block frozen for good — blank from then on.
 - **…and it shows the new children before it returns.** A widget added to the layout
   of a parent already on screen is not shown by the add: `QLayout::addChildWidget`
   *queues* the show for the next turn, and until then every layout passes it over as

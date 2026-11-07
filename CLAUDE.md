@@ -183,6 +183,13 @@ notes file that owns it.
   so the decision would be reading a width it had itself just set. State the
   narrowest arrangement you know how to reach and put the content-shaped number in
   `sizeHint`, which is a preference and may be content-shaped.
+- **A failure must never leave the window blank, and must never be silent.** The
+  installed app has no console. A rebuild or view switch that can raise is caught,
+  repaired back to something on screen, and written down with
+  `core.diagnostics.log_exception` (it lands in `logs/errors.log`); open a `QPainter`
+  only through `ui.paint.painting`. See [the sheet
+  notes](docs/notes/sheet-and-blocks.md) and [the workspace
+  notes](docs/notes/workspace-and-files.md).
 - **Read a setting through its accessor in `core.storage`**, never off
   `load_settings()`: that returns the settings file *verbatim* and does not merge
   `DEFAULT_SETTINGS`, so any key added after a workspace was created reads back as

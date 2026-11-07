@@ -60,6 +60,7 @@ from mm_companion.ui import layout_tree as lt
 from mm_companion.ui import theme
 from mm_companion.ui.blocks.base import instance_template
 from mm_companion.ui.layout_tree import VERTICAL, Leaf, Split
+from mm_companion.ui.paint import painting
 from mm_companion.ui.simple import layout as simple_layout
 from mm_companion.ui.simple.registry import SimpleContext, simple_view
 from mm_companion.ui.simple.sheet import SimpleBox, SimplePage
@@ -311,18 +312,17 @@ class PrintDocument:
             QImage.Format.Format_RGB32,
         )
         image.fill(paper("background"))
-        painter = QPainter(image)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        painter.scale(factor, factor)
-        silence = None if with_text else _SilenceLabels(self.text_labels())
-        try:
-            self.render(painter, top, bottom)
-        finally:
-            if silence is not None:
-                silence.release()
-        painter.end()
+        with painting(image) as painter:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            painter.scale(factor, factor)
+            silence = None if with_text else _SilenceLabels(self.text_labels())
+            try:
+                self.render(painter, top, bottom)
+            finally:
+                if silence is not None:
+                    silence.release()
         return image
 
     def draw_text(self, painter: QPainter, top: int, bottom: int) -> None:

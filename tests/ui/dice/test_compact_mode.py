@@ -948,3 +948,52 @@ def test_the_gm_window_remembers_its_full_size_too(gm: GMWindow) -> None:
 
     assert storage.compact_settings()["width"] == 300
     assert storage.load_settings()["gm_layout"]["window_geometry"]
+
+
+# -- a switch that fails part way ------------------------------------------------
+
+
+def test_a_failed_entry_puts_the_full_window_back(
+    qapp: QApplication, window: MainWindow, monkeypatch, tmp_path
+) -> None:
+    # Whatever step failed, the sheet and the menu bar come back and the roller goes
+    # home — the alternative is the blank window this used to leave.
+    from mm_companion.core import diagnostics
+
+    monkeypatch.setattr(diagnostics, "_errors_path", tmp_path / "errors.log")
+    diagnostics._reset_for_tests()
+    _on_screen(qapp, window)
+    view = window.sheet.dice.view
+    panel = view.panel
+
+    def failing(*_args) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(window._compact.page, "adopt", failing)
+    window._compact.enter()
+    _settle(qapp)
+
+    assert not window._compact.is_compact
+    assert view.isAncestorOf(panel)
+    assert view.isAncestorOf(view._history_part)
+    assert not window.sheet.isHidden()
+    assert not window.menuBar().isHidden()
+    assert window._compact.page.isHidden()
+    assert "Entering compact mode failed" in (tmp_path / "errors.log").read_text("utf-8")
+
+
+def test_entering_compact_ends_a_drag_on_the_page(qapp: QApplication, window: MainWindow) -> None:
+    from PySide6.QtCore import QPoint
+    from PySide6.QtTest import QTest
+
+    _on_screen(qapp, window)
+    stack = window.sheet.canvas._stack
+    grip = stack._grips[0]
+    QTest.mousePress(grip, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(5, 1))
+    QTest.mouseMove(grip, QPoint(5, 40))
+    assert grip.dragging
+
+    window._compact.enter()
+
+    assert not grip.dragging
+    assert stack._frozen_height == 0

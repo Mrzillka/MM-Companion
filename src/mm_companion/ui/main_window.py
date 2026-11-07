@@ -22,6 +22,7 @@ from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.compact import CompactController
 from mm_companion.ui.connection_indicator import install_connection_indicator
 from mm_companion.ui.layout_undo import LayoutHistory, UndoRouter
+from mm_companion.ui.pinned_panel import attach_strip_menu
 from mm_companion.ui.toasts import notify_window
 from mm_companion.ui.undo import UndoController
 
@@ -420,6 +421,9 @@ class MainWindow(QMainWindow):
             action.triggered.connect(
                 lambda _checked=False, t=descriptor.key: self._sheet.add_block_instance(t)
             )
+        # The strip's own menu, here as well as on a right-click of its divider: the
+        # pin icon that used to be the way in only shows while the strip is empty.
+        attach_strip_menu(self._view_menu.addMenu("Pinned Strip"), self._sheet.board.panel)
         self._view_menu.addAction("Reset Layout").triggered.connect(self._reset_layout)
         self._build_simple_view_actions()
         # Keep the View toggles in sync when a block is hidden/shown elsewhere

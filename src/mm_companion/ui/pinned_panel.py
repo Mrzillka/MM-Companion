@@ -19,9 +19,10 @@ Four widgets, in the order they nest:
   order of those two children *are* the strip's edge, and dragging its handle
   sets the strip's thickness.
 * :class:`PinnedPanel` — the strip itself: the pin handle plus a splitter of
-  lines. The handle is always there — it is the icon an empty strip shows, the
-  thing the whole strip is dragged to another edge by, and the button that opens
-  its menu.
+  lines. The handle is the icon an *empty* strip shows — the thing the strip is
+  dragged to another edge by, and the button that opens its menu — and it is
+  hidden once a block is pinned; the menu then lives on a right-click of the
+  strip's divider and under View ▸ Pinned Strip.
 * :class:`_PinnedLine` — one line: a splitter of blocks across the strip.
 * :class:`_PinnedSlot` — one pinned block, placed within its cell by the current
   alignment.
@@ -97,13 +98,17 @@ class PinHost(Protocol):
 
 
 class PinnedHandle(QToolButton):
-    """The strip's pin icon: its drop target, its drag handle, and its menu.
+    """The empty strip's pin icon: its drop target, its drag handle, and its menu.
 
-    Always visible, empty strip or not, because it is the only thing that is
-    *always* the strip — a block can be dragged onto it, the whole strip is
-    dragged to another edge by it, and a click on it opens the strip's menu. The
-    drag only starts once the cursor has travelled the platform's drag distance,
-    so a plain click still reads as a click.
+    Shown **only while nothing is pinned**. An empty strip is otherwise a sliver of
+    nothing, and the icon is what makes it findable — a block can be dragged onto
+    it, the strip is dragged to another edge by it, and a click opens the strip's
+    menu. Once a block is in the strip the icon sat over it as clutter, and every
+    job it did has another way in: a block is dropped on the blocks already there,
+    and the menu (the edge to sit on, *Unpin all*) is on a right-click of the
+    strip's divider and under View ▸ Pinned Strip. The drag only starts once the
+    cursor has travelled the platform's drag distance, so a plain click still
+    reads as a click.
     """
 
     drag_started = Signal()
@@ -354,9 +359,14 @@ class PinnedPanel(QFrame):
             self._grid.setColumnStretch(index, 1 if index == content_col else 0)
 
     def _apply_empty_state(self) -> None:
-        """Collapse to the handle when nothing is pinned, expand when something is."""
+        """Collapse to the handle when nothing is pinned, expand when something is.
+
+        The handle goes with it: it is the empty strip's whole content, and over a
+        strip full of blocks it was only an icon in the way (see :class:`PinnedHandle`).
+        """
         empty = self._root is None
         self._scroll.setVisible(not empty)
+        self._handle.setVisible(empty)
         self.setMinimumSize(0, 0)
         self.setMaximumSize(UNBOUNDED, UNBOUNDED)
         if empty:
@@ -469,10 +479,12 @@ class PinnedPanel(QFrame):
         still push the window around: a pinned block reflows and, past that,
         scrolls inside its own frame, so the strip has no width it has to demand.
 
-        The handle stays, because the strip has to remain findable and droppable
-        however narrow it is dragged.
+        An empty strip keeps its handle's size, because it has to remain findable
+        and droppable; a full one hides the handle and asks for nothing at all.
         """
         base = super().minimumSizeHint()
+        if not self.is_empty():
+            return base
         hint = self._handle.sizeHint()
         vertical = is_vertical_strip(self._edge)
         return QSize(
@@ -596,6 +608,11 @@ class PinnedPanel(QFrame):
     def build_menu(self) -> QMenu:
         """The strip's menu, built fresh so it always shows the live state."""
         menu = QMenu(self)
+        self.fill_menu(menu)
+        return menu
+
+    def fill_menu(self, menu: QMenu) -> None:
+        """Add the strip's items to *menu* — its own, or the window's View ▸ Pinned Strip."""
         position = menu.addMenu("Position")
         for edge in PIN_EDGES:
             action = position.addAction(EDGE_LABELS[edge])
@@ -606,10 +623,27 @@ class PinnedPanel(QFrame):
         unpin = menu.addAction("Unpin all")
         unpin.setEnabled(self._root is not None)
         unpin.triggered.connect(lambda: self._host.unpin_all())
-        return menu
 
     def _handle_menu_pos(self) -> QPoint:
         return self._handle.mapToGlobal(self._handle.rect().bottomLeft())
+
+
+def attach_strip_menu(menu: QMenu, panel: PinnedPanel) -> None:
+    """Make *menu* (a window's View ▸ Pinned Strip) the strip's menu, refilled on open.
+
+    Refilled rather than built once, so the edge it ticks and whether *Unpin all*
+    has anything to do are read at the moment it is opened. The submenus a refill
+    replaces are deleted with it: ``QMenu.clear`` drops the actions but not the
+    menus behind them.
+    """
+
+    def refill() -> None:
+        for child in menu.findChildren(QMenu):
+            child.deleteLater()
+        menu.clear()
+        panel.fill_menu(menu)
+
+    menu.aboutToShow.connect(refill)
 
 
 class EdgeZoneOverlay(QWidget):
@@ -693,6 +727,15 @@ class _BoardSplitter(GridSplitter):
         # The strip is never collapsed by a drag: its handle *is* the strip when
         # nothing is pinned, and a collapsed one could not be got back.
         self.setChildrenCollapsible(False)
+
+    def handle_menu(self, index: int, global_pos: QPoint) -> None:
+        """Right-clicking the strip's divider opens the strip's menu.
+
+        The one place the menu is always within reach: the pin icon that used to
+        open it is only shown while the strip is empty.
+        """
+        del index
+        self._panel.open_menu(global_pos)
 
     def detent_positions(self, index: int) -> list[int]:
         sizes = self.sizes()

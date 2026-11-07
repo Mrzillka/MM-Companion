@@ -142,3 +142,33 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   the window open. Seeding a loaded character does **not** mark it dirty (a `_loading`
   guard in the sections, plus the fact that section signals connect after
   construction).
+
+## The logs folder
+
+`logs/` in the workspace holds what the installed app writes about itself, because a
+windowed build has no console: PyInstaller sets `sys.stderr` to `None`, so an uncaught
+Python error — one raised in a Qt slot, which PySide reports and carries on past —
+went nowhere, and a hard crash left only an access-violation code in the Windows event
+log. `core.diagnostics.install(logs_dir, version=…)` runs first thing in
+`__main__.main()`, before `QApplication`, and keeps:
+
+- **`errors.log`** — every uncaught exception (`sys.excepthook`, which PySide calls for
+  a slot or a virtual override, and `threading.excepthook`), every error the UI caught
+  and recovered from (`diagnostics.log_exception(context)`: a page rebuild repaired, a
+  view switch rolled back), and Qt's own warnings, criticals and fatals
+  (`_route_qt_messages`, a `qInstallMessageHandler` in `__main__`). Each distinct
+  failure is written in full `FULL_REPEATS` (3) times and then only counted, so a paint
+  that raises every frame cannot fill the disk.
+- **`crash.log`** — `faulthandler`'s traceback of every thread when the process dies of
+  a native fault, after a `=== <time> started <version> (pid …)` line per session. It
+  is the only Python-level record a hard crash leaves. On Windows `faulthandler` also
+  reports some *handled* system exceptions — creating a printer raises COM's
+  `0x80040155`, which Qt catches — so a trace with that code, followed by the session
+  carrying on, is noise, not a crash.
+- The `update-…` logs the self-updater keeps (above), which predate both.
+
+Either file is rotated to `<name>.1` at startup once it passes `MAX_LOG_BYTES` (1 MB).
+`install` never raises — a workspace that cannot be written to only means there is
+nowhere to write things down — and is Qt-free, so a headless entry point can call it
+too. The first thing to ask for when a user reports a crash or a blank window is these
+two files.

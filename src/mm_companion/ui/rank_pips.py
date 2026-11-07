@@ -48,6 +48,7 @@ from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPaintEvent, QPen
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
 from mm_companion.ui import theme
+from mm_companion.ui.paint import painting
 
 #: The smallest a pip is drawn before the row stops shrinking and starts to clip.
 _FLOOR = 4
@@ -175,31 +176,30 @@ class RankPips(QWidget):
     # -- painting ------------------------------------------------------------
 
     def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802 - Qt override
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        accent = QColor(theme.color("accent"))
-        muted = QColor(theme.color("text.muted.rich"))
-        ring = float(theme.metric("border.width.emphasis"))
-        target = self._outcome(self._hover) if self._hover > 0 else self._value
-        for notch, rect in enumerate(self._rects(), start=1):
-            inner = rect.adjusted(ring / 2, ring / 2, -ring / 2, -ring / 2)
-            lit = notch <= self._value
-            wanted = notch <= target
-            if notch > self._ceiling:
-                pen = QPen(muted, ring, Qt.PenStyle.DotLine)
-                fill = QColor(Qt.GlobalColor.transparent)
-            elif lit and wanted:
-                pen, fill = QPen(accent, ring), accent
-            elif wanted:  # would light up: washed in
-                pen, fill = QPen(accent, ring), _alpha(accent, 0.45)
-            elif lit:  # would go out: fading
-                pen, fill = QPen(accent, ring), _alpha(accent, 0.2)
-            else:
-                pen, fill = QPen(muted, ring), QColor(Qt.GlobalColor.transparent)
-            painter.setPen(pen)
-            painter.setBrush(fill)
-            painter.drawEllipse(inner)
-        painter.end()
+        with painting(self) as painter:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            accent = QColor(theme.color("accent"))
+            muted = QColor(theme.color("text.muted.rich"))
+            ring = float(theme.metric("border.width.emphasis"))
+            target = self._outcome(self._hover) if self._hover > 0 else self._value
+            for notch, rect in enumerate(self._rects(), start=1):
+                inner = rect.adjusted(ring / 2, ring / 2, -ring / 2, -ring / 2)
+                lit = notch <= self._value
+                wanted = notch <= target
+                if notch > self._ceiling:
+                    pen = QPen(muted, ring, Qt.PenStyle.DotLine)
+                    fill = QColor(Qt.GlobalColor.transparent)
+                elif lit and wanted:
+                    pen, fill = QPen(accent, ring), accent
+                elif wanted:  # would light up: washed in
+                    pen, fill = QPen(accent, ring), _alpha(accent, 0.45)
+                elif lit:  # would go out: fading
+                    pen, fill = QPen(accent, ring), _alpha(accent, 0.2)
+                else:
+                    pen, fill = QPen(muted, ring), QColor(Qt.GlobalColor.transparent)
+                painter.setPen(pen)
+                painter.setBrush(fill)
+                painter.drawEllipse(inner)
 
     # -- interaction ---------------------------------------------------------
 

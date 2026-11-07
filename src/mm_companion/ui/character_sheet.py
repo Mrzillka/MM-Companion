@@ -30,6 +30,7 @@ from dataclasses import replace
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QScrollArea, QVBoxLayout, QWidget
 
+from mm_companion.core import diagnostics
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData, load_game_data
 from mm_companion.core.rules import power_points_spent, stable_build
@@ -624,6 +625,7 @@ class CharacterSheet(QWidget):
             self._simple.set_preset(self._simple_preset)
             self.layout().addWidget(self._simple)
             self._simple.hide()
+            self._simple.failed.connect(self._on_simple_failed)
         return self._simple
 
     @property
@@ -682,20 +684,31 @@ class CharacterSheet(QWidget):
         # Both halves of a switch redraw the card blocks — the lock and the simple
         # look each rebuild every card — so the blocks that can hold a rebuild do it
         # once, at the end, in the state the switch leaves them in.
-        with ExitStack() as holds:
-            for section in self._sections():
-                hold = getattr(section, "held_rebuild", None)
-                if callable(hold):
-                    holds.enter_context(hold())
-            if simple:
-                self._enter_simple()
-            else:
-                self._leave_simple()
-        self.simpleChanged.emit(simple)
+        try:
+            with ExitStack() as holds:
+                for section in self._sections():
+                    hold = getattr(section, "held_rebuild", None)
+                    if callable(hold):
+                        holds.enter_context(hold())
+                if simple:
+                    self._enter_simple()
+                else:
+                    self._leave_simple()
+        except Exception:  # noqa: BLE001 - a half-made switch is a blank window
+            direction = "to" if simple else "back from"
+            diagnostics.log_exception(f"Switching {direction} the simple sheet failed")
+            self._back_to_edit_page()
+        # What is actually showing, not what was asked for: a switch that failed and
+        # fell back has to say so, or the menu's label goes on promising the view
+        # that is not there.
+        self.simpleChanged.emit(self.is_simple)
 
     def _enter_simple(self) -> None:
         view = self.simple_sheet
         self._locked_before_simple = self._locked
+        # A hand still on a divider or a title bar is about to lose the page it was
+        # dragging on; end the gesture now, while it can still be recorded.
+        self._canvas.end_gestures()
         # Only if it is not already: locking rebuilds the card trees, and a sheet a
         # player opens to play from is locked already.
         if not self._locked:
@@ -704,20 +717,41 @@ class CharacterSheet(QWidget):
         # all (a sheet opened straight into this view): its layout is what the tree
         # says, not what its dividers read.
         self._canvas.set_sizes_held(True)
-        self._board.hide()
+        # Built before the edit page goes: if the build fails, the edit page is
+        # still what is on screen, rather than nothing.
         view.activate()
+        self._board.hide()
         view.show()
 
     def _leave_simple(self) -> None:
+        self._back_to_edit_page()
+
+    def _back_to_edit_page(self) -> None:
+        """Show the edit page, whatever state a switch left the two views in.
+
+        The way out of the simple sheet, and the way back from a switch that failed
+        half way in either direction. Every step is its own: the edit page has to
+        come back even if giving a section back or restoring the lock goes wrong,
+        because the alternative is a window with nothing in it.
+        """
         view = self._simple
-        view.deactivate()
-        view.hide()
+        if view is not None:
+            view.deactivate()  # never raises: see SimpleSheet.deactivate
+            view.hide()
         self._board.show()
         self._canvas.set_sizes_held(False)
         previous = self._locked_before_simple
         self._locked_before_simple = None
         if previous is not None and previous != self._locked:
-            self.set_locked(previous)
+            try:
+                self.set_locked(previous)
+            except Exception:  # noqa: BLE001 - see the docstring
+                diagnostics.log_exception("Restoring the lock after the simple sheet failed")
+
+    def _on_simple_failed(self) -> None:
+        """The simple page gave up during a rebuild: put the edit page back."""
+        self._back_to_edit_page()
+        self.simpleChanged.emit(False)
 
     def release_roller(self) -> tuple[QWidget, QWidget] | None:
         """Lend the dice roller out to a compact window, or ``None`` if there is none.
@@ -761,6 +795,13 @@ class CharacterSheet(QWidget):
             if callable(handler):
                 return handler()
         return None
+
+    def end_gestures(self) -> None:
+        """Stop any drag on the page — compact mode asks before it hides the sheet.
+
+        See :meth:`~mm_companion.ui.block_canvas.BlockCanvas.end_gestures`.
+        """
+        self._canvas.end_gestures()
 
     def suspend_windows(self, suspended: bool) -> None:
         """Take this sheet's floated block windows off the screen, or bring them back.

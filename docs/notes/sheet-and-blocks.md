@@ -186,10 +186,16 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   wants the wider of them; the same two along the bottom want it as thick as the
   taller. It offers **one** target where a divider between two blocks gets two —
   the other pane is the whole page, whose hint is a number about a scroll area
-  rather than a width anybody meant the strip to stop at. The **`PinnedHandle` (📌) is always visible**: the empty strip's
-  whole content, the drop target that gets the first block in, the grip the strip is
-  dragged to another edge by (lighting four `EdgeZoneOverlay` bands), and the button
-  that opens its menu. The canvas still owns the model — the panel is a view and holds
+  rather than a width anybody meant the strip to stop at. The **`PinnedHandle` (📌) shows only while the strip is
+  empty**: it is the empty strip's whole content, the drop target that gets the first
+  block in, the grip the strip is dragged to another edge by (lighting four
+  `EdgeZoneOverlay` bands), and the button that opens its menu. Over a strip with a
+  block in it — the roller, out of the box — it was clutter sitting on the block (the
+  user asked for it gone), and each of its jobs has another way in there: a block is
+  dropped on the blocks already pinned, and the menu is a **right-click on the strip's
+  divider** (`_BoardSplitter.handle_menu`, through `GridHandle.contextMenuEvent`) and
+  **View ▸ Pinned Strip** (`attach_strip_menu`, refilled on open). Moving the strip to
+  another edge is that menu's *Position* while it is full. The canvas still owns the model — the panel is a view and holds
   no arrangement state; `_relayout` renders the strip **first** so the rows are the
   last to claim a frame, and the rescue pass that follows only touches frames still
   inside the page's own stack (rescuing one the strip had just taken would undo the
@@ -261,6 +267,47 @@ minimum it reports, and only opening a layout does it: a strip the user then dra
 narrower stays there for the rest of the session. A bottom strip is not fitted — its
 blocks reflow into rows, and a height is not a thing to fit to. The GM window's strip
 is the same board and gets the same fit.
+
+## The page never stays broken (matters when touching `_relayout` or any gesture)
+
+A sheet went blank in play — first everything but Notes and the Scene, then the whole
+window — and then the app died, with nothing written anywhere: the installed build has
+no console. The native crash was never pinned to a line, but every way the page could
+be *left* broken was closed, and every one of them now writes to `logs/errors.log`
+(see [the workspace notes](workspace-and-files.md#the-logs-folder)).
+
+- **A rebuild that raises is repaired, not abandoned.** `_relayout` hides every frame
+  it re-homes and shows them again at the very end, so an exception anywhere between
+  left those blocks hidden for good — the page blank around whatever had not been
+  touched yet. It is `_render` inside a `try` now; a failure is logged and
+  `_recover` rebuilds from a clean slate (`_clear_rendering`: every docked frame
+  rescued to the canvas, every group and row container let go), first from the tree
+  with anything impossible taken out (`_repair_model`: unknown keys dropped, a block
+  named twice keeps its place on the page, a block named nowhere gets a row), then
+  from the default arrangement. `tests/ui/canvas/test_layout_robustness.py` makes
+  `build_node` fail part way and checks every block comes back.
+- **Sizes are read only off widgets built for the tree as it is.** `_remember_sizes`
+  walks the rows on screen against the page tree, and a gesture that changes the tree
+  several times before it rebuilds — `close_blocks` detaching a whole row and another
+  block — asked again after the first change. Row *n* on screen was no longer row *n*
+  of the tree: a row's sizes landed on another row, and once a row had gone
+  `layout_tree.at` raised `IndexError` out of the middle of the gesture (reproduced on
+  0.9.4). `_render` records the tree's **shape** (`_shape`: the splits and which keys
+  each leaf holds — not sizes, not tab order or the active tab, which change without a
+  rebuild) and both `_remember_sizes` and `_sync_from_board` read nothing while the
+  shape has moved on. Every caller reads before it edits, so nothing is lost.
+- **A view switch ends every gesture first** (`BlockCanvas.end_gestures`, called by
+  `CharacterSheet._enter_simple` and by compact mode through the surface's
+  `end_gestures` and `set_windows_suspended`). Each gesture ends the way its release
+  would have, minus what only a release may decide: a title-bar drag stops looking for
+  a landing; a row grip (`RowStack.cancel_drag`) and a divider (`GridSplitter.cancel_drag`,
+  `GridHandle.abandon`) keep the size they reached and close nothing; a resize still
+  settling is recorded now. A grip or handle that is **hidden** mid-drag abandons too
+  (`hideEvent`), since it will never see its release — before, the page stayed frozen
+  at the height the drag began at, and the next stray release on that divider closed
+  whatever the old drag had last warned about. Qt does not deliver a buttonless move
+  to a widget without mouse tracking, so a *missed* release cannot make a grip follow a
+  hovering pointer; that case needs no code.
 
 ## The default arrangement
 

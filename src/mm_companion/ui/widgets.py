@@ -917,7 +917,8 @@ def rebuilding(widget: QWidget) -> Iterator[None]:
     tree of any size is a flicker on every redraw, and a redraw happens on every step
     of a spin box. ``setUpdatesEnabled(False)`` collapses the whole rebuild into the
     single repaint that follows it. Restored in a ``finally`` so an exception mid-way
-    cannot leave a block that never paints again.
+    cannot leave a block that never paints again — and restored to what the widget
+    *itself* was set to, so a rebuild nested inside another one does not either.
 
     **The scroll position is put back — on every bar above the block, not just the
     nearest.** Qt clamps an enclosing scroll bar to the smaller maximum *while the
@@ -940,13 +941,18 @@ def rebuilding(widget: QWidget) -> Iterator[None]:
     areas = enclosing_scroll_areas(widget)
     bars = [bar for area in areas for bar in (area.verticalScrollBar(), area.horizontalScrollBar())]
     values = [(bar, bar.value()) for bar in bars if bar is not None]
-    painted = widget.updatesEnabled()
+    # Whether *this widget* had been told not to paint — not ``updatesEnabled()``,
+    # which is also false while an *ancestor* is frozen. Qt makes an explicit
+    # ``setUpdatesEnabled(False)`` sticky (``WA_ForceUpdatesDisabled``: a parent
+    # re-enabling passes it over), so restoring the inherited answer froze a block
+    # rebuilt inside another rebuild *for good* — it never painted again.
+    frozen = widget.testAttribute(Qt.WidgetAttribute.WA_ForceUpdatesDisabled)
     widget.setUpdatesEnabled(False)
     try:
         yield
         _show_laid_out_now(widget)
     finally:
-        widget.setUpdatesEnabled(painted)
+        widget.setUpdatesEnabled(not frozen)
         for bar, value in values:
             bar.setValue(value)
         if areas:

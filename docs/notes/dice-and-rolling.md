@@ -436,6 +436,16 @@ mini strip, `Esc`, or that same button leaves.
 - `ANIMATION_MS` is a class attribute so `tests/conftest.py` can zero it, exactly as it
   does `PowersSection.TRANSITION_MS`; a window that is not on screen jumps rather than
   eases, so a test asserts on the resting state without an event loop.
+- **Either direction is all or nothing.** Entering hides the sheet and the menu bar
+  before the mini page exists, so a failure part way used to leave a window with
+  nothing in it. `enter` runs the shrink (`_shrink`) inside a `try`; a failure is
+  logged and `_undo_enter` puts the frame, the size and the full window back. Leaving
+  and undoing share `_restore_full_window`, which runs each step on its own
+  (`_attempt`) — a roller that will not re-seat is logged and the menu bar and the
+  sheet come back regardless. `_shrink` forgets the last visit's geometry and
+  maximized flag before it measures, so an undo never restores stale ones. And
+  `enter` asks the surface to `end_gestures()` first: a hand still on a divider is
+  about to lose the page it was dragging on (see [the sheet notes](sheet-and-blocks.md#the-page-never-stays-broken-matters-when-touching-_relayout-or-any-gesture)).
 
 ## Rolling from the sheet (matters when touching the roller or a stat block)
 

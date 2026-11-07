@@ -17,8 +17,10 @@ from functools import lru_cache
 from importlib.resources import as_file, files
 
 from PySide6.QtCore import QRectF, QSize, QSizeF, Qt
-from PySide6.QtGui import QPainter, QPixmap
+from PySide6.QtGui import QPixmap
 from PySide6.QtSvg import QSvgRenderer
+
+from mm_companion.ui.paint import painting
 
 RESOURCE_PACKAGE = "mm_companion.ui"
 
@@ -67,9 +69,8 @@ def svg_pixmap(resource: str, size: QSize, ratio: float = 1.0) -> QPixmap:
     pixmap.fill(Qt.GlobalColor.transparent)
     with as_file(files(RESOURCE_PACKAGE).joinpath(resource)) as path:
         renderer = QSvgRenderer(str(path))
-        painter = QPainter(pixmap)
-        renderer.render(painter, _fitted(renderer.viewBoxF().size(), pixels))
-        painter.end()
+        with painting(pixmap) as painter:
+            renderer.render(painter, _fitted(renderer.viewBoxF().size(), pixels))
     pixmap.setDevicePixelRatio(ratio)
     return pixmap
 

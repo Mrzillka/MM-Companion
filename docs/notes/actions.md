@@ -569,11 +569,18 @@ click**: it rolls, as it always did. Its **right click** lists the Scene's creat
   `AttackDeclaration`: the target's Scene ref and name, the aimed spec) and then rolled
   with the declaration's `action_id`, `targets=(name,)` and a "Ana → Thug" title — all
   keys the server already keeps, so **no protocol change**. The roller's
-  `aim_attack` serves the bus topic `attack-requested`.
+  `aim_attack` serves the bus topic `attack-requested`. **The declaration is sent from
+  the roll itself** (`roll_spec(…, before=declare)`), carrying the spec the die is made
+  of: the maneuvers on the roller's lane have moved its modifier and its save's DC by
+  then, and the GM's app asks for the save off the declaration. A declaration that does
+  not go calls the roll off.
 - **The GM's** (`ui/attack_gm.py`, `AttackController`) gets an `ActionCard` with
   **Accept / Decline** (its new optional second button). Accept judges the hit against
-  the target's Defense (`rules.judge_attack`: the roller's arithmetic, so a counted
-  natural 20 is an added degree and a critical) and then:
+  the target's **Defense in play** (`rules.defense_class_in_play`: Vulnerable halves it,
+  All-Out Attack lowers it, Defending raises it — the area window's primary and the team
+  attack judge the same way; before the combat maneuvers it was the build's number) with
+  `rules.judge_attack` (the roller's arithmetic, so a counted natural 20 is an added
+  degree and a critical) and then:
   - one NPC save: rolled by the server at once, at the GM roller's bonus minus penalty
     (`DiceRollerPanel.adjustment`), landed through `answer_rung`;
   - several (a Linked power): `AttackWindow`, a resistance and an adjustment per save;
@@ -656,6 +663,41 @@ taken when Roll is pressed), every write to one checks `shiboken6.isValid`, and 
 outcome goes to the history first. Rolls the session would not take hand the window
 back, Roll enabled again. A result that wraps onto more lines grows the window
 (`widgets.grow_to_fit`) rather than squeezing the rows above it.
+
+## Combat maneuvers
+
+The roller's Actions popup (see [the roller notes](dice-and-rolling.md#the-actions-button))
+offers the combat maneuvers and actions out of `actions.json`'s `combat` block. The
+plan they are built to, phase by phase, is `docs/plans/combat-maneuvers.md`.
+
+**The attack maneuvers** (PDF p200) are `core/rules/maneuvers.py`, read generically off
+each record's `bonus` / `penalty` (`attack_check`, `effect_rank`, `defense` — the
+`MANEUVER_*` names) and `lasting`:
+
+- **The caps** are `combat.limits`: X at most `maxShift` (5), the penalised value never
+  below `floor` (0), the bonused one never more than doubled (`doubleCap`). The values
+  are `maneuver_values`: the attack line's modifier (only when it *is* an attack check —
+  its `marks` carry `trait_keys.attack_check`; an effect check takes no attack
+  maneuver), the **lowest** `effect_rank` of the saves it provokes (a Linked attack
+  moves all of them), and the actor's Defense in play. A save whose rank is unknown
+  (Mind Reading's opposed one, no DC) offers no effect rank.
+- **Combined**: `maneuver_limit(…, others)` adds the other lines' shifts before reading
+  the caps, so two that raise the attack check share the room to double it, and two
+  that oppose (Accurate and Power) give each other room. Several lines at once is
+  allowed (§2 of the plan).
+- **The shift** (`apply_maneuvers`) moves the modifier and restates the label's bonus,
+  moves each ranked save's DC (and the number in its label), its ladder's `rank` (what
+  Impervious is measured against) and `dc_if_resisted`, and names the maneuvers in
+  brackets after the label. Defense is not on the attack: it lands as a condition.
+- **What stays** (`lasting_conditions`): All-Out's `all_out_attack` (Defense −X) and
+  Defensive's `defensive_attack` (Defense +X, attack checks −X), put on **temporary**
+  once the die has settled, hit or miss — never on a reroll, never on an abandoned
+  roll. Accurate and Power change only the attack being made.
+- **`RollSpec.effect_rank`** is local only (like `marks`): the DC and the ladder's rank
+  are what travel, and both are already shifted. No new wire key, so the maneuvers
+  needed nothing from the protocol.
+- **Not yet**: the GM's roller has no maneuvers (phase 7 of the plan), so a team attack
+  rolls without them.
 
 ## Not done yet
 

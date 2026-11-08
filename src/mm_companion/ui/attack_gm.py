@@ -51,7 +51,7 @@ from mm_companion.core.rules import (
     answer_rung,
     combine_team_attack,
     critical_answer,
-    defense_class,
+    defense_class_in_play,
     follow_ups_for_result,
     is_choice_key,
     judge_attack,
@@ -305,7 +305,7 @@ class AttackController(QObject):
         spec = aimed.declaration.spec
         die = int(roll.get("die", 0))
         modifier = int(roll.get("bonus", 0)) - int(roll.get("penalty", 0))
-        dc = defense_class(target.character, self._data)
+        dc = defense_class_in_play(target.character, self._data)
         routine = None
         if rules.routine_attacks and target.minion and not aimed.source.minion:
             routine = routine_total(modifier)
@@ -544,7 +544,7 @@ class AttackController(QObject):
         if target is None or target.character is None:
             return "Pick a target on the Scene."
         rules = self._host.minion_rules()
-        dc = defense_class(target.character, self._data)
+        dc = defense_class_in_play(target.character, self._data)
         action_id = new_action_id()
         title = title or f"Team attack → {target.name}"
         lead_party, lead_option = members[0]

@@ -799,12 +799,45 @@ replaces its line.
   what is picked (dismissing it calls the action off). `load_spec` re-binds every line:
   no attack → greyed with `NEEDS_ATTACK`, kept in place; a **different** attack →
   the limit is worked out again and the value **reset to the maximum**; the same one
-  keeps what the player set. A maximum of 0 greys the line with the limit's reason.
+  (`core.rules.same_attack`: the aimed copy of a line counts as the line) keeps what
+  the player set, pulled down only if it no longer fits. A maximum of 0 greys the line
+  with the limit's reason.
+- **Lines limit each other.** A limit may read the other lines (the maneuvers' caps are
+  on the combined shifts), so whenever a value moves, or a line comes or goes, the lane
+  re-limits the others (`ActionLine.relimit`): ranges follow, and a value past its new
+  maximum is **pulled down, never pushed up** — that is what keeps two lines from
+  chasing each other. A second pass widens what the first left too narrow; the lane's
+  `_settling` flag stops a pass from starting another.
 - **Spent by the roll**: `_start_roll` notes the lines that applied (`_rolled_lines`,
-  and `lines` on the roll Reroll throws again); `_spend_extras` removes them. A greyed
-  line did not apply and stays; an abandoned roll keeps them; a reroll uses the last
-  roll's and leaves the current ones alone. `active_lines()` is `(key, value)` for the
-  ones that apply — what the maneuvers will read.
+  `(key, value)` pairs, and `lines` on the roll Reroll throws again); `_spend_extras`
+  removes them and raises **`linesRolled`** with them — the host's cue to land what they
+  leave behind. A greyed line did not apply and stays; an abandoned roll keeps them and
+  raises nothing; a reroll uses the last roll's, leaves the current ones alone and
+  raises nothing. `active_lines()` is `(key, value)` for the ones that apply.
+- **What the lines do to the roll is the host's**: `set_line_shift(shift)`,
+  `shift(spec, lines) -> spec`. `_start_roll` applies it once (`with_lines`) and the
+  roll is **made of** that spec (`_flight`, read by `_roll_parameters`, `_roll_label` and
+  `_rolled_spec` through `_made_of`); the chip keeps the loaded one, so the lines can be
+  set again for the next throw. A failing shift is logged and the roll goes unshifted.
+- **`roll_spec(spec, before=…)`**: *before* is handed the spec the roll will be made of
+  just before the die goes, and `False` from it calls the roll off (the chip goes back
+  to what it held, through `load_spec(..., localize=False)` — the localizer must not
+  run twice). It is how an aimed attack declares exactly what it rolls.
+
+### The attack maneuvers (Accurate, All-Out, Defensive, Power)
+
+The sheet's Dice block offers the four tiles whenever it has an attack (`NO_ATTACKS`
+otherwise). A tile is `DiceSection.start_maneuver(id)`: a line whose limit is
+`core.rules.maneuver_limit` (the other lines' values in), tinted by the tone of the
+condition it leaves (All-Out red, Defensive green, the others green). The shift is
+`core.rules.apply_maneuvers`: the attack modifier moves (the label is restated:
+`Attack +9 vs. Defense (All-Out Attack +3)`), and the effect-rank shift moves every save
+it provokes — the DC (and the number in its label), the ladder's `rank` that Impervious
+is measured against, and the local-only `RollSpec.effect_rank` the caps read. On
+`linesRolled`, `core.rules.lasting_conditions` goes out on the bus's
+**`condition-requested`** topic and the Conditions block's `take_conditions` puts each on
+**temporary** with its amount (re-applying replaces it: one All-Out a turn). The rules
+and the caps are in [the actions notes](actions.md#combat-maneuvers).
 
 ## Reroll
 

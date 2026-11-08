@@ -227,7 +227,7 @@ def test_an_abandoned_roll_keeps_its_lines(qapp) -> None:
     view = DiceRollerView()
     panel = view.panel
     panel.start_action_line("defend", "Defend", fixed="+2 Defense")
-    panel._rolled_lines = ("defend",)
+    panel._rolled_lines = (("defend", None),)
     panel._rolling = True
     panel._abandon_roll("No answer")
     panel._spend_extras()

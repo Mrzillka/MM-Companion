@@ -320,6 +320,11 @@ class RollSpec:
     #: :attr:`costs`' reason: it describes this sheet, not the roll — and left out of
     #: equality, so a spec rebuilt off the wire is still the roll it was.
     marks: tuple[str, ...] = field(default=(), compare=False)
+    #: On a power's save: the effect rank it is made against (its DC less the effect's
+    #: DC base), which an attack maneuver trades against (Accurate and Power Attack,
+    #: :mod:`.maneuvers`). 0 when unknown. **Local only**, for :attr:`marks`' reason: the
+    #: DC and the ladder's rank are what travel, and both are shifted with it.
+    effect_rank: int = field(default=0, compare=False)
 
     def follow_ups(self) -> tuple[RollSpec, ...]:
         """Every roll this one provokes: :attr:`follow_up`, then :attr:`also`."""
@@ -1100,6 +1105,16 @@ def _damage_measured(
     return replace(ladder, rank=max(0, rank), penetrating=penetrating_ranks(effect, game_data))
 
 
+def _effect_rank(effect: PowerEffectInstance, game_data: GameData, dc: int | None) -> int:
+    """The rank a save of *effect* at *dc* is made against, read back off the DC as
+    :func:`_damage_measured` does (0 when either part is unknown)."""
+
+    base = effect_resistance_dc_base(effect, game_data)
+    if dc is None or base is None:
+        return 0
+    return max(0, dc - base)
+
+
 def _effect_roll_parts(
     effect: PowerEffectInstance, game_data: GameData, char: Character | None, prefix: str
 ) -> _EffectRolls:
@@ -1133,6 +1148,7 @@ def _effect_roll_parts(
             ladder=_damage_measured(
                 effect_spec_ladder(effect, game_data, base_effect), effect, game_data, numbers.dc
             ),
+            effect_rank=_effect_rank(effect, game_data, numbers.dc),
         )
 
     opposed: RollSpec | None = None

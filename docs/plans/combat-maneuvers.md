@@ -15,7 +15,7 @@ every session.**
 | 2 | Sheet indicators: dots, tinted chips, "Clear temporary" | done (2026-11-08) |
 | 3 | Reusable grid popup, action icons, the **Actions** button | done (2026-11-08) |
 | 4 | Roller rework: one two-way slider, the action lane, the attack picker | done (2026-11-08) |
-| 5 | The four attack maneuvers, end to end (player) | not started |
+| 5 | The four attack maneuvers, end to end (player) | done (2026-11-08) |
 | 6 | Self actions: Aim, Charge/Slam, Defend, Recover, Drop Prone, Stand, Finishing, Surprise, Catch | not started |
 | 7 | The GM's side: NPC chooser first, conditions on the NPC | not started |
 | 8 | Targeted actions I: Feint, Trick, Aid | not started |
@@ -383,6 +383,18 @@ widget, log failures.
   (`NO_DC_WARNING`) is on **every** unaimed attack rolled with no DC, not only the
   Attack tile's. **The maneuver tiles are still greyed** (`NOT_BUILT`): phase 5 wires
   them to `start_action_line` with `maneuver_limits` as the *limit*.
+- **As built (phase 5):** `core/rules/maneuvers.py` — `maneuver_action`,
+  `has_attack_check` (the spec's `marks` carry `trait_keys.attack_check`),
+  `maneuver_values`, `maneuver_limit(data, id, spec, char, others) -> ManeuverLimit`,
+  `maneuver_caption`, `apply_maneuvers`, `lasting_conditions`; constants
+  `MANEUVER_ATTACK_CHECK` / `_EFFECT_RANK` / `_DEFENSE` in `game_data.py`; a save's
+  local-only `RollSpec.effect_rank` (DC − the effect's DC base); `rules.same_attack`.
+  The panel: `set_line_shift`, `with_lines`, `_flight` / `_made_of` (the spec a roll is
+  made of), `linesRolled`, `roll_spec(before=)`, `load_spec(localize=)`. The lane:
+  `ActionLine.relimit` / `valueChanged`, `ActionLane._relimit_others`. The host:
+  `DiceSection.start_maneuver`, `_land_lasting`, `conditionsRequested` → bus
+  `condition-requested` → `ConditionsSection.take_conditions`. No `RollSpec.maneuvers`
+  or `finishing` field was needed: the caption goes in the label.
 - **As built (phase 3):** `ui/action_grid.py` as above (tokens `action-grid.tile`,
   `.icon`, `.gap`, `.columns`; icons coloured from the tile's palette `ButtonText`, so no
   colour token). `ui/action_menu.combat_menu(data, offered, gm=, fallback=)` builds the
@@ -493,15 +505,20 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
       machine running low on memory, no failures up to there (see the log).
 
 ### Phase 5 — Attack maneuvers end to end (player)
-- [ ] `core/rules/maneuvers.py`: limits, `apply_maneuvers`, `lasting_conditions`,
+- [x] `core/rules/maneuvers.py`: limits, `apply_maneuvers`, `lasting_conditions`,
       with tests.
-- [ ] A roll with lines active: shifted spec, history caption, conditions land once
+- [x] A roll with lines active: shifted spec, history caption, conditions land once
       the die settles, the lines are spent; nothing lands on an abandoned roll; Reroll
       adds no condition.
-- [ ] Aimed attacks pick up the active lines. Team attack's final ranks include them
-      (p201).
-- [ ] Session: spec keys whitelisted (under v20 — already bumped in phase 2, don't bump
-      again), the GM sees the conditions.
+- [x] Aimed attacks pick up the active lines (the declaration carries the shifted spec).
+- [ ] Team attack's final ranks include them (p201) — **moved to phase 7**: a team attack
+      is the GM's, and the GM's roller has no maneuvers until then.
+- [x] Session: **no new wire key** (the label, modifier, DC and ladder rank already
+      travel; `effect_rank` is local only), so nothing to whitelist and no bump. The GM
+      sees the conditions through the player's snapshot.
+- [x] The GM judges aimed / area / team attacks against `defense_class_in_play` (§5's
+      open point), so All-Out's −X and Vulnerable now move the DC.
+- [x] Combined caps across several lines (the lane re-limits the others on every move).
 
 ### Phase 6 — Self actions
 - [ ] Aim (best of two on the next attack), Charge (−2) + Slam option (rank + self save
@@ -516,6 +533,9 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
 - [ ] Minions: the maneuvers still apply. Check `minions.md` for interactions (a
       minion's natural 20 is no critical, which matters for Finishing Attack).
 - [ ] An NPC group member acting: the chooser lists members.
+- [ ] Team attack: the maneuvers on the GM's lane shift the members' checks and the final
+      rank (p201) — moved here from phase 5. `DiceSection.start_maneuver` and
+      `set_line_shift` are the sheet's pattern to copy onto the GM's Rolls block.
 - [ ] Full run recommended.
 
 ### Phase 8 — Targeted actions I
@@ -556,11 +576,9 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
   start-of-turn clear, so these can't simply be `temporary`. Phase 1 leaves Aided and
   Trick Advantage lasting (removed by hand). Decide in phase 8: a second flag
   (`untilEndOfTurn`), clearing them by hand, or accepting the early clear.
-- **The GM's hit judging ignores conditions.** `ui/attack_gm.py` and `ui/area.py` judge
-  against `defense_class` (the build's number), so neither Vulnerable nor All-Out's −X
-  moves the DC an aimed attack must beat. `defense_class_in_play` exists now; switching
-  the judges to it belongs in phase 5 (it also starts honouring Vulnerable, a visible
-  change).
+- ~~The GM's hit judging ignores conditions.~~ **Resolved in phase 5**: the aimed
+  attack, the area window's primary and the team attack judge against
+  `defense_class_in_play`, so Vulnerable now halves the DC too (a visible change).
 
 - Several maneuver lines at once grow the lane by a line each. Accepted unless the user
   objects on seeing it.
@@ -573,6 +591,39 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
 
 Newest first. Each entry: date, phase, what was done, what's next, gotchas, and the
 commit hash.
+
+- **2026-11-08 — Phase 5 (done).** The four attack maneuvers work on a player's
+  sheet: the tile starts a line (the picker first when nothing is loaded) at its
+  maximum, the roll is made of the shifted attack (modifier, save DC, ladder rank, the
+  label restated and the maneuvers named), the lines are spent, and All-Out / Defensive
+  land as temporary conditions once the die settles. §3.3 "As built (phase 5)" has the
+  names. Also: the GM's three judges now read `defense_class_in_play` (§5 resolved);
+  an aimed attack declares the shifted spec (`roll_spec(before=declare)` — the
+  declaration is sent from inside the roll, and a failed send calls the roll off and
+  puts the chip back). Tests: `tests/core/test_maneuvers.py` (33),
+  `tests/ui/dice/test_maneuvers_ui.py` (18). **Decisions I made (small):** (1) the caps
+  are checked on the **combined** totals, as §2 says, so the lane re-limits every other
+  line when one moves — values are only ever pulled down, which is what stops two lines
+  chasing each other; (2) re-binding the **same** attack (an aimed copy included:
+  `same_attack` ignores targets / action id / title / actor) keeps the player's value,
+  only a different attack resets to the maximum — the old rule also reset when the
+  maximum changed, which with combined caps would have reset on every move; (3) the
+  line's colour is the tone of the condition it leaves (All-Out red, Defensive green,
+  Accurate/Power green); (4) an attack bonus of +0 takes no maneuver at all (it can be
+  neither lowered nor doubled), so the default character sees the tiles live but the
+  line greyed with the reason; (5) the maneuvers' caption goes in the **label**
+  (`… (All-Out Attack +3)`) rather than a new `RollSpec` field, so there is no new wire
+  key and nothing to whitelist; (6) Team attack moved to phase 7 (GM-only). **Gotchas:**
+  (1) a save's label carries its DC (`Toughness vs. 18`), so shifting the DC restates
+  the last whole number in the label; (2) the effect rank is not on the wire and not on
+  a non-damage ladder (`ladder.rank` is damage only), hence the local `effect_rank`;
+  (3) a refused `roll_spec` must put the chip back **without** the localizer (a second
+  pass adds the sheet's number again — the reroll bug in the roller notes);
+  (4) `affected.py` takes no pytest flags like `-q -x` (it refuses them) and resolves
+  to a full run on this branch while `pyproject.toml` differs from develop. Next:
+  phase 6 (the self actions). **Full run: 4682 passed, 2 failed** — both
+  `tests/ui/sheet/test_bus.py`, whose own `REQUEST_TOPICS` list (a tripwire for a new
+  topic) needed `condition-requested`; fixed and re-run green. Commit: see git log.
 
 - **2026-11-08 — Phase 4 (done).** The roller: one signed Bonus/Penalty slider
   (−20..+20, arrows kept: `make_signed_spin_box(buttons=True)`), the action lane

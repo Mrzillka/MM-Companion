@@ -31,6 +31,7 @@ from mm_companion.ui.blocks.bus import (
     BUILD_CHANGED,
     CAPS_CHANGED,
     CONDITION_CHANGED,
+    CONDITION_REQUESTED,
     COST_RATES_CHANGED,
     DERIVED_CHANGED,
     EDITED,
@@ -269,7 +270,11 @@ _BASE_BLOCKS = [
         # comes back here as the condition to shed once the roller has seen it made.
         # ... and "Clear temporary" says in the history what it took off.
         {"rollRequested": (ROLL_REQUESTED,), "noteRequested": (NOTE_REQUESTED,)},
-        {RECOVERY_REQUESTED: "recover_condition", USE_SPENT: "take_use_costs"},
+        {
+            RECOVERY_REQUESTED: "recover_condition",
+            USE_SPENT: "take_use_costs",
+            CONDITION_REQUESTED: "take_conditions",
+        },
     ),
     (
         "advantages",
@@ -437,7 +442,12 @@ _BASE_BLOCKS = [
         {},
         # A recovery check it saw made: the Conditions block sheds the condition. A
         # power it rolled whose flaws charge for using it: the Conditions block takes it.
-        {"recovered": (RECOVERY_REQUESTED,), "useSpent": (USE_SPENT,)},
+        # And what an attack maneuver it rolled leaves on the roller: the same block.
+        {
+            "recovered": (RECOVERY_REQUESTED,),
+            "useSpent": (USE_SPENT,),
+            "conditionsRequested": (CONDITION_REQUESTED,),
+        },
         {
             ROLL_REQUESTED: "perform_roll",
             LOAD_REQUESTED: "load_roll",

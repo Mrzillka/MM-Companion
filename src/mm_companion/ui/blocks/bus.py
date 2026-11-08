@@ -89,6 +89,10 @@ Request topic           Payload / server
                         block puts on what its flaws charge (Tiring,
                         Distracting), the Powers block counts the use
                         (Short-Term, Fades)
+``condition-requested``  ``((condition_id, amount), …)``; the Conditions block
+                        puts them on, temporary — what an attack maneuver the
+                        Dice block just rolled leaves behind (All-Out Attack's
+                        Defense penalty)
 ======================  ====================================================
 
 The last exists because **Extra Effort is paid for in another block's currency**
@@ -177,6 +181,10 @@ RECOVERY_REQUESTED = "recovery-requested"
 #: Conditions block puts on what using it costs (``costs``: Tiring's fatigue, Distracting's
 #: Vulnerable) and the Powers block counts the use (``spends``: Short-Term, Fades).
 USE_SPENT = "use-spent"
+#: An attack was rolled with maneuvers on it: put on what they leave behind. The payload
+#: is ``((condition_id, amount), …)``, applied temporary. Raised by the roller, which
+#: knows the die was thrown, and served by the Conditions block — a roll is not an edit.
+CONDITION_REQUESTED = "condition-requested"
 
 #: Request topics whose server is **not** brought into view when they are raised.
 #: A note is a side effect of an edit somewhere else on the sheet, so reopening a
@@ -209,6 +217,7 @@ QUIET_REQUESTS = frozenset(
         HERO_POINT_REQUESTED,
         RECOVERY_REQUESTED,
         USE_SPENT,
+        CONDITION_REQUESTED,
     }
 )
 

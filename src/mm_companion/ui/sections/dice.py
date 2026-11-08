@@ -38,15 +38,20 @@ from PySide6.QtWidgets import QGroupBox, QVBoxLayout, QWidget
 from mm_companion.core import library
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
+from mm_companion.core.data_loader.game_data import COMBAT_KIND_MANEUVER
 from mm_companion.core.rules import (
     AreaAttempt,
     ImpressAttempt,
     RollSpec,
+    apply_maneuvers,
     area_choices,
     area_key_index,
     attack_choices,
     find_area_power,
+    lasting_conditions,
     localize_spec,
+    maneuver_action,
+    maneuver_limit,
     power_area_use,
     recovery_succeeded,
     requested_roll_choices,
@@ -72,6 +77,7 @@ from mm_companion.ui.attack_targets import (
 )
 from mm_companion.ui.impress import IMPRESS_ACTION, KIND_IMPRESS, ImpressDialog, new_action_id
 from mm_companion.ui.roller.view import DiceRollerView
+from mm_companion.ui.sections.conditions import condition_tone_token
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.session_bridge import SessionBridge, live_session
 from mm_companion.ui.toasts import notify_window
@@ -96,6 +102,11 @@ class DiceSection(QGroupBox):
     #: ``use-spent`` for the Conditions and Powers blocks, for the reason
     #: :attr:`recovered` is: a roll is not an edit.
     useSpent = Signal(object)
+    #: ``((condition_id, amount), …)`` — an attack rolled with maneuvers on it leaves
+    #: these on the roller's own sheet (All-Out Attack's Defense penalty), hit or miss.
+    #: Raised on ``condition-requested`` for the Conditions block, for the reason
+    #: :attr:`recovered` is: a roll is not an edit.
+    conditionsRequested = Signal(object)
 
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -127,6 +138,9 @@ class DiceSection(QGroupBox):
         self.view.panel.actionRequested.connect(self.start_action)
         # The attack picker's list: this character's attacks, read fresh each time.
         self.view.panel.set_attack_choices(lambda: attack_choices(self._character, self._data))
+        # What the maneuvers on the lane do to the attack, and what they leave behind.
+        self.view.panel.set_line_shift(lambda spec, lines: apply_maneuvers(spec, lines, self._data))
+        self.view.panel.linesRolled.connect(self._land_lasting)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.view)
@@ -138,7 +152,11 @@ class DiceSection(QGroupBox):
         offered = dict(own)
         if self._data.impress.available:
             offered[KIND_IMPRESS] = None
-        offered[KIND_ATTACK] = None if self.view.panel.attack_choices() else NO_ATTACKS
+        attacks = None if self.view.panel.attack_choices() else NO_ATTACKS
+        offered[KIND_ATTACK] = attacks
+        for action in self._data.combat.actions:
+            if action.kind == COMBAT_KIND_MANEUVER:
+                offered[action.id] = attacks
         if self._data.area.available:
             offered[KIND_AREA_ATTACK] = (
                 None if area_choices(self._character, self._data) else NO_AREAS
@@ -160,7 +178,7 @@ class DiceSection(QGroupBox):
         """
         return localize_spec(spec, self._character, self._data)
 
-    def perform_roll(self, spec: object) -> None:
+    def perform_roll(self, spec: object, *, before=None) -> None:
         """Roll what another block asked for — the ``roll-requested`` topic's handler.
 
         Anything that isn't a :class:`~mm_companion.core.rules.RollSpec` is ignored
@@ -168,11 +186,46 @@ class DiceSection(QGroupBox):
         too, and a bad payload should cost a roll, not the sheet.
         """
         if isinstance(spec, RollSpec):
-            if self.view.panel.roll_spec(spec) and (spec.costs or spec.spends):
+            if self.view.panel.roll_spec(spec, before=before) and (spec.costs or spec.spends):
                 # The die thrown off a card *is* using the power, so what using it
                 # costs and counts lands now — once, here, and only for a die that was
                 # really thrown, never for a click the tumbling roller refused.
                 self.useSpent.emit(spec)
+
+    def start_maneuver(self, action_id: str):
+        """An attack maneuver's tile: a line on the lane, its slider over ``0..X_max``
+        and starting at the maximum, for the attack loaded (the picker asks for one when
+        none is). The roll it rides on is shifted by it, and what it leaves behind lands
+        on this sheet once that die has settled (:meth:`_land_lasting`). Returns the line,
+        or ``None`` when it was called off."""
+        action = maneuver_action(self._data, action_id)
+        if action is None:
+            return None
+        panel = self.view.panel
+
+        def limit(spec: RollSpec | None) -> tuple[int, str]:
+            others = {key: value for key, value in panel.active_lines() if key != action_id}
+            found = maneuver_limit(self._data, action_id, spec, self._character, others)
+            return found.maximum, found.reason
+
+        lasting = self._data.condition_catalog().get(action.lasting) if action.lasting else None
+        tone = condition_tone_token(lasting) if lasting is not None else "tint.better"
+        return panel.start_action_line(
+            action_id,
+            action.name,
+            limit=limit,
+            needs_attack=True,
+            tooltip=action.tooltip,
+            tone=tone,
+        )
+
+    def _land_lasting(self, lines: object) -> None:
+        """A roll with action lines on it settled: put on this sheet what they leave."""
+        if not isinstance(lines, tuple):
+            return
+        lasting = lasting_conditions(lines, self._data)
+        if lasting:
+            self.conditionsRequested.emit(tuple(lasting))
 
     def aim_attack(self, payload: object) -> None:
         """Roll an attack *at* a creature on the Scene — ``attack-requested``'s handler.
@@ -199,15 +252,22 @@ class DiceSection(QGroupBox):
         name = library.display_name(self._character)
         action_id = new_action_id()
         aimed = aimed_spec(spec, action_id, target.name, name)
-        declaration = AttackDeclaration(action_id, target.ref, target.name, aimed, name)
-        if not bridge.send_action_request(KIND_ATTACK, action_id, declaration.to_dict()):
+
+        def declare(made_of: RollSpec | None) -> bool:
+            # What is declared is what is rolled: the maneuvers on the lane move the
+            # save the GM's app will ask for, so it must see the shifted spec.
+            declared = made_of if made_of is not None else aimed
+            declaration = AttackDeclaration(action_id, target.ref, target.name, declared, name)
+            if bridge.send_action_request(KIND_ATTACK, action_id, declaration.to_dict()):
+                return True
             notify_window(
                 self.window(),
                 "Could not reach the GM — the attack was not aimed.",
                 theme.color("tint.worse"),
             )
-            return
-        self.perform_roll(aimed)
+            return False
+
+        self.perform_roll(aimed, before=declare)
 
     def settle_recovery(self, roll: object) -> None:
         """A roll of this seat's is back: if it was a recovery check and it made it,
@@ -317,6 +377,9 @@ class DiceSection(QGroupBox):
             return None
         if kind == KIND_AREA_ATTACK:
             self.start_area_tile()
+            return None
+        if maneuver_action(self._data, kind) is not None:
+            self.start_maneuver(kind)
             return None
         if kind != KIND_IMPRESS:
             return None

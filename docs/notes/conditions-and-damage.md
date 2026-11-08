@@ -130,6 +130,15 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   included, returning what went. The seven records live in the `maneuver` group, so the
   "+" menu offers them. Aided and Trick Advantage are *not* temporary: they last to the
   end of a turn, which a start-of-turn clear would cut short.
+- **The roller puts the maneuvers' ones on** (phase 5). An attack rolled with All-Out or
+  Defensive Attack on the roller's lane raises `condition-requested` with
+  `((condition_id, amount), …)` once the die has settled; the Conditions block's
+  `take_conditions` applies each temporary, through `apply_condition`, so undo and the
+  player's snapshot to the GM come with it. See [the roller notes](dice-and-rolling.md).
+- **The GM judges an aimed attack against the Defense in play**
+  (`derived.defense_class_in_play`), so Vulnerable, All-Out Attack and Defending all move
+  the DC the attack has to beat (the aimed attack, the area window's primary, the team
+  attack).
 - **The sheet shows which numbers are borrowed** (combat maneuvers, phase 2). Every stat
   a temporary condition moves gets a **dot** (`ui/stat_mark.py`): green when
   `temporary_marks` says the temporaries leave it higher, red when lower, the sources in

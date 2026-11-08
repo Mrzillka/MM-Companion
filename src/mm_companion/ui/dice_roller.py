@@ -85,7 +85,7 @@ from mm_companion.ui.roll_history import (
     escape_rich_text,
     reroll_label,
 )
-from mm_companion.ui.roller.action_lane import ActionLane, ActionLine, LineLimit
+from mm_companion.ui.roller.action_lane import ActionLane, ActionLine, LineLimit, LineShift
 from mm_companion.ui.roller.quick_rolls import QuickRollStrip, RollerQuickRollsMixin
 from mm_companion.ui.roller.requests import RollerRequestsMixin
 from mm_companion.ui.roller.shape import RollerShapeMixin
@@ -326,6 +326,13 @@ class DiceRollerPanel(
     #: one exception is Reroll, which is the panel's own and never reported.
     actionRequested = Signal(str)
 
+    #: A roll that had action lines on it has produced a number: the
+    #: ``((key, value), …)`` it was made with. What the host makes of them is its own
+    #: business — an All-Out Attack's Defense penalty lands on the sheet from here, hit or
+    #: miss. Never raised for a reroll (that throws a roll already paid for) or for a roll
+    #: the session never answered.
+    linesRolled = Signal(object)
+
     def __init__(self, parent: QWidget | None = None, *, hidden_option: bool = False) -> None:
         super().__init__(parent)
         self._hidden_option = hidden_option
@@ -381,7 +388,14 @@ class DiceRollerPanel(
         # The keys of the action lines the roll in flight used, which its result
         # spends (see :meth:`_spend_extras`). Empty on a reroll: that throws the last
         # roll's lines again and leaves the current ones alone.
-        self._rolled_lines: tuple[str, ...] = ()
+        self._rolled_lines: tuple[tuple[str, int | None], ...] = ()
+        # What the action lines do to a spec, pushed in by the host (see
+        # :meth:`set_line_shift`); without one they ride on the roll and change nothing.
+        self._line_shift: LineShift | None = None
+        # The spec the roll in flight is *made of*: the loaded one with the action lines
+        # applied (:meth:`with_lines`). The chip keeps the loaded one, so the lines can be
+        # set again and the die thrown again. ``None`` between rolls.
+        self._flight: RollSpec | None = None
         self._quick_rolls: list[dict] = self._load_quick_rolls()
         # Whether the panel is in its fixed compact shape (see :meth:`_apply_shape`),
         # in which case the width-driven reflow stands down — and the two separate
@@ -662,8 +676,10 @@ class DiceRollerPanel(
         """
         self._modifier_spin.setValue(0)
         rolled, self._rolled_lines = self._rolled_lines, ()
-        for key in rolled:
+        for key, _value in rolled:
             self._lane.remove(key)
+        if rolled:
+            self.linesRolled.emit(rolled)
 
     # -- the action lane -----------------------------------------------------
 
@@ -739,6 +755,28 @@ class DiceRollerPanel(
         self._lane.add(line)
         line.bind(self.loaded_attack())
         return line
+
+    def set_line_shift(self, shift: LineShift | None) -> None:
+        """Have *shift* say what the action lines do to the spec they ride on —
+        ``shift(spec, lines) -> spec``, ``lines`` being :meth:`active_lines`. The attack
+        maneuvers move its modifier and its save's DC; the panel reads no game data, so
+        the host supplies this."""
+        self._line_shift = shift
+
+    def with_lines(self, spec: RollSpec | None) -> RollSpec | None:
+        """*spec* with the active lines applied — what a roll of it would be made of.
+
+        A failure in the host's shift is logged and costs the lines' effect, never the
+        roll.
+        """
+        lines = self.active_lines()
+        if spec is None or not lines or self._line_shift is None:
+            return spec
+        try:
+            return self._line_shift(spec, lines)
+        except Exception:  # noqa: BLE001 - a bad action must not cost the die
+            log_exception("Applying the action lines to a roll")
+            return spec
 
     def action_lines(self) -> list[ActionLine]:
         """The lines on the lane, in order (greyed ones too)."""
@@ -897,7 +935,9 @@ class DiceRollerPanel(
         """
         self._localizer = localizer
 
-    def load_spec(self, spec: RollSpec | None, *, minion: bool = False) -> None:
+    def load_spec(
+        self, spec: RollSpec | None, *, minion: bool = False, localize: bool = True
+    ) -> None:
         """Load *spec* as the thing this panel rolls, or ``None`` to go back to manual.
 
         *minion* says the trait is a minion's, so a natural 20 on it is no added
@@ -917,7 +957,9 @@ class DiceRollerPanel(
         manual rolls against a trait no longer loaded). Only a DC this method set is
         withdrawn; one the player typed is theirs.
         """
-        if spec is not None and self._localizer is not None:
+        # *localize* false puts back a spec this panel already held, which has been
+        # through the localizer once (twice would add this sheet's number again).
+        if spec is not None and localize and self._localizer is not None:
             spec = self._localizer(spec)
         # An explicit load is always a deliberate one, whatever a roll in flight had
         # in mind: it cancels the transience :meth:`roll_spec` asked for, so a spec
@@ -981,9 +1023,19 @@ class DiceRollerPanel(
         spin = self._modifier_spin
         spin.setValue(max(spin.minimum(), min(spin.maximum(), spin.value() + amount)))
 
-    def roll_spec(self, spec: RollSpec | None, *, minion: bool = False) -> bool:
+    def roll_spec(
+        self,
+        spec: RollSpec | None,
+        *,
+        minion: bool = False,
+        before: Callable[[RollSpec | None], bool] | None = None,
+    ) -> bool:
         """Load *spec*, roll it at once, and let it go again. ``False`` if a die is
         already tumbling. *minion* is :meth:`load_spec`'s.
+
+        *before* is handed the spec the roll will be made of (the action lines applied)
+        just before the die goes, and ``False`` from it calls the roll off. It is how an
+        aimed attack declares to the GM exactly what is about to be rolled.
 
         The one public way in for the sheet: a double-clicked stat line, a power's
         🎲, or a follow-up chip on a history card all land here.
@@ -996,9 +1048,14 @@ class DiceRollerPanel(
         """
         if self._rolling:
             return False
+        held = (self._spec, self._spec_minion, self._transient)
         self.load_spec(spec, minion=minion)
         self._transient = spec is not None
-        self._start_roll()
+        if not self._start_roll(before):
+            # Called off before the die went: the chip goes back to what it held.
+            self.load_spec(held[0], minion=held[1], localize=False)
+            self._transient = held[2]
+            return False
         return True
 
     @property
@@ -1060,11 +1117,12 @@ class DiceRollerPanel(
         value = self._modifier_spin.value()
         bonus, penalty = max(value, 0), max(-value, 0)
         dc = self._dc_spin.value() if self._dc_check.isChecked() else None
-        if self._spec is not None:
-            net = self._spec.modifier + bonus - penalty
+        spec = self._made_of()
+        if spec is not None:
+            net = spec.modifier + bonus - penalty
             bonus, penalty = max(net, 0), max(-net, 0)
-            if self._spec.dc is not None:
-                dc = self._spec.dc
+            if spec.dc is not None:
+                dc = spec.dc
         return (bonus, penalty, dc, self._hidden_option and self._hidden_check.isChecked())
 
     def _roll_label(self) -> str:
@@ -1075,7 +1133,13 @@ class DiceRollerPanel(
         """
         if self._rerolling and self._last_roll is not None:
             return self._last_roll["label"]
-        return self._spec.label if self._spec is not None else ""
+        spec = self._made_of()
+        return spec.label if spec is not None else ""
+
+    def _made_of(self) -> RollSpec | None:
+        """The spec a roll is made of now: the one in flight (the lines applied) while
+        there is one, else the loaded one."""
+        return self._flight if self._flight is not None else self._spec
 
     def _rolled_spec(self) -> RollSpec | None:
         """The trait the roll in flight is of: the last roll's on a re-roll.
@@ -1086,7 +1150,7 @@ class DiceRollerPanel(
         """
         if self._rerolling and self._last_roll is not None:
             return self._last_roll["spec"]
-        return self._spec
+        return self._made_of()
 
     def reroll(self) -> bool:
         """Throw the last roll again — same bonus, penalty, DC and trait — luckily.
@@ -1108,16 +1172,25 @@ class DiceRollerPanel(
         self._start_roll()
         return True
 
-    def _start_roll(self) -> None:
+    def _start_roll(self, before: Callable[[RollSpec | None], bool] | None = None) -> bool:
         """Begin a roll: lock the inputs, tumble the die, then reveal the result.
 
         In a session the request goes out *now* and the tumble runs until the
         server's answer arrives; on its own the die is thrown when the tumble
         ends. Either way the inputs stay locked until there is a number.
+
+        The action lines are applied here, once (:meth:`with_lines`): the roll is made
+        of that spec, and Reroll throws it again as it was. *before* is
+        :meth:`roll_spec`'s. ``False`` when it called the roll off, or a die tumbles.
         """
         if self._rolling:
-            return
+            return False
         if not self._rerolling:
+            lines = tuple(self.active_lines())
+            flight = self.with_lines(self._spec)
+            if before is not None and not before(flight):
+                return False
+            self._flight = flight if flight is not self._spec else None
             bonus, penalty, dc, hidden = self._roll_parameters()
             self._pending_last = {
                 "bonus": bonus,
@@ -1125,12 +1198,12 @@ class DiceRollerPanel(
                 "dc": dc,
                 "hidden": hidden,
                 "label": self._roll_label(),
-                "spec": self._spec,
+                "spec": self._made_of(),
                 "routine": self._routine_check.isChecked(),
                 "minion": self._spec_minion,
-                "lines": tuple(self.active_lines()),
+                "lines": lines,
             }
-            self._rolled_lines = tuple(key for key, _value in self.active_lines())
+            self._rolled_lines = lines
         else:
             self._rolled_lines = ()
         self._rolling = True
@@ -1140,6 +1213,7 @@ class DiceRollerPanel(
         self._roll_clock.restart()
         self._request_session_roll()
         self._tick_roll()
+        return True
 
     def _request_session_roll(self) -> None:
         """Put the roll to the session, if there is one to put it to.
@@ -1272,6 +1346,7 @@ class DiceRollerPanel(
         self._unlock_inputs()
         # Last, so everything above still sees what was rolled.
         self._rerolling = False
+        self._flight = None
         self._settle_spec()
         self._spend_extras()
         self._spend_routine()
@@ -1313,6 +1388,7 @@ class DiceRollerPanel(
         # is placed by the cue above rather than by the flush the close performs.
         self.awaitingOwnRoll.emit(False)
         self._rerolling = False
+        self._flight = None
         self._settle_spec()
         self._spend_extras()
         self._spend_routine()
@@ -1336,6 +1412,7 @@ class DiceRollerPanel(
         self._pending_last = None
         self._rerolling = False
         self._rolled_lines = ()
+        self._flight = None
         self._disconnect_session()
         self.awaitingOwnRoll.emit(False)
         self._face.setText("?")

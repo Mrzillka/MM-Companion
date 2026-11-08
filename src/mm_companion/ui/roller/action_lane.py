@@ -13,11 +13,18 @@ for every character, not a minimum read off content.
 Rules-free like the rest of the panel: the limit of a configurable line comes from a
 callable the host hands in (``limit(spec) -> (maximum, reason)``), and the panel decides
 only whether the loaded roll is an attack at all.
+
+**Lines limit each other.** Two maneuvers that both raise the attack check share the
+room to double it, so a limit may read the other lines' values (the host's callable
+asks the panel). Whenever a line's value moves, or a line comes or goes, the lane works
+the others' limits out again (:meth:`ActionLine.relimit`): their ranges follow, and a
+value past its new maximum is pulled down to it — never pushed up, which is what keeps
+two lines from chasing each other.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -31,7 +38,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from mm_companion.core.rules import RollSpec
+from mm_companion.core.rules import RollSpec, same_attack
 from mm_companion.ui import theme
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import ElidingLabel, discard_widget, make_spin_box, tinted_style
@@ -39,6 +46,10 @@ from mm_companion.ui.widgets import ElidingLabel, discard_widget, make_spin_box,
 #: ``limit(spec) -> (maximum, reason)``: how far a configurable line may go for the
 #: attack *spec* (``None`` when no attack is loaded), and why not when that is 0.
 LineLimit = Callable[[RollSpec | None], tuple[int, str]]
+
+#: ``shift(spec, lines) -> spec``: what the lines that apply (``(key, value)`` pairs) do
+#: to the spec they ride on — the host's, since the panel reads no game data.
+LineShift = Callable[[RollSpec, Sequence[tuple[str, "int | None"]]], RollSpec]
 
 #: Why a line that needs an attack is greyed out while none is loaded.
 NEEDS_ATTACK = "Load an attack first: pick one off the Actions popup or a power card."
@@ -49,6 +60,8 @@ class ActionLine(QWidget):
 
     #: The ``✕`` was pressed: this line's key.
     removed = Signal(str)
+    #: The value was moved (by the player, or by a limit pulling it down): this key.
+    valueChanged = Signal(str)
 
     def __init__(
         self,
@@ -73,6 +86,8 @@ class ActionLine(QWidget):
         #: The attack this line's limit was last worked out for; a different one
         #: resets the value to its new maximum.
         self.bound_spec: RollSpec | None = None
+        # Greyed for want of an attack (see :meth:`bind`): nothing to work a limit for.
+        self._unloaded = False
 
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
@@ -99,6 +114,7 @@ class ActionLine(QWidget):
             self._spin = make_spin_box(0, 0)
             self._slider.valueChanged.connect(self._spin.setValue)
             self._spin.valueChanged.connect(self._slider.setValue)
+            self._spin.valueChanged.connect(lambda _v: self.valueChanged.emit(self.key))
             row.addWidget(self._slider, stretch=1)
             row.addWidget(self._spin)
         else:
@@ -148,22 +164,39 @@ class ActionLine(QWidget):
         A line that needs an attack greys out without one, and keeps its place: loading
         an attack lights it again. A **different** attack recomputes the limit and
         resets the value to the new maximum (the slider starts at the largest value
-        allowed); the same one leaves the value the player set.
+        allowed); the same one — the aimed copy of it included
+        (:func:`~mm_companion.core.rules.same_attack`) — keeps the value the player set,
+        pulled down only if it no longer fits.
         """
-        if self.needs_attack and spec is None:
+        # The attack it was set for is remembered through an unload, so loading the
+        # same one again keeps the value the player set.
+        self._unloaded = self.needs_attack and spec is None
+        if self._unloaded:
             self._set_available(False, NEEDS_ATTACK)
             return
         if self._limit is None:
             self.bound_spec = spec
             self._set_available(True, "")
             return
-        maximum, reason = self._limit(spec)
+        fresh = not same_attack(spec, self.bound_spec)
+        self.bound_spec = spec
+        self._relimit(reset=fresh)
+
+    def relimit(self) -> None:
+        """Work the limit out again for the attack the line is bound to — another line
+        moved. The value is pulled down to a lower maximum, never pushed up."""
+        if self._limit is None or self._unloaded:
+            return
+        self._relimit(reset=False)
+
+    def _relimit(self, *, reset: bool) -> None:
+        maximum, reason = self._limit(self.bound_spec)
         maximum = max(0, int(maximum))
-        if spec != self.bound_spec or self._spin.maximum() != maximum:
+        if reset or self._spin.maximum() != maximum:
+            value = maximum if reset else min(self._spin.value(), maximum)
             self._slider.setRange(0, maximum)
             self._spin.setRange(0, maximum)
-            self._spin.setValue(maximum)
-        self.bound_spec = spec
+            self._spin.setValue(value)
         self._set_available(maximum > 0, "" if maximum > 0 else reason)
 
     def _set_available(self, available: bool, reason: str) -> None:
@@ -188,6 +221,9 @@ class ActionLane(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._lines: list[ActionLine] = []
+        # Set while the lane re-limits or re-binds its lines, so the values those
+        # passes move do not each set off another pass.
+        self._settling = False
         self._column = QVBoxLayout(self)
         self._column.setContentsMargins(0, 0, 0, 0)
         self._column.setSpacing(int(theme.metric("space.xs")))
@@ -223,7 +259,9 @@ class ActionLane(QWidget):
             self._lines.append(line)
             self._column.addWidget(line)
         line.removed.connect(self.remove)
+        line.valueChanged.connect(self._relimit_others)
         self._reserve(False)
+        self._relimit_others(line.key)
         self.changed.emit()
         return line
 
@@ -235,6 +273,7 @@ class ActionLane(QWidget):
         self._column.removeWidget(line)
         discard_widget(line)
         self._reserve(not self._lines)
+        self._relimit_others(key)
         self.changed.emit()
 
     def clear(self) -> None:
@@ -242,5 +281,29 @@ class ActionLane(QWidget):
             self.remove(line.key)
 
     def bind(self, spec: RollSpec | None) -> None:
-        for line in self._lines:
-            line.bind(spec)
+        """Bind every line to *spec* (the loaded attack, or ``None``), then let them
+        settle against each other once."""
+        self._settling = True
+        try:
+            for line in self._lines:
+                line.bind(spec)
+        finally:
+            self._settling = False
+        self._relimit_others("")
+
+    def _relimit_others(self, key: str) -> None:
+        """The line *key* moved (or came, or went): work the others' limits out again."""
+        if self._settling:
+            return
+        self._settling = True
+        try:
+            for line in self._lines:
+                if line.key != key:
+                    line.relimit()
+            # A pass only ever pulls values down, which only loosens the others'
+            # limits; a second one widens the ranges the first left narrower than
+            # they need be, and moves no value.
+            for line in self._lines:
+                line.relimit()
+        finally:
+            self._settling = False

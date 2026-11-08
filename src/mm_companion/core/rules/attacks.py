@@ -13,12 +13,12 @@ it). The area attack's primary judges its hit with the same function.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ..dice import resolve_check
 from .rolls import KIND_AREA, KIND_IMPRESS, RollSpec
 
-__all__ = ["AttackVerdict", "aimed_attack", "judge_attack", "targetable_attack"]
+__all__ = ["AttackVerdict", "aimed_attack", "judge_attack", "same_attack", "targetable_attack"]
 
 
 def targetable_attack(spec: RollSpec) -> bool:
@@ -27,6 +27,20 @@ def targetable_attack(spec: RollSpec) -> bool:
     """
 
     return spec.follow_up is not None and not spec.rolled_by_target and spec.kind != KIND_AREA
+
+
+def same_attack(one: RollSpec | None, other: RollSpec | None) -> bool:
+    """Whether two specs are the same attack, whoever it is aimed at: the aimed copy of
+    a line (:func:`~mm_companion.ui.attack_targets.aimed_spec` adds its target, action
+    id, title and actor) is still the line the roller's maneuvers were set for."""
+
+    if one is None or other is None:
+        return one is other
+
+    def bare(spec: RollSpec) -> RollSpec:
+        return replace(spec, targets=(), action_id="", title="", actor="")
+
+    return bare(one) == bare(other)
 
 
 def aimed_attack(spec: RollSpec | None) -> bool:

@@ -482,6 +482,34 @@ class ConditionsSection(QGroupBox):
         self._render_conditions()
         self._emit_conditions_changed()
 
+    def take_conditions(self, payload: object) -> None:
+        """An attack maneuver was rolled — the ``condition-requested`` handler.
+
+        *payload* is ``((condition_id, amount), …)``: what the maneuvers leave on this
+        character until the start of their next turn (All-Out Attack −3 on Defense), put
+        on **temporary**. Re-applying one replaces its amount (one All-Out a turn). A
+        payload of any other shape is ignored — a mod block publishes here too.
+        """
+        if not isinstance(payload, tuple):
+            return
+        applied = False
+        for entry in payload:
+            if not isinstance(entry, tuple) or len(entry) != 2:
+                continue
+            condition_id, amount = entry
+            if not isinstance(condition_id, str) or not isinstance(amount, int):
+                continue
+            if isinstance(amount, bool) or amount <= 0:
+                continue
+            apply_condition(
+                self._character, condition_id, self._data, amount=amount, temporary=True
+            )
+            applied = True
+        if not applied:
+            return
+        self._render_conditions()
+        self._emit_conditions_changed()
+
     def roll_confused(self, applied: AppliedCondition) -> None:
         """Roll this turn's random action for a Confused-style condition."""
         self._roll_confused(applied)

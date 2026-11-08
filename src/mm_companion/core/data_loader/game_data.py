@@ -245,6 +245,12 @@ COMBAT_KIND_LOADER = "loader"
 COMBAT_KIND_ATTACK = "attack"
 COMBAT_KIND_BUILTIN = "builtin"
 
+#: What a maneuver's ``bonus`` and ``penalty`` may name: the loaded attack's attack
+#: check, the rank of the save it forces, or the actor's Defense.
+MANEUVER_ATTACK_CHECK = "attack_check"
+MANEUVER_EFFECT_RANK = "effect_rank"
+MANEUVER_DEFENSE = "defense"
+
 
 @dataclass(frozen=True)
 class CombatAction:

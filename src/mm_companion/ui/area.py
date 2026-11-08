@@ -64,7 +64,7 @@ from mm_companion.core.rules import (
     area_title,
     area_use_adjusted,
     area_use_heals,
-    defense_class,
+    defense_class_in_play,
     find_area_power,
     power_area_use,
     power_area_uses,
@@ -952,7 +952,7 @@ class AreaWindow(ActionWindow):
         character = row.party.character if row is not None else None
         if character is None:
             return None
-        return defense_class(character, self._data)
+        return defense_class_in_play(character, self._data)
 
     def _on_primary(self) -> None:
         row = self._row(self.primary_ref())

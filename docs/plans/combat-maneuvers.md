@@ -718,7 +718,7 @@ commit hash.
   class is not bound, so it misses `self` — patch a lambda that calls it; (2) a quick NPC
   has more than one attack choice; (3) heredocs with backticks still break the Bash tool
   (scripts go in the scratchpad). Next: phase 8 (Feint, Trick, Aid). **Full run: 4783 passed** (10 min 9 s).
-  Commit: COMMIT_HASH.
+  Commit: eeb0dab.
 
 - **2026-11-09 — Phase 7 (done).** The GM's roller runs the maneuvers, the self actions
   and the Attack tile as an NPC, and grants Surprise Attack. Asked the user how a team

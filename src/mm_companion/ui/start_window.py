@@ -10,6 +10,7 @@ appear without restarting.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
@@ -285,9 +286,7 @@ class StartWindow(QMainWindow):
 
     def _create_new_character(self) -> None:
         """Open a fresh, editable character sheet, hiding the launcher behind it."""
-        with loading.loading(self, opening_text(None)):
-            window = MainWindow(locked=False)
-        self._open_sheet(window)
+        self._open_behind_fade(opening_text(None), lambda: MainWindow(locked=False))
 
     def _open_existing(self) -> None:
         """Pick a saved character file and open it as a read-only sheet."""
@@ -320,18 +319,35 @@ class StartWindow(QMainWindow):
 
     def _open_character(self, path: Path) -> None:
         """Load a character from *path* into a read-only sheet."""
+        if loading.fading(self):
+            return
         character = library.load_character(path)
-        # Built behind a loading screen over the launcher, which is the window the
-        # user is looking at until the sheet is ready to replace it (ui/loading).
-        with loading.loading(self, opening_text(character)):
-            window = MainWindow(character=character, path=path, locked=True)
-        self._open_sheet(window)
+        self._open_behind_fade(
+            opening_text(character),
+            lambda: MainWindow(character=character, path=path, locked=True),
+        )
+
+    def _open_behind_fade(self, text: str, build: Callable[[], MainWindow]) -> None:
+        """Build a sheet behind the launcher's loading screen, then fade it in.
+
+        The launcher fades to its loading screen the moment it is clicked — before
+        the build blocks the event loop — and stays under the sheet until the sheet
+        has faded in (ui/loading). A second click while that runs is refused.
+        """
+        if loading.fading(self):
+            return
+        built: list[MainWindow] = []
+
+        def opened() -> None:
+            if built:
+                self._open_sheet(built[0])
+
+        loading.fade_through(self, text, lambda: built.append(build()), opened)
 
     def _open_sheet(self, window: MainWindow) -> None:
         """Show a sheet window, hide the launcher, and track it for cleanup."""
         self._track_sheet(window)
-        self.hide()
-        window.show()
+        loading.show_window(window, replacing=self)
 
     def _track_sheet(self, window: MainWindow) -> None:
         """Follow a sheet window, and any sheet opened from it (File ▸ New / Open).
@@ -380,6 +396,8 @@ class StartWindow(QMainWindow):
         from mm_companion.ui.session_bridge import active_session
         from mm_companion.ui.session_dialogs import JoinSessionDialog
 
+        if loading.fading(self):
+            return
         if active_session() is not None:
             QMessageBox.information(
                 self,
@@ -397,8 +415,11 @@ class StartWindow(QMainWindow):
         path = dialog.character_path()
         character = library.load_character(path) if path is not None else None
         # The join waits on the network and the sheet is a build, so both go behind
-        # one loading screen; the warning waits until it is down.
-        with loading.loading(self, "Joining the session…", at_once=True):
+        # one loading screen, with its bar up from the start; the warning waits until
+        # the screen is down.
+        outcome: dict[str, object] = {}
+
+        def join() -> None:
             try:
                 with loading.part(0.3):
                     client = bridge.join(
@@ -408,15 +429,20 @@ class StartWindow(QMainWindow):
                         player_token=player_token,
                     )
             except SessionClientError as exc:
-                failure: SessionClientError | None = exc
-            else:
-                failure = None
-                loading.say(opening_text(character))
-                window = self._build_joined_sheet(dialog, bridge, client, character, path)
-        if failure is not None:
-            QMessageBox.warning(self, "Could not join", str(failure))
-            return
-        self._open_sheet(window)
+                outcome["failure"] = exc
+                return
+            loading.say(opening_text(character))
+            outcome["window"] = self._build_joined_sheet(dialog, bridge, client, character, path)
+
+        def opened() -> None:
+            if "window" in outcome:
+                self._open_sheet(outcome["window"])
+
+        def warn() -> None:
+            if "failure" in outcome:
+                QMessageBox.warning(self, "Could not join", str(outcome["failure"]))
+
+        loading.fade_through(self, "Joining the session…", join, opened, after=warn, at_once=True)
 
     def _build_joined_sheet(self, dialog, bridge, client, character, path) -> MainWindow:
         """The joined session's bookkeeping, then the sheet it is played from."""
@@ -480,6 +506,8 @@ class StartWindow(QMainWindow):
             closed, self._gm_window = self._gm_window, None
             closed.deleteLater()
 
+        if loading.fading(self):
+            return
         dialog = GMSessionLaunchDialog(self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
@@ -487,16 +515,19 @@ class StartWindow(QMainWindow):
         session_id = dialog.chosen_session_id()
 
         entry = dialog.chosen_server_entry()
-        # Built (and, for a server's session, connected) behind a loading screen over
-        # the launcher; the warning waits until it is down.
-        with loading.loading(self, "Opening GM Mode…"):
+        # Built (and, for a server's session, connected) behind the launcher's loading
+        # screen, then faded in over the launcher, which stays; the warning waits
+        # until the screen is down.
+        connected: list[bool] = []
+
+        def build() -> None:
             if entry is not None:
                 # The session lives on a server: nothing to host, nothing to load off
                 # this disk. The window dials in and takes the GM's seat.
                 with loading.part(0.7):
                     self._gm_window = GMWindow(host_options=options, autohost=False)
                 loading.say("Connecting to the session…")
-                connected = self._gm_window.connect_to_server(entry, dialog.server_label())
+                connected.append(self._gm_window.connect_to_server(entry, dialog.server_label()))
             else:
                 state = None
                 if session_id:
@@ -507,8 +538,19 @@ class StartWindow(QMainWindow):
                 if state is None:
                     state = new_session(options.name)
                 self._gm_window = GMWindow(state=state, host_options=options, autohost=True)
-                connected = True
-        if not connected:
+                connected.append(True)
+
+        def opened() -> None:
+            window = self._gm_window
+            if window is None or not any(connected):
+                return
+            loading.show_window(window)
+            window.raise_()
+            window.activateWindow()
+
+        def warn() -> None:
+            if self._gm_window is None or any(connected):
+                return
             QMessageBox.warning(
                 self,
                 "Could not open the session",
@@ -517,8 +559,5 @@ class StartWindow(QMainWindow):
             )
             self._gm_window.close()
             self._gm_window = None
-            return
 
-        self._gm_window.show()
-        self._gm_window.raise_()
-        self._gm_window.activateWindow()
+        loading.fade_through(self, "Opening GM Mode…", build, opened, after=warn)

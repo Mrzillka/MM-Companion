@@ -207,6 +207,22 @@ through rather than reinvent. When building new sheet widgets, use it:
     other work (a sheet opened straight into the simple sheet), and the test suite get
     plain `loading` — made by the time the call returns. `FADE_S` (0.15 s) is each
     fade's length; tests that want a fade turn it on with the `fades` fixture.
+  - **The launcher fades too.** Opening a sheet (a card, Open From File, Create New),
+    joining a session and opening GM Mode all go through `fade_through` over the
+    launcher: it fades to its screen at the click, the window is built behind it, and
+    `finished` shows the new window with `loading.show_window`, which fades it in by
+    its own window opacity. A sheet *replaces* the launcher (`replacing=`): the launcher
+    keeps its screen up under the fading-in sheet and is hidden only once the sheet is
+    in, so there is no frame with neither on screen. GM Mode leaves the launcher up,
+    which fades back to its cards. A failure's warning box goes in `after`, which runs
+    once the screen is down; `at_once=True` puts the bar up from the start for a join,
+    which begins by waiting on the network. A click while the launcher fades is
+    refused (`loading.fading`).
+  - **Nothing runs inside an animation's `finished` signal.** The step after a fade —
+    the whole build, or a warning box with its own event loop — is posted to a turn of
+    the loop of its own (`QTimer.singleShot(0, …)`). Run inside the signal, it ran inside
+    Qt's animation timer mid-tick, and a GM window built there aborted the process
+    about one time in five in the tests: no message, just `Fatal Python error: Aborted`.
   - **The start of the app is behind a bar too.** `__main__.main()` puts a splash up
     right after the `QApplication` and the theme, *then* imports the interface a module
     at a time (`_INTERFACE`, most of a start) as steps of its bar, then the workspace and

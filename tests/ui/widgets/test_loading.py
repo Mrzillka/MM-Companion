@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QMainWindow, QWidget
+from PySide6.QtWidgets import QApplication, QDialog, QMainWindow, QWidget
 
 from mm_companion.core import library
 from mm_companion.core.character import Character
@@ -462,6 +462,103 @@ def test_a_switch_inside_other_work_joins_its_bar(host: QMainWindow, progress) -
         assert not loading.fading(host)
         assert len(_screens(host)) == 1
     assert {text for text, _ in progress} <= {"Opening Ronin…"}
+
+
+# -- opening from the launcher -------------------------------------------------------
+
+
+@pytest.mark.usefixtures("fades")
+def test_the_launcher_fades_out_at_once_and_the_sheet_fades_in_over_it(
+    qapp: QApplication, data, qtbot
+) -> None:
+    _character, path = _saved("Ronin", data)
+    launcher = StartWindow()
+    launcher.show()
+
+    launcher._open_character(path)
+
+    # Returned before the build: the launcher, as a picture, fading to its screen.
+    assert launcher._child_windows == []
+    assert loading.fading(launcher)
+    assert len(_veils(launcher)) == 1
+
+    qtbot.waitUntil(lambda: bool(launcher._child_windows))
+    sheet = launcher._child_windows[0]
+    assert sheet.isVisible()
+    # The launcher stays, under its screen, until the sheet is in — then goes.
+    assert launcher.isVisible() and _screens(launcher)
+    qtbot.waitUntil(lambda: not launcher.isVisible())
+    qtbot.waitUntil(lambda: _settled(launcher))
+    assert sheet.windowOpacity() == pytest.approx(1.0)
+    assert sheet.isVisible()
+    assert loading._handoffs == {}
+    sheet.close()
+
+
+@pytest.mark.usefixtures("fades")
+def test_a_second_click_on_the_launcher_while_it_fades_opens_nothing(
+    qapp: QApplication, data, qtbot
+) -> None:
+    _character, path = _saved("Ronin", data)
+    launcher = StartWindow()
+    launcher.show()
+
+    launcher._open_character(path)
+    launcher._open_character(path)
+    launcher._create_new_character()
+
+    qtbot.waitUntil(lambda: _settled(launcher))
+    assert len(launcher._child_windows) == 1
+    launcher._child_windows[0].close()
+
+
+@pytest.mark.usefixtures("fades")
+def test_gm_mode_fades_in_over_the_launcher_which_stays(
+    qapp: QApplication, qtbot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mm_companion.ui import session_dialogs
+
+    monkeypatch.setattr(
+        session_dialogs.GMSessionLaunchDialog, "exec", lambda self: QDialog.DialogCode.Accepted
+    )
+    monkeypatch.setattr(GMWindow, "start_hosting", lambda self, options: None)
+    launcher = StartWindow()
+    launcher.show()
+
+    launcher._open_gm_mode()
+    assert launcher._gm_window is None  # not built yet: the launcher is fading out
+
+    qtbot.waitUntil(lambda: _settled(launcher))
+    window = launcher._gm_window
+    try:
+        assert isinstance(window, GMWindow) and window.isVisible()
+        assert window.windowOpacity() == pytest.approx(1.0)
+        assert launcher.isVisible()  # a GM still opens sheets from it
+    finally:
+        window.bridge.stop()
+        window.close()
+
+
+@pytest.mark.usefixtures("fades")
+def test_a_failure_is_reported_once_the_screen_is_down(host: QMainWindow, qtbot) -> None:
+    seen: list[tuple[bool, int]] = []
+
+    def warn() -> None:
+        seen.append((loading.fading(host), len(_screens(host)) + len(_veils(host))))
+
+    loading.fade_through(host, "Joining the session…", lambda: None, after=warn, at_once=True)
+    (screen,) = _screens(host)
+    assert screen.content_shown  # a wait on the network: the bar from the start
+    qtbot.waitUntil(lambda: bool(seen))
+    assert seen == [(False, 0)]  # no fade running, nothing laid over the window
+
+
+def test_with_fades_off_a_new_window_replaces_the_old_at_once(qapp: QApplication) -> None:
+    old, new = QMainWindow(), QMainWindow()
+    old.show()
+    loading.show_window(new, replacing=old)
+    assert new.isVisible() and not old.isVisible()
+    new.close()
 
 
 # -- the start of the app -------------------------------------------------------------

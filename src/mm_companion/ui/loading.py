@@ -44,6 +44,11 @@ about to be torn up or not yet painted, and a picture costs one paint, not one p
 frame. Whether the bar is on the screen it fades to depends on how long the same
 switch took last time in that window; a quick one fades between the two views alone,
 and its bar comes up only if this time it runs long.
+
+The launcher uses the same fade for a window it opens: it fades to its screen at the
+click, the window is built behind it, and the new window fades in over it by its own
+opacity (:func:`show_window`) — the launcher, if the new window replaces it, going
+only once that is in.
 """
 
 from __future__ import annotations
@@ -445,12 +450,16 @@ class _Fade(QObject):
         text: str,
         work: Callable[[], None],
         finished: Callable[[], None] | None,
+        after: Callable[[], None] | None,
+        at_once: bool,
     ) -> None:
         super().__init__(host)
         self.host = host
         self.text = text
         self._work = work
         self._finished = finished
+        self._after = after
+        self._at_once = at_once
         self._screen: LoadingScreen | None = None
         self._veil: _Veil | None = None
         self._animation: QVariantAnimation | None = None
@@ -461,7 +470,7 @@ class _Fade(QObject):
         self.host.installEventFilter(self)
         old = self.host.grab()  # before anything is laid over it
         last = _took.get(self.host, {}).get(self.text)
-        slow = last is None or last >= (SHOW_AFTER_S or 0.0)
+        slow = self._at_once or last is None or last >= (SHOW_AFTER_S or 0.0)
         self._screen = LoadingScreen(self.host, self.text, content=slow)
         # Not painted now: the veil goes over it first, so the next frame still shows
         # the old view, and the fade starts from there.
@@ -476,7 +485,10 @@ class _Fade(QObject):
         animation.setDuration(round((FADE_S or 0.0) * 1000))
         animation.setEasingCurve(QEasingCurve.Type.OutQuad)
         animation.valueChanged.connect(self._veil.set_alpha)
-        animation.finished.connect(then)
+        # On a turn of the loop of its own, not inside the animation's signal: what
+        # comes next is the whole build, or a warning box with an event loop of its
+        # own, and either would run inside Qt's animation timer while it ticks.
+        animation.finished.connect(lambda: QTimer.singleShot(0, self, then))
         self._animation = animation
         animation.start()
 
@@ -490,28 +502,39 @@ class _Fade(QObject):
         screen = self._screen
         started = time.perf_counter()
         try:
-            with _running(_Run(self.host, self.text, screen)):
+            run = _Run(self.host, self.text, screen)
+            with _running(run):
+                if self._at_once:
+                    run.cover()
                 self._work()
         except Exception:  # noqa: BLE001 - the window still has to come back
             diagnostics.log_exception(f"A view switch failed ({self.text})")
         _took.setdefault(self.host, {})[self.text] = time.perf_counter() - started
         if screen is not None and screen.content_shown:
             screen.show_progress(1.0)
-        self._call_finished()
+        self._call("_finished")
         # A turn of the loop for the new view to lay itself out before its picture is
         # taken, with the screen still over it.
         QTimer.singleShot(0, self, self._reveal)
 
-    def _call_finished(self) -> None:
-        finished, self._finished = self._finished, None
-        if finished is None:
+    def _call(self, name: str) -> None:
+        """Run the *finished* or *after* callback, once, logging what it raises."""
+        callback = getattr(self, name)
+        setattr(self, name, None)
+        if callback is None:
             return
         try:
-            finished()
+            callback()
         except Exception:  # noqa: BLE001 - see _build
             diagnostics.log_exception(f"Finishing a view switch failed ({self.text})")
 
     def _reveal(self) -> None:
+        waiting = _handoffs.get(self.host)
+        if waiting is not None:
+            # A window is fading in to replace this one: the screen stays up under it,
+            # and comes down only once this one has gone (see show_window).
+            waiting.append(self._done)
+            return
         screen, self._screen = self._screen, None
         if screen is None or not shiboken6.isValid(screen):
             self._done()
@@ -533,10 +556,14 @@ class _Fade(QObject):
         if screen is not None and shiboken6.isValid(screen):
             screen.release()
             discard_widget(screen)
-        self._call_finished()
-        self.host.removeEventFilter(self)
+        self._call("_finished")
+        if shiboken6.isValid(self.host):
+            self.host.removeEventFilter(self)
         _fades.discard(self)
         self.deleteLater()
+        # Last: a warning box runs an event loop of its own, and should find the
+        # window with nothing laid over it.
+        self._call("_after")
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802 - Qt API
         # A picture of the window at its old size is wrong at the new one: skip to the
@@ -549,7 +576,7 @@ class _Fade(QObject):
 
 
 def fading(window: QWidget) -> bool:
-    """Whether a view switch is fading over *window*'s top-level window right now."""
+    """Whether a switch is fading over *window*'s top-level window right now."""
     host = window.window()
     return any(fade.host is host for fade in _fades)
 
@@ -559,16 +586,25 @@ def fade_through(
     text: str,
     work: Callable[[], None],
     finished: Callable[[], None] | None = None,
+    *,
+    after: Callable[[], None] | None = None,
+    at_once: bool = False,
 ) -> None:
     """Switch the view of *window*: fade out, run *work* behind a loading screen, fade in.
 
-    *finished* runs once *work* is over, before the new view fades in. The fade out
-    runs on the event loop, so this returns **before** *work* has run — except where
-    a fade makes no sense, and then it is plain :func:`loading` and both have run by
-    the time it returns: a window that is not on screen, a switch inside other work
-    in progress, fades or screens turned off, or a switch already fading over the
-    window (a caller should refuse a second one while :func:`fading` says so). A fade
-    cannot raise to the caller, so it logs whatever *work* or *finished* raises.
+    *finished* runs once *work* is over, before the new view fades in — where a
+    window opened by the work is shown (:func:`show_window`). *after* runs once
+    everything is over and the screen is down — where a warning about a failure
+    goes. *at_once* puts the bar on the screen from the start, for work that begins
+    by waiting on the network (see :func:`loading`).
+
+    The fade out runs on the event loop, so this returns **before** *work* has run —
+    except where a fade makes no sense, and then it is plain :func:`loading` and all
+    three have run by the time it returns: a window that is not on screen, a switch
+    inside other work in progress, fades or screens turned off, or a switch already
+    fading over the window (a caller should refuse a second one while :func:`fading`
+    says so). A fade cannot raise to the caller, so it logs whatever the work or the
+    callbacks raise.
     """
     host = window.window()
     if (
@@ -579,10 +615,64 @@ def fade_through(
         or fading(host)
     ):
         try:
-            with loading(window, text):
+            with loading(window, text, at_once=at_once):
                 work()
         finally:
             if finished is not None:
                 finished()
+            if after is not None:
+                after()
         return
-    _Fade(host, text, work, finished).start()
+    _Fade(host, text, work, finished, after, at_once).start()
+
+
+# -- a new window ----------------------------------------------------------------
+
+#: Windows being replaced by one fading in over them (see :func:`show_window`), each
+#: with what waits for it to go: the switch whose screen is still up on it.
+_handoffs: dict[QWidget, list[Callable[[], None]]] = {}
+
+
+def show_window(window: QWidget, *, replacing: QWidget | None = None) -> None:
+    """Show the new top-level *window* fading in — and then hide *replacing*, if given.
+
+    The launcher opening a sheet: the launcher stays up under the sheet, its loading
+    screen still on it, until the sheet is in, and goes only then — so there is no
+    moment with neither on screen. The fade is the window's own opacity, which a
+    platform without a compositor ignores; it then simply appears. With fades off it
+    is a plain ``show()``, and *replacing* is hidden at once.
+    """
+    if FADE_S is None or SHOW_AFTER_S is None:
+        window.show()
+        if replacing is not None:
+            replacing.hide()
+        return
+    if replacing is not None:
+        _handoffs.setdefault(replacing, [])
+
+    def release(hide: bool) -> None:
+        if replacing is None:
+            return
+        if hide and shiboken6.isValid(replacing):
+            replacing.hide()
+        for waiting in _handoffs.pop(replacing, []):
+            waiting()
+
+    def end() -> None:
+        window.setWindowOpacity(1.0)
+        release(hide=True)
+
+    window.setWindowOpacity(0.0)
+    window.show()
+    animation = QVariantAnimation(window)
+    animation.setStartValue(0.0)
+    animation.setEndValue(1.0)
+    animation.setDuration(round(FADE_S * 1000))
+    animation.setEasingCurve(QEasingCurve.Type.OutQuad)
+    animation.valueChanged.connect(window.setWindowOpacity)
+    # Off the animation's own signal, as in _Fade._animate.
+    animation.finished.connect(lambda: QTimer.singleShot(0, window, end))
+    # A window destroyed before it is in still lets the one it was replacing go on.
+    # (Nothing of the window itself may be touched there: it is half gone.)
+    window.destroyed.connect(lambda *_: release(hide=False))
+    animation.start()

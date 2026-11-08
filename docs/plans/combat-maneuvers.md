@@ -693,7 +693,7 @@ commit hash.
   it got through this time). It prints `Windows fatal exception: code 0x80040155` stack
   dumps from `simple/printing.py::make_printer` in `test_a_pdf_can_be_written`: COM noise
   faulthandler reports from the Windows printer setup, not a crash — the test passes.
-  Commit: (see below).
+  Commit: efcb4c7.
 
 - **2026-11-09 — Phase 6 (done).** The self actions work on a player's sheet. Asked the
   user two questions, now decisions 13 (Surprise Attack is the GM's to grant: greyed for a

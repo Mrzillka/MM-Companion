@@ -636,6 +636,54 @@ for every check.
 - Each roll is matched to its attacker **by position**, never by name: two creatures in
   one group may share a name.
 
+### A call to roll (the GM's Team attack tile)
+
+The Rolls block's **Team attack** tile is not the group window any more (that is on a
+group's ☰ menu only, the user's call, 2026-11-09): it **calls** a team attack that anyone
+at the table answers with their own roller, maneuvers and all, and the GM resolves.
+
+- **Sending.** `ui/team_call.py`'s `TeamCallWindow` takes the target (the GM's Scene) and
+  one signed Bonus/Penalty; **Send** posts `rules.team_call_spec` as an ordinary
+  **request record** (`bridge.prompt_roll`), kind `KIND_TEAM_CALL` (`"team-call"`),
+  carrying the action id, the title "Team attack → Thug", the target in `targets` and the
+  adjustment as `modifier`. **No wire change**: every key is one a request already
+  carries. The tile is greyed off the air (`NO_SESSION_FOR_CALL` — nobody could answer)
+  and with nobody on the Scene.
+- **The table.** `RollHistoryPanel._insert` routes a call's request (`team_call_of`) into
+  a `GroupTableCard` keyed by its action id. The call is no row: it is a line under the
+  heading with a **Join** button (`join_button`, `joinRequested` →
+  `teamJoinRequested`). Entries fill rows of the same table on every screen, by
+  `action_table_key`. Striking the request takes the button away and leaves the rows.
+- **Joining** arms the presser's roller (`CombatRunner.join_team`: a fixed lane line,
+  `TEAM_LINE`, the attack picker first when none of the actor's attacks is loaded). The
+  **next** attack thrown is stamped by the runner's shift (`rules.team_join_spec`): the
+  call's action id and title, the attacker's name as `targets` (its row), the GM's
+  adjustment on the check, "(team attack +2)" in the label. Stamped *before*
+  `apply_actions`, so a maneuver restates the bonus already moved. With a target named
+  it is an aimed attack by its shape, so no card offers its save. A roll made before
+  joining does not count; a **re-roll** of the entry throws the same stamped spec, so it
+  replaces the entry. A player's sheet hears Join through `DiceRollerView.teamJoinRequested`;
+  the GM's history through `_gm_team_join`, which asks which NPC joins (the target left
+  out) and acts as it.
+- **Gathering** (`TeamCallController.take_roll`, on `rollAdded`): the request's `seq`, and
+  every non-group roll with the call's action id and a save, one entry per
+  `(seat, actor)` — a later roll replaces the earlier one. The target's own roll is
+  ignored. `AttackController.ignore(action_id)` keeps the aimed-attack controller from
+  holding the entries as early rolls. The GM's `ActionCard` (**Resolve** / **Call off**)
+  lists each entry judged now against the target's `defense_class_in_play`
+  (`AttackController.judge_entry`), and "Now: Primary: …" from `combine_team_attack`.
+- **Which entries combine** is `rules.team_fits`: the first entry sets the effect and
+  resistance (ladder kind and save trait); a different one is left out, and so is one
+  whose rank is more than `rankSpread` below the strongest (a rank of 0 is unknown and
+  waives it, as in the group window — `ladder.rank` is on the wire for Damage only).
+- **Resolve** strikes the request (the Join buttons go everywhere) and hands the kept
+  entries to `AttackController.resolve_team`, which shares `_combine_team` with the group
+  window: judge, combine, then the target's one save at the raised rank — rolled for an
+  NPC at the GM roller's adjustment, asked of a player, a minion's critical landing its
+  worst — under the **call's own action id**, so the save joins the call's table.
+  **Call off**, or the GM's ✕ on the table (`rollRemoved` of the request), settles it
+  with nothing done. An entry struck from the history leaves the team.
+
 ## Team checks and group checks
 
 Two more of a group's ☰ menu items (PDF p18), one window (`ui/group_check.py`,
@@ -700,8 +748,8 @@ each record's `bonus` / `penalty` (`attack_check`, `effect_rank`, `defense` — 
   notes](dice-and-rolling.md#one-runner-for-both-rollers-uirollercombat_runnerpy)), and
   grants Surprise Attack. The NPC-group Team attack window rolls **without** maneuvers
   (its Adjust is the bonus/penalty); a team attack that takes them is a different card —
-  a call to roll anyone answers with their own roller, the GM resolving — planned as
-  phase 7b (decision 15 of the plan).
+  a call to roll anyone answers with their own roller, the GM resolving (see *A call to
+  roll*, under Team attack).
 
 ## Not done yet
 

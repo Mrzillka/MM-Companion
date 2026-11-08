@@ -18,7 +18,7 @@ every session.**
 | 5 | The four attack maneuvers, end to end (player) | done (2026-11-08) |
 | 6 | Self actions: Aim, Charge/Slam, Defend, Recover, Drop Prone, Stand, Finishing, Surprise, Catch | done (2026-11-09) |
 | 7 | The GM's side: NPC chooser first, conditions on the NPC | done (2026-11-09) |
-| 7b | Team attack as a call to roll: a history card anyone answers, GM resolves | not started |
+| 7b | Team attack as a call to roll: a history card anyone answers, GM resolves | done (2026-11-09) |
 | 8 | Targeted actions I: Feint, Trick, Aid | not started |
 | 9 | Targeted actions II: Grab, Trip, Disarm, Smash, Escape, Block | not started |
 | 10 | Notes, debts, full test run, hand-off for merge | not started |
@@ -130,6 +130,10 @@ Status values: `not started`, `in progress (<what is left>)`, `done (<date>)`.
     out, and the target's save rolled or asked. **Keep both**: the NPC-group Team attack
     window stays as it is (the GM rolls a squad at once, with its Adjust; no maneuvers
     there). An NPC joins the new one by the GM pressing the button and picking the NPC.
+16. **The call's setup** (asked 2026-11-09, phase 7b): the Rolls block's **Team attack
+    tile starts the call only** — the NPC-group window is reached from the group's ☰ menu
+    alone. The GM sets the call up in a **small window**: the target (the Scene) and one
+    signed Bonus/Penalty, then **Send**.
 
 ---
 
@@ -459,6 +463,20 @@ widget, log failures.
   replays it onto an open sheet). `choose_from_menu(icons=)`. `aim_own` declares the spec
   the die is made of (`area_roll_attack(before=)`). Surprise Attack's two options are data
   (`applies` vulnerable / defenseless, `temporary: true`).
+- **As built (phase 7b):** the call to roll — core `core/rules/team_call.py`
+  (`KIND_TEAM_CALL`, `team_call_spec`, `is_team_call`, `team_call_target`,
+  `team_join_spec`, `team_entry_option`, `team_fits`, `TEAM_NOT_SAME`); the GM's
+  `ui/team_call.py` (`TeamCallWindow`, `TeamCallController`, `TeamCall`; `RESOLVE_CAPTION`,
+  `CALL_OFF_CAPTION`, `NO_SESSION_FOR_CALL`, `NO_TARGET_FOR_CALL`, `NOBODY_YET`;
+  `GMWindow._team_calls`). `AttackController` gained `ignore`, `judge_entry`,
+  `resolve_team`, and the shared `_team_aimed` / `_combine_team` (the group window's
+  `team_attack` runs on them too) plus the module's `team_summary`. History:
+  `team_call_of`, `JOIN_CAPTION`, `GroupTableCard.call` / `join_button` / `joinRequested`,
+  `RollHistoryPanel.teamJoinRequested`, `DiceRollerView.teamJoinRequested`. Runner:
+  `TEAM_LINE`, `team_call`, `join_team`, `attacker_name`. GM: `_gm_team_join`,
+  `_choose_actor(skip_ref=)`, `TEAM_CALL_OVER`; `gm/rolls.py`'s `TEAM_ACTIONS` became
+  `GROUP_ACTIONS` (team and group check). **No wire change**: the call is a request
+  record whose spec uses only keys v20 already carries.
 - **Targeted actions** reuse the targeting layer: the target is picked off the Scene
   (`ui/attack_targets.py`), the GM accepts on an `ActionCard`, the server rolls the
   NPC's side, and a player is asked. A two-stage action (Grab, Trip, Disarm) is the
@@ -559,8 +577,8 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
       the die settles, the lines are spent; nothing lands on an abandoned roll; Reroll
       adds no condition.
 - [x] Aimed attacks pick up the active lines (the declaration carries the shifted spec).
-- [ ] Team attack's final ranks include them (p201) — **moved to phase 7**: a team attack
-      is the GM's, and the GM's roller has no maneuvers until then.
+- [x] Team attack's final ranks include them (p201) — done in **phase 7b**: a call's
+      entries are rolled with their maneuvers, so their ranks as rolled are what combine.
 - [x] Session: **no new wire key** (the label, modifier, DC and ladder rank already
       travel; `effect_rank` is local only), so nothing to whitelist and no bump. The GM
       sees the conditions through the player's snapshot.
@@ -595,18 +613,22 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
 - [x] Full run (see the log).
 
 ### Phase 7b — Team attack as a call to roll (decision 15)
-- [ ] The GM's Team attack tile (beside the group window, which stays): pick the target
-      and a bonus/penalty, send → a card in the history with a **Join** button (wire:
-      probably a new action kind on the action channel, inside v20).
-- [ ] Pressing it arms the presser's roller: the **next** attack they roll (or reroll),
-      maneuvers and all, is that member's entry. A roll made before pressing does not
-      count. The GM presses it for an NPC through the NPC chooser.
-- [ ] The card shows each entry as it comes (`judge_attack` against the target's
+- [x] The GM's Team attack tile (decision 16: the tile is the call; the group window is on
+      the group's ☰ menu): a small window — target and bonus/penalty — and Send → the call
+      in everyone's history as a table with a **Join** button (wire: a request record with
+      a new spec kind, so **no** new key, inside v20).
+- [x] Pressing it arms the presser's roller: the **next** attack they roll, maneuvers and
+      all, is that member's entry; a reroll of it replaces it. A roll made before pressing
+      does not count. The GM presses it for an NPC through the NPC chooser (the target
+      left out).
+- [x] The GM's card shows each entry as it comes (`judge_entry` against the target's
       `defense_class_in_play`, minion rules, `combine_team_attack`'s running summary).
-      Final effect ranks after the maneuvers decide who can combine (p201).
-- [ ] **Resolve** (GM only): the primary's save at the raised rank, rolled for an NPC,
-      asked of a player — the aimed-attack road `AttackController.team_attack` uses.
-- [ ] Tests, notes (`actions.md` "Team attack"), the plan.
+      The entries' ranks as rolled (maneuvers included) decide who combines (`team_fits`).
+- [x] **Resolve** (GM only): strikes the call, then the primary's save at the raised rank,
+      rolled for an NPC, asked of a player — the road the group window's team attack
+      uses, now shared (`_combine_team`). **Call off** and the GM's ✕ settle it.
+- [x] Tests, notes (`actions.md` "A call to roll", `dice-and-rolling.md`,
+      `npc-groups.md`), the plan.
 
 ### Phase 8 — Targeted actions I
 - [ ] Feint (the actor picks attack/Deception/Insight; the target resists with the
@@ -661,6 +683,42 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
 
 Newest first. Each entry: date, phase, what was done, what's next, gotchas, and the
 commit hash.
+
+- **2026-11-09 — Phase 7b (done).** The team attack as a call to roll. Asked the user two
+  questions, now decision 16 (the tile is the call only; a small setup window). How it
+  works (`actions.md` "A call to roll" has the detail, §3.3 "As built (phase 7b)" the
+  names): Send posts a **request record** whose spec is `KIND_TEAM_CALL`; every history
+  draws it as a `GroupTableCard` with a Join line; Join arms the roller with a fixed
+  `TEAM_LINE`, and the next attack is stamped (`team_join_spec`: action id, title, the
+  attacker as the row, the GM's bonus on the check) — so it fills the call's table on
+  every screen; the GM's controller gathers entries off `rollAdded` and keeps its
+  `ActionCard` (Resolve / Call off) judged and summarised; Resolve strikes the request and
+  resolves on the aimed-attack road under the call's id. Tests:
+  `tests/core/test_team_call.py` (7), `tests/ui/dice/test_team_call_join.py` (9),
+  `tests/ui/gm/test_team_call.py` (17, one through a real hosted session);
+  `test_actions_popup_gm.py` moved onto `GROUP_ACTIONS`. **Decisions I made (small):**
+  (1) **no wire change** — a request record already carries every key the call needs, and
+  the server's `sanitize_spec` passes an unknown kind; (2) the call and its entries are
+  **one table card** (decision 15's "the card updates with each new roll"), not a request
+  card beside a table; (3) Resolve **strikes** the request record, which is how the Join
+  buttons go from every screen (the rows stay); Call off, or the GM's ✕ on the table,
+  settles it with nothing done, and a struck entry leaves the team; (4) one entry per
+  `(seat, actor)`, a later roll replacing the earlier (a re-roll of the entry re-throws
+  the stamped spec, so it counts); a line left armed does **not** stamp a reroll of an
+  earlier roll — Reroll never reads the lane; (5) the **first** entry sets the effect and
+  resistance, a different one is shown "left out"; one more than `rankSpread` below the
+  strongest is left out too (rank unknown → waived, as in the group window); (6) a single
+  entry may be resolved (it is then that attack alone); (7) the tile is greyed **off the
+  air** (nobody could answer; the group window still works there) and with nobody on the
+  Scene; (8) the target's own roll never joins; (9) the GM's Join is the same table
+  button players have, then the NPC chooser without the target. **Refactor:** the group
+  window's `team_attack` and the call now share `_team_aimed` / `_combine_team` /
+  `judge_entry` (`judge_entry` also passes a Finishing Attack's `critical_hit`, which the
+  group roll never had). **Gotchas:** (1) a callable *instance* monkeypatched onto a
+  class is not bound, so it misses `self` — patch a lambda that calls it; (2) a quick NPC
+  has more than one attack choice; (3) heredocs with backticks still break the Bash tool
+  (scripts go in the scratchpad). Next: phase 8 (Feint, Trick, Aid). **Full run: 4783 passed** (10 min 9 s).
+  Commit: COMMIT_HASH.
 
 - **2026-11-09 — Phase 7 (done).** The GM's roller runs the maneuvers, the self actions
   and the Attack tile as an NPC, and grants Surprise Attack. Asked the user how a team

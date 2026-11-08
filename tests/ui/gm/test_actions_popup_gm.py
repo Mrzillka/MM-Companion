@@ -1,11 +1,14 @@
-"""The GM's Actions popup on the Rolls block: Impress, Area and the group actions."""
+"""The GM's Actions popup on the Rolls block: Impress, Area and the group actions.
+
+The Team attack tile is a call to roll now (``tests/ui/gm/test_team_call.py``).
+"""
 
 from __future__ import annotations
 
 import pytest
 from PySide6.QtWidgets import QApplication
 
-from mm_companion.ui.gm.rolls import NO_NPC_GROUPS, TEAM_ACTIONS
+from mm_companion.ui.gm.rolls import GROUP_ACTIONS, NO_NPC_GROUPS
 from mm_companion.ui.gm_window import GMWindow
 from mm_companion.ui.group_check import MODE_GROUP, MODE_TEAM
 from mm_companion.ui.session_bridge import set_active_session
@@ -29,7 +32,7 @@ def window(qapp: QApplication) -> GMWindow:
 
 def test_the_gm_gets_the_group_tiles_greyed_until_there_is_a_group(window, monkeypatch) -> None:
     popup = window._roller.open_actions()
-    for key in TEAM_ACTIONS:
+    for key in GROUP_ACTIONS:
         tile = popup.tile(key)
         assert tile is not None and not tile.isEnabled()
         assert NO_NPC_GROUPS in tile.toolTip()
@@ -38,13 +41,12 @@ def test_the_gm_gets_the_group_tiles_greyed_until_there_is_a_group(window, monke
 
     _squad(window, monkeypatch)
     popup = window._roller.open_actions()
-    assert all(popup.tile(key).isEnabled() for key in TEAM_ACTIONS)
+    assert all(popup.tile(key).isEnabled() for key in GROUP_ACTIONS)
 
 
 @pytest.mark.parametrize(
     "key,expected",
     [
-        ("team_attack", ("attack", None)),
         ("team_check", ("check", MODE_TEAM)),
         ("group_check", ("check", MODE_GROUP)),
     ],
@@ -52,7 +54,6 @@ def test_the_gm_gets_the_group_tiles_greyed_until_there_is_a_group(window, monke
 def test_a_group_tile_with_one_group_opens_its_window(window, monkeypatch, key, expected) -> None:
     group_id = _squad(window, monkeypatch)
     opened: list[tuple] = []
-    monkeypatch.setattr(window, "_team_attack", lambda gid: opened.append(("attack", None, gid)))
     monkeypatch.setattr(
         window, "_group_check", lambda gid, mode: opened.append(("check", mode, gid))
     )
@@ -98,8 +99,8 @@ def test_with_several_groups_the_gm_picks_one_off_a_menu(window, monkeypatch) ->
     assert len(window._npc_groups) == 2
     _Menu.shown = []
     monkeypatch.setattr("mm_companion.ui.gm.rolls.QMenu", _Menu)
-    opened: list[str] = []
-    monkeypatch.setattr(window, "_team_attack", opened.append)
-    window._roller.open_actions().tile("team_attack").click()
+    opened: list[tuple] = []
+    monkeypatch.setattr(window, "_group_check", lambda gid, mode: opened.append((gid, mode)))
+    window._roller.open_actions().tile("team_check").click()
     assert len(_Menu.shown[0]) == 2 and all(text.endswith("(2)") for text in _Menu.shown[0])
-    assert opened == [window._npc_groups[0].id]
+    assert opened == [(window._npc_groups[0].id, MODE_TEAM)]

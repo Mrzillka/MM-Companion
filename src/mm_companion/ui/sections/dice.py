@@ -147,6 +147,9 @@ class DiceSection(QGroupBox):
             parent=self,
             actor=CombatActor(self._character, land=self.conditionsRequested.emit),
         )
+        # A team attack's call to roll, joined in the session history: this sheet's
+        # next attack is its entry.
+        self.view.teamJoinRequested.connect(self.combat.join_team)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.view)

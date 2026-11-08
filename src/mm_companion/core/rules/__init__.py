@@ -25,7 +25,8 @@ an area's size on the card; ``area_attack`` (resolving one against a scene) sits
 its spec's ladder does to it) sits on ``rolls``, and so does ``recovery`` (the check
 that rolls a condition off, and what making it sheds).
 ``maneuvers`` (the attack maneuvers' caps and the spec they shift) sits on ``rolls`` and
-``derived`` (the Defense in play).
+``derived`` (the Defense in play). ``team_call`` (a team attack anyone joins) sits on
+``team_attack`` and ``maneuvers``.
 
 ``costs`` moved above ``powers_terms`` (it used to sit beside it) when Morph's Metamorph
 needed a note saying what its alternate forms cost: the rules put that budget at "the
@@ -85,5 +86,6 @@ from .size import *  # noqa: F401,F403
 from .subbuilds import *  # noqa: F401,F403
 from .targeting import *  # noqa: F401,F403
 from .team_attack import *  # noqa: F401,F403
+from .team_call import *  # noqa: F401,F403
 from .trait_rates import *  # noqa: F401,F403
 from .validation import *  # noqa: F401,F403

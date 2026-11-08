@@ -8,6 +8,9 @@ picker, its numbers in the caps, its name on every roll, and what the action lea
 landing on it (and replayed onto its open sheet). Surprise Attack is the GM's alone
 (decision 13 of the combat maneuvers plan): pick a creature on the Scene, and it is
 Vulnerable — or Defenseless — until the start of its next turn.
+
+A team attack's call to roll (``ui/team_call.py``) is joined for an NPC here too: Join on
+the call's table asks which NPC, and that NPC's next attack off the roller is its entry.
 """
 
 from __future__ import annotations
@@ -39,6 +42,8 @@ NO_NPC_TO_ACT = "Add an NPC to the session first: the GM takes these actions as 
 NO_ONE_ON_SCENE = "Put someone on the Scene first: a surprise attack is granted against them."
 #: Beside an NPC in the chooser that has no attack to take an attack action with.
 NO_ATTACKS_MARK = "no attacks"
+#: Join pressed on a team attack the GM has already resolved or called off.
+TEAM_CALL_OVER = "That team attack is over: it was resolved or called off."
 
 
 class GMCombatMixin:
@@ -100,11 +105,14 @@ class GMCombatMixin:
                 return reason.rstrip(".")
         return ""
 
-    def _choose_actor(self, action: CombatAction | None) -> ImpressParty | None:
+    def _choose_actor(
+        self, action: CombatAction | None, *, skip_ref: str = ""
+    ) -> ImpressParty | None:
         """Which NPC takes *action* (``None``: the Attack tile): picked off a plain menu
         at the Actions button — each with its picture, its group and whether it is a
-        minion, greyed with the reason when it cannot — or the only one there is."""
-        parties = self._acting_parties()
+        minion, greyed with the reason when it cannot — or the only one there is.
+        *skip_ref* leaves one creature out (the target of a team attack)."""
+        parties = [p for p in self._acting_parties() if not skip_ref or p.ref != skip_ref]
         if not parties:
             self._show_notice(NO_NPC_TO_ACT, theme.color("text.muted.rich"))
             return None
@@ -201,6 +209,23 @@ class GMCombatMixin:
                 self._attack.aim_own(party, spec, target.ref, target.name)
                 return
         self._combat.load(spec)
+
+    # -- a team attack's call to roll --------------------------------------------
+
+    def _gm_team_join(self, call: object) -> None:
+        """Join on a team attack call's table in the GM's history: which NPC joins (not
+        the target), and its next attack off the roller is the entry."""
+        if not isinstance(call, RollSpec):
+            return
+        open_call = self._team_calls.open_call(call.action_id)
+        if open_call is None:
+            self._show_notice(TEAM_CALL_OVER, theme.color("text.muted.rich"))
+            return
+        party = self._choose_actor(None, skip_ref=open_call.target_ref)
+        if party is None:
+            return
+        self._combat.act_as(self._actor_for(party))
+        self._combat.join_team(call)
 
     # -- what the GM grants -------------------------------------------------------
 

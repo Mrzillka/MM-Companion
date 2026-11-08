@@ -60,11 +60,12 @@ from mm_companion.ui.scene_card import CARD_AREA, CARD_END_TURN, CARD_IMPRESS
 from mm_companion.ui.sections.conditions import condition_display_name
 from mm_companion.ui.undo import absorbing
 
-#: The Actions popup's group tiles (``actions.json``), and the group window each opens.
+#: The Actions popup's Team attack tile: a call to roll anyone joins (ui/team_call.py).
 TEAM_ATTACK = "team_attack"
+#: The group tiles (``actions.json``), and the group window each opens.
 TEAM_CHECK = "team_check"
 GROUP_CHECK = "group_check"
-TEAM_ACTIONS = (TEAM_ATTACK, TEAM_CHECK, GROUP_CHECK)
+GROUP_ACTIONS = (TEAM_CHECK, GROUP_CHECK)
 
 #: Why the group tiles are greyed out on a board with no group.
 NO_NPC_GROUPS = (
@@ -278,8 +279,9 @@ class GMRollsMixin:
         if self._data.area.available:
             offered[KIND_AREA_ATTACK] = None
         groups = None if self._npc_groups else NO_NPC_GROUPS
-        for key in TEAM_ACTIONS:
+        for key in GROUP_ACTIONS:
             offered[key] = groups
+        offered[TEAM_ATTACK] = self._team_calls.reason()
         return combat_menu(self._data, offered, gm=True, fallback=[IMPRESS_ACTION, AREA_ACTION])
 
     def _on_roller_action(self, kind: str) -> None:
@@ -289,14 +291,13 @@ class GMRollsMixin:
             self._impress.open_new()
         elif kind == KIND_AREA_ATTACK:
             self._area.open_new()
-        elif kind in TEAM_ACTIONS:
+        elif kind == TEAM_ATTACK:
+            self._team_calls.open_new(self._aim_targets())
+        elif kind in GROUP_ACTIONS:
             group_id = self._choose_group()
             if group_id is None:
                 return
-            if kind == TEAM_ATTACK:
-                self._team_attack(group_id)
-            else:
-                self._group_check(group_id, MODE_TEAM if kind == TEAM_CHECK else MODE_GROUP)
+            self._group_check(group_id, MODE_TEAM if kind == TEAM_CHECK else MODE_GROUP)
 
     def _choose_group(self) -> str | None:
         """Which NPC group acts: the only one there is, or the one picked off a menu of

@@ -44,6 +44,7 @@ from mm_companion.core.data_loader import GameData
 from mm_companion.core.dice import ROUTINE_DIE
 from mm_companion.core.rules import (
     PICK_WORST,
+    AttackVerdict,
     MinionRules,
     RollSpec,
     TeamEntry,
@@ -153,12 +154,19 @@ class AttackController(QObject):
         self._aimed: dict[str, _Aimed] = {}
         #: A roll that came in before its declaration did, by action id.
         self._early: dict[str, dict] = {}
+        #: Action ids whose rolls are another controller's to gather (a team call's).
+        self._ignored: set[str] = set()
         bridge.actionRequested.connect(self._on_action_request)
         bridge.rollAdded.connect(self.take_roll)
 
     @property
     def aimed(self) -> dict[str, _Aimed]:
         return dict(self._aimed)
+
+    def ignore(self, action_id: str) -> None:
+        """Leave the rolls carrying *action_id* alone: a team call's entries are aimed
+        attacks by their shape, but its own controller gathers them."""
+        self._ignored.add(action_id)
 
     # -- being told --------------------------------------------------------------
 
@@ -242,6 +250,8 @@ class AttackController(QObject):
         # Off the air the GM's own roll carries the spec itself, not its wire form.
         spec = raw if isinstance(raw, RollSpec) else RollSpec.from_dict(raw)
         if spec is None or not spec.action_id or spec.follow_up is None:
+            return
+        if spec.action_id in self._ignored:
             return
         aimed = self._aimed.get(spec.action_id)
         if aimed is None:
@@ -526,6 +536,29 @@ class AttackController(QObject):
 
     # -- team attacks ------------------------------------------------------------------
 
+    def judge_entry(
+        self, party: ImpressParty, record: dict, target: ImpressParty, dc: int, spec=None
+    ) -> AttackVerdict:
+        """How one team member's attack *record* went against *target*'s Defense *dc*:
+        a minion's 20 adds nothing, and against a minion target a non-minion's routine
+        result counts. *spec* is the attack rolled (a Finishing Attack's every hit is a
+        critical)."""
+        rules = self._host.minion_rules()
+        die = int(record.get("die", 0))
+        modifier = int(record.get("bonus", 0)) - int(record.get("penalty", 0))
+        routine = None
+        if rules.routine_attacks and target.minion and not party.minion:
+            routine = routine_total(modifier)
+        return judge_attack(
+            modifier,
+            die,
+            dc,
+            natural=bool(record.get("critical")) if die in (1, 20) else not record.get("routine"),
+            added_success=not record.get("minion"),
+            routine_total=routine,
+            critical_hit=bool(spec is not None and spec.critical_hit),
+        )
+
     def team_attack(
         self,
         members: list[tuple[ImpressParty, TeamOption]],
@@ -554,15 +587,8 @@ class AttackController(QObject):
             return "Pick a target on the Scene."
         rules = self._host.minion_rules()
         dc = defense_class_in_play(target.character, self._data)
-        action_id = new_action_id()
         title = title or f"Team attack → {target.name}"
-        lead_party, lead_option = members[0]
-        declaration = AttackDeclaration(
-            action_id, target.ref, target.name, lead_option.attack or lead_option.save, title
-        )
-        aimed = self._make(declaration, lead_party)
-        aimed.accepted = aimed.resolving = True
-        aimed.on_done = on_done
+        aimed = self._team_aimed(new_action_id(), members, target, title, on_done)
         # By position among *members*, never by name: two creatures may share one.
         rolling = [i for i, (_p, o) in enumerate(members) if o.attack is not None]
         lines = [
@@ -585,64 +611,7 @@ class AttackController(QObject):
 
         def rolled(pairs) -> None:
             by_index = {i: record for i, (_about, record) in zip(rolling, pairs, strict=False)}
-            entries: list[TeamEntry] = []
-            shown: list[tuple[ImpressParty, str]] = []
-            for index, (party, option) in enumerate(members):
-                record = by_index.get(index)
-                if record is None:
-                    # No attack check: it hits, counting one degree (PDF p201).
-                    entries.append(TeamEntry(party.name, option.rank, True, 1))
-                    shown.append((party, "hits (no attack check)"))
-                    continue
-                die = int(record.get("die", 0))
-                modifier = int(record.get("bonus", 0)) - int(record.get("penalty", 0))
-                routine = None
-                if rules.routine_attacks and target.minion and not party.minion:
-                    routine = routine_total(modifier)
-                verdict = judge_attack(
-                    modifier,
-                    die,
-                    dc,
-                    natural=bool(record.get("critical")) if die in (1, 20) else True,
-                    added_success=not record.get("minion"),
-                    routine_total=routine,
-                )
-                degree = max(verdict.degree, 1) if verdict.hit else verdict.degree
-                entries.append(
-                    TeamEntry(party.name, option.rank, verdict.hit, degree, verdict.critical)
-                )
-                mark = "critical hit" if verdict.critical else ("hit" if verdict.hit else "missed")
-                shown.append((party, f"{total_of(record)} vs DC {dc}: {mark}"))
-            result = combine_team_attack(entries, self._data)
-            if not result.any_hit:
-                if on_rolled is not None:
-                    on_rolled(shown, "Every attack missed.")
-                self._finish(aimed, "Every attack missed.")
-                return
-            primary_party, primary_option = members[result.primary]
-            summary = f"Primary: {primary_party.name} (rank {primary_option.rank}); "
-            if result.other_degrees:
-                summary += f"the others' {result.other_degrees} degree(s) add +{result.step_bonus}"
-            else:
-                summary += "no other attack hit"
-            if result.critical_bonus:
-                summary += f", a critical +{result.critical_bonus}"
-            summary += f" — rank {primary_option.rank + result.bonus}"
-            if on_rolled is not None:
-                on_rolled(shown, summary)
-            save = team_save_spec(primary_option.save, result.bonus, title=title)
-            critical = result.critical_bonus > 0
-            if target.kind == PARTY_NPC:
-                if critical and target.minion and rules.crit_auto_fails:
-                    # The critical's own +5 is what critical_answer raises the rank by.
-                    crit_save = team_save_spec(primary_option.save, result.step_bonus, title=title)
-                    self._crit_minion(aimed, target, [crit_save], rules)
-                    return
-                self._roll_npc_saves(
-                    aimed, target, [(save, save.trait_key, self._host.roller_adjustment())]
-                )
-                return
-            self._ask_player(aimed, target, [save])
+            self._combine_team(aimed, target, members, by_index, dc, on_rolled)
 
         if not lines:
             rolled([])
@@ -652,6 +621,91 @@ class AttackController(QObject):
             self._finish(aimed, "The attack rolls did not reach the session.", notice=False)
             return "The attack rolls did not reach the session."
         return ""
+
+    def resolve_team(
+        self,
+        action_id: str,
+        members: list[tuple[ImpressParty, TeamOption]],
+        records: list[dict],
+        target: ImpressParty,
+        *,
+        title: str,
+        on_rolled: Callable[[list[tuple[ImpressParty, str]], str], None] | None = None,
+        on_done: Callable[[str], None] | None = None,
+    ) -> None:
+        """Resolve a team attack whose attacks are already rolled — a call to roll's
+        entries, *records* beside *members*. Under the call's own *action_id*, so the
+        target's save joins the call's table in the history."""
+        dc = defense_class_in_play(target.character or Character(), self._data)
+        aimed = self._team_aimed(action_id, members, target, title, on_done)
+        self._combine_team(aimed, target, members, dict(enumerate(records)), dc, on_rolled)
+
+    def _team_aimed(self, action_id, members, target, title, on_done) -> _Aimed:
+        """The aimed attack a team attack resolves as (its lead's, at *target*)."""
+        lead_party, lead_option = members[0]
+        declaration = AttackDeclaration(
+            action_id, target.ref, target.name, lead_option.attack or lead_option.save, title
+        )
+        aimed = self._make(declaration, lead_party)
+        aimed.accepted = aimed.resolving = True
+        aimed.on_done = on_done
+        return aimed
+
+    def _combine_team(self, aimed, target, members, by_index: dict, dc: int, on_rolled) -> None:
+        """Judge every member's attack, combine the hits, and set the save going."""
+        rules = self._host.minion_rules()
+        entries: list[TeamEntry] = []
+        shown: list[tuple[ImpressParty, str]] = []
+        for index, (party, option) in enumerate(members):
+            record = by_index.get(index)
+            if record is None:
+                # No attack check: it hits, counting one degree (PDF p201).
+                entries.append(TeamEntry(party.name, option.rank, True, 1))
+                shown.append((party, "hits (no attack check)"))
+                continue
+            verdict = self.judge_entry(party, record, target, dc, option.attack)
+            degree = max(verdict.degree, 1) if verdict.hit else verdict.degree
+            entries.append(
+                TeamEntry(party.name, option.rank, verdict.hit, degree, verdict.critical)
+            )
+            mark = "critical hit" if verdict.critical else ("hit" if verdict.hit else "missed")
+            shown.append((party, f"{total_of(record)} vs DC {dc}: {mark}"))
+        result = combine_team_attack(entries, self._data)
+        if not result.any_hit:
+            if on_rolled is not None:
+                on_rolled(shown, "Every attack missed.")
+            self._finish(aimed, "Every attack missed.")
+            return
+        primary_party, primary_option = members[result.primary]
+        summary = team_summary(primary_party.name, primary_option.rank, result)
+        if on_rolled is not None:
+            on_rolled(shown, summary)
+        title = aimed.run.title
+        save = team_save_spec(primary_option.save, result.bonus, title=title)
+        critical = result.critical_bonus > 0
+        if target.kind == PARTY_NPC:
+            if critical and target.minion and rules.crit_auto_fails:
+                # The critical's own +5 is what critical_answer raises the rank by.
+                crit_save = team_save_spec(primary_option.save, result.step_bonus, title=title)
+                self._crit_minion(aimed, target, [crit_save], rules)
+                return
+            self._roll_npc_saves(
+                aimed, target, [(save, save.trait_key, self._host.roller_adjustment())]
+            )
+            return
+        self._ask_player(aimed, target, [save])
+
+
+def team_summary(primary: str, rank: int, result) -> str:
+    """What a team attack came to, in a line: the primary and what the others add."""
+    summary = f"Primary: {primary} (rank {rank}); "
+    if result.other_degrees:
+        summary += f"the others' {result.other_degrees} degree(s) add +{result.step_bonus}"
+    else:
+        summary += "no other attack hit"
+    if result.critical_bonus:
+        summary += f", a critical +{result.critical_bonus}"
+    return summary + f" — rank {rank + result.bonus}"
 
 
 class AttackWindow(QDialog):

@@ -8,6 +8,10 @@ one pick to the next. Everything that depends on who is acting is a
 :class:`CombatActor`, and :class:`CombatRunner` does the rest: it starts the lane lines,
 lists the actor's attacks for the picker, shifts the roll by the lines, and hands what
 they leave behind to the actor.
+
+A team attack's **call to roll** (:mod:`~mm_companion.core.rules.team_call`) is joined
+here too (:meth:`CombatRunner.join_team`): a line on the lane, and the next attack the
+actor rolls is stamped as the call's entry, maneuvers and all.
 """
 
 from __future__ import annotations
@@ -28,6 +32,7 @@ from mm_companion.core.rules import (
     apply_actions,
     attack_choices,
     check_spec,
+    is_team_call,
     lasting_conditions,
     line_fit,
     line_key,
@@ -38,12 +43,15 @@ from mm_companion.core.rules import (
     self_action_changes,
     self_action_note,
     split_line_key,
+    team_join_spec,
 )
 from mm_companion.ui.action_menu import choose_from_menu
 from mm_companion.ui.sections.conditions import condition_tone_token
 
 #: The last line of Recover's menu: take the Defense bonus and shed nothing.
 RECOVER_DEFENSE_ONLY = "Only catch your breath (the Defense bonus)"
+#: The key of the lane line a joined team attack call rides on.
+TEAM_LINE = "team-call"
 
 
 def _no_land(_requests: tuple) -> None:
@@ -97,6 +105,9 @@ class CombatRunner:
         self._parent = parent
         #: Who acts now. ``None`` on the GM's roller until an NPC is picked.
         self.actor: CombatActor | None = actor
+        #: The team attack call joined (its spec), while :data:`TEAM_LINE` waits on the
+        #: lane for the attack that is its entry.
+        self.team_call: RollSpec | None = None
         panel.set_attack_choices(self.attack_choices)
         panel.set_line_shift(self.shift)
         panel.linesRolled.connect(self.land_lasting)
@@ -140,8 +151,13 @@ class CombatRunner:
 
     def shift(self, spec: RollSpec, lines) -> RollSpec:
         """What the lines on the lane do to *spec*, for the actor (a Slam reads its
-        speed, and its own save is the actor's)."""
+        speed, and its own save is the actor's). A joined team call stamps it as the
+        call's entry first, so the maneuvers restate the bonus it already carries."""
         actor = self.actor
+        lines = list(lines)
+        call = self.team_call
+        if call is not None and any(key == TEAM_LINE for key, _value in lines):
+            spec = team_join_spec(spec, call, self.attacker_name(), self._data)
         shifted = apply_actions(
             spec, lines, self._data, actor.character if actor is not None else None
         )
@@ -150,9 +166,12 @@ class CombatRunner:
         return shifted
 
     def land_lasting(self, lines: object) -> None:
-        """A roll with action lines on it settled: put on the actor what they leave."""
+        """A roll with action lines on it settled: put on the actor what they leave.
+        A team call it was the entry of is answered."""
         if not isinstance(lines, tuple) or self.actor is None:
             return
+        if any(isinstance(line, tuple) and line[:1] == (TEAM_LINE,) for line in lines):
+            self.team_call = None
         lasting = lasting_conditions(lines, self._data)
         if lasting:
             self.actor.land(tuple(lasting))
@@ -192,6 +211,41 @@ class CombatRunner:
             self._panel.load_spec(spec, localize=False)
         else:
             self._panel.roll_spec(spec)
+
+    def attacker_name(self) -> str:
+        """The actor's name as a team attack's row shows it."""
+        actor = self.actor
+        if actor is None:
+            return ""
+        return actor.name or library.display_name(actor.character)
+
+    # -- a team attack's call to roll ------------------------------------------
+
+    def join_team(self, call: object):
+        """A team attack's call to roll was joined: the actor's **next** attack is its
+        entry (decision 15 of the combat maneuvers plan — a roll made before joining
+        does not count).
+
+        A fixed line on the lane says so, replacing one for an earlier call (its ✕ calls
+        it off); with none of the actor's attacks loaded the picker asks first. The line
+        is spent by the roll like any other, and the roll it rides on is stamped as the
+        call's (:meth:`shift`). Returns the line, or ``None`` when it was called off.
+        """
+        if not isinstance(call, RollSpec) or not is_team_call(call) or self.actor is None:
+            return None
+        self._panel.remove_action_line(TEAM_LINE)
+        if not self.ensure_attack():
+            return None
+        self.team_call = call
+        adjust = call.modifier
+        return self._panel.start_action_line(
+            TEAM_LINE,
+            call.title,
+            fixed=f"{adjust:+d} attack" if adjust else "next attack",
+            needs_attack=True,
+            tooltip=call.hint,
+            tone="tint.worse" if adjust < 0 else "tint.better",
+        )
 
     # -- the tiles ------------------------------------------------------------
 

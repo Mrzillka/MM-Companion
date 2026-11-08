@@ -4,7 +4,7 @@ what the sheet's Dice block and the GM's Rolls block put on screen.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import (
     QGroupBox,
@@ -53,6 +53,11 @@ class DiceRollerView(ReflowBox, QWidget):
     *history* is for a host that owns its own history panel and only wants the
     arrangement: GM Mode passes its ``gm=True`` one.
     """
+
+    #: A team attack's call to roll was joined in the session history (the call's
+    #: spec) — for the host to arm its roller. A host-given history is the host's own
+    #: to connect.
+    teamJoinRequested = Signal(object)
 
     def __init__(
         self,
@@ -322,6 +327,7 @@ class DiceRollerView(ReflowBox, QWidget):
         self._session_history = RollHistoryPanel()
         self._session_history.saveToggled.connect(self.panel.toggle_quick_roll)
         self._session_history.rollFollowUp.connect(self.panel.roll_spec)
+        self._session_history.teamJoinRequested.connect(self.teamJoinRequested)
         # Hold this app's own roll until its die stops tumbling; the roller cues
         # both the window and the release (see the given-history branch above).
         self._session_history.set_defer_own(True)

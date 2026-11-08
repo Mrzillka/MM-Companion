@@ -146,7 +146,7 @@
       {"id": "trick", "name": "Trick", "icon": "trick", "tooltip": "Outwit an opponent with Deception: on a win they are left unaware.", "kind": "targeted"},
       {"id": "trip", "name": "Trip", "icon": "trip", "tooltip": "Knock someone down: a close attack, then an opposed check; a win leaves them prone.", "kind": "targeted"},
       {"id": "area", "name": "Area Attack", "caption": "Area", "icon": "area", "tooltip": "Use an attack on an area: everyone in it makes a Dodge check.", "kind": "builtin"},
-      {"id": "team_attack", "name": "Team Attack", "caption": "Team attack", "icon": "team_attack", "tooltip": "The members of a group combine their attacks on one target.", "kind": "builtin", "gmOnly": true},
+      {"id": "team_attack", "name": "Team Attack", "caption": "Team attack", "icon": "team_attack", "tooltip": "Call a team attack on one target: anyone at the table joins with their next attack, maneuvers and all, and you resolve it. A group's own menu still rolls a squad at once.", "kind": "builtin", "gmOnly": true},
       {"id": "team_check", "name": "Team Check", "caption": "Team check", "icon": "team_check", "tooltip": "The members of a group help their leader with a check.", "kind": "builtin", "gmOnly": true},
       {"id": "group_check", "name": "Group Check", "caption": "Group check", "icon": "group_check", "tooltip": "Everyone in a group makes the same check; the group succeeds if half of them do.", "kind": "builtin", "gmOnly": true},
       {"id": "reroll", "name": "Reroll", "icon": "reroll", "tooltip": "Reroll your last roll with the same bonus, penalty and DC. A result of 1–10 gets +10, so it lands on 11–20.", "kind": "builtin"}

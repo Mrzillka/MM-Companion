@@ -740,10 +740,12 @@ available moves (a roll comes back, the GM forms an NPC group).
 - The sheet's Dice block (`DiceSection.action_menu`) offers Impress, **Attack** and
   **Area** (each greyed with `NO_ATTACKS` / `NO_AREAS` on a sheet with nothing to use).
   The GM's Rolls block
-  (`GMRollsMixin.action_menu`) offers Impress, Area, and **Team attack / Team check /
-  Group check**, which need a group: greyed with `NO_NPC_GROUPS` until there is one, and
-  a pick asks which group off a plain `QMenu` (skipped when there is only one), then
-  opens the same window the group card's menu does.
+  (`GMRollsMixin.action_menu`) offers Impress, Area, **Team check / Group check**
+  (`GROUP_ACTIONS`), which need a group: greyed with `NO_NPC_GROUPS` until there is one,
+  and a pick asks which group off a plain `QMenu` (skipped when there is only one), then
+  opens the same window the group card's menu does. **Team attack** is the call to roll
+  (`ui/team_call.py`), greyed off the air or with nobody on the Scene; the NPC-group
+  window is on the group's ☰ menu only.
 - **Reroll is the panel's own**: picking it calls `reroll()` and is never reported.
   Every other pick goes out on `actionRequested(key)`, which is what the hosts' Impress
   and Area handlers always listened to. `can_reroll` replaces the old button's enabled
@@ -910,6 +912,14 @@ name, as before), `minion`, `land(requests)` (the `condition-requested` payload)
 - **Surprise Attack** (`_grant`, the GM's only): anyone on the Scene, then the record's
   options (vulnerable / defenseless, `temporary: true` in data) → an NPC's model, or a
   player's sheet as `ApplyCondition(temporary=True)`; a line in the history.
+- **A team attack's call to roll** (`join_team`, see [the actions
+  notes](actions.md#a-call-to-roll-the-gms-team-attack-tile)): Join puts a fixed
+  `TEAM_LINE` on the lane (the picker first when the actor has no attack loaded) and holds
+  the call as `team_call`. `shift` stamps the next attack with `team_join_spec` **before**
+  `apply_actions`, so the maneuvers ride on the entry; `land_lasting` forgets the call once
+  the line is spent. Joining again replaces the line. A reroll re-throws the stamped spec,
+  so it is still the entry; a line left armed does not stamp a reroll of an earlier roll
+  (Reroll never reads the lane).
 
 ## Reroll
 

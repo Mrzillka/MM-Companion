@@ -43,6 +43,7 @@ from mm_companion.core.rules import (
     RollSpec,
     aimed_attack,
     follow_ups_for_result,
+    is_team_call,
     outcome_is_failure,
     resistance_outcome,
 )
@@ -1011,6 +1012,18 @@ def _row_name(roll: dict) -> str:
     return spec.targets[0] if spec is not None and spec.targets else ""
 
 
+def team_call_of(roll: dict) -> RollSpec | None:
+    """The team attack call *roll* is (a request record), or ``None``."""
+    if roll.get("kind") != KIND_REQUEST:
+        return None
+    spec = RollSpec.from_dict(roll.get("spec"))
+    return spec if is_team_call(spec) else None
+
+
+#: The button a team attack's call to roll carries on every screen.
+JOIN_CAPTION = "Join"
+
+
 class GroupTableCard(HistoryCard):
     """Every roll of one group — an impression, an area — as **one** table.
 
@@ -1022,6 +1035,11 @@ class GroupTableCard(HistoryCard):
     side, with what the save did at the end. A roll naming nobody (an impression's own
     check) is a row of its own.
 
+    A **team attack's call to roll** is a request record that starts a table of its own
+    (:func:`team_call_of`): it is no row, but a line under the heading with a **Join**
+    button, and each attack that joins is a row, its attacker's. When the GM resolves
+    the call they strike the request, which takes the button away and leaves the rows.
+
     Rolls join it as they arrive, kept in ``seq`` order, which is what lets a second
     stage fill in rows the first one started. :attr:`seqs` is every roll it holds, so
     striking one by ``seq`` finds its table.
@@ -1031,6 +1049,8 @@ class GroupTableCard(HistoryCard):
     #: The GM asked to show a hidden roll of this table to the table, by its ``seq`` —
     #: once per hidden roll, since the server reveals them one at a time.
     revealRequested = Signal(int)
+    #: This table's team attack call was joined — the call's spec.
+    joinRequested = Signal(object)
 
     def __init__(
         self, key: str, *, can_remove: bool = False, parent: QWidget | None = None
@@ -1052,6 +1072,8 @@ class GroupTableCard(HistoryCard):
         self._lines: list[QLabel] = []
         # A row with a ↶ is its label and the button, in a row widget of their own.
         self._rows: list[QWidget] = []
+        #: The open team attack call's Join, while the table holds one.
+        self.join_button: QPushButton | None = None
         self.reveal_button: QPushButton | None = None
         if can_remove:
             # GM only, as on a roll's card: shows every hidden roll the table holds.
@@ -1113,6 +1135,8 @@ class GroupTableCard(HistoryCard):
         rows: list[tuple[str, list[dict]]] = []
         named: dict[str, list[dict]] = {}
         for roll in self.records:
+            if team_call_of(roll) is not None:
+                continue
             name = _row_name(roll)
             if not name:
                 rows.append(("", [roll]))
@@ -1122,6 +1146,31 @@ class GroupTableCard(HistoryCard):
                 named[name] = [roll]
                 rows.append((name, named[name]))
         return rows
+
+    def call(self) -> RollSpec | None:
+        """The team attack call this table holds while it is open, or ``None``."""
+        for roll in self.records:
+            call = team_call_of(roll)
+            if call is not None:
+                return call
+        return None
+
+    def _add_call_line(self, call: RollSpec) -> None:
+        """The call's line: what it is at, and the Join button."""
+        row = QWidget()
+        box = QHBoxLayout(row)
+        box.setContentsMargins(0, 0, 0, 0)
+        text = escape_rich_text(call.label)
+        line = _rich(f"🤝 {text}: join, then roll an attack")
+        line.setToolTip(call.hint)
+        box.addWidget(line, stretch=1)
+        self.join_button = fit_button(JOIN_CAPTION)
+        self.join_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.join_button.setToolTip(call.hint)
+        self.join_button.clicked.connect(lambda: self.joinRequested.emit(call))
+        box.addWidget(self.join_button, alignment=Qt.AlignmentFlag.AlignVCenter)
+        self._info.addWidget(row)
+        self._rows.append(row)
 
     def title(self) -> str:
         for roll in self.records:
@@ -1136,6 +1185,7 @@ class GroupTableCard(HistoryCard):
             discard_widget(widget)
         self._lines = []
         self._rows = []
+        self.join_button = None
         if self.reveal_button is not None:
             self.reveal_button.setVisible(bool(self.hidden_seqs()))
         if not self.records:
@@ -1150,6 +1200,9 @@ class GroupTableCard(HistoryCard):
             muted = theme.color("text.muted.rich")
             heading += f" <span style='color:{muted}'>— {escape_rich_text(title)}</span>"
         self._heading.setText(heading)
+        call = self.call()
+        if call is not None:
+            self._add_call_line(call)
         for name, rolls in self.rows():
             cells = " · ".join(_table_cell(r, name) for r in rolls)
             text = f"<b>{escape_rich_text(name)}</b> {cells}" if name else cells
@@ -1302,6 +1355,9 @@ class RollHistoryPanel(QWidget):
     rollAnswer = Signal(object, object)
     #: A card's roll button was right-clicked: roll the spec as written.
     rollPlain = Signal(object)
+    #: A team attack's call to roll was joined here — the call's spec. The roller that
+    #: owns this history arms its next attack for it.
+    teamJoinRequested = Signal(object)
 
     def __init__(self, parent: QWidget | None = None, *, gm: bool = False) -> None:
         super().__init__(parent)
@@ -1557,7 +1613,11 @@ class RollHistoryPanel(QWidget):
             self._seen.add(seq)
 
         key = action_table_key(roll) if roll.get("kind", KIND_ROLL) == KIND_ROLL else ""
-        if key and not _provokes(roll):
+        call = team_call_of(roll)
+        if call is not None:
+            # A team attack's call opens the table its entries fill.
+            key = call.action_id
+        if key and (call is not None or not _provokes(roll)):
             self._add_to_table(roll, key)
             return
 
@@ -1607,6 +1667,7 @@ class RollHistoryPanel(QWidget):
         table.undo_lookup = self._undo.get
         table.removeRequested.connect(self._request_remove)
         table.revealRequested.connect(self._request_reveal)
+        table.joinRequested.connect(self.teamJoinRequested)
         table.add_record(roll)
         self._layout.insertWidget(0, table)
         self._trim()

@@ -102,6 +102,7 @@ from mm_companion.ui.scene_board import NO_SCENE_GM, SceneBoard
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.session_bridge import SessionBridge, last_session, set_active_session
 from mm_companion.ui.session_dialogs import HostOptions
+from mm_companion.ui.team_call import TeamCallController
 from mm_companion.ui.toasts import ToastCard, ToastStack
 from mm_companion.ui.widgets import (
     ConfirmButton,
@@ -328,6 +329,9 @@ class GMWindow(
         # And every aimed attack: a player's lands with Accept / Decline, the GM's own
         # (a card's tile, an NPC sheet) runs straight through (mm_companion.ui.attack_gm).
         self._attack = AttackController(self._data, self._bridge, self, self)
+        # And every team attack called to roll: anyone joins with their next attack,
+        # and the GM resolves it off its card (mm_companion.ui.team_call).
+        self._team_calls = TeamCallController(self._data, self._bridge, self, self._attack, self)
         self._refresh_idle_status()
         self._refresh_trouble()
         self._refresh_rolls()
@@ -623,6 +627,8 @@ class GMWindow(
         self._history.rollFollowUp.disconnect(self._roller.roll_spec)
         self._history.rollAnswer.connect(self._on_history_roll)
         self._history.rollPlain.connect(self._roller.roll_spec)
+        # A team attack's call joined here: one of the GM's NPCs joins it.
+        self._history.teamJoinRequested.connect(self._gm_team_join)
         # The roll an NPC answered with, once it is back: what failing did goes on it.
         self._roller.sessionRollRevealed.connect(self._on_answer_back)
         # And a recovery check an NPC rolled: what making it sheds comes off it.

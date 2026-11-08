@@ -85,7 +85,13 @@ from mm_companion.ui.roll_history import (
     escape_rich_text,
     reroll_label,
 )
-from mm_companion.ui.roller.action_lane import ActionLane, ActionLine, LineLimit, LineShift
+from mm_companion.ui.roller.action_lane import (
+    ActionLane,
+    ActionLine,
+    LineFit,
+    LineLimit,
+    LineShift,
+)
 from mm_companion.ui.roller.quick_rolls import QuickRollStrip, RollerQuickRollsMixin
 from mm_companion.ui.roller.requests import RollerRequestsMixin
 from mm_companion.ui.roller.shape import RollerShapeMixin
@@ -195,6 +201,7 @@ def readout_html(
     hidden: bool = False,
     routine: bool = False,
     warning: str = "",
+    other_die: int = 0,
 ) -> str:
     """The rich text under the die: the roll's name, the total and its working, the grade
     (and a *warning* line, such as :data:`NO_DC_WARNING`)."""
@@ -208,10 +215,12 @@ def readout_html(
             f"{escape_rich_text(label)}</span><br>"
         )
     made = "routine" if routine else "d20"
+    # Rolled twice for the higher (Aim): the dropped die struck through.
+    shown = f"{die} <s>{other_die}</s>" if other_die else f"{die}"
     html += (
         f"<span style='font-size:{theme.font_size('size.roll-readout')}pt'>"
         f"<b>{total}</b></span> "
-        f"<span style='color:{muted}'>({made} {die} {modifier:+d})</span>"
+        f"<span style='color:{muted}'>({made} {shown} {modifier:+d})</span>"
     )
     if dc is not None:
         html += f" vs DC {dc}"
@@ -396,6 +405,9 @@ class DiceRollerPanel(
         # applied (:meth:`with_lines`). The chip keeps the loaded one, so the lines can be
         # set again and the die thrown again. ``None`` between rolls.
         self._flight: RollSpec | None = None
+        # What the roll in flight loads once it settles (its spec's ``then``: a
+        # slammer's own save), or ``None``. Never set for a reroll.
+        self._then: RollSpec | None = None
         self._quick_rolls: list[dict] = self._load_quick_rolls()
         # Whether the panel is in its fixed compact shape (see :meth:`_apply_shape`),
         # in which case the width-driven reflow stands down — and the two separate
@@ -680,6 +692,10 @@ class DiceRollerPanel(
             self._lane.remove(key)
         if rolled:
             self.linesRolled.emit(rolled)
+        then, self._then = self._then, None
+        if then is not None:
+            # Already filled in for this sheet: a second pass would add its number again.
+            self.load_spec(then, localize=False)
 
     # -- the action lane -----------------------------------------------------
 
@@ -730,13 +746,15 @@ class DiceRollerPanel(
         needs_attack: bool = False,
         tooltip: str = "",
         tone: str = "tint.better",
+        fits: LineFit | None = None,
     ) -> ActionLine | None:
         """Put an action on the lane for the next roll; ``None`` if it was called off.
 
         *limit* makes it configurable (a slider over ``0..limit(spec)[0]``, starting at
         the maximum); otherwise it shows *fixed*. A line that *needs_attack* with no
         attack loaded first opens the attack picker, and the attack picked is loaded
-        onto the chip; dismissing the picker calls the action off.
+        onto the chip; dismissing the picker calls the action off. *fits* says why a
+        fixed line cannot ride on the attack loaded (greyed with the reason).
         """
         if needs_attack and self.loaded_attack() is None:
             spec = self.choose_attack()
@@ -751,6 +769,7 @@ class DiceRollerPanel(
             needs_attack=needs_attack,
             tooltip=tooltip,
             tone=tone,
+            fits=fits,
         )
         self._lane.add(line)
         line.bind(self.loaded_attack())
@@ -777,6 +796,10 @@ class DiceRollerPanel(
         except Exception:  # noqa: BLE001 - a bad action must not cost the die
             log_exception("Applying the action lines to a roll")
             return spec
+
+    def remove_action_line(self, key: str) -> None:
+        """Take the line *key* off the lane, if it is there."""
+        self._lane.remove(key)
 
     def action_lines(self) -> list[ActionLine]:
         """The lines on the lane, in order (greyed ones too)."""
@@ -1075,6 +1098,14 @@ class DiceRollerPanel(
             return bool(self._last_roll.get("minion"))
         return self._spec_minion
 
+    def _twice(self) -> bool:
+        """Whether the roll in flight is rolled twice for the higher (Aim) — the last
+        roll's, on a reroll."""
+        if self._rerolling and self._last_roll is not None:
+            return bool(self._last_roll.get("twice"))
+        spec = self._made_of()
+        return spec is not None and spec.roll_twice
+
     def _spend_routine(self) -> None:
         """A routine check is one roll's worth: untick it once that roll is made."""
         self._routine_check.setChecked(False)
@@ -1202,10 +1233,13 @@ class DiceRollerPanel(
                 "routine": self._routine_check.isChecked(),
                 "minion": self._spec_minion,
                 "lines": lines,
+                "twice": bool(flight is not None and flight.roll_twice),
             }
             self._rolled_lines = lines
+            self._then = flight.then if flight is not None else None
         else:
             self._rolled_lines = ()
+            self._then = None
         self._rolling = True
         self._die_button.setEnabled(False)
         for widget in self._input_widgets():
@@ -1248,6 +1282,7 @@ class DiceRollerPanel(
             reroll=self._rerolling,
             routine=self._routine(),
             minion=self._as_minion(),
+            twice=self._twice(),
         )
         if not sent:
             self._abandon_roll(NOT_SENT)
@@ -1306,13 +1341,22 @@ class DiceRollerPanel(
         """Resolve the roll locally and report it, ending any tumble in progress."""
         self._rolling = False  # stops the _tick_roll chain from rescheduling
 
-        routine, minion = self._routine(), self._as_minion()
+        routine, minion, twice = self._routine(), self._as_minion(), self._twice()
         self._commit_last_roll()
         bonus, penalty, dc, _hidden = self._roll_parameters()
         if routine:
             die, natural = ROUTINE_DIE, False
         else:
             die, natural = reroll_d20() if self._rerolling else (roll_d20(), True)
+        other_die = 0
+        if twice and not routine:
+            # Aim: a second die, the higher kept — with its own "natural" (a lucky
+            # re-roll's lifted die is not one).
+            second, second_natural = reroll_d20() if self._rerolling else (roll_d20(), True)
+            if second > die:
+                die, natural, other_die = second, second_natural, die
+            else:
+                other_die = second
         self._face.setText(str(die))
 
         modifier = bonus - penalty
@@ -1328,6 +1372,7 @@ class DiceRollerPanel(
             None if result is None else result.degree,
             bool(result is not None and result.critical),
             routine=routine,
+            other_die=other_die,
         )
         self.localRoll.emit(
             {
@@ -1341,6 +1386,7 @@ class DiceRollerPanel(
                 "reroll": self._rerolling,
                 "routine": routine,
                 "minion": minion,
+                "other_die": other_die,
             }
         )
         self._unlock_inputs()
@@ -1378,6 +1424,7 @@ class DiceRollerPanel(
             bool(roll.get("critical")),
             hidden=bool(roll.get("hidden")),
             routine=bool(roll.get("routine")),
+            other_die=int(roll.get("other_die") or 0),
         )
         self._unlock_inputs()
         # The die has settled — a paired history panel can now show this own roll.
@@ -1412,6 +1459,7 @@ class DiceRollerPanel(
         self._pending_last = None
         self._rerolling = False
         self._rolled_lines = ()
+        self._then = None
         self._flight = None
         self._disconnect_session()
         self.awaitingOwnRoll.emit(False)
@@ -1459,6 +1507,7 @@ class DiceRollerPanel(
         *,
         hidden: bool = False,
         routine: bool = False,
+        other_die: int = 0,
     ) -> None:
         self._showing_result = True
         label = reroll_label(self._roll_label(), self._rerolling)
@@ -1472,5 +1521,6 @@ class DiceRollerPanel(
             hidden=hidden,
             routine=routine,
             warning=NO_DC_WARNING if self._unjudged_attack(dc) else "",
+            other_die=other_die,
         )
         self._readout.setText(html)

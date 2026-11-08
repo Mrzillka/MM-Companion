@@ -51,6 +51,7 @@ __all__ = [
     "maneuver_caption",
     "maneuver_limit",
     "maneuver_values",
+    "shift_maneuvers",
 ]
 
 #: How each value a maneuver moves is named in a reason.
@@ -241,6 +242,15 @@ def apply_maneuvers(spec: RollSpec, picks: Iterable[Pick], game_data: GameData) 
     caption = maneuver_caption(game_data, picks)
     if not caption:
         return spec
+    shifted = shift_maneuvers(spec, picks, game_data)
+    return replace(shifted, label=f"{shifted.label} ({caption})")
+
+
+def shift_maneuvers(spec: RollSpec, picks: Iterable[Pick], game_data: GameData) -> RollSpec:
+    """:func:`apply_maneuvers` without the caption in the label — for a caller that
+    names the maneuvers together with the other actions on the roll."""
+
+    picks = list(picks)
     shifts = _shifts(picks, game_data)
     attack = shifts.get(MANEUVER_ATTACK_CHECK, 0) if has_attack_check(spec, game_data) else 0
     effect = shifts.get(MANEUVER_EFFECT_RANK, 0)
@@ -253,13 +263,7 @@ def apply_maneuvers(spec: RollSpec, picks: Iterable[Pick], game_data: GameData) 
     if effect:
         follow_up = None if follow_up is None else _shift_save(follow_up, effect)
         also = tuple(_shift_save(s, effect) for s in also)
-    return replace(
-        spec,
-        label=f"{label} ({caption})",
-        modifier=modifier,
-        follow_up=follow_up,
-        also=also,
-    )
+    return replace(spec, label=label, modifier=modifier, follow_up=follow_up, also=also)
 
 
 def lasting_conditions(picks: Iterable[Pick], game_data: GameData) -> list[tuple[str, int]]:

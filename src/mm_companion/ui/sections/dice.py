@@ -37,24 +37,34 @@ from PySide6.QtWidgets import QGroupBox, QVBoxLayout, QWidget
 
 from mm_companion.core import library
 from mm_companion.core.character import Character
+from mm_companion.core.components import TONE_HINDRANCE
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.data_loader.game_data import COMBAT_KIND_MANEUVER
 from mm_companion.core.rules import (
     AreaAttempt,
     ImpressAttempt,
     RollSpec,
-    apply_maneuvers,
+    action_reason,
+    apply_actions,
     area_choices,
     area_key_index,
     attack_choices,
+    check_spec,
     find_area_power,
     lasting_conditions,
+    line_fit,
+    line_key,
     localize_spec,
     maneuver_action,
     maneuver_limit,
     power_area_use,
+    recover_choices,
     recovery_succeeded,
     requested_roll_choices,
+    self_action,
+    self_action_changes,
+    self_action_note,
+    split_line_key,
 )
 from mm_companion.core.session.protocol import sanitize_mod_payload
 from mm_companion.ui import theme
@@ -82,6 +92,9 @@ from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.session_bridge import SessionBridge, live_session
 from mm_companion.ui.toasts import notify_window
 
+#: The last line of Recover's menu: take the Defense bonus and shed nothing.
+RECOVER_DEFENSE_ONLY = "Only catch your breath (the Defense bonus)"
+
 
 class DiceSection(QGroupBox):
     """A d20 roller as a sheet block (see the module docstring)."""
@@ -103,7 +116,8 @@ class DiceSection(QGroupBox):
     #: :attr:`recovered` is: a roll is not an edit.
     useSpent = Signal(object)
     #: ``((condition_id, amount), …)`` — an attack rolled with maneuvers on it leaves
-    #: these on the roller's own sheet (All-Out Attack's Defense penalty), hit or miss.
+    #: these on the roller's own sheet (All-Out Attack's Defense penalty), hit or miss —
+    #: or ``(ConditionChange, …)`` from a self action (Defend, Drop Prone, Stand).
     #: Raised on ``condition-requested`` for the Conditions block, for the reason
     #: :attr:`recovered` is: a roll is not an edit.
     conditionsRequested = Signal(object)
@@ -139,7 +153,9 @@ class DiceSection(QGroupBox):
         # The attack picker's list: this character's attacks, read fresh each time.
         self.view.panel.set_attack_choices(lambda: attack_choices(self._character, self._data))
         # What the maneuvers on the lane do to the attack, and what they leave behind.
-        self.view.panel.set_line_shift(lambda spec, lines: apply_maneuvers(spec, lines, self._data))
+        self.view.panel.set_line_shift(
+            lambda spec, lines: apply_actions(spec, lines, self._data, self._character)
+        )
         self.view.panel.linesRolled.connect(self._land_lasting)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -157,6 +173,11 @@ class DiceSection(QGroupBox):
         for action in self._data.combat.actions:
             if action.kind == COMBAT_KIND_MANEUVER:
                 offered[action.id] = attacks
+            elif action.gm_runs:
+                offered[action.id] = action.gm_runs
+            elif self_action(self._data, action.id) is not None:
+                reason = action_reason(self._data, action, self._character)
+                offered[action.id] = reason or (attacks if action.needs_attack else None)
         if self._data.area.available:
             offered[KIND_AREA_ATTACK] = (
                 None if area_choices(self._character, self._data) else NO_AREAS
@@ -217,6 +238,74 @@ class DiceSection(QGroupBox):
             needs_attack=True,
             tooltip=action.tooltip,
             tone=tone,
+        )
+
+    def start_self_action(self, action_id: str):
+        """A self action's tile (Aim, Charge, Defend, Recover, Drop Prone, Stand, Finishing
+        Attack, Catch — see :mod:`~mm_companion.core.rules.self_actions`).
+
+        One with options asks which first, on a plain menu (Charge or Slam; Stand by a
+        check or slowly). Then it rides on the next roll as a lane line, puts conditions
+        on this sheet at once (with a line in the history), or loads its check onto the
+        chip. Returns the line it started, if any; ``None`` when it was called off or did
+        its work at once.
+        """
+        action = self_action(self._data, action_id)
+        if action is None or action_reason(self._data, action, self._character):
+            return None
+        panel = self.view.panel
+        option = None
+        if action.options:
+            index = choose_from_menu(self, [o.name for o in action.options], panel.menu_point())
+            if index is None:
+                return None
+            option = action.options[index]
+        option_id = option.id if option is not None else ""
+        title = option.name if option is not None else action.name
+        effect = action.effect_for(option_id)
+        if effect.line:
+            return self._start_self_line(action, option_id, title, effect)
+        changes = self_action_changes(effect, self._data)
+        recovery = None
+        if action.recovery is not None:
+            choices = recover_choices(self._character, self._data, action)
+            if choices:
+                captions = [c.caption for c in choices] + [RECOVER_DEFENSE_ONLY]
+                index = choose_from_menu(self, captions, panel.menu_point())
+                if index is None:
+                    return None
+                if index < len(choices):
+                    recovery = choices[index]
+                    changes += recovery.changes
+        if changes:
+            self.conditionsRequested.emit(changes)
+            name = library.display_name(self._character)
+            self.post_note(self_action_note(self._data, name, title, changes))
+        if recovery is not None and recovery.spec is not None:
+            panel.roll_spec(recovery.spec)
+        check = check_spec(self._data, self._character, action, effect)
+        if check is not None:
+            # Built off this sheet already: a second pass would add its number again.
+            panel.load_spec(check, localize=False)
+        return None
+
+    def _start_self_line(self, action, option_id: str, title: str, effect):
+        """Put a self action that rides on the next roll on the lane, replacing the same
+        action taken another way (a Slam replaces a plain Charge)."""
+        panel = self.view.panel
+        key = line_key(action.id, option_id)
+        for line in panel.action_lines():
+            if line.key != key and split_line_key(line.key)[0] == action.id:
+                panel.remove_action_line(line.key)
+        tone = "tint.worse" if effect.tone == TONE_HINDRANCE else "tint.better"
+        return panel.start_action_line(
+            key,
+            title,
+            fixed=effect.line,
+            needs_attack=action.needs_attack,
+            tooltip=action.tooltip,
+            tone=tone,
+            fits=lambda spec: line_fit(self._data, key, spec),
         )
 
     def _land_lasting(self, lines: object) -> None:
@@ -380,6 +469,9 @@ class DiceSection(QGroupBox):
             return None
         if maneuver_action(self._data, kind) is not None:
             self.start_maneuver(kind)
+            return None
+        if self_action(self._data, kind) is not None:
+            self.start_self_action(kind)
             return None
         if kind != KIND_IMPRESS:
             return None

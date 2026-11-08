@@ -80,6 +80,7 @@ from .powers_terms import *  # noqa: F401,F403
 from .recovery import *  # noqa: F401,F403
 from .rolls import *  # noqa: F401,F403
 from .runtime import *  # noqa: F401,F403
+from .self_actions import *  # noqa: F401,F403
 from .size import *  # noqa: F401,F403
 from .subbuilds import *  # noqa: F401,F403
 from .targeting import *  # noqa: F401,F403

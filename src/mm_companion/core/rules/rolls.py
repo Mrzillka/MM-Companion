@@ -325,6 +325,18 @@ class RollSpec:
     #: :mod:`.maneuvers`). 0 when unknown. **Local only**, for :attr:`marks`' reason: the
     #: DC and the ladder's rank are what travel, and both are shifted with it.
     effect_rank: int = field(default=0, compare=False)
+    #: On an attack: **every** hit is a critical hit, not only a natural 20's — a
+    #: Finishing Attack's (p201). On the wire, so the GM's judge and the target's card
+    #: raise the save as the attacker's did.
+    critical_hit: bool = False
+    #: Roll the die twice and keep the better — Aim (p200). **Local only**: what the
+    #: server is asked for is the roll request's ``twice``, and the record carries the
+    #: other die, so a spec rebuilt off the wire is still the roll it was.
+    roll_twice: bool = field(default=False, compare=False)
+    #: A roll the roller loads for its own sheet once this one has settled — the
+    #: slammer's save against their own Slam Attack (p202). **Local only**, for
+    #: :attr:`roll_twice`'s reason; it is already filled in for this sheet.
+    then: RollSpec | None = field(default=None, compare=False)
 
     def follow_ups(self) -> tuple[RollSpec, ...]:
         """Every roll this one provokes: :attr:`follow_up`, then :attr:`also`."""
@@ -384,6 +396,8 @@ class RollSpec:
             raw["recovers_parameter"] = self.recovers_parameter
         if self.pick:
             raw["pick"] = self.pick
+        if self.critical_hit:
+            raw["critical_hit"] = True
         if self.follow_up is not None:
             raw["follow_up"] = self.follow_up.to_dict()
         if self.also:
@@ -436,6 +450,7 @@ class RollSpec:
             recovers=str(raw.get("recovers", "")),
             recovers_parameter=str(raw.get("recovers_parameter", "")),
             pick=str(raw.get("pick", "")),
+            critical_hit=raw.get("critical_hit") is True,
             also=(
                 tuple(s for s in (cls.from_dict(a) for a in also) if s is not None)
                 if isinstance(also, list)
@@ -696,7 +711,9 @@ def follow_up_for_result(
         if natural_20:
             label = f"{label} — natural 20, DC {dc}"
         return replace(follow_up, dc=dc, dc_from_total=False, label=label)
-    if natural_20:
+    # A Finishing Attack's every hit is a critical (p201), and a natural 20 on one adds
+    # nothing more: the follow-up is offered only on a hit, so this is that hit.
+    if natural_20 or spec.critical_hit:
         bonus = game_data.system.critical_effect_bonus
         if bonus and follow_up.dc is not None:
             raised = follow_up.dc + bonus

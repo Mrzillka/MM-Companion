@@ -11,12 +11,19 @@ from .game_data import (
     AreaEvasion,
     AreaRules,
     CombatAction,
+    CombatCheck,
+    CombatEffect,
     CombatMenuSection,
+    CombatOption,
     CombatRules,
+    ConditionChange,
     Impression,
     ImpressRules,
+    KillRule,
     ManeuverLimits,
+    RecoveryRule,
     ResistOptions,
+    SlamRules,
 )
 from .parsing_rules import (
     _extras,
@@ -632,7 +639,67 @@ def _parse_area(raw: dict) -> AreaRules:
     )
 
 
+def _optional_int(value: object) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
+
+
+def _parse_condition_changes(raw: object, *, remove: bool = False) -> tuple:
+    """``applies`` (``[{condition, amount?, temporary?}]``) or ``removes`` (``[id]``)."""
+
+    changes = []
+    for entry in raw if isinstance(raw, list) else ():
+        if isinstance(entry, str) and entry:
+            changes.append(ConditionChange(entry, remove=remove))
+        elif isinstance(entry, dict) and entry.get("condition"):
+            temporary = entry.get("temporary")
+            changes.append(
+                ConditionChange(
+                    str(entry["condition"]),
+                    amount=_optional_int(entry.get("amount")),
+                    temporary=temporary if isinstance(temporary, bool) else None,
+                    remove=remove,
+                )
+            )
+    return tuple(changes)
+
+
+def _parse_combat_effect(raw: dict) -> CombatEffect:
+    """The effect fields a combat action or one of its options carries."""
+
+    check = raw.get("check")
+    kill = raw.get("kill")
+    return CombatEffect(
+        line=str(raw.get("line", "")),
+        tone=str(raw.get("tone", "")),
+        attack_modifier=_optional_int(raw.get("attackModifier")) or 0,
+        roll_twice=bool(raw.get("rollTwice", False)),
+        dc=_optional_int(raw.get("dc")),
+        critical_hit=bool(raw.get("criticalHit", False)),
+        slam=bool(raw.get("slam", False)),
+        full_speed=bool(raw.get("fullSpeed", False)),
+        kill=(
+            KillRule(int(kill.get("degrees", 3)), str(kill.get("condition", "")))
+            if isinstance(kill, dict) and kill.get("condition")
+            else None
+        ),
+        applies=_parse_condition_changes(raw.get("applies"))
+        + _parse_condition_changes(raw.get("removes"), remove=True),
+        check=(
+            CombatCheck(
+                str(check["kind"]), str(check.get("trait", "")), _optional_int(check.get("dc"))
+            )
+            if isinstance(check, dict) and check.get("kind")
+            else None
+        ),
+        clears=str(raw.get("clears", "")),
+    )
+
+
 def _parse_combat_action(raw: dict) -> CombatAction:
+    slam = raw.get("slamRules")
+    recovery = raw.get("recovery")
     return CombatAction(
         id=str(raw.get("id", "")),
         name=str(raw.get("name", raw.get("id", ""))),
@@ -645,6 +712,38 @@ def _parse_combat_action(raw: dict) -> CombatAction:
         bonus=str(raw.get("bonus", "")),
         penalty=str(raw.get("penalty", "")),
         lasting=str(raw.get("lasting", "")),
+        effect=_parse_combat_effect(raw),
+        options=tuple(
+            CombatOption(
+                id=str(o["id"]),
+                name=str(o.get("name", o["id"])),
+                tooltip=str(o.get("tooltip", "")),
+                effect=_parse_combat_effect(o),
+            )
+            for o in raw.get("options", ())
+            if isinstance(o, dict) and o.get("id")
+        ),
+        requires=str(raw.get("requires", "")),
+        refused_by=str(raw.get("refusedBy", "")),
+        gm_runs=str(raw.get("gmRuns", "")),
+        slam=(
+            SlamRules(
+                rank_bonus=int(slam.get("rankBonus", 1)),
+                full_speed_bonus=int(slam.get("fullSpeedBonus", 1)),
+                self_resistance=str(slam.get("selfResistance", "")),
+                halve_self=bool(slam.get("halveSelf", True)),
+            )
+            if isinstance(slam, dict)
+            else None
+        ),
+        recovery=(
+            RecoveryRule(
+                conditions=tuple(str(c) for c in recovery.get("from", ()) if isinstance(c, str)),
+                fatigue=bool(recovery.get("fatigue", False)),
+            )
+            if isinstance(recovery, dict)
+            else None
+        ),
     )
 
 

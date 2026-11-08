@@ -148,6 +148,9 @@ from typing import ClassVar
 #: keep ``amount`` and ``temporary``. Bumped for the v13 reason: a v19 server strips the
 #: scene keys and drops the new command without a word, so a GM's All-Out Attack would
 #: land on a player at no size at all and "Clear temporary" would do nothing.
+#: (Still v20, unreleased:) ``RollRequest.twice`` rolls two dice and keeps the higher
+#: (Aim), the record's ``other_die`` is the one dropped, and a spec's ``critical_hit``
+#: makes every hit of it a critical (Finishing Attack).
 PROTOCOL_VERSION = 20
 
 #: Hard cap on one encoded message, including its trailing newline. A character
@@ -335,6 +338,9 @@ class RollRequest(Message):
     :data:`~mm_companion.core.dice.ROUTINE_DIE`. ``minion`` says the roll is made as a
     minion, whose natural 20 is no added success (PDF p25). Both are stamped on the
     record, so every seat reads the same verdict off it (protocol v18).
+
+    ``twice`` rolls two dice and keeps the higher (Aim, PDF p200); the record keeps
+    the other as ``other_die`` (v20).
     """
 
     TYPE: ClassVar[str] = "roll_request"
@@ -348,6 +354,7 @@ class RollRequest(Message):
     reroll: bool = False
     routine: bool = False
     minion: bool = False
+    twice: bool = False
 
 
 @_register
@@ -1067,6 +1074,8 @@ def sanitize_spec(raw: object, _depth: int = 0) -> dict | None:
         spec["dc_from_total"] = True
     if raw.get("follow_up_always") is True:
         spec["follow_up_always"] = True
+    if raw.get("critical_hit") is True:
+        spec["critical_hit"] = True
     targets = raw.get("targets")
     if isinstance(targets, list):
         names = [t[:MAX_SPEC_TEXT] for t in targets[:MAX_SPEC_TARGETS] if isinstance(t, str) and t]

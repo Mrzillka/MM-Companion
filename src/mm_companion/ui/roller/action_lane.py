@@ -51,6 +51,10 @@ LineLimit = Callable[[RollSpec | None], tuple[int, str]]
 #: to the spec they ride on — the host's, since the panel reads no game data.
 LineShift = Callable[[RollSpec, Sequence[tuple[str, "int | None"]]], RollSpec]
 
+#: ``fits(spec) -> reason``: why a fixed line cannot ride on the attack *spec* (``""``
+#: when it can) — Aim on an attack that makes no attack check.
+LineFit = Callable[[RollSpec | None], str]
+
 #: Why a line that needs an attack is greyed out while none is loaded.
 NEEDS_ATTACK = "Load an attack first: pick one off the Actions popup or a power card."
 
@@ -73,10 +77,12 @@ class ActionLine(QWidget):
         needs_attack: bool = False,
         tooltip: str = "",
         tone: str = "tint.better",
+        fits: LineFit | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.key = key
+        self._fits = fits
         self.name = name
         self.needs_attack = needs_attack
         self._limit = limit
@@ -176,7 +182,8 @@ class ActionLine(QWidget):
             return
         if self._limit is None:
             self.bound_spec = spec
-            self._set_available(True, "")
+            reason = self._fits(spec) if self._fits is not None else ""
+            self._set_available(not reason, reason)
             return
         fresh = not same_attack(spec, self.bound_spec)
         self.bound_spec = spec

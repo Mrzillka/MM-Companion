@@ -495,7 +495,13 @@ def roll_headline(roll: dict) -> str:
     muted = theme.color("text.muted.rich")
     # A routine check rolled nothing: say so, rather than show a 10 that never came up.
     made = "routine" if roll.get("routine") else "d20"
-    breakdown = f"<span style='color:{muted}'>({made} {die} {modifier:+d})</span>"
+    # Rolled twice for the higher (Aim): the dropped die, struck through beside the kept.
+    other = roll.get("other_die")
+    if isinstance(other, int) and not isinstance(other, bool) and other > 0:
+        made = f"{made} {die} <s>{other}</s>"
+    else:
+        made = f"{made} {die}"
+    breakdown = f"<span style='color:{muted}'>({made} {modifier:+d})</span>"
     headline = f"<b>{die + modifier}</b> {breakdown}"
     dc = roll.get("dc")
     if dc is not None:

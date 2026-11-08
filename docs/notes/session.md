@@ -758,7 +758,10 @@ The shape:
   and `_sanitize_scene_conditions` keeps a scene condition's `amount` (bounded by
   `MAX_SCENE_AMOUNT`) and `temporary`. Bumped for the v13 reason: a v19 server strips the
   scene keys and drops the command without a word. **Redeploy the hub** with the release
-  that ships it.
+  that ships it. Still v20 (unreleased): `RollRequest.twice` rolls two dice and keeps the
+  higher (Aim), with the dropped die on the record as `other_die` (0 for any other roll),
+  and a spec's `critical_hit` (a Finishing Attack: every hit a critical) is whitelisted
+  by `sanitize_spec`.
 - **A join code is version 2, and a public-server session's is 24 characters.**
   Version 1 spelled the relay URL out byte by byte and came to 130 characters for
   a session on the hub. `discovery.encode_join_code` now packs every field as

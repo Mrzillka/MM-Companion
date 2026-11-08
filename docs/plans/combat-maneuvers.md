@@ -16,7 +16,7 @@ every session.**
 | 3 | Reusable grid popup, action icons, the **Actions** button | done (2026-11-08) |
 | 4 | Roller rework: one two-way slider, the action lane, the attack picker | done (2026-11-08) |
 | 5 | The four attack maneuvers, end to end (player) | done (2026-11-08) |
-| 6 | Self actions: Aim, Charge/Slam, Defend, Recover, Drop Prone, Stand, Finishing, Surprise, Catch | not started |
+| 6 | Self actions: Aim, Charge/Slam, Defend, Recover, Drop Prone, Stand, Finishing, Surprise, Catch | done (2026-11-09) |
 | 7 | The GM's side: NPC chooser first, conditions on the NPC | not started |
 | 8 | Targeted actions I: Feint, Trick, Aid | not started |
 | 9 | Targeted actions II: Grab, Trip, Disarm, Smash, Escape, Block | not started |
@@ -110,6 +110,15 @@ Status values: `not started`, `in progress (<what is left>)`, `done (<date>)`.
     **first line is "Skip"**. With no target the roller's **DC box counts as the
     Defense**. If neither a DC is set nor a target picked when the attack is rolled,
     show a **warning sign** (the roll still goes).
+13. **Surprise Attack** (asked 2026-11-09, phase 6): **the GM grants it.** The tile is the
+    GM's: pick a creature, and it gets Vulnerable or Defenseless as a temporary condition
+    (built with the GM's side, phase 7). On a player's sheet the tile is greyed with "The
+    GM grants a surprise attack" (`gmRuns`); the player then attacks normally, and the
+    GM's hit judge already reads the target's conditions.
+14. **Finishing Attack's intent to kill** (asked 2026-11-09, phase 6): **rewrite the
+    ladder.** The tile offers "Finishing Attack" or "…, intent to kill"; the kill version
+    turns the damage save's third and deeper failures into Dead, so the GM's auto-apply
+    and the buttons land Dead with no by-hand step.
 
 ---
 
@@ -395,6 +404,19 @@ widget, log failures.
   `DiceSection.start_maneuver`, `_land_lasting`, `conditionsRequested` → bus
   `condition-requested` → `ConditionsSection.take_conditions`. No `RollSpec.maneuvers`
   or `finishing` field was needed: the caption goes in the label.
+- **As built (phase 6):** `core/rules/self_actions.py` — `self_action`, `action_reason`
+  (`requires` / `refusedBy` / `gmRuns`), `line_key` / `split_line_key` (`action/option`),
+  `line_fit`, `apply_actions` (the maneuvers + the lines, one caption; replaces
+  `apply_maneuvers` as the panel's shift), `self_action_changes`, `apply_condition_changes`,
+  `check_spec`, `recover_choices` (`RecoverChoice`), `self_action_note`, `speed_rank`
+  (the fastest mode). Loader: `CombatEffect` (on the action and on each `CombatOption`,
+  merged by `CombatAction.effect_for`), `ConditionChange`, `CombatCheck`
+  (`COMBAT_CHECK_*`), `SlamRules` (the record's `slamRules`), `KillRule`, `RecoveryRule`.
+  `RollSpec.critical_hit` (wire), `roll_twice` and `then` (local). Session (v20, no bump):
+  `RollRequest.twice`, `RollRecord.other_die`. Panel: `ActionLine(fits=)`,
+  `start_action_line(fits=)`, `remove_action_line`, `_twice`, `_then`. Host:
+  `DiceSection.start_self_action`, `_start_self_line`, `RECOVER_DEFENSE_ONLY`;
+  `take_conditions` takes `ConditionChange`s. See the roller notes' "self actions".
 - **As built (phase 3):** `ui/action_grid.py` as above (tokens `action-grid.tile`,
   `.icon`, `.gap`, `.columns`; icons coloured from the tile's palette `ButtonText`, so no
   colour token). `ui/action_menu.combat_menu(data, offered, gm=, fallback=)` builds the
@@ -521,13 +543,20 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
 - [x] Combined caps across several lines (the lane re-limits the others on every move).
 
 ### Phase 6 — Self actions
-- [ ] Aim (best of two on the next attack), Charge (−2) + Slam option (rank + self save
-      with Resistance), Defend, Recover (+2 Defense + the recovery roll), Drop Prone,
+- [x] Aim (best of two on the next attack; the server rolls both in a session),
+      Charge (−2) + Slam options (rank + the self save at half rank, loaded after),
+      Defend, Recover (+2 Defense + the recovery roll or a fatigue step), Drop Prone,
       Stand (DC 20 Acrobatics/speed, or Hindered temporary; Prone off), Finishing Attack
-      (DC 10, a hit is a critical, intent-to-kill toggle), Surprise Attack (GM: the
-      target is Vulnerable/Defenseless), Catch (Agility DC 10).
+      (DC 10, a hit is a critical, intent to kill rewrites the ladder), Catch (Agility
+      DC 10).
+- [x] Surprise Attack: greyed on a player's sheet ("the GM grants it", decision 13);
+      the GM's tile is **phase 7**.
 
 ### Phase 7 — The GM's side
+- [ ] Surprise Attack (decision 13): pick a creature → Vulnerable or Defenseless,
+      temporary, on it.
+- [ ] The self actions on the GM's roller (`start_self_action`'s pattern, acting as the
+      chosen NPC: `apply_actions` with that NPC as *character*, conditions on the NPC).
 - [ ] Actions on the Rolls block → the NPC chooser → that NPC's attacks → roll as that
       NPC; conditions land on the NPC and replay onto an open NPC sheet.
 - [ ] Minions: the maneuvers still apply. Check `minions.md` for interactions (a
@@ -591,6 +620,41 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
 
 Newest first. Each entry: date, phase, what was done, what's next, gotchas, and the
 commit hash.
+
+- **2026-11-09 — Phase 6 (done).** The self actions work on a player's sheet. Asked the
+  user two questions, now decisions 13 (Surprise Attack is the GM's to grant: greyed for a
+  player, built in phase 7) and 14 (intent to kill rewrites the damage ladder). Rules
+  re-read in the book: Aim p200; Charge/Slam, Defend, Drop Prone p202; Recover, Stand
+  p204; Finishing, Surprise p201; "Resistance" halves the rank before the save (p130).
+  §3.3 "As built (phase 6)" has the names. Tests: `tests/core/test_self_actions.py` (23),
+  `tests/ui/dice/test_self_actions_ui.py` (23). **Decisions I made (small):** (1) Recover's
+  fatigue option steps **down** the ladder (Exhausted → Fatigued) rather than wiping it,
+  my reading of "remove your most severe Fatigue condition" with Exhausted superseding
+  Fatigued; (2) "speed rank" (Stand's check, Slam's rank) is the fastest mode the
+  character has; (3) Catch's and Stand's checks **load** onto the chip (the player can
+  still add a circumstance modifier), while Recover's recovery check rolls at once (it is
+  part of the action); (4) the slammer's own save is loaded onto the chip once the slam
+  settles (`RollSpec.then`), not posted as a request; (5) Charge is not limited to close
+  attacks — a spec carries no range (tooltip says close); (6) a self action whose record
+  does nothing yet (Block, Escape) stays greyed, `NOT_BUILT`; (7) the maneuvers' caps do
+  not count Charge's −2 (an edge: a +2 attack charged could still be doubled to +4).
+  **Gotchas:** (1) `reroll_d20` returns `(die, natural)`, so a second die for a lucky Aim
+  must keep the kept die's own `natural` (caught in review, now tested both locally and on
+  the server); (2) `degree_label` reads `critical` as "Nat 20!/Nat 1!" off the die, so a
+  Finishing hit is **not** flagged critical in the readout's degree line — the save's
+  label ("critical hit, DC X") says it; (3) an action-level `slam` dict would read as the
+  effect's `slam: true` flag, hence the record's `slamRules`; (4) `cat > file` in a Bash
+  call blocked on stdin again — write scripts to the scratchpad with the Write tool.
+  Next: phase 7 (the GM's side: the NPC chooser, the maneuvers and self actions as an
+  NPC, Surprise Attack, Team attack with maneuvers). **Tests:** a full run was
+  **stopped at 70% by the system (low memory)**. Up to there it had found 4 failures, all
+  one bug of mine: `self_actions` exported a `condition_changes` that, through `rules`'
+  star-imports, shadowed `answering.condition_changes` (which `ui/gm/rolls.py` uses).
+  Renamed to `self_action_changes` and checked no other export collides; the three
+  failing files, the phase 6 tests and the sheet's bus / window-flash / conditions /
+  recovery / extra-effort / temporary files are green (292 tests). The last 30% (mostly
+  `tests/ui/sheet`, `widgets`) is left to phase 7's full run, recommended there anyway.
+  Commit: COMMIT_HASH.
 
 - **2026-11-08 — Phase 5 (done).** The four attack maneuvers work on a player's
   sheet: the tile starts a line (the picker first when nothing is loaded) at its

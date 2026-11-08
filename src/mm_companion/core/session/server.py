@@ -541,6 +541,7 @@ class SessionServer:
         reroll: bool = False,
         routine: bool = False,
         minion: bool = False,
+        twice: bool = False,
     ) -> RollRecord:
         """Resolve a roll for the GM (or for *player_id*) and publish it.
 
@@ -562,6 +563,7 @@ class SessionServer:
             reroll=reroll,
             routine=routine,
             minion=minion,
+            twice=twice,
         )
 
     def note(self, text: str, *, player_id: str | None = None) -> RollRecord:
@@ -1337,6 +1339,7 @@ class SessionServer:
                 reroll=message.reroll,
                 routine=message.routine,
                 minion=message.minion,
+                twice=message.twice,
             )
         elif isinstance(message, NoteRequest):
             self._record_note(slot, message.text)
@@ -1440,6 +1443,7 @@ class SessionServer:
         reroll: bool = False,
         routine: bool = False,
         minion: bool = False,
+        twice: bool = False,
     ) -> RollRecord:
         bonus = _clamp(bonus, MAX_ROLL_MODIFIER)
         penalty = _clamp(penalty, MAX_ROLL_MODIFIER)
@@ -1457,6 +1461,17 @@ class SessionServer:
             die, natural, reroll = ROUTINE_DIE, False, False
         else:
             die, natural = reroll_d20(self._rng) if reroll else (roll_d20(self._rng), True)
+        other_die = 0
+        if twice and not routine:
+            # Aim: a second die, the higher kept. Dice, not rules — the server rolls
+            # it for the reason it rolls the first.
+            second, second_natural = (
+                reroll_d20(self._rng) if reroll else (roll_d20(self._rng), True)
+            )
+            if second > die:
+                die, natural, other_die = second, second_natural, die
+            else:
+                other_die = second
         if dc is not None:
             result = resolve_check(
                 bonus - penalty, dc, roll=die, natural=natural, added_success=not minion
@@ -1477,6 +1492,7 @@ class SessionServer:
                 natural=natural,
                 routine=routine,
                 minion=minion,
+                other_die=other_die,
             )
             self._append_roll(record)
 

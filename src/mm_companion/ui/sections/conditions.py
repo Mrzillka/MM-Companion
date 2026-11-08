@@ -33,10 +33,11 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core.character import AppliedCondition, Character
 from mm_companion.core.components import MECH_RANDOM_ACTION, TONE_BENEFIT
-from mm_companion.core.data_loader import Condition, GameData
+from mm_companion.core.data_loader import Condition, ConditionChange, GameData
 from mm_companion.core.rules import (
     applied_condition_name,
     apply_condition,
+    apply_condition_changes,
     apply_damage_step,
     apply_recovery,
     apply_use_costs,
@@ -483,17 +484,23 @@ class ConditionsSection(QGroupBox):
         self._emit_conditions_changed()
 
     def take_conditions(self, payload: object) -> None:
-        """An attack maneuver was rolled — the ``condition-requested`` handler.
+        """The roller asks for conditions on this character — the
+        ``condition-requested`` handler.
 
-        *payload* is ``((condition_id, amount), …)``: what the maneuvers leave on this
-        character until the start of their next turn (All-Out Attack −3 on Defense), put
-        on **temporary**. Re-applying one replaces its amount (one All-Out a turn). A
-        payload of any other shape is ignored — a mod block publishes here too.
+        *payload* is a tuple of requests, each either ``(condition_id, amount)`` — what an
+        attack maneuver leaves until the start of the next turn (All-Out Attack −3 on
+        Defense), put on **temporary**, replacing the amount (one All-Out a turn) — or a
+        :class:`~mm_companion.core.data_loader.ConditionChange` from a self action
+        (Defend's Defending, Drop Prone's Prone, Stand's Hindered and Prone off). Any
+        other entry is ignored — a mod block publishes here too.
         """
         if not isinstance(payload, tuple):
             return
         applied = False
         for entry in payload:
+            if isinstance(entry, ConditionChange):
+                applied = apply_condition_changes(self._character, (entry,), self._data) or applied
+                continue
             if not isinstance(entry, tuple) or len(entry) != 2:
                 continue
             condition_id, amount = entry

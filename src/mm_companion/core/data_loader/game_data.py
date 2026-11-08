@@ -252,6 +252,104 @@ MANEUVER_EFFECT_RANK = "effect_rank"
 MANEUVER_DEFENSE = "defense"
 
 
+#: What a combat action's ``check`` may roll: an ability, a skill row, or the actor's
+#: speed rank (Stand's "speed rank check").
+COMBAT_CHECK_ABILITY = "ability"
+COMBAT_CHECK_SKILL = "skill"
+COMBAT_CHECK_SPEED = "speed"
+
+
+@dataclass(frozen=True)
+class ConditionChange:
+    """One condition a combat action puts on the actor, or takes off (``applies`` /
+    ``removes``). *temporary* ``None`` leaves it to the condition's own record."""
+
+    condition: str
+    amount: int | None = None
+    temporary: bool | None = None
+    remove: bool = False
+
+
+@dataclass(frozen=True)
+class CombatCheck:
+    """A check a combat action rolls: :attr:`kind` (``COMBAT_CHECK_*``) of :attr:`trait`
+    (an ability key or a skill row id; none for speed) against :attr:`dc`."""
+
+    kind: str
+    trait: str = ""
+    dc: int | None = None
+
+
+@dataclass(frozen=True)
+class SlamRules:
+    """A Slam Attack's numbers (Charge, p202): the Damage rank is the higher of the
+    attack's rank + :attr:`rank_bonus` and the actor's speed rank, + :attr:`full_speed_bonus`
+    after a full-speed move. The slammer resists the same rank with
+    :attr:`self_resistance`, halved first when :attr:`halve_self` (Resistance, p130)."""
+
+    rank_bonus: int = 1
+    full_speed_bonus: int = 1
+    self_resistance: str = ""
+    halve_self: bool = True
+
+
+@dataclass(frozen=True)
+class KillRule:
+    """Intent to kill (Finishing Attack, p201): :attr:`degrees` or more degrees of
+    failure on the damage save land :attr:`condition` instead."""
+
+    degrees: int = 3
+    condition: str = ""
+
+
+@dataclass(frozen=True)
+class RecoveryRule:
+    """What Recover may shed (p204): a recovery check against the most severe of
+    :attr:`conditions` on the actor (most severe first), or (:attr:`fatigue`) one step
+    down the fatigue ladder."""
+
+    conditions: tuple[str, ...] = ()
+    fatigue: bool = False
+
+
+@dataclass(frozen=True)
+class CombatEffect:
+    """What a self action (or one of its options) does — every field optional.
+
+    A :attr:`line` caption puts it on the roller's lane, riding on the next roll: an
+    :attr:`attack_modifier` (Charge's −2), :attr:`roll_twice` (Aim), a fixed :attr:`dc`
+    and :attr:`critical_hit` (Finishing), :attr:`slam` (with :attr:`full_speed`) and
+    :attr:`kill`. Without one it happens at once: :attr:`applies` / :attr:`removes`
+    conditions, or loads :attr:`check`, whose success sheds :attr:`clears`. :attr:`tone`
+    (``benefit`` / ``hindrance``) colours the line.
+    """
+
+    line: str = ""
+    tone: str = ""
+    attack_modifier: int = 0
+    roll_twice: bool = False
+    dc: int | None = None
+    critical_hit: bool = False
+    slam: bool = False
+    full_speed: bool = False
+    kill: KillRule | None = None
+    applies: tuple[ConditionChange, ...] = ()
+    check: CombatCheck | None = None
+    clears: str = ""
+
+
+@dataclass(frozen=True)
+class CombatOption:
+    """One way to take a combat action (Charge or Slam; Stand by a check or slowly),
+    offered on a menu when the tile is picked. Its :attr:`effect` overrides the
+    action's own field by field (see :meth:`CombatAction.effect_for`)."""
+
+    id: str
+    name: str
+    tooltip: str = ""
+    effect: CombatEffect = field(default_factory=CombatEffect)
+
+
 @dataclass(frozen=True)
 class CombatAction:
     """One combat action the roller's Actions popup offers (``combat.actions``).
@@ -261,6 +359,11 @@ class CombatAction:
     a generic one for a key it does not know. A ``maneuver`` shifts up to X from
     :attr:`penalty` to :attr:`bonus` (``attack_check``, ``effect_rank``, ``defense``)
     and leaves :attr:`lasting` (a condition id taking X as its amount) on the actor.
+
+    A ``self`` or ``loader`` action does its :attr:`effect` (or one of its
+    :attr:`options`'). :attr:`requires` / :attr:`refused_by` name a condition the
+    actor must have (Stand: Prone) or must not (Drop Prone). :attr:`gm_runs` is why a
+    player's tile is greyed when the GM runs the action (Surprise Attack).
     """
 
     id: str
@@ -274,11 +377,38 @@ class CombatAction:
     bonus: str = ""
     penalty: str = ""
     lasting: str = ""
+    effect: CombatEffect = field(default_factory=CombatEffect)
+    options: tuple[CombatOption, ...] = ()
+    requires: str = ""
+    refused_by: str = ""
+    gm_runs: str = ""
+    slam: SlamRules | None = None
+    recovery: RecoveryRule | None = None
 
     @property
     def tile_caption(self) -> str:
         """What the action's tile is captioned: its short caption, else its name."""
         return self.caption or self.name
+
+    def option(self, option_id: str) -> CombatOption | None:
+        return next((o for o in self.options if o.id == option_id), None)
+
+    def effect_for(self, option_id: str = "") -> CombatEffect:
+        """The action's :attr:`effect` with *option_id*'s overriding it field by field
+        (a field the option leaves at its default keeps the action's)."""
+        option = self.option(option_id) if option_id else None
+        if option is None:
+            return self.effect
+        base, over, blank = self.effect, option.effect, CombatEffect()
+        merged = {
+            name: (
+                getattr(over, name)
+                if getattr(over, name) != getattr(blank, name)
+                else getattr(base, name)
+            )
+            for name in CombatEffect.__dataclass_fields__
+        }
+        return CombatEffect(**merged)
 
 
 @dataclass(frozen=True)

@@ -135,6 +135,11 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   `((condition_id, amount), …)` once the die has settled; the Conditions block's
   `take_conditions` applies each temporary, through `apply_condition`, so undo and the
   player's snapshot to the GM come with it. See [the roller notes](dice-and-rolling.md).
+  The self actions (phase 6) send `ConditionChange`s on the same topic — Defending,
+  Prone (lasting), Stand's temporary Hindered and Prone *off* — which
+  `core.rules.apply_condition_changes` applies (a removal takes every directly applied
+  instance, with its members). A made Stand check sheds Prone through `recovers`, and a
+  record with no `recoveryCheck` needs one degree (`recovery_succeeded`).
 - **The GM judges an aimed attack against the Defense in play**
   (`derived.defense_class_in_play`), so Vulnerable, All-Out Attack and Defending all move
   the DC the attack has to beat (the aimed attack, the area window's primary, the team

@@ -839,6 +839,49 @@ is measured against, and the local-only `RollSpec.effect_rank` the caps read. On
 **temporary** with its amount (re-applying replaces it: one All-Out a turn). The rules
 and the caps are in [the actions notes](actions.md#combat-maneuvers).
 
+### The self actions (Aim, Charge, Defend, Recover, Drop Prone, Stand, Finishing, Catch)
+
+`DiceSection.start_self_action(id)`, read off the record's `CombatEffect` by
+`core/rules/self_actions.py` (no action is named in code). An action with `options` asks
+which first, on the plain `choose_from_menu` (Charge / Slam / Slam at full speed; Stand by
+Acrobatics, by speed rank, or slowly; Finishing with or without intent to kill). Then one
+of three things:
+
+- **A `line`**: a *fixed* lane line keyed `action/option` (`line_key`; a Slam replaces a
+  plain Charge, since both are the one action). A fixed line takes a `fits(spec) -> reason`
+  (`core.rules.line_fit`): Aim on an attack with no attack check, or a Slam on one that is
+  not Damage, greys out with the reason, as a maneuver's 0 maximum does. The panel's shift
+  is now `core.rules.apply_actions` — the maneuvers and these lines together, named once in
+  the label (`… (All-Out Attack +3, Charge)`). Charge moves the modifier; Finishing sets
+  `dc = 10` and `critical_hit` (on the wire: `follow_up_for_result` and the GM's
+  `judge_attack(critical_hit=)` treat any hit as a critical) and, to kill, rewrites the
+  damage ladder from the third failure to Dead; a Slam moves the Damage save to
+  `max(rank + 1, speed rank)` (+1 at full speed) and sets **`RollSpec.then`**: the
+  slammer's own save at the halved rank (Resistance, p130), filled in for this sheet.
+  **`then` and `roll_twice` are local only** (`compare=False`, never in `to_dict`).
+- **`roll_twice`** (Aim) is read by the panel (`_twice`, the last roll's on a reroll):
+  locally two dice, the higher kept; in a session the request's **`twice`** and the
+  server rolls both. The dropped one is `other_die` on the roll (the record's too), shown
+  struck through in the readout and the history headline.
+- **`then`** is loaded onto the chip once the roll has settled (`_spend_extras`, with
+  `localize=False` — it is already this sheet's number); never for a reroll or an
+  abandoned roll.
+- **Conditions at once** (Defend, Drop Prone, Stand slowly, Recover's +2): a tuple of
+  `ConditionChange` on `conditionsRequested` (`condition-requested`), which
+  `take_conditions` now takes beside the maneuvers' `(id, amount)` pairs, plus a history
+  line (`self_action_note`) through `post_note`.
+- **A `check`** (Catch's Agility, Stand's Acrobatics or speed rank) is loaded onto the
+  chip at its DC (`check_spec`, `localize=False`). Its `clears` rides as
+  `RollSpec.recovers`, so a made Stand check takes Prone off through the ordinary
+  recovery road (`settle_recovery` → `recovery-requested` → `apply_recovery`).
+
+Recover also offers what it may shed (`recover_choices`): a recovery check for the most
+severe of its `recovery.from` list on the creature that offers one (rolled at once), a
+step down the fatigue ladder, or `RECOVER_DEFENSE_ONLY`; with nothing to shed there is no
+menu. "Once per scene" is in its tooltip, not enforced. `requires` / `refusedBy` grey
+Stand (not Prone) and Drop Prone (already Prone); `gmRuns` greys a player's Surprise
+Attack (the GM grants it — phase 7). The GM's roller does not run these yet (phase 7).
+
 ## Reroll
 
 `DiceRollerPanel.reroll` throws **this panel's last roll** again — the bonus, penalty,

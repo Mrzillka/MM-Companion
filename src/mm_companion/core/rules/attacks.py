@@ -81,6 +81,7 @@ def judge_attack(
     natural: bool = True,
     added_success: bool = True,
     routine_total: int | None = None,
+    critical_hit: bool = False,
 ) -> AttackVerdict:
     """Judge an attack of *modifier* that rolled *die* against *defense_dc*.
 
@@ -89,6 +90,7 @@ def judge_attack(
     *natural* false a routine 10 or a lucky re-roll's lifted die. *routine_total* is what
     a routine check would have come to — given only when the target is a minion and the
     session lets attacks on minions be routine — and a hit by it is a hit.
+    *critical_hit* makes every hit a critical (a Finishing Attack's, p201).
     """
 
     result = resolve_check(
@@ -98,7 +100,7 @@ def judge_attack(
     by_routine = False
     if not hit and routine_total is not None and routine_total >= defense_dc:
         hit = by_routine = True
-    critical = bool(result.critical and die == 20 and natural and added_success)
+    critical = bool(result.critical and die == 20 and natural and added_success) or critical_hit
     return AttackVerdict(
         hit=hit, critical=critical and hit, degree=result.degree, by_routine=by_routine
     )

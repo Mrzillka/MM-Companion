@@ -316,6 +316,7 @@ class AttackController(QObject):
             natural=bool(roll.get("critical")) if die in (1, 20) else not roll.get("routine"),
             added_success=not roll.get("minion"),
             routine_total=routine,
+            critical_hit=spec.critical_hit,
         )
         total = total_of(roll)
         if not verdict.hit:

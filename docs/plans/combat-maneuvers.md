@@ -523,7 +523,7 @@ commit hash.
   tints by `tone`/sign; the "+" menu applies an All-Out Attack with no amount (no
   `defaultAmount`), which moves nothing — phase 2 should ask for the amount, or the
   record gets a default. Wire findings in the phase 1 checklist (bump likely in phase
-  2). Next: phase 2. Commit: (see below).
+  2). Next: phase 2. Commit: 495dd33.
 
 - **2026-11-08 — Phase 0.** Rules checked against the book (p200–205). The user's
   answers recorded in §1. The plan and the `/combat-maneuvers` skill written. Branch

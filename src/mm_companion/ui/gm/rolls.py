@@ -269,8 +269,10 @@ class GMRollsMixin:
     def action_menu(self, own: Mapping[str, str | None]) -> list[GridSection]:
         """The Actions popup's sections on the Rolls block's roller (see
         :func:`~mm_companion.ui.action_menu.combat_menu`): the panel's own actions
-        (*own*: Reroll), Impress and Area, and the group actions, which need a group."""
+        (*own*: Reroll), Impress and Area, the group actions, which need a group, and
+        the combat actions an NPC takes (:meth:`combat_offered`)."""
         offered = dict(own)
+        offered.update(self.combat_offered())
         if self._data.impress.available:
             offered[KIND_IMPRESS] = None
         if self._data.area.available:
@@ -281,6 +283,8 @@ class GMRollsMixin:
         return combat_menu(self._data, offered, gm=True, fallback=[IMPRESS_ACTION, AREA_ACTION])
 
     def _on_roller_action(self, kind: str) -> None:
+        if self._gm_combat_action(kind):
+            return
         if kind == KIND_IMPRESS:
             self._impress.open_new()
         elif kind == KIND_AREA_ATTACK:
@@ -394,6 +398,7 @@ class GMRollsMixin:
         """A pinned tile on an NPC's card: roll (or load) it as that creature rolls."""
         if not isinstance(spec, RollSpec):
             return
+        self._follow_actor(name)
         entry = self._npc_state.get(name)
         minion = self.rolls_as_minion(entry.character if entry is not None else None)
         if load:

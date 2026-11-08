@@ -33,11 +33,11 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core.character import AppliedCondition, Character
 from mm_companion.core.components import MECH_RANDOM_ACTION, TONE_BENEFIT
-from mm_companion.core.data_loader import Condition, ConditionChange, GameData
+from mm_companion.core.data_loader import Condition, GameData
 from mm_companion.core.rules import (
     applied_condition_name,
     apply_condition,
-    apply_condition_changes,
+    apply_condition_requests,
     apply_damage_step,
     apply_recovery,
     apply_use_costs,
@@ -494,25 +494,7 @@ class ConditionsSection(QGroupBox):
         (Defend's Defending, Drop Prone's Prone, Stand's Hindered and Prone off). Any
         other entry is ignored — a mod block publishes here too.
         """
-        if not isinstance(payload, tuple):
-            return
-        applied = False
-        for entry in payload:
-            if isinstance(entry, ConditionChange):
-                applied = apply_condition_changes(self._character, (entry,), self._data) or applied
-                continue
-            if not isinstance(entry, tuple) or len(entry) != 2:
-                continue
-            condition_id, amount = entry
-            if not isinstance(condition_id, str) or not isinstance(amount, int):
-                continue
-            if isinstance(amount, bool) or amount <= 0:
-                continue
-            apply_condition(
-                self._character, condition_id, self._data, amount=amount, temporary=True
-            )
-            applied = True
-        if not applied:
+        if not apply_condition_requests(self._character, payload, self._data):
             return
         self._render_conditions()
         self._emit_conditions_changed()

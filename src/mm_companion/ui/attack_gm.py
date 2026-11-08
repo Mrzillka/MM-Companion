@@ -116,7 +116,7 @@ class AttackHost(Protocol):
 
     def action_add_card(self, card: ActionCard) -> None: ...
 
-    def area_roll_attack(self, spec: RollSpec, attacker=None) -> None: ...
+    def area_roll_attack(self, spec: RollSpec, attacker=None, *, before=None) -> None: ...
 
     def minion_rules(self) -> MinionRules: ...
 
@@ -199,14 +199,22 @@ class AttackController(QObject):
 
         No card to accept — the GM chose this — but the roll goes through the GM's
         roller like any NPC attack (a minion's 20 no critical), and the resolution
-        waits for it the way a player's does.
+        waits for it the way a player's does. What is resolved is what the die was made
+        of: the maneuvers on the GM's lane move the attack and its save just before it
+        is thrown, so the declaration takes that spec.
         """
         action_id = new_action_id()
         spec = aimed_spec(spec, action_id, target_name, source.name)
         declaration = AttackDeclaration(action_id, target_ref, target_name, spec, source.name)
         aimed = self._make(declaration, source)
         aimed.accepted = True
-        self._host.area_roll_attack(spec, source.character)
+
+        def made_of(rolled: RollSpec | None) -> bool:
+            if rolled is not None:
+                aimed.declaration = replace(aimed.declaration, spec=rolled)
+            return True
+
+        self._host.area_roll_attack(spec, source.character, before=made_of)
         return aimed
 
     def _make(self, declaration: AttackDeclaration, source: ImpressParty) -> _Aimed:

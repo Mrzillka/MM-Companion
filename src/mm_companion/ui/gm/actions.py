@@ -198,6 +198,7 @@ class GMActionsMixin:
         spec, target = payload
         if not isinstance(spec, RollSpec) or not isinstance(target, SceneTarget):
             return
+        self._follow_actor(name)
         source = self._npc_party(name)
         self._attack.aim_own(source, spec, target.ref, target.name)
 
@@ -209,6 +210,7 @@ class GMActionsMixin:
         if not isinstance(spec, RollSpec) or not isinstance(target, SceneTarget):
             return
         name = self._npc_name_for_window(window)
+        self._follow_actor(name)
         if name:
             source = self._npc_party(name)
         else:
@@ -227,9 +229,13 @@ class GMActionsMixin:
         entry = self._npc_state[name]
         return ImpressParty(f"npc:{name}", entry.summary.name, PARTY_NPC, name, entry.character)
 
-    def area_roll_attack(self, spec: RollSpec, attacker: Character | None = None) -> None:
+    def area_roll_attack(
+        self, spec: RollSpec, attacker: Character | None = None, *, before=None
+    ) -> None:
         """Roll an NPC's attack against the primary on this window's roller.
 
-        A minion *attacker*'s natural 20 is no critical (PDF p25).
+        A minion *attacker*'s natural 20 is no critical (PDF p25). *before* is the
+        roller's (``roll_spec(before=)``): an aimed attack declares the spec the die is
+        made of, the GM's maneuvers on it.
         """
-        self._roller.roll_spec(spec, minion=self.rolls_as_minion(attacker))
+        self._roller.roll_spec(spec, minion=self.rolls_as_minion(attacker), before=before)

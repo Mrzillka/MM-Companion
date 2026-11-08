@@ -62,6 +62,7 @@ __all__ = [
     "action_reason",
     "apply_actions",
     "apply_condition_changes",
+    "apply_condition_requests",
     "check_spec",
     "self_action_changes",
     "line_fit",
@@ -340,6 +341,37 @@ def apply_condition_changes(
             amount=change.amount,
             temporary=bool(change.temporary),
         )
+        changed = True
+    return changed
+
+
+def apply_condition_requests(character: Character, requests: object, game_data: GameData) -> bool:
+    """Put what the roller asks for on *character* — the ``condition-requested`` payload.
+
+    *requests* is a tuple whose entries are either ``(condition_id, amount)`` — what an
+    attack maneuver leaves until the start of the next turn (All-Out Attack −3), put on
+    **temporary**, replacing the amount — or a :class:`ConditionChange` from a self action
+    (Defend's Defending, Stand's Hindered and Prone off). Anything else is skipped: a mod
+    publishes on the same topic. Whether anything changed. The one reading both the
+    sheet's Conditions block and the GM's NPC cards apply, so the two copies agree.
+    """
+    if not isinstance(requests, tuple):
+        return False
+    changed = False
+    for entry in requests:
+        if isinstance(entry, ConditionChange):
+            changed = apply_condition_changes(character, (entry,), game_data) or changed
+            continue
+        if not isinstance(entry, tuple) or len(entry) != 2:
+            continue
+        condition_id, amount = entry
+        if not isinstance(condition_id, str) or not isinstance(amount, int):
+            continue
+        if isinstance(amount, bool) or amount <= 0:
+            continue
+        if game_data.condition_catalog().get(condition_id) is None:
+            continue
+        apply_condition(character, condition_id, game_data, amount=amount, temporary=True)
         changed = True
     return changed
 

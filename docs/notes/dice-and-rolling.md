@@ -880,7 +880,36 @@ severe of its `recovery.from` list on the creature that offers one (rolled at on
 step down the fatigue ladder, or `RECOVER_DEFENSE_ONLY`; with nothing to shed there is no
 menu. "Once per scene" is in its tooltip, not enforced. `requires` / `refusedBy` grey
 Stand (not Prone) and Drop Prone (already Prone); `gmRuns` greys a player's Surprise
-Attack (the GM grants it — phase 7). The GM's roller does not run these yet (phase 7).
+Attack (the GM grants it, below).
+
+### One runner for both rollers (`ui/roller/combat_runner.py`)
+
+The maneuvers and self actions are not the Dice block's own code: they are
+`CombatRunner`, built on a panel with a `note` callable and a parent for its menus. It
+wires the panel's attack choices, line shift and `linesRolled` itself. Everything that
+depends on **who acts** is a `CombatActor`: the `character` (whose attacks, caps, speed
+and conditions are read), a `name` and `key` (`""` on a player's sheet: its rolls carry no
+name, as before), `minion`, `land(requests)` (the `condition-requested` payload) and
+`throw(spec, load)` (a check the action rolls or loads; `None` = the panel plainly).
+
+- **The sheet** (`DiceSection.combat`) has one actor for good, landing on the bus.
+- **The GM** (`ui/gm/combat.py`) changes actor per pick: a tile asks which NPC acts
+  (`_choose_actor` — portraits, groups, "(minion)", greyed with the reason when it
+  can't; one NPC asks nothing), then `act_as(actor)`. A named actor's specs are `own`ed
+  ("Thug: …", `actor="Thug"`), so the history heads "Thug (GM)". `land` goes through
+  `GMWindow._land_npc_requests` (the model, then the open sheet's `take_conditions`, so the
+  temporary flag survives the replay); `throw` holds a check that sheds a condition
+  (Stand's) as the chip's 🎲 does (`_recovering`).
+- **A different actor drops the lane's lines** (`act_as`), and so does a roll off another
+  NPC's card or sheet (`_follow_actor`): a line's limit reads its actor's numbers.
+- **`ensure_attack`**: a loaded attack that is not the actor's own (`spec.actor` differs —
+  one loaded off a card) makes the picker ask again.
+- **The GM's Attack tile**: NPC, its attack, then the target (`SKIP_TARGET` first; the
+  GM's own Scene less the NPC) → `AttackController.aim_own`, which declares the spec the
+  die is made of (`area_roll_attack(before=)`), so the lane's maneuvers move the save.
+- **Surprise Attack** (`_grant`, the GM's only): anyone on the Scene, then the record's
+  options (vulnerable / defenseless, `temporary: true` in data) → an NPC's model, or a
+  player's sheet as `ApplyCondition(temporary=True)`; a line in the history.
 
 ## Reroll
 

@@ -533,6 +533,7 @@ class GMNpcBoardMixin:
                 self._roller.roll_spec(payload)
         elif topic == ROLL_REQUESTED and isinstance(payload, RollSpec):
             # Rolled as the sheet's creature, so a minion's natural 20 is no critical.
+            self._follow_actor(self._npc_name_for_window(window))
             sheet = window.sheet.character if window is not None else None
             self._roller.roll_spec(payload, minion=self.rolls_as_minion(sheet))
         elif topic == ATTACK_REQUESTED and window is not None:
@@ -542,6 +543,7 @@ class GMNpcBoardMixin:
             # Not a die: the NPC uses a power on an area, and the GM picks who is in it.
             self._start_npc_area(window, payload)
         elif topic == LOAD_REQUESTED and isinstance(payload, RollSpec):
+            self._follow_actor(self._npc_name_for_window(window))
             sheet = window.sheet.character if window is not None else None
             self._roller.load_spec(payload, minion=self.rolls_as_minion(sheet))
         elif topic == BONUS_REQUESTED and type(payload) is int and payload > 0:

@@ -94,7 +94,12 @@ it. These paths pass it, through `GMWindow.rolls_as_minion`:
 - a card's pinned tiles (`_npc_roll`);
 - history answers (`_roll_as`);
 - the area window's NPC attacker (`area_roll_attack`);
-- every Impress and area group line (`group_line(minion=)`).
+- every Impress and area group line (`group_line(minion=)`);
+- the combat actions an NPC takes off the GM's Actions popup (`CombatActor.minion`).
+
+**A Finishing Attack's hit is still a critical for a minion.** The book (p25) takes away
+only the added success of "a roll of 20"; Finishing's critical comes from the maneuver,
+not the die, and `judge_attack` ORs `critical_hit` in after the minion check.
 
 A minion's save also travels with its outcome list cut to the worst rung
 (`minion_save_spec`), so every seat's card reads what the GM's table applies, with no

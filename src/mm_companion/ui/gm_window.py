@@ -65,6 +65,7 @@ from mm_companion.ui.compact import CompactController
 from mm_companion.ui.connection_indicator import install_connection_indicator
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.gm.actions import GMActionsMixin
+from mm_companion.ui.gm.combat import GMCombatMixin
 from mm_companion.ui.gm.hosting import GMHostingMixin
 from mm_companion.ui.gm.model import (
     BIND_ADDRESS,
@@ -111,6 +112,7 @@ __all__ = ["SCENE_NPC", "SCENE_PLAYER", "GMWindow", "register_base_gm_blocks"]
 
 class GMWindow(
     GMRollsMixin,
+    GMCombatMixin,
     GMActionsMixin,
     GMHostingMixin,
     GMPlayersMixin,
@@ -639,6 +641,8 @@ class GMWindow(
         # button a player's sheet has (see GMRollsMixin.action_menu).
         self._roller.set_action_menu(self.action_menu)
         self._roller.actionRequested.connect(self._on_roller_action)
+        # The maneuvers and self actions, taken as the NPC each pick asks for.
+        self._setup_combat()
         layout.addWidget(self._view)
         return box
 

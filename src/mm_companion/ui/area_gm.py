@@ -97,8 +97,10 @@ class AreaHost(Protocol):
     def action_add_card(self, card: ActionCard) -> None:
         """Put the GM's reminder card in their history."""
 
-    def area_roll_attack(self, spec: RollSpec, attacker=None) -> None:
-        """Roll an NPC's attack against the primary on the GM's roller (as *attacker*)."""
+    def area_roll_attack(self, spec: RollSpec, attacker=None, *, before=None) -> None:
+        """Roll an NPC's attack against the primary on the GM's roller (as *attacker*).
+        *before* is the roller's: handed the spec the die is made of, ``False`` calls
+        it off."""
 
     def minion_rules(self) -> MinionRules:
         """The minion rules the open session plays by."""

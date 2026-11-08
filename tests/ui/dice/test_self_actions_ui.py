@@ -12,7 +12,8 @@ from mm_companion.core.powers import Power, PowerEffectInstance
 from mm_companion.core.rules import apply_condition, attack_choices
 from mm_companion.ui.action_menu import NO_ATTACKS
 from mm_companion.ui.character_sheet import CharacterSheet
-from mm_companion.ui.sections.dice import RECOVER_DEFENSE_ONLY, DiceSection
+from mm_companion.ui.roller.combat_runner import RECOVER_DEFENSE_ONLY
+from mm_companion.ui.sections.dice import DiceSection
 
 pytestmark = pytest.mark.usefixtures("workspace")
 

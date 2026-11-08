@@ -17,7 +17,8 @@ every session.**
 | 4 | Roller rework: one two-way slider, the action lane, the attack picker | done (2026-11-08) |
 | 5 | The four attack maneuvers, end to end (player) | done (2026-11-08) |
 | 6 | Self actions: Aim, Charge/Slam, Defend, Recover, Drop Prone, Stand, Finishing, Surprise, Catch | done (2026-11-09) |
-| 7 | The GM's side: NPC chooser first, conditions on the NPC | not started |
+| 7 | The GM's side: NPC chooser first, conditions on the NPC | done (2026-11-09) |
+| 7b | Team attack as a call to roll: a history card anyone answers, GM resolves | not started |
 | 8 | Targeted actions I: Feint, Trick, Aid | not started |
 | 9 | Targeted actions II: Grab, Trip, Disarm, Smash, Escape, Block | not started |
 | 10 | Notes, debts, full test run, hand-off for merge | not started |
@@ -119,6 +120,16 @@ Status values: `not started`, `in progress (<what is left>)`, `done (<date>)`.
     ladder.** The tile offers "Finishing Attack" or "…, intent to kill"; the kill version
     turns the damage save's third and deeper failures into Dead, so the GM's auto-apply
     and the buttons land Dead with no by-hand step.
+15. **Team attack with maneuvers** (asked 2026-11-09, phase 7): a **new team attack, as a
+    call to roll**, built in its own phase (7b). The GM sets only the target and a
+    bonus/penalty and sends it; a **button appears on a card in the history**. Every
+    player who presses it then rolls an attack with **any maneuvers they like** (their
+    own roller and lane), and the card updates with each new roll. **Only a roll (or
+    reroll) made after pressing the button counts.** The GM presses **Resolve** when
+    everyone has rolled; then the primary is picked, the +2/+5 (and critical +5) worked
+    out, and the target's save rolled or asked. **Keep both**: the NPC-group Team attack
+    window stays as it is (the GM rolls a squad at once, with its Adjust; no maneuvers
+    there). An NPC joins the new one by the GM pressing the button and picking the NPC.
 
 ---
 
@@ -433,6 +444,21 @@ widget, log failures.
   conditions on that NPC (`_apply_npc_damage`'s pattern: change the GM's model, then
   replay onto an open NPC sheet). On a player's card, "Clear temporary" goes to the
   owning app through the existing condition path in `session.md`.
+- **As built (phase 7):** the sheet's maneuver / self-action code moved, unchanged in
+  behaviour, into `ui/roller/combat_runner.py`: `CombatRunner` (wires the panel's
+  attack choices, line shift and `linesRolled`; `start`, `start_maneuver`,
+  `start_self_action`, `ensure_attack`, `choose_attack`, `load`, `own`, `act_as`,
+  `drop_lines`) and `CombatActor(character, name, key, minion, land, throw)`;
+  `RECOVER_DEFENSE_ONLY` lives there now. `DiceSection.combat` is one with a fixed actor
+  (its `start_maneuver` / `start_self_action` are wrappers). The GM's is
+  `ui/gm/combat.py` `GMCombatMixin` (`_setup_combat`, `combat_offered`,
+  `_gm_combat_action`, `_choose_actor`, `_actor_for`, `_npc_throw`, `_follow_actor`,
+  `_gm_attack`, `_grant`; `NO_NPC_TO_ACT`, `NO_ONE_ON_SCENE`, `NO_ATTACKS_MARK`). The
+  `condition-requested` payload is read by `core.rules.apply_condition_requests` on both
+  sides (`take_conditions` and `_land_npc_requests`; `_after_npc_condition_change(requests=)`
+  replays it onto an open sheet). `choose_from_menu(icons=)`. `aim_own` declares the spec
+  the die is made of (`area_roll_attack(before=)`). Surprise Attack's two options are data
+  (`applies` vulnerable / defenseless, `temporary: true`).
 - **Targeted actions** reuse the targeting layer: the target is picked off the Scene
   (`ui/attack_targets.py`), the GM accepts on an `ActionCard`, the server rolls the
   NPC's side, and a player is asked. A two-stage action (Grab, Trip, Disarm) is the
@@ -553,19 +579,34 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
       the GM's tile is **phase 7**.
 
 ### Phase 7 — The GM's side
-- [ ] Surprise Attack (decision 13): pick a creature → Vulnerable or Defenseless,
-      temporary, on it.
-- [ ] The self actions on the GM's roller (`start_self_action`'s pattern, acting as the
+- [x] Surprise Attack (decision 13): pick a creature → Vulnerable or Defenseless,
+      temporary, on it (an NPC's model, or a player's sheet over the session).
+- [x] The self actions on the GM's roller (the shared `CombatRunner`, acting as the
       chosen NPC: `apply_actions` with that NPC as *character*, conditions on the NPC).
-- [ ] Actions on the Rolls block → the NPC chooser → that NPC's attacks → roll as that
+- [x] Actions on the Rolls block → the NPC chooser → that NPC's attacks → roll as that
       NPC; conditions land on the NPC and replay onto an open NPC sheet.
-- [ ] Minions: the maneuvers still apply. Check `minions.md` for interactions (a
-      minion's natural 20 is no critical, which matters for Finishing Attack).
-- [ ] An NPC group member acting: the chooser lists members.
-- [ ] Team attack: the maneuvers on the GM's lane shift the members' checks and the final
-      rank (p201) — moved here from phase 5. `DiceSection.start_maneuver` and
-      `set_line_shift` are the sheet's pattern to copy onto the GM's Rolls block.
-- [ ] Full run recommended.
+- [x] Minions: the maneuvers still apply, and a minion's rolls go as a minion's. A
+      minion's Finishing Attack hit **is** still a critical: the book (p25) takes away
+      only the added success of "a roll of 20", and `judge_attack` already ORs
+      `critical_hit` in.
+- [x] An NPC group member acting: the chooser lists members, each with its group.
+- [ ] ~~Team attack with the lane's maneuvers~~ — **redesigned by the user (decision
+      15)** and moved to phase 7b.
+- [x] Full run (see the log).
+
+### Phase 7b — Team attack as a call to roll (decision 15)
+- [ ] The GM's Team attack tile (beside the group window, which stays): pick the target
+      and a bonus/penalty, send → a card in the history with a **Join** button (wire:
+      probably a new action kind on the action channel, inside v20).
+- [ ] Pressing it arms the presser's roller: the **next** attack they roll (or reroll),
+      maneuvers and all, is that member's entry. A roll made before pressing does not
+      count. The GM presses it for an NPC through the NPC chooser.
+- [ ] The card shows each entry as it comes (`judge_attack` against the target's
+      `defense_class_in_play`, minion rules, `combine_team_attack`'s running summary).
+      Final effect ranks after the maneuvers decide who can combine (p201).
+- [ ] **Resolve** (GM only): the primary's save at the raised rank, rolled for an NPC,
+      asked of a player — the aimed-attack road `AttackController.team_attack` uses.
+- [ ] Tests, notes (`actions.md` "Team attack"), the plan.
 
 ### Phase 8 — Targeted actions I
 - [ ] Feint (the actor picks attack/Deception/Insight; the target resists with the
@@ -620,6 +661,39 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
 
 Newest first. Each entry: date, phase, what was done, what's next, gotchas, and the
 commit hash.
+
+- **2026-11-09 — Phase 7 (done).** The GM's roller runs the maneuvers, the self actions
+  and the Attack tile as an NPC, and grants Surprise Attack. Asked the user how a team
+  attack takes maneuvers; the answer redesigned it (decision 15: a call-to-roll card any
+  player or NPC answers, GM resolves, the group window kept) and it became **phase 7b**.
+  §3.3 "As built (phase 7)" has the names. How it works: a tile asks which NPC acts
+  (`choose_from_menu` with portraits; one NPC → no menu; an NPC that can't — no attacks,
+  Stand while not Prone — is greyed with the reason; a group member shows "· Thugs", a
+  minion "(minion)"); the runner then acts as it: that NPC's attacks in the picker
+  (labelled "Thug: …" with `actor`, so the history heads "Thug (GM)"), its numbers in the
+  caps, a minion's rolls as a minion's, and what is left lands on its model and replays
+  onto its open sheet as **temporary** (the old replay, `apply_condition_by_id`, would
+  have lost the flag). Tests: `tests/ui/gm/test_combat_gm.py` (21). **Decisions I made
+  (small):** (1) the sheet's code moved into a shared `CombatRunner` rather than being
+  copied onto the GM window; (2) a different NPC acting — a tile for another one, or a
+  roll off another NPC's card or sheet (`_follow_actor`) — **drops the lane's lines**:
+  their limits read the last actor's numbers; (3) a loaded attack that isn't the actor's
+  own (`spec.actor` differs, e.g. loaded off a card) makes the picker ask again; (4) a
+  check an NPC's action loads (Stand's) is **held** like the chip's 🎲 recovery
+  (`_recovering`), so a made roll sheds Prone off that NPC; (5) Surprise Attack lists
+  everyone on the Scene, players included (to a player it goes as `ApplyCondition` with
+  `temporary`); (6) a minion's Finishing hit stays a critical (book p25 only removes the
+  natural-20 one). **Fixed on the way:** the GM's own aimed attack declared the spec
+  *before* the lane shifted it, so a maneuver never reached the save it asked for
+  (`aim_own` now uses `roll_spec(before=)`, as a player's does). **Gotchas:** (1) the
+  runner must look `post_note` up at call time (`lambda text: self.post_note(text)`) — a
+  test swaps it on the instance after the block is built; (2) a test stand-in for
+  `QMenu` entries needs `setIcon` now (only called when there is a portrait). Next:
+  phase 7b (the call-to-roll team attack), then 8. **Full run: 4751 passed** (16 min 47 s;
+  it got through this time). It prints `Windows fatal exception: code 0x80040155` stack
+  dumps from `simple/printing.py::make_printer` in `test_a_pdf_can_be_written`: COM noise
+  faulthandler reports from the Windows printer setup, not a crash — the test passes.
+  Commit: (see below).
 
 - **2026-11-09 — Phase 6 (done).** The self actions work on a player's sheet. Asked the
   user two questions, now decisions 13 (Surprise Attack is the GM's to grant: greyed for a

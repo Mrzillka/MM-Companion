@@ -17,6 +17,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from PySide6.QtCore import QPoint
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QMenu, QWidget
 
 from mm_companion.core.data_loader import GameData
@@ -46,10 +47,17 @@ NO_AREAS = (
 
 
 def choose_from_menu(
-    parent: QWidget, captions: Sequence[str], at: QPoint, *, disabled: Sequence[int] = ()
+    parent: QWidget,
+    captions: Sequence[str],
+    at: QPoint,
+    *,
+    disabled: Sequence[int] = (),
+    icons: Sequence[QIcon | None] = (),
 ) -> int | None:
     """Offer *captions* on a plain ``QMenu`` at *at* and return the index picked, or
-    ``None`` if the menu was dismissed. Indices in *disabled* are shown greyed.
+    ``None`` if the menu was dismissed. Indices in *disabled* are shown greyed; *icons*
+    (by index, ``None`` for none) go in front of their lines — the GM's NPC chooser
+    shows each creature's picture.
 
     The one place the roller's choosers (which attack, which target, which area) build
     their menus — and so the one name a test stands in for (``action_menu.QMenu``).
@@ -60,6 +68,9 @@ def choose_from_menu(
         action.setData(index)
         if index in disabled:
             action.setEnabled(False)
+        icon = icons[index] if index < len(icons) else None
+        if icon is not None:
+            action.setIcon(icon)
     chosen = menu.exec(at)
     if chosen is None:
         return None

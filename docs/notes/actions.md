@@ -696,8 +696,12 @@ each record's `bonus` / `penalty` (`attack_check`, `effect_rank`, `defense` — 
 - **`RollSpec.effect_rank`** is local only (like `marks`): the DC and the ladder's rank
   are what travel, and both are already shifted. No new wire key, so the maneuvers
   needed nothing from the protocol.
-- **Not yet**: the GM's roller has no maneuvers (phase 7 of the plan), so a team attack
-  rolls without them.
+- **The GM's roller** takes them too, as the NPC each pick asks for (see [the roller
+  notes](dice-and-rolling.md#one-runner-for-both-rollers-uirollercombat_runnerpy)), and
+  grants Surprise Attack. The NPC-group Team attack window rolls **without** maneuvers
+  (its Adjust is the bonus/penalty); a team attack that takes them is a different card —
+  a call to roll anyone answers with their own roller, the GM resolving — planned as
+  phase 7b (decision 15 of the plan).
 
 ## Not done yet
 

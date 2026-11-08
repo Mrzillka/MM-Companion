@@ -30,7 +30,7 @@ from mm_companion.core.session import store
 from mm_companion.core.session.model import (
     KIND_NOTE,
 )
-from mm_companion.ui import npc_icons, theme
+from mm_companion.ui import loading, npc_icons, theme
 from mm_companion.ui.blocks.bus import (
     AREA_REQUESTED,
     ATTACK_REQUESTED,
@@ -47,6 +47,7 @@ from mm_companion.ui.gm.model import (
     _npc_key,
     _NpcEntry,
 )
+from mm_companion.ui.main_window import opening_text
 from mm_companion.ui.npc_card import NPCCard
 from mm_companion.ui.npc_group import GROUP_KIND, NPCGroupCard
 from mm_companion.ui.npc_quick_dialog import QuickNPCDialog
@@ -274,7 +275,9 @@ class GMNpcBoardMixin:
 
     def _create_npc(self) -> None:
         """Write a new NPC: an editable, simplified sheet that saves into the cast."""
-        self._track_npc_window(NPCWindow(locked=False))
+        with loading.loading(self, opening_text(None)):
+            window = NPCWindow(locked=False)
+        self._track_npc_window(window)
 
     def _quick_npc(self) -> None:
         """Build a mook from a Power Level and a preset and put it straight in the cast.
@@ -403,7 +406,11 @@ class GMNpcBoardMixin:
         if existing is not None:
             resurface(existing)
             return
-        window = self._take_spare_npc(library.load_character(path), path)
+        character = library.load_character(path)
+        # A spare sheet is handed the creature in a moment; building one fresh is
+        # most of a second, behind a loading screen over this window (ui/loading).
+        with loading.loading(self, opening_text(character)):
+            window = self._take_spare_npc(character, path)
         if entry.card is not None:
             self._attach_pin_sheet(window, entry.card)
         self._track_npc_window(window)

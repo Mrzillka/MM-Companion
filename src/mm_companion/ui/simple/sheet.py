@@ -49,7 +49,7 @@ from PySide6.QtWidgets import (
 from mm_companion.core import diagnostics
 from mm_companion.core.rules import stable_build
 from mm_companion.ui import layout_tree as lt
-from mm_companion.ui import theme
+from mm_companion.ui import loading, theme
 from mm_companion.ui.block_frame import InnerScroll
 from mm_companion.ui.blocks.base import instance_template
 from mm_companion.ui.blocks.bus import NOTIFICATIONS
@@ -572,11 +572,14 @@ class SimpleSheet(QWidget):
         # A read of the build from end to end, so the rules layer may work it out once
         # (see core.rules.build_cache) — the only write inside, an array normalized
         # by the Powers block's redraw, invalidates the scope itself.
+        keys = list(model.keys())
+        loading.expect(len(keys))
         with stable_build():
-            for key in model.keys():
+            for key in keys:
                 box = self._make_box(key)
                 if box is not None:
                     self._boxes[key] = box
+                loading.step()
         # A block with nothing to show — a portrait never loaded, a character with no
         # gear — gives its room to its neighbours rather than standing there empty.
         model = without_keys(model, set(model.keys()) - set(self._boxes))

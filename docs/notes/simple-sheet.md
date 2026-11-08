@@ -22,7 +22,10 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   on purpose: the card modules reach for `ui.simple.style`, and the views reach for the
   sections those cards belong to, so a package that imported its own parts would import
   itself in a circle.
-- `CharacterSheet.set_simple(bool)` is the switch; it builds the `SimpleSheet` on first
+- `CharacterSheet.set_simple(bool)` is the switch. On a window that is on screen it
+  **fades** (`loading.fade_through`): it returns at once, before the switch is made, and
+  `simpleChanged` says when the switch is done (see [the UI utilities
+  notes](ui-utilities.md)). It builds the `SimpleSheet` on first
   use and keeps it (its bus subscriptions are made once). The sheet's own page (the
   `PinnedBoard`) is hidden while the simple one is up. **The sheet is locked** while it
   is up — every play-time control is one that already survives the lock — and the lock

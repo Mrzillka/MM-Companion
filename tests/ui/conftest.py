@@ -103,6 +103,23 @@ def _no_spare_npc_sheets():
 
 
 @pytest.fixture(autouse=True)
+def _no_loading_screens():
+    """Keep a slow build from putting a loading screen up behind a test's back.
+
+    Whether one goes up depends on how long the build took (``SHOW_AFTER_S``), which
+    is the machine's speed, not the code — and a screen that did is a child widget,
+    then an unparented one awaiting deletion, that a test counting widgets would
+    trip on. ``tests/ui/widgets/test_loading.py`` turns it back on, with no delay.
+    """
+    from mm_companion.ui import loading
+
+    original = loading.SHOW_AFTER_S
+    loading.SHOW_AFTER_S = None
+    yield
+    loading.SHOW_AFTER_S = original
+
+
+@pytest.fixture(autouse=True)
 def _peer_rolls_land_at_once():
     """Show another seat's roll the moment it arrives, as it was before the hold.
 

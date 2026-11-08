@@ -160,6 +160,60 @@ through rather than reinvent. When building new sheet widgets, use it:
   that is hidden only because nobody has shown it yet (not `WA_WState_ExplicitShowHide`,
   and never a window). Freezing the paint could not have covered this: the paint freeze
   is on the block, and the fold was in the page. `tests/ui/sheet/test_click_repaint.py`.
+- **A build the user waits on goes behind `ui/loading.py`'s loading screen.** Opening a
+  sheet (from the launcher, File ▸ New/Open, or a GM card), opening GM Mode, and switching
+  to or from the simple sheet each build widgets for a third of a second to three seconds,
+  and Qt builds widgets only on the GUI thread, so the window used to sit frozen. Wrap the
+  work in `with loading.loading(window, "Opening …"):`. It lays an opaque page with a label
+  and a bar over that window (a child outside every layout: no new window, no resize)
+  and **repaints it synchronously** each time the work reports. Inside, `loading.part(share)`
+  gives a phase a share of *what is left* of the bar, and `expect(n)` / `step()` count
+  that share out; the sheet steps once per block built and once per block locked, the
+  simple sheet once per box, the GM window once per block. Three decisions not to undo:
+  - **No `processEvents`.** It would deliver timers, session messages and clicks into a
+    sheet that is half built. A synchronous `repaint` paints the page and nothing else.
+  - **Opaque, by `autoFillBackground` alone.** `WA_OpaquePaintEvent` as well tells Qt the
+    widget fills itself, so the fill is skipped and the half-built window shows through.
+    The first build did exactly that.
+  - **Every report is a no-op when no screen is up**, and a `loading` inside another one
+    is a `part` of it rather than a second screen. A spare NPC sheet built in idle time,
+    a hidden window and the tests report into nothing; a sheet that opens straight into
+    the simple sheet runs one bar from the launcher's click to the end. A screen goes up
+    only over a window that is visible. A dialog that must report a failure is shown
+    *after* the `with` block, once the screen is down.
+  - **It waits `SHOW_AFTER_S` (0.15 s) before going up**, at the first report after
+    that. A GM card handed to a ready spare sheet is done in a blink, and a page flashing
+    over the window for a few milliseconds reads worse than nothing. Work that starts
+    by waiting on the network reports nothing while it waits, so the player's join
+    passes `at_once=True` and GM Mode's connect calls `loading.say("Connecting…")`,
+    which puts the screen up immediately. The test suite sets the delay to `None`
+    (never) in `tests/ui/conftest.py`, since whether a screen went up would otherwise
+    depend on the machine's speed.
+  - **A view switch fades through the screen** (`loading.fade_through(window, text, work,
+    finished)`; the simple sheet's switch is the one user). The old view fades out
+    *before* the work starts, while the event loop still runs, so the press answers at
+    once with a real animation; the work then runs behind the screen; the new view
+    fades in once the loop is free. A fade drawn from the work's own reports would
+    stutter: the switch has gaps of 130–310 ms between reports. Both fades cross
+    between pictures (`QWidget.grab`, ~25 ms), laid over the window as a `_Veil`: the
+    view under the fade out is about to be torn up, and a picture over the new view
+    keeps Qt from painting the whole sheet once a frame. Whether the screen it fades to
+    carries the bar is how long *the same switch took last time in that window*
+    (`_took`): a quick one fades between the two views over the bare page, and a bar
+    still comes up if this one runs past `SHOW_AFTER_S`. So **`set_simple` returns
+    before the switch is made** on a visible window, and `simpleChanged` says when it
+    is; a second press while it fades is refused and answered with `simpleChanged` for
+    what is showing, which keeps the menu tick honest. A hidden window, a switch inside
+    other work (a sheet opened straight into the simple sheet), and the test suite get
+    plain `loading` — made by the time the call returns. `FADE_S` (0.15 s) is each
+    fade's length; tests that want a fade turn it on with the `fades` fixture.
+  - **The start of the app is behind a bar too.** `__main__.main()` puts a splash up
+    right after the `QApplication` and the theme, *then* imports the interface a module
+    at a time (`_INTERFACE`, most of a start) as steps of its bar, then the workspace and
+    mods, then builds the launcher. The splash is a plain frameless `QWidget`, not a
+    `QSplashScreen`: on Windows that one's `show()` waits for the window to say it is
+    exposed and gives up only after a full second, which every start used to pay.
+  `tests/ui/widgets/test_loading.py`.
 - Tests build real windows, and `conftest.py` tears them down after each one.
   `processEvents()` alone does **not** run deferred deletions, so the teardown also
   sends `QEvent.Type.DeferredDelete` explicitly — without it every window built all

@@ -552,7 +552,7 @@ commit hash.
   live in the scratchpad (backticks in heredocs). **Decisions I made (small):** ✕ only on
   temporary chips; the cards' "Clear temporary" under the chips rather than on the button
   row (so a card never widens); no System-block dot yet; the "+" amount prompt starts at 1.
-  Next: phase 3 (the grid popup, icons, the Actions button). Commit: (see below).
+  Next: phase 3 (the grid popup, icons, the Actions button). Commit: 1bd595a.
 
 - **2026-11-08 — Phase 1 (done).** `AppliedCondition.amount`/`.temporary` (omitted at
   defaults); `apply_condition(amount=, temporary=)` with the record's `defaultAmount`

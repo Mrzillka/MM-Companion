@@ -183,9 +183,16 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   height whatever they held, and the roller lost its history to three scene cards.
   `release_body` drops the minimum height the scroll pinned, a refusal measured for
   the strip's width.
-- The strip opens at its width (360, or the edit strip's own under Custom) but never
-  more than 40% of the window (`STRIP_SHARE`), re-applied on every resize until the
-  player drags the divider. Sizing it once was sizing it against a half-built window.
+- The strip opens at its width (360, or the edit strip's own under Custom) — **or wider,
+  if its content asks for more** (`_strip_need`: the widest box's `sizeHint` and the
+  page's margins) — but never more than 40% of the window (`STRIP_SHARE`), re-applied on
+  every resize, and whenever the strip page's layout changes, until the player drags
+  the divider. At a flat 360 the roller's Roll group, which cannot reflow narrower than
+  its rows, lost its right edge. Two things had to hold for the content's width to be
+  read at all: `_BoxScroll` passes its content's layout changes on (`updateGeometry`),
+  since the box's layout otherwise keeps the hint the scroll had before the roller was
+  lent to it; and a borrowed section's own layout catches up a turn after the switch,
+  which is why the strip is re-sized on the page's `LayoutRequest`, not only once. Sizing it once was sizing it against a half-built window.
   It is re-divided from the **splitter's** own `resizeEvent`, ahead of `QSplitter`'s
   pass (`_StripSplitter`), not after it from the sheet's: a shrinking splitter takes
   all of the loss out of the page and keeps the strip whole, so restoring a maximised

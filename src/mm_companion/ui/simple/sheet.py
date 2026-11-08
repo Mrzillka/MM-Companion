@@ -92,6 +92,19 @@ class _BoxScroll(InnerScroll):
         frame = 2 * self.frameWidth()
         return widget.sizeHint() + QSize(frame, frame)
 
+    def hold(self, widget: QWidget) -> None:
+        super().hold(widget)
+        self.updateGeometry()
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: ANN001, N802 - Qt override
+        # The hint above is the content's, but the box's layout caches it until this
+        # scroll says it moved — which a scroll area never does when what it holds
+        # changes. Stale, the strip opened at the width the roller had *before* it was
+        # lent here, and cut the right of it off (see SimpleSheet._strip_need).
+        if watched is self.widget() and event.type() == QEvent.Type.LayoutRequest:
+            self.updateGeometry()
+        return super().eventFilter(watched, event)
+
 
 class SimpleBox(QFrame):
     """One box of the simple sheet: a small heading over the block's content.
@@ -429,6 +442,10 @@ class SimpleSheet(QWidget):
         self._strip.setFrameShape(QFrame.Shape.NoFrame)
         self._strip.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._strip.setWidget(self._strip_page)
+        # What the strip's boxes ask for settles a turn or two after they are built (a
+        # borrowed section's layout catching up), so the strip is sized again as it
+        # does — until the player drags the divider (see _apply_strip_extent).
+        self._strip_page.installEventFilter(self)
 
         self._splitter = _StripSplitter(self._apply_strip_extent)
         self._splitter.setChildrenCollapsible(False)
@@ -720,9 +737,12 @@ class SimpleSheet(QWidget):
         if total <= 0:
             return
         first = self._splitter.indexOf(self._strip) == 0
+        extent = self._strip_extent
+        if not vertical:
+            extent = max(extent, self._strip_need())
         # On a narrow window the page is what the player is reading; the roller
         # reflows into what is left.
-        strip = min(self._strip_extent, round(total * STRIP_SHARE))
+        strip = min(extent, round(total * STRIP_SHARE))
         sizes = [strip, total - strip] if first else [total - strip, strip]
         if self._splitter.sizes() != sizes:
             self._placing = True
@@ -730,6 +750,30 @@ class SimpleSheet(QWidget):
                 self._splitter.setSizes(sizes)
             finally:
                 self._placing = False
+
+    def _strip_need(self) -> int:
+        """How wide the strip's content asks to be: its widest box, and the page's margins.
+
+        The roller's Roll group cannot reflow narrower than its slider-and-field rows,
+        and a strip opened at a flat :data:`DEFAULT_STRIP_EXTENT` cut the right of it
+        off. Read from size hints — a preference, not a minimum, so a divider dragged
+        narrower still wins — which are the same before the window is laid out as
+        after.
+        """
+        page = self._strip_page
+        widest = max(
+            (box.sizeHint().width() for box in self._boxes.values() if page.isAncestorOf(box)),
+            default=0,
+        )
+        if widest <= 0:
+            return 0
+        margins = page.layout().contentsMargins()
+        return widest + margins.left() + margins.right() + 2 * self._strip.frameWidth()
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: ANN001, N802 - Qt override
+        if watched is self._strip_page and event.type() == QEvent.Type.LayoutRequest:
+            self._apply_strip_extent()
+        return super().eventFilter(watched, event)
 
     def _on_splitter_moved(self, _pos: int, _index: int) -> None:
         if not self._placing:

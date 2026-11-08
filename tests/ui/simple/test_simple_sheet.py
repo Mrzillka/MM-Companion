@@ -1271,3 +1271,34 @@ def test_a_rebuild_that_fails_while_up_goes_back_to_the_edit_page(
     assert announced == [False]
     assert sheet.board.isVisible()
     assert not any(sheet.block_frame(key).is_lent() for key in sheet.block_keys())
+
+
+def test_the_strip_opens_wide_enough_for_the_roller(qapp, data) -> None:
+    """The roller's Roll group cannot reflow narrower than its rows, and a strip opened
+    at a flat width cut the right of it off. It opens at what its content asks for —
+    and still never past its share of the window."""
+    from mm_companion.ui.sections.dice import DiceSection
+    from mm_companion.ui.simple.sheet import DEFAULT_STRIP_EXTENT, STRIP_SHARE
+
+    sheet = CharacterSheet(data, _hero(data))
+    sheet.set_locked(True)
+    sheet.resize(1500, 900)
+    sheet.show()
+    _settle(qapp)
+    (roller,) = sheet.findChildren(DiceSection)
+    # Wider than the strip's flat width whatever the fonts: a row it cannot shed.
+    wide = DEFAULT_STRIP_EXTENT + 60
+    row = QWidget()
+    row.setMinimumWidth(wide)
+    roller.layout().addWidget(row)
+    sheet.set_simple(True)
+    _settle(qapp, sheet)
+
+    view = sheet.simple_sheet
+    assert view._strip_page.isAncestorOf(roller)
+    assert roller.minimumSizeHint().width() >= wide
+    assert roller.parentWidget().width() >= roller.minimumSizeHint().width()  # nothing cut
+
+    sheet.resize(700, 900)
+    _settle(qapp, sheet)
+    assert view._strip.width() <= round(sheet.width() * STRIP_SHARE)

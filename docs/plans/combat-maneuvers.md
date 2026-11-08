@@ -623,7 +623,7 @@ commit hash.
   to a full run on this branch while `pyproject.toml` differs from develop. Next:
   phase 6 (the self actions). **Full run: 4682 passed, 2 failed** — both
   `tests/ui/sheet/test_bus.py`, whose own `REQUEST_TOPICS` list (a tripwire for a new
-  topic) needed `condition-requested`; fixed and re-run green. Commit: see git log.
+  topic) needed `condition-requested`; fixed and re-run green. Commit: d2bad7c.
 
 - **2026-11-08 — Phase 4 (done).** The roller: one signed Bonus/Penalty slider
   (−20..+20, arrows kept: `make_signed_spin_box(buttons=True)`), the action lane

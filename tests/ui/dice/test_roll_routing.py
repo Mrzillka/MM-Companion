@@ -423,19 +423,18 @@ def test_an_equipment_card_rolls_through_the_same_channel(qapp: QApplication) ->
 def test_the_sliders_add_on_top_of_the_loaded_trait(qapp: QApplication) -> None:
     sheet = _sheet()
     panel = sheet.dice.panel
-    panel._bonus_spin.setValue(2)
-    panel._penalty_spin.setValue(5)
+    panel._modifier_spin.setValue(-3)
 
     panel.load_spec(RollSpec(label="Athletics", modifier=9))
 
-    # 9 + 2 - 5 = 6, split back into a non-negative bonus/penalty pair for the wire.
+    # 9 - 3 = 6, split back into a non-negative bonus/penalty pair for the wire.
     assert panel._roll_parameters()[:2] == (6, 0)
 
 
 def test_a_net_negative_modifier_becomes_a_penalty(qapp: QApplication) -> None:
     sheet = _sheet()
     panel = sheet.dice.panel
-    panel._penalty_spin.setValue(8)
+    panel._modifier_spin.setValue(-8)
     panel.load_spec(RollSpec(label="Stealth", modifier=3))
 
     assert panel._roll_parameters()[:2] == (0, 5)
@@ -598,7 +597,7 @@ def test_a_save_that_held_still_reports_the_hit_it_cost(qapp: QApplication) -> N
     panel = sheet.dice.panel
     history = sheet.dice.view._local_history
 
-    panel._bonus_spin.setValue(20)  # cannot fail
+    panel._modifier_spin.setValue(20)  # cannot fail
     panel.load_spec(
         RollSpec(
             label="Toughness vs. 18",
@@ -618,7 +617,7 @@ def test_a_save_with_nothing_to_say_on_a_success_says_nothing(qapp: QApplication
     panel = sheet.dice.panel
     history = sheet.dice.view._local_history
 
-    panel._bonus_spin.setValue(20)  # cannot fail
+    panel._modifier_spin.setValue(20)  # cannot fail
     panel.load_spec(RollSpec(label="Will vs. 16", dc=16, outcomes=("Dazed",)))
     panel._start_roll()
 

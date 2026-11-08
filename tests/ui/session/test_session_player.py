@@ -731,7 +731,7 @@ def test_a_players_roll_is_resolved_by_the_gm_and_shared(
     monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
     set_active_session(player)
     view = DiceRollerView()
-    view.panel._bonus_spin.setValue(7)
+    view.panel._modifier_spin.setValue(7)
     view.panel._dc_check.setChecked(True)
     view.panel._dc_spin.setValue(12)
 

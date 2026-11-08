@@ -131,7 +131,9 @@ class RollerQuickRollsMixin:
         seen: set[tuple[str, int, int]] = set()
         for entry in stored:
             name = str(entry.get("name", "")).strip()
-            clean = {"bonus": int(entry.get("bonus", 0)), "penalty": int(entry.get("penalty", 0))}
+            # By the net, as the one Bonus/Penalty slider loads it (see quick_roll_key).
+            net = int(entry.get("bonus", 0)) - int(entry.get("penalty", 0))
+            clean = {"bonus": max(net, 0), "penalty": max(-net, 0)}
             if name:
                 clean["name"] = name
             key = quick_roll_key(clean)
@@ -182,7 +184,8 @@ class RollerQuickRollsMixin:
         full. No DC is stored: see
         :func:`~mm_companion.ui.roll_history.roll_parameters` for why.
         """
-        entry = {"bonus": int(params["bonus"]), "penalty": int(params["penalty"])}
+        net = int(params["bonus"]) - int(params["penalty"])
+        entry = {"bonus": max(net, 0), "penalty": max(-net, 0)}
         chosen = str(name if name is not None else params.get("name", "")).strip()
         if chosen:
             entry["name"] = chosen
@@ -270,8 +273,7 @@ class RollerQuickRollsMixin:
         (:func:`~mm_companion.ui.roll_history.roll_parameters`): the difficulty in
         front of the player now beats one saved weeks ago.
         """
-        self._bonus_spin.setValue(entry["bonus"])
-        self._penalty_spin.setValue(entry["penalty"])
+        self._modifier_spin.setValue(int(entry["bonus"]) - int(entry["penalty"]))
         name = str(entry.get("name", "")).strip()
         self.load_spec(RollSpec(label=name) if name else None)
         self._transient = bool(name)

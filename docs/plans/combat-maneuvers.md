@@ -14,7 +14,7 @@ every session.**
 | 1 | Temporary conditions in `core` (amount, temporary, tone, stat mods) | done (2026-11-08) |
 | 2 | Sheet indicators: dots, tinted chips, "Clear temporary" | done (2026-11-08) |
 | 3 | Reusable grid popup, action icons, the **Actions** button | done (2026-11-08) |
-| 4 | Roller rework: one two-way slider, the action lane, the attack picker | not started |
+| 4 | Roller rework: one two-way slider, the action lane, the attack picker | done (2026-11-08) |
 | 5 | The four attack maneuvers, end to end (player) | not started |
 | 6 | Self actions: Aim, Charge/Slam, Defend, Recover, Drop Prone, Stand, Finishing, Surprise, Catch | not started |
 | 7 | The GM's side: NPC chooser first, conditions on the NPC | not started |
@@ -371,6 +371,18 @@ widget, log failures.
   cleared: …"; a player's is a `ClearTemporary` command and their own sheet writes the
   line. `applyConditionRequested` on the player and NPC cards is now
   `(key, id, parameter, amount)`.
+- **As built (phase 4):** the roller as above, with these names: `_modifier_slider` /
+  `_modifier_spin` / `_modifier_label` (`MODIFIER_LIMIT`, `MODIFIER_LABEL`), the lane in
+  `ui/roller/action_lane.py` (`ActionLane`, `ActionLine`, `LineLimit`, `NEEDS_ATTACK`),
+  and on the panel `start_action_line(key, name, limit=, fixed=, needs_attack=, tone=)`,
+  `action_lines()`, `active_lines()` (what phase 5's `apply_maneuvers` reads),
+  `loaded_attack()`, `choose_attack()`, `menu_point()`. A roll records `lines` in the
+  roll Reroll throws again. The picker's list is `core.rules.attack_choices`
+  (`AttackChoice(caption, spec)`, in `core/rules/attack_choices.py`, beside
+  `area_choices`); every chooser is `action_menu.choose_from_menu`. The no-DC warning
+  (`NO_DC_WARNING`) is on **every** unaimed attack rolled with no DC, not only the
+  Attack tile's. **The maneuver tiles are still greyed** (`NOT_BUILT`): phase 5 wires
+  them to `start_action_line` with `maneuver_limits` as the *limit*.
 - **As built (phase 3):** `ui/action_grid.py` as above (tokens `action-grid.tile`,
   `.icon`, `.gap`, `.columns`; icons coloured from the tile's palette `ButtonText`, so no
   colour token). `ui/action_menu.combat_menu(data, offered, gm=, fallback=)` builds the
@@ -465,21 +477,20 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
 - [x] `QToolButton:disabled` restated in the styled presets (greyed tiles read live).
 
 ### Phase 4 — Roller rework
-- [ ] One −20..+20 Bonus/Penalty slider (signed spin, tint, `adjustment()`,
+- [x] One −20..+20 Bonus/Penalty slider (signed spin, tint, `adjustment()`,
       `add_bonus`, `_spend_extras`, quick rolls' bonus/penalty identity still
-      round-trips).
-- [ ] The action lane with reserved height; `ActionLine` (configurable or fixed); ✕.
-- [ ] `set_attack_choices` + the plain `QMenu` attack picker; chip removed → lines
+      round-trips — now read by the net).
+- [x] The action lane with reserved height; `ActionLine` (configurable or fixed); ✕.
+- [x] `set_attack_choices` + the plain `QMenu` attack picker; chip removed → lines
       greyed out; a new attack → limits reset to the max.
-- [ ] **The Attack tile** (decision 12): the attack picker, then a target menu with
+- [x] **The Attack tile** (decision 12): the attack picker, then a target menu with
       "Skip" first (Scene targets, through the aimed-attack road — `aim_attack`); no
       target → the DC box is the Defense; a warning sign when there is neither.
-- [ ] **The player's Area tile**: today it is greyed (`NOT_BUILT`) — a player starts
-      an area from a power card's area line. Wire it to the attack picker →
-      `DiceSection.start_area(power_id)`.
-- [ ] Compact mode and the Extended layout still fit (`dice-and-rolling.md`, compact
-      section).
-- [ ] Move the existing tests onto the one slider. Full run recommended.
+- [x] **The player's Area tile**: `core.rules.area_choices` → one opens at once,
+      several on a menu → `DiceSection.start_area(area key)`.
+- [x] Compact mode and the bottom-strip roller still fit (screenshots).
+- [x] Move the existing tests onto the one slider. Full run: stopped at 82% by the
+      machine running low on memory, no failures up to there (see the log).
 
 ### Phase 5 — Attack maneuvers end to end (player)
 - [ ] `core/rules/maneuvers.py`: limits, `apply_maneuvers`, `lasting_conditions`,
@@ -562,6 +573,38 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
 
 Newest first. Each entry: date, phase, what was done, what's next, gotchas, and the
 commit hash.
+
+- **2026-11-08 — Phase 4 (done).** The roller: one signed Bonus/Penalty slider
+  (−20..+20, arrows kept: `make_signed_spin_box(buttons=True)`), the action lane
+  (`ui/roller/action_lane.py`) under it, the attack picker, and the Attack and Area
+  tiles on the sheet's Dice block (§3.3 "As built (phase 4)"). Core:
+  `core/rules/attack_choices.py` (`attack_choices`, `area_choices`). Quick rolls: the
+  identity and the saved entries are read **by the net** (`quick_roll_key`,
+  `_load_quick_rolls`, `toggle_quick_roll`), so an old "+4 / −1" chip is the +3 it now
+  loads. Driver target `roller-lane`. Tests: `tests/core/test_attack_choices.py`,
+  `tests/ui/dice/test_action_lane.py` (22); the old two-slider references moved onto
+  `_modifier_spin` in `test_dice_roller.py`, `test_roll_routing.py`, `test_gm_window.py`,
+  `test_session_player.py`, `test_extra_effort.py`, `test_play_affordances.py`.
+  **Gotchas:** (1) **Python's default encoding here is cp1251**: a script that edits a
+  file must pass `encoding="utf-8"` as well as `newline=""` (an edit without it mangled
+  every em dash in `action_menu.py`; restored from git); (2) `affected.py` refuses
+  `-p no:cacheprovider` (testmon needs the cache) — run it plainly; (3) `cat > file`
+  with no heredoc blocks the Bash tool on stdin. **Decisions I made (small):** the
+  maneuver tiles stay greyed until phase 5 — a line that changed nothing on the roll
+  would have been misleading; the no-DC warning covers every unaimed attack (a card's
+  🎲 too), since an ungraded attack is the same problem wherever it was clicked;
+  dismissing the Attack tile's target menu cancels (Skip is the way to load without a
+  target); with nobody on the Scene (or offline) there is no target menu at all; a
+  fixed line is as tall as a spin box so the lane never moves; the DC/Routine rows were
+  **not** merged into one row as the sketch in §1 shows (left for phase 10 if wanted).
+  **Seen in the screenshot:** the chip of a picked attack reads "Rolling: Attack +0 vs.
+  Defense" — the card's label, which does not name the power (with two attacks the
+  chip can't tell them apart; the picker's caption does). Next: phase 5 (the four
+  maneuvers: `maneuver_limits`, `apply_maneuvers`, `lasting_conditions`, wired through
+  `start_action_line`). Full run: **stopped at 82% by the system (low memory)**, no failure up to there; the
+  rest is covered by the targeted files (dice, sheet roller, extra effort, play
+  affordances, window flash, the GM and session tests I edited — all green). Phase 7's
+  full run (recommended there anyway) covers the remaining 18%. Commit: HASH.
 
 - **2026-11-08 — Phase 3 (done).** Asked the user two questions, now decisions 11
   (four sections) and 12 (the Attack tile: attack, then optional target with "Skip"

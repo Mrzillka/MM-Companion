@@ -236,11 +236,11 @@ def quick_roll_key(params: dict) -> tuple[str, int, int]:
     that roll any more — but it is why :meth:`DiceRollerPanel._rename_quick_roll`
     refuses a name that would collide with another chip.
     """
-    return (
-        str(params.get("name", "")),
-        int(params.get("bonus", 0)),
-        int(params.get("penalty", 0)),
-    )
+    # By the net: the roller has one two-way slider, so a roll is +3 or -3, never "+4
+    # and -1". A chip saved before that (bonus 4, penalty 1) is the same quick roll as
+    # the +3 it now loads, and a card from then still lights its star.
+    net = int(params.get("bonus", 0)) - int(params.get("penalty", 0))
+    return (str(params.get("name", "")), max(net, 0), max(-net, 0))
 
 
 class QuickRollStar(QPushButton):

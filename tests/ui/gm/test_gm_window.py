@@ -1348,7 +1348,7 @@ def test_a_gm_roll_lands_in_the_session_and_the_history(
 ) -> None:
     monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
     start_hosting(qapp, window, canned())
-    window._roller._bonus_spin.setValue(5)
+    window._roller._modifier_spin.setValue(5)
 
     window._roller._start_roll()
     qapp.processEvents()

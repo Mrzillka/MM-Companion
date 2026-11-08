@@ -483,14 +483,19 @@ had their look. Three things fall out of it:
   it, as the caption for slider values that stayed set — but the sliders are now spent
   by the roll (below), so a chip left standing would be naming numbers that are gone.
 
-**And the sliders are spent by the roll.** Bonus and Penalty are a circumstance of
+**And the slider is spent by the roll.** Bonus/Penalty is **one two-way slider**
+(−20..+20, centred, `MODIFIER_LIMIT`; a `SignedSpinBox` that keeps its arrows, `+3` /
+`-3`) — it used to be two sliders, a Bonus and a Penalty. It is a circumstance of
 *one* check — cover against this attack, Extra Effort's "+2 on a single check" — yet a
-value left in a slider used to ride along on every roll after it, unnoticed.
-`_spend_extras` zeroes both beside each `_settle_spec`, i.e. at the end of both paths
-that produce a number and **not** in `_abandon_roll`, for the same reason the chip
-survives there. While either holds anything, `_mark_extras` tints its label and spin
-box (`tint.better` / `tint.worse`, bold) so a pending charge is as visible as a loaded
-trait. Only `color` and weight go on the spin box — a `border`, `padding` or
+value left in it used to ride along on every roll after it, unnoticed.
+`_spend_extras` zeroes it (and drops the action lines the roll used, below) beside each
+`_settle_spec`, i.e. at the end of both paths that produce a number and **not** in
+`_abandon_roll`, for the same reason the chip survives there. While it holds anything,
+`_mark_extras` tints its label and spin box (`tint.better` above 0, `tint.worse` below,
+bold) so a pending charge is as visible as a loaded trait. The wire and the history
+still speak a non-negative bonus/penalty **pair**, split from the net in
+`_roll_parameters`; a quick roll's identity (`quick_roll_key`) is read by that net, so a
+chip saved as "+4 and −1" before the change is the same chip as the +3 it now loads. Only `color` and weight go on the spin box — a `border`, `padding` or
 `background` there trips rule 4 of the theme notes. Note what this did to tests that
 call `_start_roll()` and then `_finish_roll()` under a zero `ROLL_DURATION_MS`: the
 first call already finishes the roll, so that pair is *two* rolls, and the second now
@@ -524,7 +529,7 @@ drawn squashed, and a tall compact window stretched it the other way.
 - Two things a spec deliberately does *not* know, because this character's sheet
   cannot see them: an attack's **DC** (the target's Defense — `dc` stays `None` and
   the roller's DC box supplies it) and a save's **modifier** (the target's
-  resistance — `modifier` is 0 and the Bonus slider supplies it).
+  resistance — `modifier` is 0 and the Bonus/Penalty slider supplies it).
 - `power_rolls` replaced the card footer's prose-only `roll_lines`, which built
   strings like `"8 vs. Defense"` and threw the numbers away. It reads them from
   `powers_terms.effect_roll_numbers` (`check_actor`/`dc`/`attack`, factored out of
@@ -566,7 +571,7 @@ drawn squashed, and a tall compact window stretched it the other way.
   arrived through `roll_spec` is let go once the die settles (above). The sliders always
   **add on top** (`net = spec.modifier + bonus − penalty`, split back into a
   non-negative pair for the wire) rather than being overwritten — they are the
-  situational extras, and a trait bonus can exceed their 0-20 range anyway.
+  situational extras, and a trait bonus can exceed their ±20 range anyway.
 - Every such roll now travels **named**: `RollRequest.label` has existed end to end
   since the session layer landed and nothing filled it; `_request_session_roll`
   passes `spec.label`, so the table sees *what* was rolled. A named quick-roll chip
@@ -732,7 +737,9 @@ available moves (a roll comes back, the GM forms an NPC group).
   the reason in the tooltip). An id the host does not mention is greyed with
   `NOT_BUILT` — the actions later phases of the combat maneuvers plan wire up. `gmOnly`
   actions are left off a player's popup entirely.
-- The sheet's Dice block (`DiceSection.action_menu`) offers Impress. The GM's Rolls block
+- The sheet's Dice block (`DiceSection.action_menu`) offers Impress, **Attack** and
+  **Area** (each greyed with `NO_ATTACKS` / `NO_AREAS` on a sheet with nothing to use).
+  The GM's Rolls block
   (`GMRollsMixin.action_menu`) offers Impress, Area, and **Team attack / Team check /
   Group check**, which need a group: greyed with `NO_NPC_GROUPS` until there is one, and
   a pick asks which group off a plain `QMenu` (skipped when there is only one), then
@@ -752,6 +759,52 @@ available moves (a roll comes back, the GM forms an NPC group).
 
 See [the actions notes](actions.md), which also cover the two `RollSpec` additions the
 action brought (`KIND_BEST_OF` and `dc_from_total`).
+
+### The attack picker, and the Attack and Area tiles
+
+- **The picker** is a plain `QMenu` of the character's attacks: `core.rules.
+  attack_choices` (every roll line the wielder makes that forces a save —
+  `targetable_attack` — off the very lines the power and gear cards draw, so the menu
+  and the cards agree; an area power's card has an attack line too, for its primary).
+  The panel reads no game data, so the host hands it in: `set_attack_choices(callable)`,
+  read at each opening. `choose_attack()` returns the spec picked; it loads nothing.
+  Every chooser opened off the popup goes through `action_menu.choose_from_menu`, the
+  one `QMenu` a test stands in for (`action_menu.QMenu`), at `panel.menu_point()`.
+- **The Attack tile** (`DiceSection.start_attack`): the picker, then — when the Scene
+  has someone to aim at — a target menu whose first line is `SKIP_TARGET`. A target
+  goes the aimed-attack road (`aim_attack`: declared to the GM, rolled at once).
+  Skipping, or nobody to aim at, **loads** the attack onto the chip: the DC box is the
+  Defense. An unaimed attack rolled with no DC is written up with `NO_DC_WARNING` in the
+  readout (`_unjudged_attack`) — on any attack, a card's 🎲 included — and still rolls.
+- **The Area tile** (`DiceSection.start_area_tile`): `core.rules.area_choices` (the
+  cards' area lines, whose `trait_key` is the area key) — the only one opens at once,
+  several are offered on a menu — then `start_area`, as the card's area line does.
+
+### The action lane
+
+Under the slider, `ui/roller/action_lane.py`: an `ActionLane` of `ActionLine`s, one per
+action riding on the next roll — its name (in the line's `tone`), a `✕`, then a slider
+and spin over `0..X_max` (*configurable*) or a fixed caption. The panel's way in is
+`start_action_line(key, name, limit=…, fixed=…, needs_attack=…)`; re-picking an action
+replaces its line.
+
+- **It holds one line's height when empty**, so picking an action never resizes the
+  roller: a hidden placeholder line with `retainSizeWhenHidden`, dropped (retain off)
+  while there is a real line. A fixed line is as tall as a spin box (measured off one,
+  then discarded), so every kind of line is the same height. Lines past the first grow
+  the lane (accepted).
+- **The limit is the host's**: `limit(spec) -> (maximum, reason)`, the loaded attack in.
+  The panel only decides whether the loaded spec *is* an attack (`loaded_attack`).
+- **A line that needs an attack** with none loaded opens the picker first and loads
+  what is picked (dismissing it calls the action off). `load_spec` re-binds every line:
+  no attack → greyed with `NEEDS_ATTACK`, kept in place; a **different** attack →
+  the limit is worked out again and the value **reset to the maximum**; the same one
+  keeps what the player set. A maximum of 0 greys the line with the limit's reason.
+- **Spent by the roll**: `_start_roll` notes the lines that applied (`_rolled_lines`,
+  and `lines` on the roll Reroll throws again); `_spend_extras` removes them. A greyed
+  line did not apply and stays; an abandoned roll keeps them; a reroll uses the last
+  roll's and leaves the current ones alone. `active_lines()` is `(key, value)` for the
+  ones that apply — what the maneuvers will read.
 
 ## Reroll
 

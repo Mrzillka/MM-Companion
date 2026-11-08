@@ -83,13 +83,17 @@ class SignedSpinBox(QSpinBox):
         return f"{value:+d}" if value else "0"
 
 
-def make_signed_spin_box(limit: int, *, max_width: int | None = None) -> SignedSpinBox:
-    """A wheel-guarded, arrowless :class:`SignedSpinBox` from -*limit* to +*limit*."""
+def make_signed_spin_box(
+    limit: int, *, max_width: int | None = None, buttons: bool = False
+) -> SignedSpinBox:
+    """A wheel-guarded :class:`SignedSpinBox` from -*limit* to +*limit*, arrowless
+    unless *buttons* (the roller's Bonus/Penalty box keeps its arrows)."""
     spin = SignedSpinBox()
     spin.setRange(-limit, limit)
     spin.setValue(0)
-    spin.setButtonSymbols(QSpinBox.NoButtons)
-    spin.setProperty(theme.ARROWLESS_PROPERTY, True)
+    if not buttons:
+        spin.setButtonSymbols(QSpinBox.NoButtons)
+        spin.setProperty(theme.ARROWLESS_PROPERTY, True)
     if max_width is not None:
         spin.setMaximumWidth(max_width)
     guard_wheel(spin)

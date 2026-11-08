@@ -16,6 +16,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
+from PySide6.QtCore import QPoint
+from PySide6.QtWidgets import QMenu, QWidget
+
 from mm_companion.core.data_loader import GameData
 from mm_companion.ui.action_grid import GridItem, GridSection
 from mm_companion.ui.widgets import help_markup
@@ -28,6 +31,40 @@ NOT_BUILT = "Not available yet."
 
 #: Why Reroll is greyed out before there is a roll to throw again.
 NOTHING_TO_REROLL = "Roll something first: there is nothing to reroll yet."
+
+
+#: The first line of the Attack tile's target menu: roll the attack at nobody in
+#: particular, the DC box standing for the Defense (decision 12 of the plan).
+SKIP_TARGET = "Skip (no target)"
+
+#: Why the Attack and Area tiles are greyed on a sheet with nothing to use them with.
+NO_ATTACKS = "This character has no attack to make."
+NO_AREAS = (
+    "No area to use: buy an area power, or switch an attack's area use on (right-click "
+    "its card)."
+)
+
+
+def choose_from_menu(
+    parent: QWidget, captions: Sequence[str], at: QPoint, *, disabled: Sequence[int] = ()
+) -> int | None:
+    """Offer *captions* on a plain ``QMenu`` at *at* and return the index picked, or
+    ``None`` if the menu was dismissed. Indices in *disabled* are shown greyed.
+
+    The one place the roller's choosers (which attack, which target, which area) build
+    their menus — and so the one name a test stands in for (``action_menu.QMenu``).
+    """
+    menu = QMenu(parent)
+    for index, caption in enumerate(captions):
+        action = menu.addAction(caption)
+        action.setData(index)
+        if index in disabled:
+            action.setEnabled(False)
+    chosen = menu.exec(at)
+    if chosen is None:
+        return None
+    index = chosen.data()
+    return index if isinstance(index, int) else None
 
 
 def action_tooltip(name: str, text: str, reason: str | None = None) -> str:

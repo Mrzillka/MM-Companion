@@ -25,7 +25,7 @@ from mm_companion.core import storage
 from mm_companion.core.dice import resolve_check
 from mm_companion.core.rules import RollSpec
 from mm_companion.core.session.model import new_session
-from mm_companion.ui import dice_roller
+from mm_companion.ui import dice_roller, theme
 from mm_companion.ui.dice_roller import DiceRollerPanel, degree_text
 from mm_companion.ui.roll_history import (
     HISTORY_FLOOR_HEIGHT,
@@ -87,15 +87,14 @@ def test_roll_without_dc_shows_total_and_records_history(
 ) -> None:
     monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 12)
     view = DiceRollerView()
-    view.panel._bonus_spin.setValue(4)
-    view.panel._penalty_spin.setValue(1)  # net modifier +3
+    view.panel._modifier_spin.setValue(3)
     view.panel._dc_check.setChecked(False)
 
     view.panel._finish_roll()
 
     cards = view._local_history.cards()
     assert len(cards) == 1
-    assert cards[0]._params == {"name": "", "bonus": 4, "penalty": 1}
+    assert cards[0]._params == {"name": "", "bonus": 3, "penalty": 0}
     text = view.panel._readout.text()
     assert "15" in text  # die 12 + net modifier 3
     assert "Success" not in text and "Failure" not in text  # no DC → no degree
@@ -106,8 +105,7 @@ def test_roll_with_dc_shows_degree_of_success(
 ) -> None:
     monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 20)
     view = DiceRollerView()
-    view.panel._bonus_spin.setValue(5)
-    view.panel._penalty_spin.setValue(0)
+    view.panel._modifier_spin.setValue(5)
     view.panel._dc_check.setChecked(True)
     view.panel._dc_spin.setValue(15)
 
@@ -130,8 +128,7 @@ def test_reroll_throws_the_last_roll_again_with_a_lucky_die(
     monkeypatch.setattr(dice_roller, "reroll_d20", lambda *a, **k: (14, False))
     view = DiceRollerView()
     panel = view.panel
-    panel._bonus_spin.setValue(5)
-    panel._penalty_spin.setValue(1)
+    panel._modifier_spin.setValue(4)
     panel._dc_check.setChecked(True)
     panel._dc_spin.setValue(15)
     panel._start_roll()
@@ -144,7 +141,7 @@ def test_reroll_throws_the_last_roll_again_with_a_lucky_die(
     panel._finish_roll()
 
     newest = view._local_history.cards()[0]._params
-    assert (newest["bonus"], newest["penalty"]) == (5, 1)  # the last roll's, not the inputs'
+    assert (newest["bonus"], newest["penalty"]) == (4, 0)  # the last roll's, not the inputs'
     text = panel._readout.text()
     assert "18" in text and "vs DC 15" in text  # die 14 + 4 against the old DC
     assert "reroll" in text.lower()
@@ -156,46 +153,44 @@ def test_a_roll_spends_the_bonus_and_penalty(
     """A circumstance modifier is for one check, not for every roll after it."""
     monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 12)
     view = DiceRollerView()
-    view.panel._bonus_spin.setValue(4)
-    view.panel._penalty_spin.setValue(1)
+    view.panel._modifier_spin.setValue(-3)
 
     view.panel._finish_roll()
 
-    # The roll itself still carried them …
-    assert view._local_history.cards()[0]._params["bonus"] == 4
-    # … and then they were gone.
-    assert view.panel._bonus_spin.value() == 0
-    assert view.panel._penalty_spin.value() == 0
+    # The roll itself still carried it …
+    assert view._local_history.cards()[0]._params["penalty"] == 3
+    # … and then it was gone.
+    assert view.panel._modifier_spin.value() == 0
 
 
 def test_an_abandoned_roll_keeps_its_bonus(qapp: QApplication) -> None:
     """Nobody answered, so the player will throw it again — as it was."""
     view = DiceRollerView()
-    view.panel._bonus_spin.setValue(3)
+    view.panel._modifier_spin.setValue(3)
     view.panel._rolling = True
 
     view.panel._abandon_roll("No answer")
 
-    assert view.panel._bonus_spin.value() == 3
+    assert view.panel._modifier_spin.value() == 3
 
 
 def test_a_set_bonus_or_penalty_is_highlighted(qapp: QApplication) -> None:
     view = DiceRollerView()
     panel = view.panel
-    assert panel._bonus_label.styleSheet() == ""
-    assert panel._penalty_spin.styleSheet() == ""
+    assert panel._modifier_label.styleSheet() == ""
+    assert panel._modifier_spin.styleSheet() == ""
 
-    panel._bonus_spin.setValue(2)
-    assert "bold" in panel._bonus_label.styleSheet()
-    assert "bold" in panel._bonus_spin.styleSheet()
-    assert panel._penalty_label.styleSheet() == ""
+    panel._modifier_spin.setValue(2)
+    assert "bold" in panel._modifier_label.styleSheet()
+    assert "bold" in panel._modifier_spin.styleSheet()
+    assert theme.color("tint.better") in panel._modifier_label.styleSheet()
 
-    panel._penalty_spin.setValue(1)
-    assert "bold" in panel._penalty_label.styleSheet()
+    panel._modifier_spin.setValue(-1)
+    assert theme.color("tint.worse") in panel._modifier_label.styleSheet()
 
-    panel._bonus_spin.setValue(0)
-    assert panel._bonus_label.styleSheet() == ""
-    assert panel._bonus_spin.styleSheet() == ""
+    panel._modifier_spin.setValue(0)
+    assert panel._modifier_label.styleSheet() == ""
+    assert panel._modifier_spin.styleSheet() == ""
 
 
 def test_a_named_quick_roll_lets_go_of_its_name_once_rolled(
@@ -214,7 +209,7 @@ def test_a_named_quick_roll_lets_go_of_its_name_once_rolled(
         "penalty": 0,
     }
     assert view.panel.current_spec() is None
-    assert view.panel._bonus_spin.value() == 0
+    assert view.panel._modifier_spin.value() == 0
 
 
 def test_saving_a_roll_adds_a_persisted_quick_roll(qapp: QApplication) -> None:
@@ -222,8 +217,9 @@ def test_saving_a_roll_adds_a_persisted_quick_roll(qapp: QApplication) -> None:
 
     view.panel._add_quick_roll({"bonus": 4, "penalty": 1})
 
+    # Saved by the net, the one number the Bonus/Penalty slider loads.
     assert view.panel._quick_flow.count() == 1
-    assert storage.load_settings()["quick_rolls"] == [{"bonus": 4, "penalty": 1}]
+    assert storage.load_settings()["quick_rolls"] == [{"bonus": 3, "penalty": 0}]
 
     # De-duplicated by name *and* numbers: the same roll twice is one chip, but the
     # same numbers under another name is a different roll and gets its own.
@@ -257,7 +253,7 @@ def test_a_quick_roll_leaves_the_dc_box_alone(qapp: QApplication) -> None:
 
     assert view.panel._dc_check.isChecked() is True
     assert view.panel._dc_spin.value() == 21
-    assert view.panel._bonus_spin.value() == 9
+    assert view.panel._modifier_spin.value() == 9
     assert view.panel.current_spec().label == "Athletics"
 
 
@@ -397,7 +393,7 @@ def test_a_history_cards_star_follows_the_strip(
 ) -> None:
     monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 9)
     view = DiceRollerView()
-    view.panel._bonus_spin.setValue(2)
+    view.panel._modifier_spin.setValue(2)
     view.panel._finish_roll()
     star = view._local_history.cards()[0].star
 
@@ -416,7 +412,7 @@ def test_a_full_strip_disables_an_unsaved_cards_star(
 ) -> None:
     monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 9)
     view = DiceRollerView()
-    view.panel._bonus_spin.setValue(20)  # not a roll any of the chips below match
+    view.panel._modifier_spin.setValue(20)  # not a roll any of the chips below match
     view.panel._finish_roll()
 
     for bonus in range(MAX_QUICK_ROLLS):
@@ -846,7 +842,7 @@ def test_the_roll_comes_from_the_server_not_the_panel(
     # Any local roll would use this; the server has its own rng.
     monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 1)
     view = DiceRollerView()
-    view.panel._bonus_spin.setValue(4)
+    view.panel._modifier_spin.setValue(4)
 
     view.panel._start_roll()
     qapp.processEvents()
@@ -867,7 +863,7 @@ def test_the_session_roll_is_graded_against_the_dc(
     view = DiceRollerView()
     view.panel._dc_check.setChecked(True)
     view.panel._dc_spin.setValue(10)
-    view.panel._bonus_spin.setValue(20)  # cannot fail
+    view.panel._modifier_spin.setValue(20)  # cannot fail
 
     view.panel._start_roll()
     qapp.processEvents()
@@ -906,7 +902,7 @@ def test_a_session_that_never_answers_releases_the_die(
 
     assert dice_roller.NO_ANSWER in view.panel._readout.text()
     assert view.panel._die_button.isEnabled()
-    assert view.panel._bonus_spin.isEnabled()
+    assert view.panel._modifier_spin.isEnabled()
 
 
 def test_a_roll_that_cannot_be_sent_says_so(

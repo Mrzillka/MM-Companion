@@ -42,7 +42,9 @@ from mm_companion.core.rules import (
     AreaAttempt,
     ImpressAttempt,
     RollSpec,
+    area_choices,
     area_key_index,
+    attack_choices,
     find_area_power,
     localize_spec,
     power_area_use,
@@ -52,7 +54,13 @@ from mm_companion.core.rules import (
 from mm_companion.core.session.protocol import sanitize_mod_payload
 from mm_companion.ui import theme
 from mm_companion.ui.action_grid import GridSection
-from mm_companion.ui.action_menu import combat_menu
+from mm_companion.ui.action_menu import (
+    NO_AREAS,
+    NO_ATTACKS,
+    SKIP_TARGET,
+    choose_from_menu,
+    combat_menu,
+)
 from mm_companion.ui.action_ui import sets_up_own_actions
 from mm_companion.ui.area import KIND_AREA_ATTACK, AreaDialog
 from mm_companion.ui.attack_targets import (
@@ -60,6 +68,7 @@ from mm_companion.ui.attack_targets import (
     AttackDeclaration,
     SceneTarget,
     aimed_spec,
+    session_targets,
 )
 from mm_companion.ui.impress import IMPRESS_ACTION, KIND_IMPRESS, ImpressDialog, new_action_id
 from mm_companion.ui.roller.view import DiceRollerView
@@ -116,6 +125,8 @@ class DiceSection(QGroupBox):
         # The Actions popup: what this sheet runs, from the ruleset's menu.
         self.view.panel.set_action_menu(self.action_menu)
         self.view.panel.actionRequested.connect(self.start_action)
+        # The attack picker's list: this character's attacks, read fresh each time.
+        self.view.panel.set_attack_choices(lambda: attack_choices(self._character, self._data))
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.view)
@@ -127,6 +138,11 @@ class DiceSection(QGroupBox):
         offered = dict(own)
         if self._data.impress.available:
             offered[KIND_IMPRESS] = None
+        offered[KIND_ATTACK] = None if self.view.panel.attack_choices() else NO_ATTACKS
+        if self._data.area.available:
+            offered[KIND_AREA_ATTACK] = (
+                None if area_choices(self._character, self._data) else NO_AREAS
+            )
         return combat_menu(self._data, offered, gm=False, fallback=[IMPRESS_ACTION])
 
     @property
@@ -282,7 +298,8 @@ class DiceSection(QGroupBox):
             self.view.add_local_request(spec)
 
     def start_action(self, kind: str) -> ImpressDialog | None:
-        """Run an action picked off the roller's Actions popup — so far, Impress.
+        """Run an action picked off the roller's Actions popup: Impress, an Attack, an
+        Area (see :meth:`start_attack` and :meth:`start_area_tile` for those two).
 
         At a table the dialog only *declares* the impression: it goes to the GM, who
         sets the modifiers and rolls (see :mod:`mm_companion.ui.impress_gm`). A player
@@ -295,6 +312,12 @@ class DiceSection(QGroupBox):
         **Not modal**, for the reason the area dialog is not: targets are dragged in off
         the Scene block on this very window.
         """
+        if kind == KIND_ATTACK:
+            self.start_attack()
+            return None
+        if kind == KIND_AREA_ATTACK:
+            self.start_area_tile()
+            return None
         if kind != KIND_IMPRESS:
             return None
         bridge = live_session()
@@ -319,6 +342,49 @@ class DiceSection(QGroupBox):
         self._impress_dialog = dialog
         dialog.show()
         return dialog
+
+    def start_attack(self) -> None:
+        """The Attack tile: pick an attack, then — at a table — optionally its target.
+
+        The target menu's first line is :data:`~mm_companion.ui.action_menu.SKIP_TARGET`.
+        A target rolls the attack *at* it, as a right-click on the attack line does
+        (:meth:`aim_attack`: declared to the GM, who judges the hit). Skipping, or
+        having no one to aim at, loads the attack onto the chip instead, and the DC box
+        stands for the Defense: set it and click the die. An attack rolled with neither
+        is written up with a warning (``dice_roller.NO_DC_WARNING``) — but it still rolls.
+        """
+        panel = self.view.panel
+        spec = panel.choose_attack()
+        if spec is None:
+            return
+        targets = session_targets(live_session())
+        if targets:
+            captions = [SKIP_TARGET] + [
+                f"{t.name} (minion)" if t.minion else t.name for t in targets
+            ]
+            index = choose_from_menu(self, captions, panel.menu_point())
+            if index is None:
+                return
+            if index > 0:
+                self.aim_attack((spec, targets[index - 1]))
+                return
+        panel.load_spec(spec)
+
+    def start_area_tile(self) -> AreaDialog | None:
+        """The Area tile: the area this sheet's cards offer — straight away when there
+        is one, off a menu when there are several — opened as the card's area line
+        would (:meth:`start_area`)."""
+        choices = area_choices(self._character, self._data)
+        if not choices:
+            return None
+        index = 0
+        if len(choices) > 1:
+            index = choose_from_menu(
+                self, [c.caption for c in choices], self.view.panel.menu_point()
+            )
+            if index is None:
+                return None
+        return self.start_area(choices[index].spec.trait_key)
 
     def _forget_impress(self, dialog: ImpressDialog) -> None:
         if self._impress_dialog is dialog:

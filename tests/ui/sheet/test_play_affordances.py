@@ -123,5 +123,5 @@ def test_the_request_row_lines_up_with_the_sliders_and_spin_boxes(qapp, data) ->
         return column, columns
 
     # The trait under the sliders, the difficulty and its button under the spin boxes.
-    assert cell(panel._request_combo) == cell(panel._bonus_slider)
-    assert cell(panel._request_part) == cell(panel._bonus_spin)
+    assert cell(panel._request_combo) == cell(panel._modifier_slider)
+    assert cell(panel._request_part) == cell(panel._modifier_spin)

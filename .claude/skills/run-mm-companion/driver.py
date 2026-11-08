@@ -810,6 +810,27 @@ def build(target: str):
         _pump(_app())
         _shoot(host, Path("_driver_shots") / f"{target}-window.png")
         win = panel.open_actions()
+    elif target == "roller-lane":
+        # The roller after phase 4: one Bonus/Penalty slider, an attack loaded off the
+        # Attack tile's picker, and a line on the action lane under the slider.
+        from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
+        from mm_companion.core.rules import attack_choices
+        from mm_companion.ui.main_window import MainWindow
+
+        win = MainWindow(locked=False)
+        damage = PowerEffectInstance("damage", rank=8)
+        damage.extras.append(ModifierSelection("ranged", config={"from": "close"}))
+        win._sheet.character.powers.append(Power(name="Blast", effects=[damage]))
+        panel = win._sheet.dice.panel
+        panel.load_spec(attack_choices(win._sheet.character, win._sheet.data)[0].spec)
+        panel._modifier_spin.setValue(-2)
+        panel.start_action_line(
+            "all_out_attack",
+            "All-Out Attack",
+            limit=lambda spec: (3, ""),
+            needs_attack=True,
+        )
+        win.resize(1400, 900)
     elif target in ("roll-demo", "roll-demo-table"):
         # Rolling straight off the sheet. "roll-demo" is the solo case: a power's
         # attack goes through the same path a card's 🎲 uses, against a typed-in
@@ -1793,6 +1814,7 @@ def main(argv: list[str] | None = None) -> int:
             "dice-demo",
             "actions-popup",
             "actions-popup-gm",
+            "roller-lane",
             "roll-demo",
             "roll-demo-table",
             "dice-bottom",

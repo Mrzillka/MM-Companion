@@ -35,6 +35,7 @@ from mm_companion.core.character import AppliedCondition, Character
 from mm_companion.core.components import MECH_RANDOM_ACTION
 from mm_companion.core.data_loader import Condition, GameData
 from mm_companion.core.rules import (
+    applied_condition_name,
     apply_condition,
     apply_damage_step,
     apply_recovery,
@@ -154,22 +155,16 @@ def matching_condition(
 
 
 def condition_display_name(applied: AppliedCondition, record: Condition | None) -> str:
-    """Fold the chosen parameter and stacking count into the shown name (§6):
-    ``Impaired`` + ``Attack`` → "Attack Impaired"; ``Hit`` ×3 → "Hit ×3".
+    """Fold the chosen parameter, stacking count and amount into the shown name (§6):
+    ``Impaired`` + ``Attack`` → "Attack Impaired"; ``Hit`` ×3 → "Hit ×3"; an All-Out
+    Attack at 3 → "All-Out Attack -3".
 
     Module-level because a condition reads the same wherever it is shown — this
-    block's chips and the GM window's player cards both name them through here.
+    block's chips and the GM window's player cards both name them through here. The
+    wording itself is :func:`~mm_companion.core.rules.applied_condition_name`'s, so the
+    dots' tooltips (built in ``core``) name a condition exactly as its chip does.
     """
-    name = record.name if record else applied.condition_id
-    if applied.parameter:
-        ptype = record.parameter.type if record and record.parameter else ""
-        if ptype in ("trait_select", "sense_select"):
-            name = f"{applied.parameter} {name}"
-        else:
-            name = f"{name} ({applied.parameter})"
-    if applied.count > 1:
-        name = f"{name} ×{applied.count}"
-    return name
+    return applied_condition_name(applied, record)
 
 
 def condition_tooltip(

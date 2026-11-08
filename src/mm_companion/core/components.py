@@ -68,6 +68,7 @@ MECH_DEBILITATE_TRAIT = "debilitate_trait"  # removes a trait, may cascade
 MECH_ATTACK_MOD = "attack_mod"  # attack checks by/against the character (Prone)
 MECH_RANDOM_ACTION = "random_action"  # the turn's action is rolled (roll layer)
 MECH_NARRATIVE = "narrative"  # no computed effect; a GM prompt/note
+MECH_AMOUNT_MOD = "amount_mod"  # moves amountMods traits by the applied amount
 MECHANISMS = (
     MECH_ACTION_LIMIT,
     MECH_CHECK_PENALTY,
@@ -81,7 +82,15 @@ MECHANISMS = (
     MECH_ATTACK_MOD,
     MECH_RANDOM_ACTION,
     MECH_NARRATIVE,
+    MECH_AMOUNT_MOD,
 )
+
+# Condition tones — what a condition does to its bearer on balance, which is the colour
+# its chip is drawn in. A record that names none is a hindrance, so every condition
+# written before tones existed keeps its look.
+TONE_BENEFIT = "benefit"
+TONE_HINDRANCE = "hindrance"
+TONES = (TONE_BENEFIT, TONE_HINDRANCE)
 
 
 @dataclass(frozen=True)

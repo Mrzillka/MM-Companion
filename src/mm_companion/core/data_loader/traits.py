@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ..components import TONE_HINDRANCE
+
 # ===========================================================================
 # Records — the typed dataclasses each data file parses into. Grouped below by
 # the content they model; the parsing functions that build them follow further
@@ -321,6 +323,21 @@ class RecoveryCheck:
 
 
 @dataclass(frozen=True)
+class AmountMod:
+    """One trait a condition moves by its applied *amount* (All-Out Attack's −X Defense).
+
+    ``trait`` is a trait key — a resistance's (``DEF``) or a roll's
+    (``system.trait_keys.attack_check`` for attack checks); ``sign`` is ``+1`` or ``−1``,
+    multiplied by the applied instance's amount. ``parameter``, when set, limits the mod to
+    an instance applied with that parameter (Aided's "Attack" or "Defense").
+    """
+
+    trait: str
+    sign: int = 1
+    parameter: str = ""
+
+
+@dataclass(frozen=True)
 class RandomActionRow:
     """One row of a ``random_action`` table (Confused). Loaded now, roll layer later."""
 
@@ -373,6 +390,17 @@ class Condition:
     #: Disabled is a check penalty severe enough to count, Debilitated a real trait
     #: removal, so the data says so outright.
     trait_lost: bool = False
+    #: What the condition does to its bearer on balance — ``"benefit"`` or
+    #: ``"hindrance"`` (:data:`~mm_companion.core.components.TONES`) — and so the colour
+    #: its chip is drawn in. Hindrance unless the record says otherwise.
+    tone: str = TONE_HINDRANCE
+    #: The traits an applied instance moves by its ``amount`` (the maneuvers' ±X).
+    amount_mods: tuple[AmountMod, ...] = ()
+    #: The amount an instance gets when applied without one (Defending's +2).
+    default_amount: int | None = None
+    #: Always applied as temporary — gone at the start of the bearer's next turn — from
+    #: wherever it is applied, the "+" menu included.
+    temporary: bool = False
 
 
 @dataclass(frozen=True)

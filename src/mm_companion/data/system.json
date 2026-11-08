@@ -41,7 +41,8 @@
       "dodge": "DODGE",
       "toughness": "TOUGHNESS",
       "fortitude": "FORTITUDE",
-      "will": "WILL"
+      "will": "WILL",
+      "attack_check": "attack_check"
     },
     "paired_caps": [
       {

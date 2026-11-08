@@ -4,7 +4,7 @@ typed records.
 
 from __future__ import annotations
 
-from ..components import APPLY_BONUS, Integration, TraitBoost
+from ..components import APPLY_BONUS, TONE_HINDRANCE, Integration, TraitBoost
 from .game_data import (
     ActionModifier,
     AreaCover,
@@ -42,6 +42,7 @@ from .system_records import (
 from .traits import (
     Ability,
     Advantage,
+    AmountMod,
     AttackMods,
     Characteristic,
     Condition,
@@ -306,6 +307,24 @@ def _parse_recovery_check(raw: dict | None) -> RecoveryCheck | None:
     )
 
 
+def _parse_amount_mods(raw) -> tuple[AmountMod, ...]:
+    """A condition's ``amountMods``: ``{trait, sign, parameter?}`` entries, sign ±1."""
+
+    mods = []
+    for entry in raw or ():
+        if not isinstance(entry, dict) or not entry.get("trait"):
+            continue
+        sign = -1 if int(entry.get("sign", 1) or 1) < 0 else 1
+        mods.append(
+            AmountMod(
+                trait=str(entry["trait"]),
+                sign=sign,
+                parameter=str(entry.get("parameter", "") or ""),
+            )
+        )
+    return tuple(mods)
+
+
 def _parse_condition(c: dict) -> Condition:
     return Condition(
         name=c["name"],
@@ -334,6 +353,10 @@ def _parse_condition(c: dict) -> Condition:
             for r in c.get("randomTable", ())
         ),
         trait_lost=bool(c.get("traitLost", False)),
+        tone=str(c.get("tone") or TONE_HINDRANCE),
+        amount_mods=_parse_amount_mods(c.get("amountMods")),
+        default_amount=(int(c["defaultAmount"]) if c.get("defaultAmount") is not None else None),
+        temporary=bool(c.get("temporary", False)),
     )
 
 

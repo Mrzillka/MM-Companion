@@ -11,7 +11,7 @@ every session.**
 | # | Phase | Status |
 |---|---|---|
 | 0 | Plan and skill | done (2026-11-08) |
-| 1 | Temporary conditions in `core` (amount, temporary, tone, stat mods) | not started |
+| 1 | Temporary conditions in `core` (amount, temporary, tone, stat mods) | done (2026-11-08) |
 | 2 | Sheet indicators: dots, tinted chips, "Clear temporary" | not started |
 | 3 | Reusable grid popup, action icons, the **Actions** button | not started |
 | 4 | Roller rework: one two-way slider, the action lane, the attack picker | not started |
@@ -215,8 +215,11 @@ widget, log failures.
     generically. **Reuse, don't fork.**
 - **`conditions.json` gains the temporary conditions:** `all_out_attack`,
   `defensive_attack`, `defending`, `recovering`, `aided`, `blocking` (stacking, for the
-  −2 per extra block), `trick_advantage` (Trick's +5 against the trickster). Each one
-  has:
+  −2 per extra block), `trick_advantage` (Trick's +5 against the trickster). As built,
+  `aided` takes a parameter (`Attack` / `Defense`, which scopes its `amountMods`), and
+  `aided` and `trick_advantage` are **not** temporary (they last to the end of a turn;
+  see §5). A record-level `temporary: true` makes the others temporary from anywhere,
+  the "+" menu included. Each one has:
   - `tone`: `"benefit"` or `"hindrance"` (the chip colour). The default for every
     existing record is hindrance, so nothing old changes colour;
   - `amountMods`: a list of `{trait: "DEF" | "attack_check" | …, sign: +1 | −1}`,
@@ -249,8 +252,17 @@ widget, log failures.
     instance (provenance members go too) and returns what went, for undo and the note.
   - Fold the DEF mods into the **displayed** Defense and Defense Class (the same
     display-only overlay as `condition_defense_mods`). Fold the `attack_check` mods into
-    the attack modifier `power_rolls` builds, as `condition_attack_mods` already does
-    for Prone. The build math stays condition-free.
+    the attack modifier `power_rolls` builds. The build math stays condition-free.
+  - **As built (phase 1):** `amount_contributions` is the one walk the others share;
+    `condition_amount_mods`, `condition_attack_check_mod` (what `rolls.py` adds to an
+    attack check, flagged by `EffectRollNumbers.attack_check`, Linked included),
+    `temporary_marks` → `TemporaryMark(tone, delta, sources)` with `MARK_BETTER` /
+    `MARK_WORSE`, `clear_temporary`, `has_temporary`, `applied_condition_name` (the shown
+    name, moved into `core`; the UI's `condition_display_name` delegates), and
+    `derived.defense_class_in_play` (the pin's Defense Class; `defense_class` stays the
+    build's). The attack-check key is data: `system.json` `trait_keys.attack_check`.
+    Note `condition_attack_mods` (Prone's ±5) was **never** wired into `power_rolls`,
+    contrary to what this plan first said, and still isn't (out of scope).
 - **`core/rules/maneuvers.py`** (new):
   - `maneuver_limits(action, spec, character, data) -> int`: `X_max` per §2, reading
     the attack bonus off the spec, the effect rank off its follow-up's ladder/DC, and
@@ -356,17 +368,22 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
 `feature/combat-maneuvers`**. Never merge into `develop`: the user says when it's done.
 
 ### Phase 1 — Temporary conditions in `core`
-- [ ] `AppliedCondition.amount` / `.temporary`; (de)serialization; old saves load.
-- [ ] `apply_condition(amount=, temporary=)`; re-applying replaces the amount; the
+- [x] `AppliedCondition.amount` / `.temporary`; (de)serialization; old saves load.
+- [x] `apply_condition(amount=, temporary=)`; re-applying replaces the amount; the
       display name includes the amount.
-- [ ] `conditions.json`: `tone`, `amountMods`, `defaultAmount`; the seven new records;
+- [x] `conditions.json`: `tone`, `amountMods`, `defaultAmount`; the seven new records;
       a `maneuver` condition group. Loader + `Condition` dataclass fields.
-- [ ] `condition_amount_mods`, `temporary_marks`, `clear_temporary`.
-- [ ] Fold DEF into the displayed Defense / Defense Class, and the attack-check mods
+- [x] `condition_amount_mods`, `temporary_marks`, `clear_temporary`.
+- [x] Fold DEF into the displayed Defense / Defense Class, and the attack-check mods
       into `power_rolls`.
-- [ ] Undo/redo works for the new fields (`docs/notes/undo-and-redo.md`).
-- [ ] Do the player→GM sheet sync and the save files carry the new keys? Note it here
-      (decides the bump).
+- [x] Undo/redo works for the new fields (`docs/notes/undo-and-redo.md`).
+- [x] Do the player→GM sheet sync and the save files carry the new keys? **Saves and
+      the player's snapshot: yes** (both are the whole `to_dict`; `sanitize_snapshot`
+      only drops `image_path`). **The Scene: no** — `_sanitize_scene_conditions`
+      whitelists `id`/`parameter`/`count`. **GM → player: no** — `ApplyCondition` has
+      no `amount`/`temporary`, and there is no "clear temporary" command. Phase 2's
+      "Clear temporary" on the GM's and Scene cards needs both, so the **bump (v19 →
+      v20) probably lands in phase 2**, not 5.
 
 ### Phase 2 — Sheet indicators
 - [ ] `StatMark` dot widget, tokens for its size.
@@ -462,6 +479,17 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
 
 ## 5. Open points (resolve with the user when reached; record the answer in §1)
 
+- **Effects that last to the *end* of a turn** (Aided: the ally's next turn; Feint's
+  Vulnerable and Trick Advantage: the actor's next turn). "Clear temporary" is a
+  start-of-turn clear, so these can't simply be `temporary`. Phase 1 leaves Aided and
+  Trick Advantage lasting (removed by hand). Decide in phase 8: a second flag
+  (`untilEndOfTurn`), clearing them by hand, or accepting the early clear.
+- **The GM's hit judging ignores conditions.** `ui/attack_gm.py` and `ui/area.py` judge
+  against `defense_class` (the build's number), so neither Vulnerable nor All-Out's −X
+  moves the DC an aimed attack must beat. `defense_class_in_play` exists now; switching
+  the judges to it belongs in phase 5 (it also starts honouring Vulnerable, a visible
+  change).
+
 - Several maneuver lines at once grow the lane by a line each. Accepted unless the user
   objects on seeing it.
 - Should Accurate/Power's "until start of next turn" ever matter (a second attack in
@@ -474,6 +502,28 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
 
 Newest first. Each entry: date, phase, what was done, what's next, gotchas, and the
 commit hash.
+
+- **2026-11-08 — Phase 1 (done).** `AppliedCondition.amount`/`.temporary` (omitted at
+  defaults); `apply_condition(amount=, temporary=)` with the record's `defaultAmount`
+  and `temporary` flag; re-apply replaces the amount; lasting beats temporary. Loader:
+  `AmountMod`, `Condition.tone`/`amount_mods`/`default_amount`/`temporary`,
+  `TraitKeys.attack_check`, `MECH_AMOUNT_MOD`, `TONE_*` in `components.py`. Data: the
+  seven records in a new `maneuver` group ("Maneuvers & Actions"), plus `_meta`
+  `toneNote`/`amountNote`/`temporaryNote` and the `amount_mod` mechanism. Rules: see
+  §3.2 "As built". DEF folds into the Defense row (after halve/zero) and the Defense
+  Class pin; the attack-check mod folds into `power_rolls` (incl. the Linked check, with
+  a "Conditions: …" hint). Tests: `tests/core/test_temporary_conditions.py` (23).
+  **Gotchas:** (1) the plan's claim that `condition_attack_mods` reaches `power_rolls`
+  was wrong — nothing reads it; (2) the GM's hit judging uses the condition-free
+  `defense_class` (§5); (3) on this machine a Python script that edits files must open
+  them with `newline=""`, or it writes CRLF into LF files, and heredocs containing
+  backticks break the Bash tool — write the script to the scratchpad and run it.
+  **Phase 2 needs to know:** the Resistances table tints any active condition overlay
+  as a penalty, so Defending's +2 currently shows in the *worse* tint until phase 2
+  tints by `tone`/sign; the "+" menu applies an All-Out Attack with no amount (no
+  `defaultAmount`), which moves nothing — phase 2 should ask for the amount, or the
+  record gets a default. Wire findings in the phase 1 checklist (bump likely in phase
+  2). Next: phase 2. Commit: (see below).
 
 - **2026-11-08 — Phase 0.** Rules checked against the book (p200–205). The user's
   answers recorded in §1. The plan and the `/combat-maneuvers` skill written. Branch

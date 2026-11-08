@@ -103,3 +103,30 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   the GM's **End turn**, which rolls every `end_of_turn` check on the creature (see [the
   actions notes](actions.md#end-of-turn)). Who applies the
   result is whoever owns the creature — see [the session notes](session.md).
+- **Some conditions have an amount, and some are temporary** (combat maneuvers). An
+  `AppliedCondition` may carry `amount` (All-Out Attack −3) and `temporary` (it lasts
+  until the start of the bearer's next turn); both stay out of a save at their defaults,
+  so older saves load unchanged, and undo carries them because a step is a whole
+  `to_dict`. What an amount *does* is the record's: `amountMods` lists `{trait, sign,
+  parameter?}` — a resistance key such as `DEF`, or `system.trait_keys.attack_check` for
+  attack checks — and `defaultAmount` sizes an instance applied without one (Defending's
+  +2). `tone` (`benefit` / `hindrance`, default hindrance, so nothing old changes colour)
+  is the chip's colour and the sign the shown name carries; `temporary: true` makes a
+  record temporary from wherever it is applied, and `apply_condition(temporary=True)`
+  makes any condition so (a feint's Vulnerable). Re-applying replaces the amount rather
+  than stacking, and an instance stays temporary only if both old and new are — a lasting
+  Vulnerable is not shortened by a temporary one. The shown name ("All-Out Attack -3",
+  "Aided (Attack) +5") is `core.rules.applied_condition_name`, which the UI's
+  `condition_display_name` delegates to, so a dot's tooltip names a condition exactly as
+  its chip does. Three readers fold the amounts in, all display-only: the Defense row's
+  `resistance_condition_effect` (a `delta` after the halve/zero `op`, so Vulnerable +
+  Defending on 8 is 6), `defense_class_in_play` (the Defense Class pin; `defense_class`
+  stays the build's number), and the attack check `power_rolls` builds
+  (`condition_attack_check_mod`, flagged by `EffectRollNumbers.attack_check`, so a
+  Perception-range effect with no attack check is untouched, and a Linked group's one
+  check takes it once). `temporary_marks` says per trait key whether the temporary ones
+  leave it better or worse (an override such as halving is always worse; a net zero is
+  not marked), and `clear_temporary` removes every temporary instance, umbrella members
+  included, returning what went. The seven records live in the `maneuver` group, so the
+  "+" menu offers them. Aided and Trick Advantage are *not* temporary: they last to the
+  end of a turn, which a start-of-turn clear would cut short.

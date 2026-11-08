@@ -33,6 +33,7 @@ from ..data_loader import Effect, GameData, ResistanceOutcome
 from ..powers import Power, PowerEffectInstance
 from .area import area_dodge_bonus
 from .conditions import (
+    condition_attack_check_mod,
     condition_check_penalty,
     condition_scope_penalty,
     resistance_condition_effect,
@@ -1176,9 +1177,14 @@ def _effect_roll_parts(
         dc = numbers.check_dc
         against = _check_against(check_row.value)
         hint = "" if dc is not None else f"The target's {against} goes in the DC box."
+        actor = numbers.check_actor
+        if numbers.attack_check:
+            shift, because = _attack_condition(char, game_data)
+            actor += shift
+            hint = " ".join(part for part in (hint, because) if part)
         check = RollSpec(
-            label=named(_check_label(check_row.value, numbers.check_actor, effect, game_data)),
-            modifier=numbers.check_actor,
+            label=named(_check_label(check_row.value, actor, effect, game_data)),
+            modifier=actor,
             dc=dc,
             kind=KIND_POWER_CHECK,
             hint=hint,
@@ -1232,24 +1238,44 @@ def _counted_use(
     return part
 
 
-def _linked_check(power: Power, attack, parts: list[_EffectRolls], prefixes: list[str]) -> RollSpec:
+def _attack_condition(char: Character | None, game_data: GameData) -> tuple[int, str]:
+    """What the wielder's conditions add to an attack check, and the hint saying so."""
+
+    if char is None:
+        return 0, ""
+    shift, because = condition_attack_check_mod(char, game_data)
+    return shift, (f"Conditions: {because}." if shift else "")
+
+
+def _linked_check(
+    power: Power,
+    attack,
+    parts: list[_EffectRolls],
+    prefixes: list[str],
+    char: Character | None,
+    game_data: GameData,
+) -> RollSpec:
     """The one attack check a Linked group rolls, provoking every member's save."""
 
     members = [parts[i] for i in attack.indices]
     provoked = [fu for part in members if part.check is not None for fu in part.check.follow_ups()]
     names = " + ".join(prefixes[i] for i in attack.indices if prefixes[i])
-    label = f"Attack {attack.bonus:+d} vs. {attack.against}"
+    shift, because = _attack_condition(char, game_data)
+    bonus = attack.bonus + shift
+    label = f"Attack {bonus:+d} vs. {attack.against}"
     differ = len(set(attack.bonuses)) > 1
     hint = f"The target's {attack.against} goes in the DC box. One roll lands every linked effect."
     if differ:
         hint += " The effects' bonuses differ; this rolls the ruleset's pick of them."
+    if because:
+        hint += f" {because}"
     costs = tuple(
         dict.fromkeys(c for part in members if part.check is not None for c in part.check.costs)
     )
     spends = tuple(i for part in members if part.check is not None for i in part.check.spends)
     return RollSpec(
         label=f"{names}: {label}" if names else label,
-        modifier=attack.bonus,
+        modifier=bonus,
         kind=KIND_POWER_CHECK,
         hint=hint,
         follow_up=provoked[0] if provoked else None,
@@ -1306,7 +1332,7 @@ def power_rolls(power: Power, char: Character | None, game_data: GameData) -> li
             if part.check is not None:
                 specs.append(part.check)
         elif index == attack.indices[0]:
-            specs.append(_linked_check(power, attack, parts, prefixes))
+            specs.append(_linked_check(power, attack, parts, prefixes, char, game_data))
         specs.extend(part.after)
     return specs
 

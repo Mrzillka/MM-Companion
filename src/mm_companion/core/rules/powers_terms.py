@@ -1305,6 +1305,10 @@ class EffectRollNumbers:
     #: "Effect vs. DC 10". ``None`` for an attack (the target's Defense) or an opposed
     #: check, whose number the roller's DC box supplies.
     check_dc: int | None = None
+    #: Whether the check row rolls the wielder's *attack* ("Attack vs. …") rather than
+    #: the effect's rank or a typed number — the one a maneuver's attack-check mod
+    #: (Defensive Attack's −X) reaches.
+    attack_check: bool = False
 
 
 #: An explicit DC written into a check phrase — ``"Effect vs. DC 10"``.
@@ -1418,6 +1422,7 @@ def _roll_numbers(
         dc=dc,
         drops_check=impact.drops_check,
         check_dc=check_dc,
+        attack_check=not literal and phrase.startswith("Attack"),
     )
 
 

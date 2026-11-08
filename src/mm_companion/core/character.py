@@ -106,12 +106,19 @@ class AppliedCondition:
     (trait/sense/descriptor/controller) folded into the display name (§6); ``count``
     is the stacking-instance count (1 for the non-stacking majority, >1 only for
     Hit, §5); ``provenance`` is ``None`` for a directly applied condition.
+
+    ``amount`` is the size of a condition applied with one (All-Out Attack −3: the
+    record's ``amountMods`` say what it moves); ``temporary`` marks an instance that
+    lasts until the start of its bearer's next turn and goes with "Clear temporary".
+    Both are omitted from a save at their defaults, so older saves load unchanged.
     """
 
     condition_id: str
     parameter: str | None = None
     count: int = 1
     provenance: str | None = None
+    amount: int | None = None
+    temporary: bool = False
 
     def to_dict(self) -> dict:
         """Serialize, omitting defaulted fields to keep saves compact."""
@@ -123,15 +130,22 @@ class AppliedCondition:
             data["count"] = self.count
         if self.provenance is not None:
             data["provenance"] = self.provenance
+        if self.amount is not None:
+            data["amount"] = self.amount
+        if self.temporary:
+            data["temporary"] = True
         return data
 
     @classmethod
     def from_dict(cls, raw: dict) -> AppliedCondition:
+        amount = raw.get("amount")
         return cls(
             condition_id=raw["id"],
             parameter=raw.get("parameter"),
             count=int(raw.get("count", 1)),
             provenance=raw.get("provenance"),
+            amount=int(amount) if amount is not None else None,
+            temporary=bool(raw.get("temporary", False)),
         )
 
 

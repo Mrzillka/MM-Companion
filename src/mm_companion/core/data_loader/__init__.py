@@ -148,6 +148,7 @@ from .system_records import (
 from .traits import (
     Ability,
     Advantage,
+    AmountMod,
     AttackMods,
     Characteristic,
     Condition,
@@ -171,6 +172,7 @@ __all__ = [
     "Ability",
     "ActionModifier",
     "Advantage",
+    "AmountMod",
     "AllocationOption",
     "AreaCover",
     "AreaEvasion",

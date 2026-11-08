@@ -14,7 +14,12 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from ..character import AppliedCondition, Character
-from ..components import MECH_CHECK_PENALTY, MECH_DEBILITATE_TRAIT, MECH_MOVEMENT_MOD
+from ..components import (
+    MECH_CHECK_PENALTY,
+    MECH_DEBILITATE_TRAIT,
+    MECH_MOVEMENT_MOD,
+    TONE_BENEFIT,
+)
 from ..data_loader import Condition, GameData, RandomActionRow
 from ..dice import roll_d20
 from ..registry import Registry
@@ -106,12 +111,17 @@ def _add_or_stack(
     condition: Condition,
     parameter: str | None,
     provenance: str | None,
+    amount: int | None = None,
+    temporary: bool = False,
 ) -> None:
     """Add one flattened condition, or bump its ``count`` if it stacks (§5).
 
     Supersession runs first so a bundled part (a Stunned inside Incapacitated) still
     replaces what it should. A non-stacking condition already present with the same
-    id + parameter is left untouched (idempotent).
+    id + parameter is otherwise left alone (idempotent), except that a new *amount*
+    replaces its old one — one All-Out Attack a turn, at the size last chosen — and it
+    stays temporary only if both the old instance and the new one are: a lasting
+    Vulnerable is not shortened by a feint's.
     """
 
     _remove_superseded(character, catalog, condition, parameter)
@@ -119,9 +129,19 @@ def _add_or_stack(
         if applied.condition_id == condition.id and applied.parameter == parameter:
             if condition.stacking:
                 applied.count += 1
+            if amount is not None:
+                applied.amount = amount
+            applied.temporary = applied.temporary and temporary
             return
     character.conditions.append(
-        AppliedCondition(condition.id, parameter=parameter, count=1, provenance=provenance)
+        AppliedCondition(
+            condition.id,
+            parameter=parameter,
+            count=1,
+            provenance=provenance,
+            amount=amount,
+            temporary=temporary,
+        )
     )
 
 
@@ -132,6 +152,8 @@ def apply_condition(
     *,
     parameter: str | None = None,
     provenance: str | None = None,
+    amount: int | None = None,
+    temporary: bool = False,
 ) -> None:
     """Apply a condition to a character, expanding bundles and cascades (§3, §7).
 
@@ -139,21 +161,31 @@ def apply_condition(
     this condition's id), applying supersession across the flattened set. If the
     condition ``debilitates`` a chosen trait, its cascade conditions (Strength →
     Incapacitated) are applied as further members. Unknown ids are ignored.
+
+    *amount* sizes a condition whose record moves traits by one (``amountMods``); left
+    out, it is the record's ``defaultAmount`` (Defending's +2). *temporary* marks the
+    instance — and everything it bundles — as lasting until the start of the bearer's
+    next turn; a record flagged ``temporary`` is always applied so.
     """
 
     catalog = game_data.condition_catalog()
     condition = catalog.get(condition_id)
     if condition is None:
         return
-    _add_or_stack(character, catalog, condition, parameter, provenance)
+    temporary = temporary or condition.temporary
+    if amount is None:
+        amount = condition.default_amount
+    _add_or_stack(character, catalog, condition, parameter, provenance, amount, temporary)
     member_provenance = provenance or condition_id
     for member_id in expand_includes(condition, catalog):
         member = catalog.get(member_id)
         if member is not None:
-            _add_or_stack(character, catalog, member, None, member_provenance)
+            _add_or_stack(character, catalog, member, None, member_provenance, temporary=temporary)
     if condition.debilitates is not None and parameter is not None:
         for cascade_id in condition.debilitates.cascade.get(parameter, ()):
-            apply_condition(character, cascade_id, game_data, provenance=condition_id)
+            apply_condition(
+                character, cascade_id, game_data, provenance=condition_id, temporary=temporary
+            )
 
 
 def remove_condition(character: Character, applied: AppliedCondition) -> None:
@@ -170,6 +202,215 @@ def remove_condition(character: Character, applied: AppliedCondition) -> None:
             if other.provenance == applied.condition_id:
                 drop.add(id(other))
     character.conditions[:] = [c for c in character.conditions if id(c) not in drop]
+
+
+def clear_temporary(character: Character) -> list[AppliedCondition]:
+    """Remove every temporary condition, as the start of the bearer's turn does.
+
+    A temporary umbrella takes its members with it, as removing it by hand would.
+    Returns what went, in the order it was held, so a caller can note it.
+    """
+
+    gone = {id(c) for c in character.conditions if c.temporary}
+    umbrellas = {
+        c.condition_id for c in character.conditions if c.temporary and c.provenance is None
+    }
+    for applied in character.conditions:
+        if applied.provenance in umbrellas:
+            gone.add(id(applied))
+    removed = [c for c in character.conditions if id(c) in gone]
+    if removed:
+        character.conditions[:] = [c for c in character.conditions if id(c) not in gone]
+    return removed
+
+
+def has_temporary(character: Character) -> bool:
+    """Whether anything on *character* goes with "Clear temporary"."""
+
+    return any(c.temporary for c in character.conditions)
+
+
+def applied_amount(applied: AppliedCondition, condition: Condition | None) -> int:
+    """The amount *applied* moves its traits by: its own, else the record's default."""
+
+    if applied.amount is not None:
+        return applied.amount
+    if condition is not None and condition.default_amount is not None:
+        return condition.default_amount
+    return 0
+
+
+def signed_amount(applied: AppliedCondition, condition: Condition | None) -> int:
+    """The amount as its bearer feels it: ``+X`` for a benefit, ``−X`` for a hindrance.
+
+    What the shown name carries — "All-Out Attack −3", "Defending +2".
+    """
+
+    amount = applied_amount(applied, condition)
+    return amount if condition is not None and condition.tone == TONE_BENEFIT else -amount
+
+
+def applied_condition_name(applied: AppliedCondition, condition: Condition | None) -> str:
+    """The shown name of one applied condition (§6), wherever it is shown.
+
+    The chosen parameter is folded in (``Impaired`` + ``Attack`` → "Attack Impaired";
+    a free-text one in brackets), then a stacking count ("Hit ×3"), then an amount
+    ("All-Out Attack −3", signed by the record's tone). Only a condition that has an
+    amount says one: a plain Prone is never "Prone +0".
+    """
+
+    name = condition.name if condition else applied.condition_id
+    if applied.parameter:
+        ptype = _param_type(condition)
+        if ptype in ("trait_select", "sense_select"):
+            name = f"{applied.parameter} {name}"
+        else:
+            name = f"{name} ({applied.parameter})"
+    if applied.count > 1:
+        name = f"{name} ×{applied.count}"
+    has_amount = applied.amount is not None or (
+        condition is not None and condition.default_amount is not None
+    )
+    signed = signed_amount(applied, condition) if has_amount else 0
+    if signed:
+        name = f"{name} {signed:+d}"
+    return name
+
+
+@dataclass(frozen=True)
+class AmountContribution:
+    """What one applied condition's amount does to one trait key."""
+
+    trait: str
+    delta: int
+    applied: AppliedCondition
+    condition: Condition
+
+
+def amount_contributions(
+    character: Character, game_data: GameData, *, temporary_only: bool = False
+) -> list[AmountContribution]:
+    """Every ``amountMods`` entry in force, one per applied condition and trait.
+
+    An entry scoped to a parameter (Aided's "Attack") counts only for an instance
+    applied with that parameter. Zero contributions are left out.
+    """
+
+    catalog = game_data.condition_catalog()
+    found: list[AmountContribution] = []
+    for applied in character.conditions:
+        if temporary_only and not applied.temporary:
+            continue
+        cond = catalog.get(applied.condition_id)
+        if cond is None or not cond.amount_mods:
+            continue
+        amount = applied_amount(applied, cond)
+        for mod in cond.amount_mods:
+            if mod.parameter and applied.parameter != mod.parameter:
+                continue
+            delta = mod.sign * amount
+            if delta:
+                found.append(AmountContribution(mod.trait, delta, applied, cond))
+    return found
+
+
+def condition_amount_mods(character: Character, game_data: GameData) -> dict[str, int]:
+    """The summed ``amountMods`` per trait key — DEF −3 from an All-Out Attack −3.
+
+    Trait keys are a resistance's (``DEF``) or ``system.trait_keys.attack_check`` for
+    attack checks. A key the conditions net to zero is left out.
+    """
+
+    totals: dict[str, int] = {}
+    for part in amount_contributions(character, game_data):
+        totals[part.trait] = totals.get(part.trait, 0) + part.delta
+    return {key: value for key, value in totals.items() if value}
+
+
+def condition_attack_check_mod(character: Character, game_data: GameData) -> tuple[int, str]:
+    """What the conditions add to every attack check, and the tooltip line saying so.
+
+    Only the ``amountMods`` naming ``system.trait_keys.attack_check`` (Defensive
+    Attack's −X): the build's attack bonus stays condition-free, and this is folded
+    into the roll :func:`~.rolls.power_rolls` builds.
+    """
+
+    key = game_data.system.trait_keys.attack_check
+    parts = [p for p in amount_contributions(character, game_data) if p.trait == key]
+    total = sum(p.delta for p in parts)
+    text = "; ".join(f"{p.delta:+d} {p.condition.name}" for p in parts)
+    return total, text
+
+
+#: The two ways a temporary condition can leave a stat — what a stat's dot is drawn as
+#: (the theme's ``tint.better`` / ``tint.worse``).
+MARK_BETTER = "better"
+MARK_WORSE = "worse"
+
+
+@dataclass(frozen=True)
+class TemporaryMark:
+    """How the temporary conditions leave one stat: better or worse, and why.
+
+    ``delta`` is their net flat change (0 when only an override such as a feint's
+    Vulnerable halving moves it); ``sources`` are the shown names of the conditions
+    behind it, for the dot's tooltip.
+    """
+
+    tone: str
+    delta: int = 0
+    sources: tuple[str, ...] = ()
+
+    @property
+    def tooltip(self) -> str:
+        return "Until the start of your next turn: " + ", ".join(self.sources)
+
+
+def temporary_marks(character: Character, game_data: GameData) -> dict[str, TemporaryMark]:
+    """Per trait key, what the *temporary* conditions do to it — what the dots read.
+
+    A stat is marked when the temporary conditions' ``amountMods`` net a change on it
+    (better above zero, worse below), or when a temporary one halves or zeroes it
+    (Defense/Dodge: always worse). A stat they net to no change is not marked.
+    """
+
+    catalog = game_data.condition_catalog()
+    trait_keys = game_data.system.trait_keys
+    deltas: dict[str, int] = {}
+    sources: dict[str, list[str]] = {}
+    overridden: set[str] = set()
+
+    def note(key: str, applied: AppliedCondition, cond: Condition | None) -> None:
+        name = applied_condition_name(applied, cond)
+        names = sources.setdefault(key, [])
+        if name not in names:
+            names.append(name)
+
+    for part in amount_contributions(character, game_data, temporary_only=True):
+        deltas[part.trait] = deltas.get(part.trait, 0) + part.delta
+        note(part.trait, part.applied, part.condition)
+    for applied in character.conditions:
+        if not applied.temporary:
+            continue
+        cond = catalog.get(applied.condition_id)
+        if cond is None or cond.defense_mod is None:
+            continue
+        for stat, key in (("defense", trait_keys.defense), ("dodge", trait_keys.dodge)):
+            if getattr(cond.defense_mod, stat):
+                overridden.add(key)
+                note(key, applied, cond)
+
+    marks: dict[str, TemporaryMark] = {}
+    for key, names in sources.items():
+        delta = deltas.get(key, 0)
+        if key in overridden or delta < 0:
+            tone = MARK_WORSE
+        elif delta > 0:
+            tone = MARK_BETTER
+        else:
+            continue
+        marks[key] = TemporaryMark(tone=tone, delta=delta, sources=tuple(names))
+    return marks
 
 
 def hit_stack_penalty(character: Character, game_data: GameData) -> int:
@@ -487,7 +728,9 @@ def resistance_condition_effect(
 
     Toughness carries the Hit stacking penalty (a ``delta`` on Damage-resistance checks);
     the active defenses Dodge and Defense carry Vulnerable/Defenseless halving/zeroing (an
-    ``op``). Other resistances get an inert effect.
+    ``op``). Any resistance a condition's ``amountMods`` name (All-Out Attack's Defense)
+    carries that as a further ``delta``, after the ``op``. Other resistances get an inert
+    effect.
     """
 
     catalog = game_data.condition_catalog()
@@ -521,6 +764,13 @@ def resistance_condition_effect(
                 ):
                     ids.add(cond.id)
                     parts.append(f"{cond.name} {chosen}s {res_key.title()}")
+
+    for part in amount_contributions(character, game_data):
+        if part.trait != res_key:
+            continue
+        delta += part.delta
+        ids.add(part.condition.id)
+        parts.append(f"{part.delta:+d} {part.condition.name}")
 
     return ConditionEffect(
         delta=delta,

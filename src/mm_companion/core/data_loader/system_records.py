@@ -96,6 +96,9 @@ class TraitKeys:
     toughness: str = "TOUGHNESS"
     fortitude: str = "FORTITUDE"
     will: str = "WILL"
+    #: Not a trait on the sheet but the attack check an attack rolls — what a
+    #: condition's ``amountMods`` names to move it (Defensive Attack's −X).
+    attack_check: str = "attack_check"
 
 
 @dataclass(frozen=True)

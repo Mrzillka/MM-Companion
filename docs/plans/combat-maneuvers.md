@@ -654,7 +654,7 @@ commit hash.
   failing files, the phase 6 tests and the sheet's bus / window-flash / conditions /
   recovery / extra-effort / temporary files are green (292 tests). The last 30% (mostly
   `tests/ui/sheet`, `widgets`) is left to phase 7's full run, recommended there anyway.
-  Commit: COMMIT_HASH.
+  Commit: a8566b8.
 
 - **2026-11-08 — Phase 5 (done).** The four attack maneuvers work on a player's
   sheet: the tile starts a line (the picker first when nothing is loaded) at its

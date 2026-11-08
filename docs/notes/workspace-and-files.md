@@ -4,7 +4,9 @@ Matters when touching startup, settings, saving, loading or the character librar
 
 Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
 
-- On launch, `__main__.main()` shows a splash and calls
+- On launch, `__main__.main()` shows a splash with a loading bar — up before the
+  interface is imported, which is most of a start (see [the UI utilities
+  notes](ui-utilities.md)) — and calls
   `core.storage.ensure_workspace()` to create the per-user workspace on first
   run: a platform data directory (`%APPDATA%\MM-Companion` on Windows, XDG /
   Application Support elsewhere; override with `MM_COMPANION_HOME`) holding

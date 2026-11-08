@@ -161,16 +161,15 @@ class GMPlayersMixin:
         snapshot = self._snapshots.get(player_id)
         if not snapshot:
             return
-        from mm_companion.ui.main_window import MainWindow
+        from mm_companion.ui import loading
+        from mm_companion.ui.main_window import MainWindow, opening_text
 
         previous = self._player_windows.pop(player_id, None)
         if previous is not None:
             previous.close()
-        window = MainWindow(
-            character=self._character_from_snapshot(snapshot),
-            gm_view=True,
-            pin_target=True,
-        )
+        character = self._character_from_snapshot(snapshot)
+        with loading.loading(self, opening_text(character)):
+            window = MainWindow(character=character, gm_view=True, pin_target=True)
         card = self._cards.get(player_id)
         if card is not None:
             self._attach_pin_sheet(window, card)

@@ -48,7 +48,7 @@ from mm_companion.core.session.model import (
     new_session,
 )
 from mm_companion.core.session.net import DEFAULT_PORT
-from mm_companion.ui import theme
+from mm_companion.ui import loading, theme
 from mm_companion.ui.area import AREA_ACTION
 from mm_companion.ui.area_gm import AreaController
 from mm_companion.ui.attack_gm import AttackController
@@ -260,7 +260,13 @@ class GMWindow(
         # The base panels register at this module's import (register_base_gm_blocks);
         # their order, sizes and default places travel on their descriptors.
         descriptors = gm_block_descriptors()
-        panels = [(d.key, d.title, d.factory(self)) for d in descriptors]
+        # A step per block, the canvas, and the board's first fill — what a loading
+        # screen over this build moves by (ui/loading).
+        loading.expect(len(descriptors) + 2)
+        panels = []
+        for d in descriptors:
+            panels.append((d.key, d.title, d.factory(self)))
+            loading.step()
         for _key, _title, box in panels:
             strip_groupbox_caption(box)  # the block's title bar carries the name
         sizes = {d.key: d.size for d in descriptors}
@@ -268,6 +274,7 @@ class GMWindow(
         self._canvas = BlockCanvas(
             panels, sizes, default_rows, default_pinned=gm_default_pin_lines()
         )
+        loading.step()
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
@@ -329,6 +336,7 @@ class GMWindow(
         self._refresh_npcs()
         # After the cast, so a creature whose file went away is simply not found.
         self._restore_scene()
+        loading.step()
 
         # Hosting was chosen in the launch dialog, so start it now — the window
         # comes up already reachable, with the join code a menu click away.

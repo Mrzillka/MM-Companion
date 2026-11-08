@@ -151,8 +151,10 @@ notes file that owns it.
 - **Go through the shared UI layer** rather than reinventing it: the `ui/widgets.py`
   factories, `guard_wheel`, `set_widget_locked` (locking is *not*
   `setEnabled(False)`), a `FlowLayout` hosted in a `FlowContainer`,
-  `DropFeedback`/`DropIndicator` for drag targets, `discard_widget` to shed a child
-  and `rebuilding` around a redraw that sheds several. Any section with editable
+  `DropFeedback`/`DropIndicator` for drag targets, `discard_widget` to shed a child,
+  `rebuilding` around a redraw that sheds several, and `loading.loading` around a
+  build the user waits on (opening a window), or `loading.fade_through` for a view
+  switch. Any section with editable
   widgets exposes `set_locked` and is wired into `CharacterSheet.set_locked`.
 - **A widget must never be visible while it has no parent.** A parentless widget *is*
   a top-level window, so showing one flashes a real window on screen and is slow to

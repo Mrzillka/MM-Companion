@@ -35,6 +35,7 @@ from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData, load_game_data
 from mm_companion.core.rules import power_points_spent, stable_build
 from mm_companion.ui import layout_tree as lt
+from mm_companion.ui import loading
 from mm_companion.ui.block_canvas import BlockCanvas
 from mm_companion.ui.block_frame import BlockFrame
 from mm_companion.ui.blocks import (
@@ -127,12 +128,17 @@ class CharacterSheet(QWidget):
         self._descriptor_by_key = {d.key: d for d in self._descriptors}
         panels = []
         sizes = {}
+        # A step per block, and the canvas that frames them weighs about half as
+        # much again — what a loading screen over this build moves by (ui/loading).
+        canvas_steps = max(1, len(self._descriptors) // 2)
+        loading.expect(len(self._descriptors) + canvas_steps)
         for descriptor in self._descriptors:
             section = descriptor.factory(self._data, self.character)
             setattr(self, descriptor.key, section)
             self._sections_by_key[descriptor.key] = section
             panels.append((descriptor.key, descriptor.title, section))
             sizes[descriptor.key] = descriptor.size
+            loading.step()
         self._canvas = BlockCanvas(
             panels,
             sizes,
@@ -140,6 +146,7 @@ class CharacterSheet(QWidget):
             default_pinned=self._without_excluded(default_pin_lines()),
             instance_factory=self._build_instance,
         )
+        loading.step(canvas_steps)
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
@@ -604,8 +611,11 @@ class CharacterSheet(QWidget):
         if locked == self._locked:
             return
         self._locked = locked
-        for key in self._canvas.block_keys():
+        keys = self._canvas.block_keys()
+        loading.expect(len(keys))
+        for key in keys:
             self._canvas.block_frame(key).set_locked(locked)
+            loading.step()
         self._update_min_width()
 
     # -- the simple sheet ----------------------------------------------------
@@ -679,8 +689,30 @@ class CharacterSheet(QWidget):
         was on the way out. Neither direction writes the model or marks it edited.
         """
         simple = bool(simple)
+        if loading.fading(self):
+            # A second press while a switch is fading is refused, and the menu and
+            # the button put back in step with what is showing (the switch says so
+            # again once its work is done).
+            self.simpleChanged.emit(self.is_simple)
+            return
         if simple == self.is_simple:
             return
+        # A third of a second or more of rebuilding cards, so it goes behind a
+        # loading screen between two fades (ui/loading) — or into the screen already
+        # up, for a sheet that opens straight into the simple sheet. On screen the
+        # fade out runs first, so this returns before the switch is made.
+        text = "Opening the simple sheet…" if simple else "Opening the edit sheet…"
+        loading.fade_through(
+            self,
+            text,
+            lambda: self._switch_simple(simple),
+            # What is actually showing, not what was asked for: a switch that failed
+            # and fell back has to say so, or the menu's label goes on promising the
+            # view that is not there.
+            lambda: self.simpleChanged.emit(self.is_simple),
+        )
+
+    def _switch_simple(self, simple: bool) -> None:
         # Both halves of a switch redraw the card blocks — the lock and the simple
         # look each rebuild every card — so the blocks that can hold a rebuild do it
         # once, at the end, in the state the switch leaves them in.
@@ -698,10 +730,6 @@ class CharacterSheet(QWidget):
             direction = "to" if simple else "back from"
             diagnostics.log_exception(f"Switching {direction} the simple sheet failed")
             self._back_to_edit_page()
-        # What is actually showing, not what was asked for: a switch that failed and
-        # fell back has to say so, or the menu's label goes on promising the view
-        # that is not there.
-        self.simpleChanged.emit(self.is_simple)
 
     def _enter_simple(self) -> None:
         view = self.simple_sheet
@@ -712,14 +740,17 @@ class CharacterSheet(QWidget):
         # Only if it is not already: locking rebuilds the card trees, and a sheet a
         # player opens to play from is locked already.
         if not self._locked:
-            self.set_locked(True)
+            with loading.part(0.3):
+                self.set_locked(True)
         # The page is out of sight from here on, and may never have been laid out at
         # all (a sheet opened straight into this view): its layout is what the tree
         # says, not what its dividers read.
         self._canvas.set_sizes_held(True)
         # Built before the edit page goes: if the build fails, the edit page is
-        # still what is on screen, rather than nothing.
-        view.activate()
+        # still what is on screen, rather than nothing. The rest of the bar after
+        # this is the card blocks' held rebuild, released by set_simple.
+        with loading.part(0.75):
+            view.activate()
         self._board.hide()
         view.show()
 
@@ -744,7 +775,8 @@ class CharacterSheet(QWidget):
         self._locked_before_simple = None
         if previous is not None and previous != self._locked:
             try:
-                self.set_locked(previous)
+                with loading.part(0.6):
+                    self.set_locked(previous)
             except Exception:  # noqa: BLE001 - see the docstring
                 diagnostics.log_exception("Restoring the lock after the simple sheet failed")
 

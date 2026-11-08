@@ -591,7 +591,7 @@ commit hash.
   (the slider, the lane, the attack picker, the Attack tile). **Not run:** the full
   affected-tests set was stopped by the machine running low on memory; the targeted
   files (popup, roller, GM, Impress, theme, packaging, data — 500+ tests) are green.
-  Phase 4's full run covers it. Commit: COMMIT_HASH.
+  Phase 4's full run covers it. Commit: 8186045.
 
 - **2026-11-08 — Phase 2 (done).** Dots: `ui/stat_mark.py` (`StatMark`,
   `StatMarkDelegate`, `mark_item`, `MARK_ROLE`, token `mark.size`), on the Resistances

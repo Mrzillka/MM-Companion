@@ -604,7 +604,7 @@ commit hash.
   `start_action_line`). Full run: **stopped at 82% by the system (low memory)**, no failure up to there; the
   rest is covered by the targeted files (dice, sheet roller, extra effort, play
   affordances, window flash, the GM and session tests I edited — all green). Phase 7's
-  full run (recommended there anyway) covers the remaining 18%. Commit: HASH.
+  full run (recommended there anyway) covers the remaining 18%. Commit: 846e626.
 
 - **2026-11-08 — Phase 3 (done).** Asked the user two questions, now decisions 11
   (four sections) and 12 (the Attack tile: attack, then optional target with "Skip"

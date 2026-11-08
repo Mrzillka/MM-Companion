@@ -236,6 +236,81 @@ class AreaRules:
         return bool(self.modifiers and self.dodge)
 
 
+#: The kinds a combat action comes in (``actions.json``'s ``combat.actions``). Kept
+#: as strings so a mod's unknown kind still loads (and is simply not run).
+COMBAT_KIND_MANEUVER = "maneuver"
+COMBAT_KIND_SELF = "self"
+COMBAT_KIND_TARGETED = "targeted"
+COMBAT_KIND_LOADER = "loader"
+COMBAT_KIND_ATTACK = "attack"
+COMBAT_KIND_BUILTIN = "builtin"
+
+
+@dataclass(frozen=True)
+class CombatAction:
+    """One combat action the roller's Actions popup offers (``combat.actions``).
+
+    :attr:`caption` is the short name its tile wears (the :attr:`name` when the record
+    gives none) and :attr:`icon` the key of a drawing the app ships — the popup draws
+    a generic one for a key it does not know. A ``maneuver`` shifts up to X from
+    :attr:`penalty` to :attr:`bonus` (``attack_check``, ``effect_rank``, ``defense``)
+    and leaves :attr:`lasting` (a condition id taking X as its amount) on the actor.
+    """
+
+    id: str
+    name: str
+    caption: str = ""
+    icon: str = ""
+    tooltip: str = ""
+    kind: str = COMBAT_KIND_SELF
+    needs_attack: bool = False
+    gm_only: bool = False
+    bonus: str = ""
+    penalty: str = ""
+    lasting: str = ""
+
+    @property
+    def tile_caption(self) -> str:
+        """What the action's tile is captioned: its short caption, else its name."""
+        return self.caption or self.name
+
+
+@dataclass(frozen=True)
+class CombatMenuSection:
+    """One titled section of the Actions popup: action ids, in order."""
+
+    id: str
+    title: str
+    items: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ManeuverLimits:
+    """The attack maneuvers' caps: a shift of at most :attr:`max_shift`, never taking
+    the penalised value below :attr:`floor`, and (with :attr:`double_cap`) never more
+    than doubling the bonused one."""
+
+    max_shift: int = 5
+    floor: int = 0
+    double_cap: bool = True
+
+
+@dataclass(frozen=True)
+class CombatRules:
+    """Combat maneuvers and actions, from ``actions.json``'s ``combat`` block.
+
+    Empty when a ruleset ships none, which leaves the Actions popup with only what
+    its host runs itself.
+    """
+
+    menu: tuple[CombatMenuSection, ...] = ()
+    actions: tuple[CombatAction, ...] = ()
+    limits: ManeuverLimits = field(default_factory=ManeuverLimits)
+
+    def action(self, action_id: str) -> CombatAction | None:
+        return next((a for a in self.actions if a.id == action_id), None)
+
+
 @dataclass(frozen=True)
 class GameData:
     """The full parsed game-data content, aggregated across the data files.
@@ -318,6 +393,8 @@ class GameData:
     #: The Impress action, from ``actions.json``.
     impress: ImpressRules = field(default_factory=ImpressRules)
     area: AreaRules = field(default_factory=AreaRules)
+    #: Combat maneuvers and actions — the roller's Actions popup — from ``actions.json``.
+    combat: CombatRules = field(default_factory=CombatRules)
 
     def _catalog(self, key: str, build: Callable[[], dict]) -> dict:
         """Memoize one of the merged ``id ->`` lookups below, per :class:`GameData`.

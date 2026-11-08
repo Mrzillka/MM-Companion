@@ -48,9 +48,13 @@ from .game_data import (
     AreaRules,
     BlockFieldSpec,
     BlockSpec,
+    CombatAction,
+    CombatMenuSection,
+    CombatRules,
     GameData,
     Impression,
     ImpressRules,
+    ManeuverLimits,
     Readout,
     ResistOptions,
 )
@@ -63,6 +67,7 @@ from .parsing_content import (
     _parse_advantage,
     _parse_area,
     _parse_characteristic,
+    _parse_combat,
     _parse_condition,
     _parse_configuration,
     _parse_duration_action_floor,
@@ -182,6 +187,9 @@ __all__ = [
     "BlockFieldSpec",
     "BlockSpec",
     "Characteristic",
+    "CombatAction",
+    "CombatMenuSection",
+    "CombatRules",
     "Condition",
     "ConditionCategory",
     "ConditionGroup",
@@ -217,6 +225,7 @@ __all__ = [
     "ImprovisedEffectRules",
     "InstallationRules",
     "InstallationSizeRow",
+    "ManeuverLimits",
     "Measure",
     "Measurements",
     "MinionSystem",
@@ -355,6 +364,7 @@ def _build_game_data(content: dict[str, dict]) -> GameData:
         blocks=tuple(_parse_block_spec(b) for b in blocks_raw.get("blocks", [])),
         impress=_parse_impress(actions_raw),
         area=_parse_area(actions_raw),
+        combat=_parse_combat(actions_raw),
     )
 
 

@@ -119,7 +119,7 @@ def test_roll_with_dc_shows_degree_of_success(
 
 def test_reroll_waits_for_a_roll_to_throw_again(qapp: QApplication) -> None:
     view = DiceRollerView()
-    assert not view.panel._reroll_button.isEnabled()
+    assert not view.panel.can_reroll
     assert view.panel.reroll() is False
 
 
@@ -136,7 +136,7 @@ def test_reroll_throws_the_last_roll_again_with_a_lucky_die(
     panel._dc_spin.setValue(15)
     panel._start_roll()
     panel._finish_roll()
-    assert panel._reroll_button.isEnabled()
+    assert panel.can_reroll
     # The roll spent its sliders, and the player has since touched the DC.
     panel._dc_spin.setValue(25)
 
@@ -1178,7 +1178,7 @@ def test_an_abandoned_roll_is_not_offered_for_a_reroll(qapp: QApplication) -> No
     panel._abandon_roll("No answer")
 
     assert panel._last_roll is None
-    assert not panel._reroll_button.isEnabled()
+    assert not panel.can_reroll
     assert panel.reroll() is False
 
 

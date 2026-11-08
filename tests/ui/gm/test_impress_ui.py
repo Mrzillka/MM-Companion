@@ -44,7 +44,6 @@ from mm_companion.ui.action_ui import (
 )
 from mm_companion.ui.gm_window import SCENE_NPC, GMWindow
 from mm_companion.ui.impress import (
-    IMPRESS_ACTION,
     PARTY_NPC,
     PARTY_PLAYER,
     ImpressDialog,
@@ -233,11 +232,18 @@ def test_online_the_dialog_takes_targets_the_way_an_area_does(qapp, data) -> Non
     assert ImpressAttempt.from_dict(attempt.to_dict()) == attempt
 
 
-def test_the_dice_block_offers_impress_on_its_action_row(qapp, data) -> None:
+def test_the_dice_block_offers_impress_in_its_actions_popup(qapp, data) -> None:
     section = DiceSection(data, talker(data))
-    buttons = section.panel._action_buttons
-    assert [b.text() for b in buttons] == [IMPRESS_ACTION[1]]
-    assert section.panel._action_label.isVisibleTo(section.panel)
+    popup = section.panel.open_actions()
+    tile = popup.tile(KIND_IMPRESS)
+    assert tile is not None and tile.isEnabled()
+    picked: list[str] = []
+    # Only what the pick reports: the dialog it opens is tested below.
+    section.panel.actionRequested.disconnect(section.start_action)
+    section.panel.actionRequested.connect(picked.append)
+    tile.click()
+    assert picked == [KIND_IMPRESS]
+    assert not popup.isVisible()
 
 
 def test_offline_the_dice_block_rolls_the_check_itself(qapp, data, monkeypatch) -> None:

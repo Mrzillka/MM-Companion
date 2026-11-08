@@ -48,6 +48,7 @@ datas = collect_data_files(
         "ui/assets/*.png",
         "ui/assets/*.svg",
         "ui/assets/npc_icons/*.svg",
+        "ui/assets/actions/*.svg",
     ],
 )
 

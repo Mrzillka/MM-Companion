@@ -716,17 +716,42 @@ of NPCs — often fewer. Two answers, and they are independent.
   makes would pop a real window on the developer's desktop; `tests/ui/dice/test_toasts.py`
   lifts it for its own.
 
-## The Action row
+## The Actions button
 
-Under the Request row, an **Action** row: **Reroll** first, then the actions taken
-against other characters — Impress — once a host calls `set_actions` with
-`(key, caption, tooltip)` triples. The row used to hide until then; Reroll is always
-there, so it no longer does. The actions only *report* (`actionRequested(key)`): running an action
-needs a dialog, a character and perhaps a session, none of which the panel has. The
-Dice block and the GM's Rolls block both offer Impress here, which is what puts the
-player's button and the GM's in the same place. See [the actions notes](actions.md),
-which also cover the two `RollSpec` additions the action brought (`KIND_BEST_OF` and
-`dc_from_total`).
+Under the Request row, one centred **Actions** button (the old Action row of push
+buttons — Reroll, Impress, Area — is gone). It opens the **Actions popup**
+(`ui/action_grid.py`, see [the UI utilities notes](ui-utilities.md)): titled sections of
+square icon tiles, built from `actions.json`'s `combat` block by
+`ui/action_menu.combat_menu`. The panel reads no game data, so the **host builds the
+sections**: `DiceRollerPanel.set_action_menu(build)` takes a callable that is handed the
+panel's **own** actions (`own_actions()`: Reroll, mapped to `None` or the reason it can't
+run) and returns the sections. It is called at every opening, not once, because what is
+available moves (a roll comes back, the GM forms an NPC group).
+
+- **What a host offers** is a map of action id → `None` (it runs) or a reason (greyed,
+  the reason in the tooltip). An id the host does not mention is greyed with
+  `NOT_BUILT` — the actions later phases of the combat maneuvers plan wire up. `gmOnly`
+  actions are left off a player's popup entirely.
+- The sheet's Dice block (`DiceSection.action_menu`) offers Impress. The GM's Rolls block
+  (`GMRollsMixin.action_menu`) offers Impress, Area, and **Team attack / Team check /
+  Group check**, which need a group: greyed with `NO_NPC_GROUPS` until there is one, and
+  a pick asks which group off a plain `QMenu` (skipped when there is only one), then
+  opens the same window the group card's menu does.
+- **Reroll is the panel's own**: picking it calls `reroll()` and is never reported.
+  Every other pick goes out on `actionRequested(key)`, which is what the hosts' Impress
+  and Area handlers always listened to. `can_reroll` replaces the old button's enabled
+  state as the thing a test reads.
+- A ruleset with no `combat.menu` falls back to one section of the host's own
+  `(key, caption, tooltip)` triples (`IMPRESS_ACTION`, `AREA_ACTION`) plus Reroll.
+- Building the popup is wrapped: a bad menu (a mod's data) is logged
+  (`log_exception`) and costs the popup, never the panel.
+- The button is in `_input_widgets`, so it is disabled while the die tumbles (the old
+  Impress button was not; Reroll was).
+- The run-mm-companion driver shoots it: `driver.py actions-popup` /
+  `actions-popup-gm` (each also writes `<target>-window.png`).
+
+See [the actions notes](actions.md), which also cover the two `RollSpec` additions the
+action brought (`KIND_BEST_OF` and `dc_from_total`).
 
 ## Reroll
 

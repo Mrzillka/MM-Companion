@@ -792,6 +792,24 @@ def build(target: str):
             panel._dc_check.setChecked(False)
             panel._bonus_spin.setValue(4)
             panel._finish_roll()
+    elif target in ("actions-popup", "actions-popup-gm"):
+        # The roller's Actions popup (combat maneuvers, phase 3+). The window behind
+        # it is shot first as <target>-window.png; the popup is what is returned.
+        if target == "actions-popup":
+            from mm_companion.ui.main_window import MainWindow
+
+            host = MainWindow(locked=False)
+            panel = host._sheet.dice.panel
+        else:
+            from mm_companion.ui.gm_window import GMWindow
+
+            host = GMWindow(bind="127.0.0.1")
+            panel = host._roller
+        host.resize(1400, 900)
+        host.show()
+        _pump(_app())
+        _shoot(host, Path("_driver_shots") / f"{target}-window.png")
+        win = panel.open_actions()
     elif target in ("roll-demo", "roll-demo-table"):
         # Rolling straight off the sheet. "roll-demo" is the solo case: a power's
         # attack goes through the same path a card's 🎲 uses, against a typed-in
@@ -1773,6 +1791,8 @@ def main(argv: list[str] | None = None) -> int:
             "focus",
             "dice",
             "dice-demo",
+            "actions-popup",
+            "actions-popup-gm",
             "roll-demo",
             "roll-demo-table",
             "dice-bottom",

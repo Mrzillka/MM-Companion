@@ -1,0 +1,99 @@
+"""The roller's Actions button and the popup it opens (combat maneuvers, phase 3)."""
+
+from __future__ import annotations
+
+import pytest
+
+from mm_companion.core.character import Character
+from mm_companion.ui.action_menu import ACTION_REROLL, NOT_BUILT, NOTHING_TO_REROLL, combat_menu
+from mm_companion.ui.roller.view import DiceRollerView
+from mm_companion.ui.sections.dice import DiceSection
+
+
+def test_the_actions_button_sits_where_the_action_row_was(qapp) -> None:
+    view = DiceRollerView()  # held: the panel's widgets die with it
+    panel = view.panel
+    assert panel._actions_button.text() == "Actions"
+    assert not hasattr(panel, "_reroll_button")
+
+
+def test_without_a_host_menu_the_popup_offers_reroll_alone(qapp) -> None:
+    view = DiceRollerView()  # held: the panel's widgets die with it
+    panel = view.panel
+    popup = panel.open_actions()
+    assert [t.key for t in popup.tiles] == [ACTION_REROLL]
+    assert not popup.tile(ACTION_REROLL).isEnabled()
+    assert NOTHING_TO_REROLL in popup.tile(ACTION_REROLL).toolTip()
+
+
+def test_reroll_lights_once_a_roll_is_back_and_is_the_panels_own(
+    qapp, instant_die, monkeypatch
+) -> None:
+    view = DiceRollerView()  # held: the panel's widgets die with it
+    panel = view.panel
+    panel._start_roll()
+    panel._finish_roll()
+    assert panel.can_reroll
+    rerolled: list[bool] = []
+    reported: list[str] = []
+    monkeypatch.setattr(panel, "reroll", lambda: rerolled.append(True) or True)
+    panel.actionRequested.connect(reported.append)
+    popup = panel.open_actions()
+    tile = popup.tile(ACTION_REROLL)
+    assert tile.isEnabled()
+    tile.click()
+    assert rerolled == [True] and reported == []
+
+
+def test_opening_it_again_closes_the_first(qapp) -> None:
+    view = DiceRollerView()  # held: the panel's widgets die with it
+    panel = view.panel
+    first = panel.open_actions()
+    second = panel.open_actions()
+    assert not first.isVisible() and second.isVisible()
+
+
+def test_a_menu_that_raises_costs_the_popup_not_the_panel(qapp, monkeypatch) -> None:
+    logged: list[str] = []
+    monkeypatch.setattr(
+        "mm_companion.ui.dice_roller.log_exception", lambda context, *a: logged.append(context)
+    )
+    view = DiceRollerView()  # held: the panel's widgets die with it
+    panel = view.panel
+
+    def broken(_own):
+        raise ValueError("bad mod data")
+
+    panel.set_action_menu(broken)
+    assert panel.open_actions() is None
+    assert logged == ["Building the Actions popup"]
+
+
+def test_a_players_menu_follows_the_data_and_leaves_out_the_gms_tiles(qapp, data) -> None:
+    section = DiceSection(data, Character.new_default(data))
+    popup = section.panel.open_actions()
+    keys = [t.key for t in popup.tiles]
+    order = [i for s in data.combat.menu for i in s.items]
+    gm_only = {a.id for a in data.combat.actions if a.gm_only}
+    assert keys == [k for k in order if k not in gm_only]
+    titles = [t.text() for t in popup._titles]
+    assert titles == ["Attack Maneuvers", "Actions", "Area & Group", "Dice"]
+    assert popup.tile("impress").isEnabled()
+    # What this version cannot run yet is shown, greyed, saying so.
+    aid = popup.tile("aid")
+    assert not aid.isEnabled() and NOT_BUILT in aid.toolTip()
+
+
+@pytest.mark.parametrize("gm", [False, True])
+def test_a_ruleset_with_no_menu_falls_back_to_the_hosts_own_actions(data, gm) -> None:
+    from dataclasses import replace
+
+    from mm_companion.core.data_loader import CombatRules
+    from mm_companion.ui.impress import IMPRESS_ACTION
+
+    bare = replace(data, combat=CombatRules())
+    sections = combat_menu(
+        bare, {"impress": None, ACTION_REROLL: None}, gm=gm, fallback=[IMPRESS_ACTION]
+    )
+    assert [[i.key for i in s.items] for s in sections] == [["impress", ACTION_REROLL]]
+    assert sections[0].items[0].caption == "Impress"

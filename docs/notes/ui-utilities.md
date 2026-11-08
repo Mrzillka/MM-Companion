@@ -68,6 +68,16 @@ through rather than reinvent. When building new sheet widgets, use it:
   Senses' twenty check boxes, a `widgetResizable` `QScrollArea` showing the first
   row of the launcher's character library with no scroll bar to reach the rest.
   Neither container asks a second time, which is why the host has to answer right.
+- **`ActionGridPopup`** (`ui/action_grid.py`) is the reusable "pick one, by picture"
+  popup: titled `GridSection`s of square `GridItem` tiles (icon over an elided caption,
+  sized by the `action-grid.*` tokens), one `FlowLayout` per section, so the columns
+  follow the width. It is a frameless `Qt.Popup` **parented to its anchor** (never
+  parentless — see the standing rule), closes on a pick, Esc or a click outside, walks
+  its tiles with the arrow keys (enabled tiles only), and `show_under(anchor)` sizes it
+  for the anchor's screen (scrolling only if taller) and keeps it on that screen. It
+  closes *before* emitting `picked(key)`, so whatever the pick opens next (a menu, a
+  window) is not fighting it. A disabled tile keeps its tooltip, which is where to say
+  why. Rules-free: the roller's sections come from `ui/action_menu.py`.
 - **`WrappingButton`** (`ui/widgets.py`) is a push button whose caption word-wraps, for
   any button whose caption is data rather than a word (a roll's "🎲 Toughness vs. … vs.
   DC 15"). A `QPushButton` reports its one-line caption as its minimum width, so one

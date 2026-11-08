@@ -98,9 +98,8 @@ ACTION_NAME = "Impress"
 KIND_IMPRESS = "impress"
 
 
-#: The roller's Action-row button, as the sheet and the GM window both offer it:
-#: ``(key, caption, tooltip)`` — see
-#: :meth:`~mm_companion.ui.dice_roller.DiceRollerPanel.set_actions`.
+#: Impress as a ``(key, caption, tooltip)`` triple: the Actions popup's tile for a
+#: ruleset with no ``combat.menu`` (see :func:`~mm_companion.ui.action_menu.combat_menu`).
 IMPRESS_ACTION = (
     KIND_IMPRESS,
     "Impress…",

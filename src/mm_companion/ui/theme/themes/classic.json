@@ -88,6 +88,13 @@
     "_mark.size": "The diameter of the dot beside a stat a temporary condition is moving (an All-Out Attack's Defense, Defending's), in pixels. Green when the stat is higher for it, red when lower. Zero hides the dots.",
     "mark.size": 6,
 
+    "_action-grid.tile": "The Actions popup: each tile is a square this many pixels on a side, its icon above its caption.",
+    "action-grid.tile": 80,
+    "action-grid.icon": 30,
+    "action-grid.gap": 6,
+    "_action-grid.columns": "How many tiles a row of the Actions popup holds when the screen has room for them.",
+    "action-grid.columns": 6,
+
     "canvas.hint.height": 120,
     "platform.features.height": 160,
 

@@ -49,7 +49,6 @@ from mm_companion.core.session.model import (
 )
 from mm_companion.core.session.net import DEFAULT_PORT
 from mm_companion.ui import loading, theme
-from mm_companion.ui.area import AREA_ACTION
 from mm_companion.ui.area_gm import AreaController
 from mm_companion.ui.attack_gm import AttackController
 from mm_companion.ui.block_canvas import BlockCanvas
@@ -90,9 +89,6 @@ from mm_companion.ui.gm.pins import GMPinsMixin
 from mm_companion.ui.gm.players import GMPlayersMixin
 from mm_companion.ui.gm.rolls import GMRollsMixin
 from mm_companion.ui.gm.scene import GMSceneMixin
-from mm_companion.ui.impress import (
-    IMPRESS_ACTION,
-)
 from mm_companion.ui.impress_gm import ImpressController
 from mm_companion.ui.npc_group import NPCGroupCard
 from mm_companion.ui.npc_window import NPCWindow
@@ -322,7 +318,7 @@ class GMWindow(
 
         self._connect_bridge()
         # Runs every Impress this window resolves — a player's, or an NPC's from the
-        # roller's Action row (see mm_companion.ui.impress_gm).
+        # roller's Actions popup (see mm_companion.ui.impress_gm).
         self._impress = ImpressController(self._data, self._bridge, self, self)
         # And every area attack: a player's declaration lands in the history with a
         # Resolve button, and an NPC's starts from its sheet (mm_companion.ui.area_gm).
@@ -638,16 +634,10 @@ class GMWindow(
         # they are character-free) and this window decides where the ask goes.
         self._roller.set_roll_choices(requested_roll_choices(self._data))
         self._roller.rollRequested.connect(self._request_roll)
-        # The Action row: the GM impresses, or spreads an attack over an area, for
-        # anybody — an NPC of theirs or a player — exactly where a player's Impress
-        # button is on their sheet.
-        actions = []
-        if self._data.impress.available:
-            actions.append(IMPRESS_ACTION)
-        if self._data.area.available:
-            actions.append(AREA_ACTION)
-        if actions:
-            self._roller.set_actions(actions)
+        # The Actions popup: the GM impresses, spreads an attack over an area, or has
+        # a group act, for anybody — an NPC of theirs or a player — from the same
+        # button a player's sheet has (see GMRollsMixin.action_menu).
+        self._roller.set_action_menu(self.action_menu)
         self._roller.actionRequested.connect(self._on_roller_action)
         layout.addWidget(self._view)
         return box

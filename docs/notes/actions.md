@@ -1,7 +1,7 @@
 # Actions against other characters: Impress, area attacks, and the targeting layer
 
 Matters when touching the Impress action, area attacks, `actions.json`, the roller's
-Action row, the history's table card, or anything that resolves one check against
+Actions popup, the history's table card, or anything that resolves one check against
 several creatures.
 
 Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
@@ -56,7 +56,7 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
     GM's window is where they set things up.
   - Off the air there is no GM, so the dialog always opens.
 - **The GM may start either action for anybody**, a player included: the roller's
-  Impress and Area buttons, an NPC card's 🗣 and 💥, and a creature's card on the board
+  Impress and Area tiles (its Actions popup — see [the dice notes](dice-and-rolling.md#the-actions-button)), an NPC card's 🗣 and 💥, and a creature's card on the board
   (right-click: **Impress…**, **Area attack…**). Impress's impresser combo lists the cast
   and the players; the area window grows an **Attacker** combo for one the GM started,
   and switching it reads that creature's builds afresh (a player's off their snapshot —

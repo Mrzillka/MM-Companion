@@ -38,6 +38,7 @@
     "column": "Column minimums",
     "canvas": "Canvas",
     "die": "The die",
+    "action-grid": "Actions popup",
     "compact": "Compact mode",
     "gm": "GM cards",
     "opacity": "Opacity",
@@ -150,6 +151,22 @@
     "mark.size": {
       "label": "Temporary-condition dot",
       "hint": "The dot beside a stat a temporary condition is moving, in pixels. Zero hides it."
+    },
+    "action-grid.tile": {
+      "label": "Actions popup tile",
+      "hint": "The side of each square tile in the roller's Actions popup, in pixels."
+    },
+    "action-grid.icon": {
+      "label": "Actions popup icon",
+      "hint": "The size of the drawing on each Actions popup tile, in pixels."
+    },
+    "action-grid.gap": {
+      "label": "Actions popup gap",
+      "hint": "The space between the Actions popup's tiles, in pixels."
+    },
+    "action-grid.columns": {
+      "label": "Actions popup columns",
+      "hint": "How many tiles a row of the Actions popup holds, when the screen has room."
     },
     "space.sm": {"label": "Small"},
     "space.md": {"label": "Medium"},

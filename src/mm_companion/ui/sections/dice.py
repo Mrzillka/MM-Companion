@@ -30,6 +30,8 @@ Two things about it are deliberately unlike its neighbours:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QGroupBox, QVBoxLayout, QWidget
 
@@ -49,6 +51,8 @@ from mm_companion.core.rules import (
 )
 from mm_companion.core.session.protocol import sanitize_mod_payload
 from mm_companion.ui import theme
+from mm_companion.ui.action_grid import GridSection
+from mm_companion.ui.action_menu import combat_menu
 from mm_companion.ui.action_ui import sets_up_own_actions
 from mm_companion.ui.area import KIND_AREA_ATTACK, AreaDialog
 from mm_companion.ui.attack_targets import (
@@ -109,13 +113,21 @@ class DiceSection(QGroupBox):
         # comes back by: the session's record, or the die this panel threw itself.
         self.view.panel.sessionRollRevealed.connect(self.settle_recovery)
         self.view.panel.localRoll.connect(self.settle_recovery)
-        # Actions against other characters, when the ruleset has any.
-        if data.impress.available:
-            self.view.panel.set_actions([IMPRESS_ACTION])
+        # The Actions popup: what this sheet runs, from the ruleset's menu.
+        self.view.panel.set_action_menu(self.action_menu)
         self.view.panel.actionRequested.connect(self.start_action)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.view)
+
+    def action_menu(self, own: Mapping[str, str | None]) -> list[GridSection]:
+        """The Actions popup's sections, for the roller to open (see
+        :func:`~mm_companion.ui.action_menu.combat_menu`): the panel's own actions
+        (*own*: Reroll) plus what a player's sheet runs."""
+        offered = dict(own)
+        if self._data.impress.available:
+            offered[KIND_IMPRESS] = None
+        return combat_menu(self._data, offered, gm=False, fallback=[IMPRESS_ACTION])
 
     @property
     def panel(self):
@@ -270,7 +282,7 @@ class DiceSection(QGroupBox):
             self.view.add_local_request(spec)
 
     def start_action(self, kind: str) -> ImpressDialog | None:
-        """Run one of the Action row's actions — the Impress button's handler.
+        """Run an action picked off the roller's Actions popup — so far, Impress.
 
         At a table the dialog only *declares* the impression: it goes to the GM, who
         sets the modifiers and rolls (see :mod:`mm_companion.ui.impress_gm`). A player

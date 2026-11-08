@@ -13,7 +13,7 @@ every session.**
 | 0 | Plan and skill | done (2026-11-08) |
 | 1 | Temporary conditions in `core` (amount, temporary, tone, stat mods) | done (2026-11-08) |
 | 2 | Sheet indicators: dots, tinted chips, "Clear temporary" | done (2026-11-08) |
-| 3 | Reusable grid popup, action icons, the **Actions** button | not started |
+| 3 | Reusable grid popup, action icons, the **Actions** button | done (2026-11-08) |
 | 4 | Roller rework: one two-way slider, the action lane, the attack picker | not started |
 | 5 | The four attack maneuvers, end to end (player) | not started |
 | 6 | Self actions: Aim, Charge/Slam, Defend, Recover, Drop Prone, Stand, Finishing, Surprise, Catch | not started |
@@ -100,6 +100,16 @@ Status values: `not started`, `in progress (<what is left>)`, `done (<date>)`.
 10. A **protocol bump** is expected and fine (memory: "ask before avoiding a protocol
     bump"). **Bump once for the whole feature.** If this branch has already bumped,
     reuse that version.
+11. **The popup's sections** (asked 2026-11-08, phase 3): four — *Attack Maneuvers*
+    (Accurate, All-Out, Defensive, Power, Finishing, Surprise); *Actions* A–Z (Aid, Aim,
+    Attack, Block, Catch, Charge, Defend, Disarm, Drop Prone, Escape, Feint, Grab,
+    Impress, Recover, Smash, Stand, Trick, Trip); *Area & Group* (Area, and the GM's
+    Team attack / Team check / Group check); *Dice* (Reroll).
+12. **The Attack tile** (asked 2026-11-08, phase 3): pick an attack (the plain `QMenu`
+    of the character's attacks), then **optionally** the target: a second menu whose
+    **first line is "Skip"**. With no target the roller's **DC box counts as the
+    Defense**. If neither a DC is set nor a target picked when the attack is rolled,
+    show a **warning sign** (the roll still goes).
 
 ---
 
@@ -227,6 +237,14 @@ widget, log failures.
     the amount in the record (`defaultAmount: 2`);
   - `group: "maneuver"` (a new `_meta.conditionGroups` entry, so the "+" menu offers
     them too), and `recovery` text.
+- **As built (phase 3):** `combat` = `menu` (sections), `limits`, `actions`. Kinds
+  `maneuver`, `self`, `targeted`, `loader`, `attack` (the Attack tile) and `builtin`
+  (run by the host's own window or the dice: Impress, Area, the team actions,
+  Reroll). Records carry `caption` (the tile's short name), and the maneuvers already
+  carry `bonus`/`penalty`/`lasting`. Loader: `CombatRules` / `CombatAction` /
+  `CombatMenuSection` / `ManeuverLimits`, `GameData.combat`, `COMBAT_KIND_*`. The
+  per-kind fields of the other kinds (`fixedModifier`, `check`, `outcomes`, …) are
+  added by the phase that runs them.
 - **Icons are UI assets, not game data:** `src/mm_companion/ui/assets/actions/<key>.svg`,
   one per `icon` key, plus `generic.svg` as the fallback (so a mod's action with an
   unknown key still draws). Single-colour line art on a 24×24 viewBox, drawn with
@@ -353,6 +371,16 @@ widget, log failures.
   cleared: …"; a player's is a `ClearTemporary` command and their own sheet writes the
   line. `applyConditionRequested` on the player and NPC cards is now
   `(key, id, parameter, amount)`.
+- **As built (phase 3):** `ui/action_grid.py` as above (tokens `action-grid.tile`,
+  `.icon`, `.gap`, `.columns`; icons coloured from the tile's palette `ButtonText`, so no
+  colour token). `ui/action_menu.combat_menu(data, offered, gm=, fallback=)` builds the
+  sections; *offered* maps an id to `None` or a reason, an unmentioned id is greyed
+  `NOT_BUILT`, `gmOnly` ones are dropped for a player. The panel's
+  `set_action_menu(build)` is called with the panel's own entries (Reroll) at every
+  opening; `open_actions()` returns the popup (tests drive it). Hosts:
+  `DiceSection.action_menu`, `GMRollsMixin.action_menu` (+ `_choose_group`,
+  `TEAM_ACTIONS`, `NO_NPC_GROUPS`). `set_actions`, `_reroll_button` and the Action row
+  are gone; `can_reroll` is what tests read.
 - **The GM (`ui/gm_window.py`, `ui/gm/*.py`):** the Rolls block's Actions button. A pick
   → the NPC chooser (the `_on_history_roll` menu pattern: portraits, board order). It
   loads that NPC's attack list into the picker, rolls as that NPC, and lands the lasting
@@ -422,18 +450,19 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
       `ClearTemporary`, the scene's `amount`/`temporary`.
 
 ### Phase 3 — Grid popup, icons, the Actions button
-- [ ] `ui/action_grid.py` (`ActionGridPopup`, `GridSection`, `GridItem`), reflowing
+- [x] `ui/action_grid.py` (`ActionGridPopup`, `GridSection`, `GridItem`), reflowing
       columns, keyboard, Esc / click-outside, on-screen placement, tokens.
-- [ ] Draw the SVG icon set (`ui/assets/actions/`), with a fallback, tinted from the
+- [x] Draw the SVG icon set (`ui/assets/actions/`), with a fallback, tinted from the
       theme.
-- [ ] `actions.json` `combat.menu` + action records (names, icons, tooltips, kinds),
+- [x] `actions.json` `combat.menu` + action records (names, icons, tooltips, kinds),
       and loader support.
-- [ ] Replace the Action row with the **Actions** button. Reroll, Impress and Area go
+- [x] Replace the Action row with the **Actions** button. Reroll, Impress and Area go
       through the popup and behave exactly as before. The not-yet-built actions show
       disabled ("coming soon" is **not** acceptable in a release — phase 10 checks
       every tile works).
-- [ ] The GM's Rolls block gets the same button (Team attack/check/Group check
+- [x] The GM's Rolls block gets the same button (Team attack/check/Group check
       tiles: pick the group first).
+- [x] `QToolButton:disabled` restated in the styled presets (greyed tiles read live).
 
 ### Phase 4 — Roller rework
 - [ ] One −20..+20 Bonus/Penalty slider (signed spin, tint, `adjustment()`,
@@ -442,6 +471,12 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
 - [ ] The action lane with reserved height; `ActionLine` (configurable or fixed); ✕.
 - [ ] `set_attack_choices` + the plain `QMenu` attack picker; chip removed → lines
       greyed out; a new attack → limits reset to the max.
+- [ ] **The Attack tile** (decision 12): the attack picker, then a target menu with
+      "Skip" first (Scene targets, through the aimed-attack road — `aim_attack`); no
+      target → the DC box is the Defense; a warning sign when there is neither.
+- [ ] **The player's Area tile**: today it is greyed (`NOT_BUILT`) — a player starts
+      an area from a power card's area line. Wire it to the attack picker →
+      `DiceSection.start_area(power_id)`.
 - [ ] Compact mode and the Extended layout still fit (`dice-and-rolling.md`, compact
       section).
 - [ ] Move the existing tests onto the one slider. Full run recommended.
@@ -520,7 +555,6 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
   objects on seeing it.
 - Should Accurate/Power's "until start of next turn" ever matter (a second attack in
   one turn)? Treated as no.
-- The order and grouping of the menu tiles beyond the user's sketch.
 
 ---
 
@@ -528,6 +562,36 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
 
 Newest first. Each entry: date, phase, what was done, what's next, gotchas, and the
 commit hash.
+
+- **2026-11-08 — Phase 3 (done).** Asked the user two questions, now decisions 11
+  (four sections) and 12 (the Attack tile: attack, then optional target with "Skip"
+  first; DC = Defense; warning when neither — built in phase 4). Data: `actions.json`
+  `combat` (menu, limits, 29 actions, paraphrased tooltips, provenance) and the loader
+  records (§3.1 "As built"). `ui/action_grid.py` (the reusable popup),
+  `ui/action_menu.py` (sections from data + what the host offers),
+  `ui/svg_assets.py` (`action_icon_resource`, `tinted_svg_pixmap`,
+  `action_icon_pixmap`), 30 SVGs in `ui/assets/actions/` (incl. `generic.svg`; added to
+  `pyproject.toml` and `installer/mm_companion.spec`), tokens `action-grid.*` in
+  `classic.json` + `token_meta.json`. The roller's Action row → one **Actions** button
+  (`set_action_menu`, `open_actions`, `own_actions`, `can_reroll`). GM: Impress, Area,
+  and the team tiles (greyed until a group exists; several groups → a `QMenu` chooser).
+  Theme fix: `QToolButton:disabled` in the styled presets. Driver targets
+  `actions-popup` / `actions-popup-gm`. Tests: `tests/core/test_combat_data.py`,
+  `tests/ui/widgets/test_action_grid.py`, `tests/ui/dice/test_actions_button.py`,
+  `tests/ui/gm/test_actions_popup_gm.py`, a qss rule test; `test_dice_roller.py` and
+  `test_impress_ui.py` moved off the old row. **Gotchas:** (1) `DiceRollerView().panel`
+  in a test lets the view be collected and its widgets deleted — hold the view;
+  (2) `monkeypatch.setattr(QMenu, "exec", …)` does **not** reach a PySide instance
+  (the existing GM test that does it only asserts it is *not* called) — patch the
+  module's `QMenu` name with a stand-in class instead; (3) on the styled presets a
+  disabled tool button painted like a live one (fixed in qss). **Decisions I made
+  (small):** the player's Area tile stays greyed until phase 4 wires it (a player never
+  had Area on the roller); the Actions button is disabled while the die tumbles (it is
+  in `_input_widgets`); a group tile with one group skips the chooser. Next: phase 4
+  (the slider, the lane, the attack picker, the Attack tile). **Not run:** the full
+  affected-tests set was stopped by the machine running low on memory; the targeted
+  files (popup, roller, GM, Impress, theme, packaging, data — 500+ tests) are green.
+  Phase 4's full run covers it. Commit: COMMIT_HASH.
 
 - **2026-11-08 — Phase 2 (done).** Dots: `ui/stat_mark.py` (`StatMark`,
   `StatMarkDelegate`, `mark_item`, `MARK_ROLE`, token `mark.size`), on the Resistances

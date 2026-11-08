@@ -45,7 +45,7 @@ from __future__ import annotations
 
 import math
 import random
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 
 from PySide6.QtCore import QElapsedTimer, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QIcon, QPixmap, QTextDocument
@@ -65,10 +65,13 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.core import storage
+from mm_companion.core.diagnostics import log_exception
 from mm_companion.core.dice import ROUTINE_DIE, CheckResult, reroll_d20, resolve_check, roll_d20
 from mm_companion.core.rules import RollSpec
 from mm_companion.core.session.model import KIND_ROLL
 from mm_companion.ui import theme
+from mm_companion.ui.action_grid import ActionGridPopup, GridItem, GridSection
+from mm_companion.ui.action_menu import ACTION_REROLL, NOTHING_TO_REROLL, action_tooltip
 from mm_companion.ui.flow_layout import FlowLayout
 from mm_companion.ui.reflow import ReflowBox
 from mm_companion.ui.roll_history import (
@@ -85,7 +88,6 @@ from mm_companion.ui.svg_assets import die_resource, svg_pixmap
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import (
     ElidingLabel,
-    discard_widget,
     help_markup,
     make_spin_box,
     tinted_style,
@@ -296,9 +298,10 @@ class DiceRollerPanel(
     #: session of its own to answer it with.
     rollRequested = Signal(object)
 
-    #: One of the Action row's buttons was pressed — its action key (``"impress"``).
+    #: A tile of the Actions popup was picked — its action key (``"impress"``).
     #: Like :attr:`rollRequested` the panel only reports it: running an action means
-    #: a dialog, a character and perhaps a session, none of which the panel has.
+    #: a dialog, a character and perhaps a session, none of which the panel has. The
+    #: one exception is Reroll, which is the panel's own and never reported.
     actionRequested = Signal(str)
 
     def __init__(self, parent: QWidget | None = None, *, hidden_option: bool = False) -> None:
@@ -343,6 +346,13 @@ class DiceRollerPanel(
         # no game data) — see :meth:`set_roll_choices`. Empty until it is, which is
         # why the row starts hidden.
         self._request_specs: list[RollSpec] = []
+        # Builds the Actions popup's sections, pushed in by the host — see
+        # :meth:`set_action_menu`. Without one the popup offers Reroll alone.
+        self._menu_builder: Callable[[Mapping[str, str | None]], Sequence[GridSection]] | None = (
+            None
+        )
+        # The popup while it is open (it deletes itself on close).
+        self._action_popup: ActionGridPopup | None = None
         self._quick_rolls: list[dict] = self._load_quick_rolls()
         # Whether the panel is in its fixed compact shape (see :meth:`_apply_shape`),
         # in which case the width-driven reflow stands down — and the two separate
@@ -450,53 +460,86 @@ class DiceRollerPanel(
         return group
 
     def _build_action_row(self, grid: QGridLayout, row: int) -> None:
-        """The Action row: Reroll, then the actions taken against other characters.
+        """The **Actions** button, centred under the Request row, across the grid.
 
-        **Reroll** leads, and is always there: it throws this panel's last roll again
-        (:meth:`reroll`). Impress follows when a host offers it (:meth:`set_actions`).
-        Under the Request row because they are the same kind of verb, and on the same
-        grid, the buttons spanning the trait and spin-box columns.
+        It opens the Actions popup (:meth:`open_actions`): the combat maneuvers, the
+        other actions, the actions taken against other characters (Impress, Area) and
+        Reroll, as a grid of tiles. It replaced a row of push buttons that could only
+        ever grow sideways.
         """
 
-        self._action_part = QWidget()
-        line = QHBoxLayout(self._action_part)
-        line.setContentsMargins(0, 0, 0, 0)
-        line.setSpacing(int(theme.metric("space.xs")))
-        self._action_line = line
-        self._reroll_button = QPushButton("Reroll")
-        self._reroll_button.setToolTip(
-            help_markup(
-                "**Reroll** your last roll with the same bonus, penalty and DC. A result of 1–10 "
-                "gets +10, so it lands on 11–20."
-            )
+        self._actions_button = QPushButton("Actions")
+        self._actions_button.setToolTip(
+            "Combat maneuvers and actions: attack maneuvers, Aid, Grab, Impress, Reroll…"
         )
-        self._reroll_button.setEnabled(False)  # nothing to throw again yet
-        self._reroll_button.clicked.connect(self.reroll)
-        line.addWidget(self._reroll_button)
-        self._action_buttons: list[QPushButton] = []
-        self._action_label = QLabel("Action")
-        grid.addWidget(self._action_label, row, 0)
-        grid.addWidget(self._action_part, row, 1, 1, 2)
+        self._actions_button.clicked.connect(self.open_actions)
+        grid.addWidget(self._actions_button, row, 0, 1, 3, Qt.AlignmentFlag.AlignHCenter)
 
-    def set_actions(self, actions: object) -> None:
-        """Offer *actions* — ``(key, caption, tooltip)`` triples — on the Action row.
+    def set_action_menu(
+        self, build: Callable[[Mapping[str, str | None]], Sequence[GridSection]] | None
+    ) -> None:
+        """Have *build* make the Actions popup's sections each time it opens.
 
-        An empty list hides the row. Each button reports its key on
+        Called with the panel's **own** actions — Reroll, mapped to ``None`` when there
+        is a roll to throw again or to the reason there is not — to fold into what the
+        host offers (see :func:`~mm_companion.ui.action_menu.combat_menu`). Built at
+        every opening rather than once, because what is available moves: a roll comes
+        back, an NPC group is formed. Each pick other than Reroll is reported on
         :attr:`actionRequested`.
         """
+        self._menu_builder = build
 
-        for button in self._action_buttons:
-            self._action_line.removeWidget(button)
-            discard_widget(button)
-        self._action_buttons = []
-        for key, caption, tooltip in actions or ():
-            button = QPushButton(caption)
-            button.setToolTip(tooltip)
-            button.clicked.connect(lambda _=False, k=key: self.actionRequested.emit(k))
-            self._action_line.addWidget(button)
-            self._action_buttons.append(button)
-        self.updateGeometry()
-        self.contentChanged.emit()
+    def own_actions(self) -> dict[str, str | None]:
+        """The actions the panel runs itself, and whether each can run right now."""
+        return {ACTION_REROLL: None if self._last_roll is not None else NOTHING_TO_REROLL}
+
+    @property
+    def can_reroll(self) -> bool:
+        """Whether there is a roll that came back, for Reroll to throw again."""
+        return self._last_roll is not None
+
+    def _action_sections(self) -> list[GridSection]:
+        own = self.own_actions()
+        if self._menu_builder is not None:
+            return list(self._menu_builder(own))
+        reason = own[ACTION_REROLL]
+        tile = GridItem(
+            ACTION_REROLL,
+            "Reroll",
+            ACTION_REROLL,
+            action_tooltip("Reroll", "Throw your last roll again.", reason),
+            enabled=reason is None,
+        )
+        return [GridSection("Dice", (tile,))]
+
+    def open_actions(self) -> ActionGridPopup | None:
+        """Open the Actions popup under its button, and return it.
+
+        A failure to build it is logged and costs the popup, never the panel: the
+        sections come from game data a mod may have written.
+        """
+        if self._action_popup is not None:
+            self._action_popup.close()
+        try:
+            popup = ActionGridPopup(self._action_sections(), self._actions_button)
+        except Exception:  # noqa: BLE001 - a bad menu must not take the roller down
+            log_exception("Building the Actions popup")
+            return None
+        popup.picked.connect(self._on_action_picked)
+        popup.destroyed.connect(lambda _=None, p=popup: self._forget_popup(p))
+        self._action_popup = popup
+        popup.show_under(self._actions_button)
+        return popup
+
+    def _forget_popup(self, popup: ActionGridPopup) -> None:
+        if self._action_popup is popup:
+            self._action_popup = None
+
+    def _on_action_picked(self, key: str) -> None:
+        if key == ACTION_REROLL:
+            self.reroll()
+        else:
+            self.actionRequested.emit(key)
 
     def _build_spec_chip(self) -> QWidget:
         """The strip naming what the sheet asked to roll — hidden until it does.
@@ -706,7 +749,7 @@ class DiceRollerPanel(
             self._request_dc,
             self._request_button,
             self._quick_container,
-            self._reroll_button,
+            self._actions_button,
         ]
 
     # -- rolling a trait off the sheet ---------------------------------------
@@ -1190,8 +1233,6 @@ class DiceRollerPanel(
         self._dc_spin.setEnabled(self._dc_check.isChecked())
         # And the Ask button follows whether a trait is chosen, for the same reason.
         self._sync_request_button()
-        # Reroll, whether there is a roll that came back to throw again.
-        self._reroll_button.setEnabled(self._last_roll is not None)
 
     def _update_readout(
         self,

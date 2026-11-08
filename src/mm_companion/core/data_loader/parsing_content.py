@@ -10,8 +10,12 @@ from .game_data import (
     AreaCover,
     AreaEvasion,
     AreaRules,
+    CombatAction,
+    CombatMenuSection,
+    CombatRules,
     Impression,
     ImpressRules,
+    ManeuverLimits,
     ResistOptions,
 )
 from .parsing_rules import (
@@ -624,6 +628,54 @@ def _parse_area(raw: dict) -> AreaRules:
             (str(w["modifier"]), str(w.get("key", "")), str(w.get("value", "")))
             for w in block.get("worstOf", ())
             if isinstance(w, dict) and w.get("modifier")
+        ),
+    )
+
+
+def _parse_combat_action(raw: dict) -> CombatAction:
+    return CombatAction(
+        id=str(raw.get("id", "")),
+        name=str(raw.get("name", raw.get("id", ""))),
+        caption=str(raw.get("caption", "")),
+        icon=str(raw.get("icon", "")),
+        tooltip=str(raw.get("tooltip", "")),
+        kind=str(raw.get("kind", "self")),
+        needs_attack=bool(raw.get("needsAttack", False)),
+        gm_only=bool(raw.get("gmOnly", False)),
+        bonus=str(raw.get("bonus", "")),
+        penalty=str(raw.get("penalty", "")),
+        lasting=str(raw.get("lasting", "")),
+    )
+
+
+def _parse_combat(raw: dict) -> CombatRules:
+    """Parse ``actions.json``'s ``combat`` block (see :class:`CombatRules`)."""
+
+    block = raw.get("combat")
+    if not isinstance(block, dict):
+        return CombatRules()
+    limits = block.get("limits")
+    if not isinstance(limits, dict):
+        limits = {}
+    return CombatRules(
+        menu=tuple(
+            CombatMenuSection(
+                id=str(s["id"]),
+                title=str(s.get("title", s["id"])),
+                items=tuple(str(i) for i in s.get("items", ()) if isinstance(i, str)),
+            )
+            for s in block.get("menu", ())
+            if isinstance(s, dict) and s.get("id")
+        ),
+        actions=tuple(
+            _parse_combat_action(a)
+            for a in block.get("actions", ())
+            if isinstance(a, dict) and a.get("id")
+        ),
+        limits=ManeuverLimits(
+            max_shift=int(limits.get("maxShift", 5)),
+            floor=int(limits.get("floor", 0)),
+            double_cap=bool(limits.get("doubleCap", True)),
         ),
     )
 

@@ -147,6 +147,10 @@
       "hint": "The standing left edge that marks a power card as clickable."
     },
     "space.xs": {"label": "Extra small"},
+    "mark.size": {
+      "label": "Temporary-condition dot",
+      "hint": "The dot beside a stat a temporary condition is moving, in pixels. Zero hides it."
+    },
     "space.sm": {"label": "Small"},
     "space.md": {"label": "Medium"},
     "space.lg": {"label": "Large"},

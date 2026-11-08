@@ -20,6 +20,7 @@ from mm_companion.core.session.protocol import (
     ActionRequest,
     ApplyCondition,
     CharacterSnapshot,
+    ClearTemporary,
     ControlHello,
     ControlWelcome,
     CreateSessionRequest,
@@ -137,6 +138,8 @@ ROUND_TRIP_CASES = [
     SceneUpdate(entries=[{"ref": "e1", "name": "Thug", "initiative": 14}]),
     ScenePortrait(ref="e1", portrait="AAAA"),
     ApplyCondition(player_id="p1", condition_id="dazed", parameter="Strength"),
+    ApplyCondition(player_id="p1", condition_id="all_out_attack", amount=3, temporary=True),
+    ClearTemporary(player_id="p1"),
     RemoveCondition(player_id="p1", condition_id="dazed"),
     SetHeroPoints(player_id="p1", value=3),
     ErrorMessage(code=protocol.ERROR_BAD_TOKEN, message="wrong join code"),
@@ -200,11 +203,13 @@ def test_the_protocol_version_is_the_one_the_keepalive_needs() -> None:
     the same way again. v18 adds a roll's ``routine`` (take 10) and ``minion`` flags, which
     a v17 server would ignore and roll a d20 or score a minion's critical. v19 carries a
     choice save's ``pick`` (best or worst of two), which a v18 server would strip and roll
-    the better. Either way
+    the better. v20 carries a condition's amount and temporary flag (the GM's command and
+    the scene) and the GM's "Clear temporary", which a v19 server would strip or drop.
+    Either way
     changing this number is a decision about who can still join, so it should not be
     possible to do by accident.
     """
-    assert PROTOCOL_VERSION == 19
+    assert PROTOCOL_VERSION == 20
 
 
 def test_every_registered_type_is_reachable_by_tag() -> None:
@@ -683,3 +688,25 @@ def test_a_spec_keeps_the_condition_its_recovery_check_is_for() -> None:
     spec = sanitize_spec({"label": "Recover", "recovers": "dazed", "recovers_parameter": "x"})
 
     assert spec == {"label": "Recover", "recovers": "dazed", "recovers_parameter": "x"}
+
+
+def test_a_scene_condition_keeps_its_amount_and_temporary_flag() -> None:
+    """v20: a card names an All-Out Attack "-3" and draws it as the passing thing it is."""
+    scene = sanitize_scene(
+        [
+            {
+                "ref": "e1",
+                "conditions": [
+                    {"id": "all_out_attack", "amount": 3, "temporary": True},
+                    {"id": "dazed", "amount": True, "temporary": "yes"},  # wrong shapes
+                    {"id": "defending", "amount": 10_000},
+                ],
+            }
+        ]
+    )
+
+    assert scene[0]["conditions"] == [
+        {"id": "all_out_attack", "amount": 3, "temporary": True},
+        {"id": "dazed"},
+        {"id": "defending", "amount": protocol.MAX_SCENE_AMOUNT},
+    ]

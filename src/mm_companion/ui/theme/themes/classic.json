@@ -85,6 +85,9 @@
     "_space.indent": "How far a group card insets the members drawn inside it, so the nesting is legible without a second frame.",
     "space.indent": 14,
 
+    "_mark.size": "The diameter of the dot beside a stat a temporary condition is moving (an All-Out Attack's Defense, Defending's), in pixels. Green when the stat is higher for it, red when lower. Zero hides the dots.",
+    "mark.size": 6,
+
     "canvas.hint.height": 120,
     "platform.features.height": 160,
 

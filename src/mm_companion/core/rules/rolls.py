@@ -26,7 +26,7 @@ other roll, so there is one way to say "and +2 for cover".
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from ..character import Character
 from ..data_loader import Effect, GameData, ResistanceOutcome
@@ -314,6 +314,12 @@ class RollSpec:
     #: :data:`KIND_BEST_OF` / :data:`KIND_WORST_OF`, because the kind has to stay
     #: :data:`KIND_POWER_SAVE` — that is how a pin or a team attack finds the save.
     pick: str = ""
+    #: The trait keys whose condition mods are folded into :attr:`modifier` — an attack
+    #: check carries ``system.trait_keys.attack_check`` — so a card can put the stat's
+    #: dot (:func:`~.conditions.temporary_marks`) beside the line. **Local only**, for
+    #: :attr:`costs`' reason: it describes this sheet, not the roll — and left out of
+    #: equality, so a spec rebuilt off the wire is still the roll it was.
+    marks: tuple[str, ...] = field(default=(), compare=False)
 
     def follow_ups(self) -> tuple[RollSpec, ...]:
         """Every roll this one provokes: :attr:`follow_up`, then :attr:`also`."""
@@ -1178,16 +1184,19 @@ def _effect_roll_parts(
         against = _check_against(check_row.value)
         hint = "" if dc is not None else f"The target's {against} goes in the DC box."
         actor = numbers.check_actor
+        marks: tuple[str, ...] = ()
         if numbers.attack_check:
             shift, because = _attack_condition(char, game_data)
             actor += shift
             hint = " ".join(part for part in (hint, because) if part)
+            marks = (game_data.system.trait_keys.attack_check,)
         check = RollSpec(
             label=named(_check_label(check_row.value, actor, effect, game_data)),
             modifier=actor,
             dc=dc,
             kind=KIND_POWER_CHECK,
             hint=hint,
+            marks=marks,
             follow_up=provoked[0] if provoked else None,
             also=tuple(provoked[1:]),
         )
@@ -1282,6 +1291,7 @@ def _linked_check(
         also=tuple(provoked[1:]),
         costs=costs,
         spends=spends,
+        marks=(game_data.system.trait_keys.attack_check,),
     )
 
 

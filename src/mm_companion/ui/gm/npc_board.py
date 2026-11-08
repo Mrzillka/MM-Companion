@@ -190,6 +190,7 @@ class GMNpcBoardMixin:
         card.deleteRequested.connect(self._delete_npc)
         card.applyConditionRequested.connect(self._apply_npc_condition)
         card.removeConditionRequested.connect(self._remove_npc_condition)
+        card.clearTemporaryRequested.connect(self._clear_npc_temporary)
         card.recoveryRequested.connect(self._roll_npc_recovery)
         card.sceneToggled.connect(lambda n, on: self._set_in_scene(SCENE_NPC, n, on))
         card.copyRequested.connect(self._copy_npc)

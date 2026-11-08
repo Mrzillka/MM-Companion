@@ -172,7 +172,8 @@ class ConditionReceiver(QObject):
         bridge.heroPointsCommand.connect(self.handle_hero_points)
 
     def handle(self, action: str, payload: object) -> None:
-        """Apply one ``("apply" | "remove", payload)`` command from the GM."""
+        """Apply one ``("apply" | "remove" | "clear_temporary", payload)`` command from
+        the GM. An apply may carry an ``amount`` and ``temporary`` (protocol v20)."""
         if not self._attached or not isinstance(payload, dict):
             return
         section = getattr(self._sheet, "conditions", None)
@@ -183,12 +184,20 @@ class ConditionReceiver(QObject):
         condition_id = str(payload.get("condition_id", "") or "")
         raw = payload.get("parameter")
         parameter = str(raw) if raw else None
+        amount = payload.get("amount")
+        size = amount if isinstance(amount, int) and not isinstance(amount, bool) else None
+        temporary = payload.get("temporary") is True
         # Absorbed, not recorded: this is the GM's change, and Ctrl+Z is for
         # taking back what *this* player did. Undoing the table's Stunned — and
         # pushing that back up as a snapshot — is not something to offer.
         with absorbing(self._sheet):
             if action == "apply":
-                changed = section.apply_condition_by_id(condition_id, parameter)
+                changed = section.apply_condition_by_id(
+                    condition_id, parameter, amount=size, temporary=temporary
+                )
+            elif action == "clear_temporary":
+                clear = getattr(section, "clear_temporary_conditions", None)
+                changed = bool(clear()) if callable(clear) else False
             else:
                 changed = section.remove_condition_by_id(condition_id, parameter)
         if changed:

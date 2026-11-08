@@ -1211,12 +1211,12 @@ def test_picking_a_condition_sends_it_to_that_player(
     monkeypatch.setattr(
         window.bridge.server,
         "apply_condition",
-        lambda *args: sent.append(args) or True,
+        lambda *args, **kw: sent.append((*args, kw)) or True,
     )
 
     window._cards["p0"]._choose_condition(a_condition("dazed"))
 
-    assert sent == [("p0", "dazed", None)]
+    assert sent == [("p0", "dazed", None, {"amount": None, "temporary": False})]
     assert "Dazed" in window._notice_label.text()
 
 

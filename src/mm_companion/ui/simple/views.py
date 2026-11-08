@@ -65,6 +65,7 @@ from mm_companion.core.rules import (
     skill_roll,
     speed_columns,
     split_trait_key,
+    temporary_marks,
     trait_bonuses,
     trait_display_name,
 )
@@ -463,14 +464,31 @@ class ResistancesView(_View):
 
     def refresh(self) -> None:
         bonuses = trait_bonuses(self._character, self._data).get("resistance", {})
+        marks = temporary_marks(self._character, self._data)
         for resistance in self._data.resistances:
             spec = resistance_roll(self._character, self._data, resistance.key)
             condition = resistance_condition_effect(self._character, self._data, resistance.key)
             bonus = bonuses.get(resistance.key)
-            moved = -1 if condition.active else (bonus.amount if bonus else 0)
-            self.boxes[resistance.key].set_value(
-                str(spec.modifier), moved=moved, tooltip=_hint(resistance.name, spec.hint)
+            moved = (
+                _condition_moved(condition) if condition.active else (bonus.amount if bonus else 0)
             )
+            self.boxes[resistance.key].set_value(
+                str(spec.modifier),
+                moved=moved,
+                tooltip=_hint(resistance.name, spec.hint),
+                mark=marks.get(resistance.key),
+            )
+
+
+def _condition_moved(effect) -> int:
+    """Which way an active condition overlay tints a number: up only when all it does is
+    raise it (Defending's +2), otherwise down — the penalty an overlay always was."""
+    return 1 if effect.better else -1
+
+
+def _skill_mark(marks: dict, row_id: str):
+    """A skill row's temporary mark: the row's own (a focus), else its skill's."""
+    return marks.get(row_id) or marks.get(split_trait_key(row_id)[0])
 
 
 # -- Skills ----------------------------------------------------------------------
@@ -532,12 +550,18 @@ class SkillsView(_View):
         layout.addStretch()
         self.refresh()
 
-    def _line(self, row_id: str, display: str) -> SimpleLine:
+    def _line(self, row_id: str, display: str, marks: dict) -> SimpleLine:
         spec = skill_roll(self._character, self._data, row_id, label=display)
         mods = skill_modifiers(self._character, self._data, row_id)
         bonus = skill_bonus(self._character, self._data, row_id)
-        moved = -1 if mods.condition.active else (bonus.amount if bonus else 0)
-        line = SimpleLine(display, signed(spec.modifier), moved=moved)
+        moved = (
+            _condition_moved(mods.condition)
+            if mods.condition.active
+            else (bonus.amount if bonus else 0)
+        )
+        line = SimpleLine(
+            display, signed(spec.modifier), moved=moved, mark=_skill_mark(marks, row_id)
+        )
         if spec.hint:
             line.setToolTip(spec.hint)
         make_rollable(
@@ -550,12 +574,23 @@ class SkillsView(_View):
 
     def _signature(self, trained, untrained) -> tuple:
         character, data = self._character, self._data
+        marks = temporary_marks(character, data)
 
         def row(row_id: str, display: str) -> tuple:
             spec = skill_roll(character, data, row_id, label=display)
             bonus = skill_bonus(character, data, row_id)
-            condition = skill_modifiers(character, data, row_id).condition.active
-            return (row_id, display, spec.modifier, spec.hint, bonus and bonus.amount, condition)
+            condition = skill_modifiers(character, data, row_id).condition
+            mark = _skill_mark(marks, row_id)
+            return (
+                row_id,
+                display,
+                spec.modifier,
+                spec.hint,
+                bonus and bonus.amount,
+                condition.active,
+                condition.better,
+                mark,
+            )
 
         return (
             tuple(row(r, d) for r, d in trained),
@@ -566,8 +601,9 @@ class SkillsView(_View):
         trained, untrained = skill_rows(self.context)
         if self._unchanged(self._signature(trained, untrained)):
             return
+        marks = temporary_marks(self._character, self._data)
         with rebuilding(self):
-            self.grid.set_items([self._line(row_id, display) for row_id, display in trained])
+            self.grid.set_items([self._line(row_id, display, marks) for row_id, display in trained])
             self.grid.setVisible(bool(trained))
             clear_layout(self._untrained)
             for row_id, display in untrained:
@@ -734,6 +770,15 @@ class ConditionsView(_View):
         self.damage.stepChosen.connect(self._on_damage)
         top.addWidget(self.damage)
         top.addStretch()
+        from mm_companion.ui.sections.conditions import CLEAR_TEMPORARY_TEXT, CLEAR_TEMPORARY_TIP
+
+        # The live block's "Clear temporary", shown only while something is temporary.
+        self.clear_button = QToolButton()
+        self.clear_button.setText(CLEAR_TEMPORARY_TEXT)
+        self.clear_button.setToolTip(CLEAR_TEMPORARY_TIP)
+        self.clear_button.clicked.connect(self._clear_temporary)
+        top.addWidget(self.clear_button)
+        self.clear_button.hide()
         self._top = QWidget()
         self._top.setLayout(top)
         layout.addWidget(self._top)
@@ -753,6 +798,11 @@ class ConditionsView(_View):
         menu = build_condition_menu(self, self._data, section.choose_condition)
         menu.exec(self.add_button.mapToGlobal(self.add_button.rect().bottomLeft()))
 
+    def _clear_temporary(self) -> None:
+        clear = self._funnel("clear_temporary_conditions")
+        if clear is not None:
+            clear()
+
     def _on_damage(self, index: int) -> None:
         apply = getattr(self.context.section, "apply_damage_step", None)
         if callable(apply):
@@ -767,13 +817,18 @@ class ConditionsView(_View):
     def _facts(self, applied: AppliedCondition, catalog: dict) -> tuple:
         """Everything a chip shows, as values: what :meth:`refresh` compares and draws.
 
-        ``(name, inherited, tooltip, random, rolled, recover)`` — *inherited* when
-        another condition put it on (drawn in italics), *random* for a Confused-style
-        condition that offers a roll, *rolled* this turn's random action if one was
-        rolled, *recover* for one that is rolled off with a recovery check.
+        ``(name, inherited, tooltip, random, rolled, recover, tone, temporary)`` —
+        *inherited* when another condition put it on (drawn in italics), *random* for a
+        Confused-style condition that offers a roll, *rolled* this turn's random action
+        if one was rolled, *recover* for one that is rolled off with a recovery check,
+        *tone* the tint it is drawn in, *temporary* for one that offers its own ✕.
         """
         from mm_companion.core.rules import can_recover
-        from mm_companion.ui.sections.conditions import condition_display_name, condition_tooltip
+        from mm_companion.ui.sections.conditions import (
+            condition_display_name,
+            condition_tone_token,
+            condition_tooltip,
+        )
 
         record = catalog.get(applied.condition_id)
         roll = self._funnel("confused_roll")
@@ -790,18 +845,20 @@ class ConditionsView(_View):
             (roll(applied) or None) if random and roll is not None else None,
             self._funnel("roll_recovery") is not None
             and can_recover(self._character, self._data, applied),
+            condition_tone_token(record),
+            applied.temporary,
         )
 
     def _chip(self, applied: AppliedCondition, facts: tuple) -> QWidget:
-        name, inherited, tooltip, random, rolled, recover = facts
+        name, inherited, tooltip, random, rolled, recover, tone, temporary = facts
         chip = QWidget()
         chip.setObjectName("simpleCondition")
         chip.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        worse = theme.color("tint.worse")
+        edge = theme.color(tone)
         chip.setStyleSheet(
-            f"#simpleCondition {{ border: {int(theme.metric('border.width'))}px solid {worse};"
+            f"#simpleCondition {{ border: {int(theme.metric('border.width'))}px solid {edge};"
             f" border-radius: {int(theme.metric('radius.chip'))}px;"
-            f" background: {theme.wash('tint.worse', 0.10)}; }}"
+            f" background: {theme.wash(tone, 0.10)}; }}"
         )
         row = QHBoxLayout(chip)
         pad = int(theme.metric("space.xs"))
@@ -836,6 +893,15 @@ class ConditionsView(_View):
             )
             row.addWidget(recovery)
         shed = self._funnel("shed_condition")
+        if shed is not None and temporary:
+            from mm_companion.ui.sections.conditions import DISMISS_GLYPH
+
+            dismiss = QToolButton()
+            dismiss.setText(DISMISS_GLYPH)
+            dismiss.setAutoRaise(True)
+            dismiss.setToolTip(f"Take off {name}")
+            dismiss.clicked.connect(lambda _c=False, a=applied: shed(a))
+            row.addWidget(dismiss)
         if shed is not None:
             attach_context_removal(chip, lambda a=applied: shed(a), what=name)
         return chip
@@ -865,6 +931,10 @@ class ConditionsView(_View):
             self._chips_host.setVisible(has_any)
             self._chips_host.refresh_height()
             self.empty.setVisible(not has_any)
+            self.clear_button.setVisible(
+                self._funnel("clear_temporary_conditions") is not None
+                and any(applied.temporary for applied in conditions)
+            )
 
 
 # -- Notes, on paper ----------------------------------------------------------------

@@ -356,6 +356,7 @@ def _parse_condition(c: dict) -> Condition:
         tone=str(c.get("tone") or TONE_HINDRANCE),
         amount_mods=_parse_amount_mods(c.get("amountMods")),
         default_amount=(int(c["defaultAmount"]) if c.get("defaultAmount") is not None else None),
+        max_amount=(int(c["maxAmount"]) if c.get("maxAmount") is not None else None),
         temporary=bool(c.get("temporary", False)),
     )
 

@@ -267,7 +267,8 @@ _BASE_BLOCKS = [
         {CONDITION_CHANGED: "reseed"},
         # A recovery check off a chip's 🎲 is rolled by whoever serves rolls, and
         # comes back here as the condition to shed once the roller has seen it made.
-        {"rollRequested": (ROLL_REQUESTED,)},
+        # ... and "Clear temporary" says in the history what it took off.
+        {"rollRequested": (ROLL_REQUESTED,), "noteRequested": (NOTE_REQUESTED,)},
         {RECOVERY_REQUESTED: "recover_condition", USE_SPENT: "take_use_costs"},
     ),
     (

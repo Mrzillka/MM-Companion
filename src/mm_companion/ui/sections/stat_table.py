@@ -52,6 +52,7 @@ from mm_companion.ui.sections.row_table import (
     MenuContributor,
     install_row_menu,
 )
+from mm_companion.ui.stat_mark import install_mark_delegate
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import hline_separator, make_spin_box, readonly_item
 
@@ -220,6 +221,9 @@ def build_stat_table(
     # wheel then always falls through to the page.
     table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
     guard_wheel(table)
+    # The dot a temporary condition leaves on a total (see mm_companion.ui.stat_mark),
+    # painted over the cell rather than beside it, so it moves no column.
+    install_mark_delegate(table, COL_TOTAL)
 
     rows = len(entries) + (1 if any(entry.derived for entry in entries) else 0)
     table.setRowCount(rows)
@@ -387,8 +391,9 @@ def apply_stat_effects(
     modifier, then a condition overlay (a Hit penalty on Toughness, a halved/zeroed
     active defense, a scoped check penalty). A modifier tints the cell by its
     **sign** (:func:`bonus_tint`) — a power boost green, a large creature's −1
-    Defense red; any condition tints it red regardless, struck through when the
-    overlay reports the trait lost (``ConditionEffect.trait_lost``). An unmodified
+    Defense red; a condition tints it red regardless — unless all it does is raise
+    the stat (``ConditionEffect.better``: Defending's +2), which is green — struck
+    through when the overlay reports the trait lost (``ConditionEffect.trait_lost``). An unmodified
     trait's total is just its rank, untinted.
 
     Returns whether any trait is modified at all — when none is, the column only
@@ -471,7 +476,9 @@ def paint_stat_cell(
     item.setToolTip("\n".join(tips))
 
     if has_cond:
-        token = CONDITION_TINT
+        # A condition that only *raises* the stat (Defending's +2) reads in the
+        # benefit green; anything else a condition does is the penalty red.
+        token = ENHANCED_TINT if effect.better else CONDITION_TINT
     elif bonus:
         token = bonus_tint(bonus.amount)
     else:

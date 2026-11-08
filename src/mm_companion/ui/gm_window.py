@@ -509,6 +509,7 @@ class GMWindow(
         self._scene_board.actionRequested.connect(self._on_scene_action)
         self._scene_board.removeConditionRequested.connect(self._remove_scene_condition)
         self._scene_board.recoveryRequested.connect(self._roll_scene_recovery)
+        self._scene_board.clearTemporaryRequested.connect(self._clear_scene_temporary)
         self._scene_board.set_recovery_probe(self._scene_can_recover)
         # Every pixel of the box below the buttons, and no trailing stretch: the
         # board's drop target fills what it is given, so what a GM aims a dragged

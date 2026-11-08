@@ -130,3 +130,47 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   included, returning what went. The seven records live in the `maneuver` group, so the
   "+" menu offers them. Aided and Trick Advantage are *not* temporary: they last to the
   end of a turn, which a start-of-turn clear would cut short.
+- **The sheet shows which numbers are borrowed** (combat maneuvers, phase 2). Every stat
+  a temporary condition moves gets a **dot** (`ui/stat_mark.py`): green when
+  `temporary_marks` says the temporaries leave it higher, red when lower, the sources in
+  its tooltip, sized by the `mark.size` token. Two forms. A table cell (the Resistances
+  and Skills totals) is marked with `mark_item`, which writes `MARK_ROLE`, and
+  `StatMarkDelegate` (installed on the Total column) paints the dot in the cell's corner
+  *over* its contents, so a dot costs the column no width and moves no text; call it after
+  whatever writes the cell's tooltip, since it appends to it. A label readout uses the
+  `StatMark` widget, hidden-but-room-keeping (`retainSizeWhenHidden`): the simple sheet's
+  stat boxes (the room mirrored on the left, so the number stays centred) and lines, and a
+  card's roll line. Which roll line is decided in `core`: `RollSpec.marks` names the trait
+  keys whose condition mods a spec folds in (an attack check carries
+  `trait_keys.attack_check`; a Perception-range effect's check does not). It is local
+  only, never in `to_dict`, and `compare=False`, so a spec rebuilt off the wire still
+  equals the roll it was. `RollsFooter(marks=temporary_marks(...))` draws it; the cards
+  are rebuilt on every condition change (`FACTS_CHANGED`), so a footer holds no empty
+  room for a dot. A skill row is marked by its own key first, then its skill's name.
+  **The overlay's colour follows its sign now:** `ConditionEffect.better` (a net rise
+  with no halving and no lost trait) tints a total green rather than the penalty red
+  every overlay used to be, so Defending's +2 Defense reads as the help it is.
+- **Chips wear their tone.** `condition_tone_token(record)` (`tint.better` for a benefit,
+  `tint.worse` otherwise) colours every chip: the GM cards' `_ConditionChip(tone=…)`, the
+  simple sheet's, and on the sheet's own block any benefit or temporary chip (a lasting
+  hindrance keeps the plain panel it always had). A **temporary** chip also gets a visible
+  ✕ beside the right-click (the user's call: it is the condition taken off every turn,
+  often one at a time), and its tooltip says it is temporary. **"Clear temporary"** is
+  shown only while something temporary is on the creature: in the Conditions block's
+  header (`clear_temporary_conditions`, one undo step, plus a history line from
+  `clear_temporary_note` on `noteRequested`), the simple sheet's Conditions view (through
+  the same funnel), and on the GM's NPC, player and Scene cards — **on a line of its own
+  under the chips**, never in their flow, because `condition_names()` reads every widget
+  in the flow as a condition. An NPC's clear changes the GM's model and replays onto an
+  open NPC sheet with `note=False` (the GM window writes one line naming the creature); a
+  player's goes to their app as a `ClearTemporary` command (protocol v20), whose sheet
+  writes the line. The GM's End turn does not clear them (they last to the *start* of the
+  next turn).
+- **The "+" menu asks for an amount** when applying one by hand needs it:
+  `condition_asks_amount` (has `amountMods`, no `defaultAmount` — All-Out and Defensive
+  Attack) makes `prompt_condition_amount` ask, 1 to the record's `maxAmount` (5 for the
+  maneuvers; 20 when unstated). Defending's +2 is applied as it comes. The prompt is a
+  second call after `prompt_condition_parameter` in every "+" (the sheet's, and the GM's
+  on a player and an NPC card), whose `applyConditionRequested` now carries
+  `(key, id, parameter, amount)`; `apply_condition_by_id` takes `amount` and `temporary`.
+

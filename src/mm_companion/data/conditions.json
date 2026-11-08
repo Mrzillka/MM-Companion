@@ -92,7 +92,7 @@
     },
     "parameterNote": "Some conditions must be qualified with a subject when applied — which trait, sense, descriptor, or controller they concern. That is the 'parameter' block. type='trait_select'/'sense_select'/'descriptor_text'/'character_ref' drives a combobox or text input in the UI; the chosen value is stored on the applied-condition instance and folded into the displayed name (e.g. 'Impaired' + trait 'Attack' -> 'Attack Impaired'). A condition with parameter.required=false but present is narrative-scoped only.",
     "toneNote": "'tone' is what a condition does to its bearer on balance: 'benefit' (drawn green) or 'hindrance' (drawn red). A record without one is a hindrance.",
-    "amountNote": "Some conditions are applied with an amount (All-Out Attack -3). 'amountMods' lists the traits that amount moves, each {trait, sign, parameter?}: 'trait' is a trait key (a resistance key such as DEF, or system.json's trait_keys.attack_check for attack checks), 'sign' is +1 or -1, and 'parameter' limits the entry to an instance applied with that parameter. 'defaultAmount' is the amount an instance gets when applied without one (Defending's +2). Re-applying such a condition replaces its amount rather than stacking, unless it is 'stacking'.",
+    "amountNote": "Some conditions are applied with an amount (All-Out Attack -3). 'amountMods' lists the traits that amount moves, each {trait, sign, parameter?}: 'trait' is a trait key (a resistance key such as DEF, or system.json's trait_keys.attack_check for attack checks), 'sign' is +1 or -1, and 'parameter' limits the entry to an instance applied with that parameter. 'defaultAmount' is the amount an instance gets when applied without one (Defending's +2); 'maxAmount' is the largest the rules allow, which is as high as the '+' menu offers when it asks for one. Re-applying such a condition replaces its amount rather than stacking, unless it is 'stacking'.",
     "temporaryNote": "A temporary condition lasts until the start of its bearer's next turn and is removed then, by hand, with 'Clear temporary' (there is no turn clock). 'temporary': true makes a record temporary wherever it is applied from; an action may also apply any other condition temporarily (a feint's Vulnerable).",
     "debilitationNote": "Debilitating an ability cascades into hard conditions (see each entry's 'debilitates.cascade'): Strength->Incapacitated, Stamina->Dying (stabilize at -5), Agility->Paralyzed, any Mental (INT/AWE/PRE)->Unaware until restored to >= -5, Attack->auto-fail attacks, Defense->Defenseless, Initiative->acts last. Debilitated Skills read as untrained; Debilitated Advantages/Powers stop functioning. Absent (rank '-') traits behave like debilitated with a few extras (no Stamina treats Dying as Dead). The engine drives this from the chosen trait, not a hardcoded per-condition branch."
   },
@@ -1160,6 +1160,7 @@
       "effect": "The attack check took a bonus of up to +5, paid for with an equal penalty to Defense. The penalty stays until the start of your next turn, whether the attack hit or not.",
       "recovery": "Ends at the start of your next turn.",
       "tone": "hindrance",
+      "maxAmount": 5,
       "temporary": true,
       "amountMods": [
         {
@@ -1185,6 +1186,7 @@
       "effect": "The attack check took a penalty of up to -5 in exchange for an equal bonus to Defense. Both last until the start of your next turn.",
       "recovery": "Ends at the start of your next turn.",
       "tone": "benefit",
+      "maxAmount": 5,
       "temporary": true,
       "amountMods": [
         {

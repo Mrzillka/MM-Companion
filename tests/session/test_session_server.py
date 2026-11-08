@@ -869,6 +869,21 @@ def test_apply_condition_to_an_absent_player_reports_false(running_server) -> No
     assert srv.apply_condition("nobody", "dazed") is False
 
 
+def test_apply_condition_carries_an_amount_and_temporary(running_server, connect) -> None:
+    srv = running_server()
+    client, events = connect(srv, "Volt")
+    assert srv.apply_condition(client.player_id, "all_out_attack", amount=3, temporary=True)
+    command = events.next_of(EVENT_APPLY_CONDITION)
+    assert command["amount"] == 3 and command["temporary"] is True
+
+
+def test_clear_temporary_reaches_the_player(running_server, connect) -> None:
+    srv = running_server()
+    client, events = connect(srv, "Volt")
+    assert srv.clear_temporary(client.player_id) is True
+    assert events.next_of("clear_temporary")["player_id"] == client.player_id
+
+
 def test_remove_condition_reaches_the_player(running_server, connect) -> None:
     srv = running_server()
     client, events = connect(srv, "Volt")

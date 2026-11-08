@@ -83,6 +83,7 @@ from mm_companion.core.rules import (
     skill_usable,
     specialized_row_id,
     split_trait_key,
+    temporary_marks,
     trait_display_name,
 )
 from mm_companion.ui import theme
@@ -102,6 +103,7 @@ from mm_companion.ui.sections.row_table import (
 )
 from mm_companion.ui.sections.stat_table import (
     CONDITION_TINT,
+    ENHANCED_TINT,
     ROLL_ROLE,
     PinMenuState,
     bonus_tint,
@@ -109,6 +111,7 @@ from mm_companion.ui.sections.stat_table import (
     tint_item,
 )
 from mm_companion.ui.sections.titled_section import TitledSection
+from mm_companion.ui.stat_mark import install_mark_delegate, mark_item
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import make_spin_box, readonly_item
 
@@ -353,6 +356,8 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         # The panels fit their content and never scroll, so keep them out of the
         # focus chain; the wheel then always falls through to the page scroll.
         table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        # A temporary condition's dot on the total it moves (mm_companion.ui.stat_mark).
+        install_mark_delegate(table, COL_TOTAL)
         # Connected once per table, which outlives the frequent _rebuild: the tables
         # themselves are reused, only their items are rebuilt.
         table.cellDoubleClicked.connect(
@@ -1192,6 +1197,7 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
             self._rebuild()
             return
 
+        marks = temporary_marks(self._character, self._data)
         for row in self._rows:
             mod = mods[row.row_id]
             # The ABL column shows the *effective* ability (with any power boost) so
@@ -1206,6 +1212,11 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
             effect = mod.condition
             row.total_item.setText(str(effect.apply(total) if effect.active else total))
             self._style_condition(row.total_item, row.name_item, effect, total)
+            # Keyed by the row (a focus) first, then by the skill it belongs to.
+            mark_item(
+                row.total_item,
+                marks.get(row.row_id) or marks.get(split_trait_key(row.row_id)[0]),
+            )
             self._fill_untrained_cell(row)
             if not effect.active:
                 self._mute_unusable(row)
@@ -1288,8 +1299,9 @@ class SkillsSection(ColumnFlowPanels, TitledSection):
         """Tint the total red (and strike the row) while a condition scopes to it."""
 
         struck = effect.active and effect.trait_lost
+        token = (ENHANCED_TINT if effect.better else CONDITION_TINT) if effect.active else None
         for item in (total_item, name_item):
-            tint_item(item, CONDITION_TINT if effect.active else None, struck=struck)
+            tint_item(item, token, struck=struck)
         if effect.active:
             total_item.setToolTip(f"{base_total} {effect.tooltip}")
         else:

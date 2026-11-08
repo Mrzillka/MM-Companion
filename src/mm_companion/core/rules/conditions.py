@@ -230,6 +230,35 @@ def has_temporary(character: Character) -> bool:
     return any(c.temporary for c in character.conditions)
 
 
+def clear_temporary_note(removed: Iterable[AppliedCondition], game_data: GameData) -> str:
+    """The history line a "Clear temporary" writes, naming what went; ``""`` for nothing.
+
+    Only the directly applied conditions are named — a bundled member went with the
+    condition that brought it, as its chip did.
+    """
+
+    catalog = game_data.condition_catalog()
+    names = [
+        applied_condition_name(c, catalog.get(c.condition_id))
+        for c in removed
+        if c.provenance is None
+    ]
+    if not names:
+        return ""
+    return "temporary conditions cleared: " + ", ".join(names)
+
+
+def condition_asks_amount(condition: Condition) -> bool:
+    """Whether applying *condition* by hand needs an amount chosen first.
+
+    True for a record whose ``amountMods`` move something but which has no
+    ``defaultAmount`` to fall back on — an All-Out Attack applied with no amount moves
+    nothing at all. Defending (+2 by default) is applied as it comes.
+    """
+
+    return bool(condition.amount_mods) and condition.default_amount is None
+
+
 def applied_amount(applied: AppliedCondition, condition: Condition | None) -> int:
     """The amount *applied* moves its traits by: its own, else the record's default."""
 
@@ -551,6 +580,16 @@ class ConditionEffect:
     @property
     def active(self) -> bool:
         return bool(self.delta or self.op or self.condition_ids)
+
+    @property
+    def better(self) -> bool:
+        """Whether the overlay leaves the stat *higher* — Defending's +2 on Defense.
+
+        Only a net rise with no override says so: a halving, a lost trait, a penalty
+        or a wash (+2 and −2) all read as the penalty an overlay always used to be.
+        """
+
+        return self.delta > 0 and not self.op and not self.trait_lost
 
     def apply(self, value: int) -> int:
         """The value after this overlay (``zero`` wins, then ``halve``, then ``delta``)."""

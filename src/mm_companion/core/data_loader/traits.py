@@ -398,6 +398,9 @@ class Condition:
     amount_mods: tuple[AmountMod, ...] = ()
     #: The amount an instance gets when applied without one (Defending's +2).
     default_amount: int | None = None
+    #: The largest amount the rules allow (a maneuver's 5) — what the "+" menu offers
+    #: up to when it asks for one. ``None`` leaves it open.
+    max_amount: int | None = None
     #: Always applied as temporary — gone at the start of the bearer's next turn — from
     #: wherever it is applied, the "+" menu included.
     temporary: bool = False

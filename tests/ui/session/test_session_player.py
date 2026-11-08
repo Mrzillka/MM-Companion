@@ -565,6 +565,28 @@ def test_the_gm_can_put_a_condition_on_a_players_sheet(qapp: QApplication, table
     assert [c["id"] for c in stored] == ["dazed"]
 
 
+def test_the_gm_can_size_a_maneuver_and_clear_it_again(qapp: QApplication, table) -> None:
+    """Protocol v20: the command carries an amount, and "Clear temporary" reaches the sheet."""
+    host, player = table
+    sheet, _pusher, receiver = joined_sheet(player)
+    player_id = player.client.player_id
+    host.server.apply_condition(player_id, "prone")
+    host.server.apply_condition(player_id, "all_out_attack", amount=3)
+
+    assert wait_for(qapp, lambda: receiver.applied == 2)
+    applied = sheet.character.conditions[1]
+    assert (applied.condition_id, applied.amount, applied.temporary) == (
+        "all_out_attack",
+        3,
+        True,
+    )
+
+    host.server.clear_temporary(player_id)
+
+    assert wait_for(qapp, lambda: receiver.applied == 3)
+    assert [c.condition_id for c in sheet.character.conditions] == ["prone"]
+
+
 def test_a_gm_applied_condition_bundles_like_a_local_one(qapp: QApplication, table) -> None:
     """The command goes through the same resolver, so an umbrella brings its members."""
     host, player = table

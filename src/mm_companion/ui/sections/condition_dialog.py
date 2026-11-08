@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QVBoxLayout,
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import Condition, GameData
+from mm_companion.core.rules import condition_asks_amount
 from mm_companion.ui.wheel_guard import guard_wheel
 
 # Which options mean "no scope" and which open a second combo is declared per option
@@ -202,3 +204,32 @@ def prompt_condition_parameter(
     if dialog.exec() != QDialog.DialogCode.Accepted:
         return False, None
     return True, dialog.value()
+
+
+#: How high the amount prompt goes for a record that names no ``maxAmount``.
+OPEN_AMOUNT_CEILING = 20
+
+
+def prompt_condition_amount(
+    condition: Condition, parent: QWidget | None = None
+) -> tuple[bool, int | None]:
+    """Ask how big a condition is when applying it by hand needs that (All-Out Attack).
+
+    Returns ``(go_ahead, amount)`` — ``(False, None)`` when the user cancelled. A
+    condition that needs no amount (:func:`~mm_companion.core.rules.condition_asks_amount`:
+    most of them, and Defending with its +2 default) never asks and answers
+    ``(True, None)``, which leaves the record's own default to the resolver.
+
+    Shared, like :func:`prompt_condition_parameter`, by every "+" that applies a
+    condition: the sheet's, and the GM's on a player or an NPC card.
+    """
+
+    if not condition_asks_amount(condition):
+        return True, None
+    ceiling = condition.max_amount or OPEN_AMOUNT_CEILING
+    amount, ok = QInputDialog.getInt(
+        parent, condition.name, f"How much (1 to {ceiling})?", 1, 1, ceiling
+    )
+    if not ok:
+        return False, None
+    return True, int(amount)

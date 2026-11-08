@@ -12,7 +12,7 @@ every session.**
 |---|---|---|
 | 0 | Plan and skill | done (2026-11-08) |
 | 1 | Temporary conditions in `core` (amount, temporary, tone, stat mods) | done (2026-11-08) |
-| 2 | Sheet indicators: dots, tinted chips, "Clear temporary" | not started |
+| 2 | Sheet indicators: dots, tinted chips, "Clear temporary" | done (2026-11-08) |
 | 3 | Reusable grid popup, action icons, the **Actions** button | not started |
 | 4 | Roller rework: one two-way slider, the action lane, the attack picker | not started |
 | 5 | The four attack maneuvers, end to end (player) | not started |
@@ -277,9 +277,16 @@ widget, log failures.
     `finishing_spec`, `stand_options`.
 - **`RollSpec`** may need `maneuvers: tuple[str, …]` (the history caption) and
   `finishing: bool` (a hit is a critical). If either crosses the wire, add it to
-  `protocol.sanitize_spec`'s whitelist and **bump the protocol (v19 → v20)**. Check that
-  `AppliedCondition`'s new keys reach the GM on a player's sheet sync. Keep the server
-  rules-free.
+  `protocol.sanitize_spec`'s whitelist. **The bump has already happened: v20, in phase
+  2** (`ApplyCondition.amount`/`temporary`, `ClearTemporary`, the scene's condition
+  keys). v20 is unreleased, so later phases add to it and do **not** bump again. Keep the
+  server rules-free.
+- **As built (phase 2):** `RollSpec.marks` (local only, `compare=False`) names the trait
+  keys a spec's modifier folds condition mods into — an attack check carries
+  `trait_keys.attack_check` — so a card knows which line wears the dot.
+  `ConditionEffect.better` says an overlay only raises a stat (the tint follows it).
+  `condition_asks_amount` + a record's `maxAmount` (5 on All-Out / Defensive Attack) drive
+  the "+" menu's amount prompt. `clear_temporary_note` is the history line.
 
 ### 3.3 UI
 
@@ -331,6 +338,21 @@ widget, log failures.
   with the amount in the caption. **"Clear temporary"** sits on the Conditions block
   header, the GM's player and NPC cards, and the Scene cards, and is visible only while
   `any(c.temporary …)`.
+- **As built (phase 2):** the dots are `ui/stat_mark.py` — `StatMark` (a widget, for
+  label readouts: the simple sheet's boxes and lines, a card's roll line) and
+  `StatMarkDelegate` + `mark_item`/`MARK_ROLE` for table cells (the Resistances and
+  Skills totals: painted in the cell's corner, so no column width moves). Token
+  `mark.size`. **No dot on the System block**: nothing temporary moves Initiative or
+  Speed yet; add one there when something does. Chips: `condition_tone_token(record)`
+  colours every chip (GM cards, simple sheet; on the sheet's block only benefit or
+  temporary chips, lasting hindrances keep the plain panel). A **✕ on temporary chips
+  only** (decision 8 read as "each temporary chip"; the right-click still works on all).
+  On the GM's cards "Clear temporary" is a small button on a line under the chips, never
+  in the chip flow (`condition_names()` reads the flow). An NPC's clear replays onto an
+  open NPC sheet with `note=False`, and the GM window writes "Thug: temporary conditions
+  cleared: …"; a player's is a `ClearTemporary` command and their own sheet writes the
+  line. `applyConditionRequested` on the player and NPC cards is now
+  `(key, id, parameter, amount)`.
 - **The GM (`ui/gm_window.py`, `ui/gm/*.py`):** the Rolls block's Actions button. A pick
   → the NPC chooser (the `_on_history_roll` menu pattern: portraits, board order). It
   loads that NPC's attack list into the picker, rolls as that NPC, and lands the lasting
@@ -386,14 +408,18 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
       v20) probably lands in phase 2**, not 5.
 
 ### Phase 2 — Sheet indicators
-- [ ] `StatMark` dot widget, tokens for its size.
-- [ ] Dots in Resistances, System readouts, Skills, and power/gear attack lines; the
-      simple sheet.
-- [ ] Chips tinted by `tone`, with the amount in the caption.
-- [ ] "Clear temporary" on the Conditions block, GM player/NPC cards, and Scene cards,
+- [x] `StatMark` dot widget, tokens for its size (`mark.size`), plus a table delegate.
+- [x] Dots in Resistances, Skills, and power/gear attack lines; the simple sheet. (System
+      readouts: none — nothing temporary moves them yet.)
+- [x] Chips tinted by `tone`, with the amount in the caption; ✕ on temporary chips.
+- [x] "Clear temporary" on the Conditions block, GM player/NPC cards, and Scene cards,
       visible only when a temporary condition exists; one undo step; a history note.
-- [ ] For now the conditions come in through the existing "+" menu (the `maneuver`
-      group), which shows that everything works without the roller.
+- [x] For now the conditions come in through the existing "+" menu (the `maneuver`
+      group), which shows that everything works without the roller. The menu asks for
+      an amount when the record has no default (All-Out / Defensive Attack, 1–5).
+- [x] The tint of a condition overlay follows its sign (Defending's +2 is green).
+- [x] Protocol v20 (the feature's one bump): `ApplyCondition.amount`/`temporary`,
+      `ClearTemporary`, the scene's `amount`/`temporary`.
 
 ### Phase 3 — Grid popup, icons, the Actions button
 - [ ] `ui/action_grid.py` (`ActionGridPopup`, `GridSection`, `GridItem`), reflowing
@@ -428,8 +454,8 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
       adds no condition.
 - [ ] Aimed attacks pick up the active lines. Team attack's final ranks include them
       (p201).
-- [ ] Session: spec keys whitelisted, the protocol bump (once), the GM sees the
-      conditions.
+- [ ] Session: spec keys whitelisted (under v20 — already bumped in phase 2, don't bump
+      again), the GM sees the conditions.
 
 ### Phase 6 — Self actions
 - [ ] Aim (best of two on the next attack), Charge (−2) + Slam option (rank + self save
@@ -502,6 +528,31 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
 
 Newest first. Each entry: date, phase, what was done, what's next, gotchas, and the
 commit hash.
+
+- **2026-11-08 — Phase 2 (done).** Dots: `ui/stat_mark.py` (`StatMark`,
+  `StatMarkDelegate`, `mark_item`, `MARK_ROLE`, token `mark.size`), on the Resistances
+  and Skills totals (delegate on the Total column), on the power/gear cards' attack line
+  (`RollsFooter(marks=…)`, driven by the new `RollSpec.marks`), and on the simple sheet's
+  resistance boxes and skill lines. The overlay tint follows its sign
+  (`ConditionEffect.better`), fixing phase 1's red Defending. Chips: `condition_tone_token`
+  everywhere, ✕ on temporary chips (sheet, simple sheet, GM cards), temporary line in the
+  tooltip. "Clear temporary": the block header (`clear_temporary_conditions`, history note
+  via the block's new `noteRequested` → `NOTE_REQUESTED`), the simple sheet, the NPC card
+  (`_clear_npc_temporary`, replays onto an open sheet), the player card
+  (`_clear_player_temporary` → `bridge.clear_temporary`) and the Scene card
+  (`_clear_scene_temporary`). The "+" menu asks for an amount (`prompt_condition_amount`,
+  `maxAmount: 5` on the two maneuvers). **Protocol v20** landed here (see the phase 1 wire
+  findings): later phases add to v20 without bumping. Tests: 7 new in
+  `tests/core/test_temporary_conditions.py`, `tests/ui/sheet/test_temporary_indicators.py`
+  (15), `tests/ui/gm/test_temporary_gm.py` (9), protocol/server/session-player cases.
+  **Gotchas:** (1) `RollSpec.marks` must be `compare=False` — a spec round-tripped through
+  `to_dict` is compared for equality in tests and in the history; (2) closing an NPC
+  sheet window in a test after a GM change prompts "unsaved changes" and hangs —
+  leave it to the conftest teardown; (3) a scratch script that edits files still has to
+  live in the scratchpad (backticks in heredocs). **Decisions I made (small):** ✕ only on
+  temporary chips; the cards' "Clear temporary" under the chips rather than on the button
+  row (so a card never widens); no System-block dot yet; the "+" amount prompt starts at 1.
+  Next: phase 3 (the grid popup, icons, the Actions button). Commit: (see below).
 
 - **2026-11-08 — Phase 1 (done).** `AppliedCondition.amount`/`.temporary` (omitted at
   defaults); `apply_condition(amount=, temporary=)` with the record's `defaultAmount`

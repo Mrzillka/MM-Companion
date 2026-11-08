@@ -68,6 +68,7 @@ from .protocol import (
     ActionRequest,
     ApplyCondition,
     CharacterSnapshot,
+    ClearTemporary,
     ErrorMessage,
     GroupRollRequest,
     Hello,
@@ -754,13 +755,29 @@ class SessionServer:
         return records
 
     def apply_condition(
-        self, player_id: str, condition_id: str, parameter: str | None = None
+        self,
+        player_id: str,
+        condition_id: str,
+        parameter: str | None = None,
+        *,
+        amount: int | None = None,
+        temporary: bool = False,
     ) -> bool:
         """Tell one player's client to put a condition on their live sheet."""
         return self.send_to(
             player_id,
-            ApplyCondition(player_id=player_id, condition_id=condition_id, parameter=parameter),
+            ApplyCondition(
+                player_id=player_id,
+                condition_id=condition_id,
+                parameter=parameter,
+                amount=amount,
+                temporary=temporary,
+            ),
         )
+
+    def clear_temporary(self, player_id: str) -> bool:
+        """Tell one player's client to take every temporary condition off their sheet."""
+        return self.send_to(player_id, ClearTemporary(player_id=player_id))
 
     def remove_condition(
         self, player_id: str, condition_id: str, parameter: str | None = None
@@ -1336,7 +1353,10 @@ class SessionServer:
             self.reveal_roll(message.seq)
         elif isinstance(message, Ping):
             self._send_quietly(connection, Pong(nonce=message.nonce))
-        elif isinstance(message, (ApplyCondition, RemoveCondition, SetHeroPoints)) and slot.is_gm:
+        elif (
+            isinstance(message, (ApplyCondition, RemoveCondition, ClearTemporary, SetHeroPoints))
+            and slot.is_gm
+        ):
             # A GM driving a headless server from a remote app: relay the command
             # on to the player it names.
             self.send_to(message.player_id, message)

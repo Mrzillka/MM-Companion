@@ -18,7 +18,9 @@ from mm_companion.core.rules import (
     applied_condition_name,
     apply_condition,
     clear_temporary,
+    clear_temporary_note,
     condition_amount_mods,
+    condition_asks_amount,
     condition_attack_check_mod,
     defense_class,
     defense_class_in_play,
@@ -282,3 +284,64 @@ def test_clear_temporary_takes_only_the_temporary_ones(hero, data) -> None:
     assert [c.condition_id for c in hero.conditions] == ["prone"]
     assert not has_temporary(hero)
     assert clear_temporary(hero) == []
+
+
+# -- phase 2: what the sheet reads ---------------------------------------------------------
+
+
+def test_a_raise_only_overlay_reads_better_and_anything_else_worse(hero, data) -> None:
+    apply_condition(hero, "defending", data)
+    assert resistance_condition_effect(hero, data, "DEF").better
+    apply_condition(hero, "vulnerable", data)
+    assert not resistance_condition_effect(hero, data, "DEF").better  # halving wins
+
+
+def test_a_penalty_overlay_is_not_better(hero, data) -> None:
+    apply_condition(hero, "all_out_attack", data, amount=2)
+    assert not resistance_condition_effect(hero, data, "DEF").better
+
+
+def test_an_attack_check_names_the_mark_it_folds_in(hero, data) -> None:
+    attack, save = power_rolls(_blast(), hero, data)
+    assert attack.marks == (data.system.trait_keys.attack_check,)
+    assert save.marks == ()
+
+
+def test_a_check_with_no_attack_carries_no_mark(hero, data) -> None:
+    affliction = PowerEffectInstance(
+        "affliction",
+        rank=8,
+        config={"resistance": "Will", "degree1": "dazed", "degree2": "stunned"},
+        extras=[ModifierSelection("perception_range")],
+    )
+    power = Power(name="Stare", effects=[affliction])
+    assert all(not spec.marks for spec in power_rolls(power, hero, data))
+
+
+def test_marks_stay_off_the_wire_and_out_of_equality(hero, data) -> None:
+    from mm_companion.core.rules import RollSpec
+
+    attack, _save = power_rolls(_blast(), hero, data)
+    assert "marks" not in attack.to_dict()
+    assert RollSpec.from_dict(attack.to_dict()) == attack
+
+
+def test_only_a_condition_with_no_default_asks_for_an_amount(data) -> None:
+    catalog = data.condition_catalog()
+    assert condition_asks_amount(catalog["all_out_attack"])
+    assert condition_asks_amount(catalog["defensive_attack"])
+    assert not condition_asks_amount(catalog["defending"])  # +2 by default
+    assert not condition_asks_amount(catalog["prone"])
+    assert catalog["all_out_attack"].max_amount == 5
+    assert catalog["defending"].max_amount is None
+
+
+def test_the_clear_note_names_only_the_directly_applied_ones(hero, data) -> None:
+    apply_condition(hero, "all_out_attack", data, amount=3)
+    apply_condition(hero, "incapacitated", data, temporary=True)  # bundles members
+    removed = clear_temporary(hero)
+    note = clear_temporary_note(removed, data)
+    assert note.startswith("temporary conditions cleared: ")
+    assert "All-Out Attack -3" in note and "Incapacitated" in note
+    assert "Defenseless" not in note  # a member, gone with its umbrella
+    assert clear_temporary_note([], data) == ""

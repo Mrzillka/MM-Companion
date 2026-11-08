@@ -110,6 +110,7 @@ from mm_companion.core.rules import (
     power_has_custom_modifier,
     power_pl_violations,
     power_rolls_with_area,
+    temporary_marks,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.cards import (
@@ -977,6 +978,7 @@ class EquipmentSection(HeldRebuild, TitledSection):
             pins=self._pins,
             pin_ref=lambda index, iid=item.id: PinRef(PIN_EQUIPMENT, iid, index),
             simple=self._simple,
+            marks=temporary_marks(self._character, self._data),
         )
         footer.rollRequested.connect(self.rollRequested)
         footer.targetRequested.connect(self.targetRequested)

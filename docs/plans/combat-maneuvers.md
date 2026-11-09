@@ -763,7 +763,7 @@ commit hash.
   Screenshots (`_driver_shots/`): `actions-popup.png`, `actions-popup-gm.png`,
   `roller-lane.png` — all as expected. **Full run: 4850 passed** (16 min 56 s), ruff and
   black clean. **Not merged**: the user calls it done. The hub/relay must be redeployed
-  for protocol v20.
+  for protocol v20. Commit: 5e4bbe3.
 
 - **2026-11-09 — Phase 9 (done).** Grab, Trip, Disarm, Smash, Escape and Block, player and
   GM. Asked the user two questions, now decisions 19 (a lasting **Holding** chip on the

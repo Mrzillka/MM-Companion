@@ -366,3 +366,20 @@ def test_an_npcs_action_reaches_its_open_sheet_as_temporary(window: GMWindow, me
     window._gm_combat_action("defend")
     (applied,) = sheet_window.sheet.character.conditions
     assert applied.condition_id == "defending" and applied.temporary and applied.amount == 2
+
+
+def test_a_blocking_npc_with_no_attack_is_greyed_for_block(window) -> None:
+    """The GM's chooser greys a Blocking NPC with no attack for Block, as the sheet
+    greys the tile: its block check picks an attack."""
+    from mm_companion.core.character import Character
+    from mm_companion.core.rules import apply_condition
+    from mm_companion.ui.gm.combat import NO_ATTACKS_MARK
+    from mm_companion.ui.impress import PARTY_NPC, ImpressParty
+
+    data = window._data
+    plain = Character.new_default(data)
+    block = data.combat.action("block")
+    party = ImpressParty("npc:x", "Thug", PARTY_NPC, "thug.json", plain)
+    assert window._actor_reason(party, block) == ""
+    apply_condition(plain, "blocking", data)
+    assert window._actor_reason(party, block) == NO_ATTACKS_MARK

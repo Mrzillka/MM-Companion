@@ -144,6 +144,39 @@ notes](actions.md#grab-trip-disarm-smash-and-escape)).
 - **Narrated outcomes stay narrated.** A disarmed item, a smashed object's Damage and a
   trip's extra distance are said in the history; nothing tracks them.
 
+## Combat maneuvers: what is left overall
+
+The feature as a whole (`docs/plans/combat-maneuvers.md`; the two sections above hold
+the targeted actions' own). Each of these was seen and left on purpose.
+
+- **No turn clock.** Temporary conditions last "until the start of your next turn", and
+  the player or the GM takes them off with **Clear temporary**. End turn does not clear
+  them (the user's call: they end at the *start* of the creature's next turn). A turn
+  tracker would clear a creature's temporaries as its turn starts.
+- **Prone's ±5 on attacks never reaches an attack roll.** `condition_attack_mods`
+  (close +5 against a prone target, ranged −5, and the prone attacker's own −5) is read
+  by the Conditions block's display only; `power_rolls` folds in the amount mods
+  (`condition_attack_check_mod`) but not these. Found in phase 1; out of the feature's
+  scope.
+- **Charge's −2 is not in the maneuvers' caps.** `maneuver_values` reads the attack's
+  modifier before the lines' fixed shifts, so a +2 attack charged (+0) can still be
+  doubled by All-Out to +4.
+- **Recover works "once per scene"** says its tooltip; nothing counts it.
+- **Aim's "lost if your next standard action is not that attack"** is not tracked. The
+  line stays (greyed) through a roll that is not an attack, and the player drops it with
+  its ✕.
+- **Accurate and Power** change only the attack being made. By the book they last until
+  the start of the next turn, which matters only for a second attack in one turn.
+- **Several lines grow the lane** by one line each (the lane reserves one). Accepted
+  unless it bothers someone in play.
+- **The loaded chip does not name the power.** An attack picked off the picker shows
+  the card's label ("Rolling: Attack +0 vs. Defense"), so two attacks look alike on
+  the chip; the picker's caption names them.
+- **The DC and Routine rows stay two rows**, not the one row §1's sketch of the plan
+  shows.
+- **No dot on the System block.** Nothing temporary moves Initiative or Speed yet; add
+  a `StatMark` there when something does.
+
 ## PySide6 is capped below 6.12, and 6.11.3 is excluded
 
 `pyproject.toml` pins `PySide6>=6.6,<6.12,!=6.11.3`, so CI and the release builds get

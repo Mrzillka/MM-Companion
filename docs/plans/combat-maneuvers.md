@@ -21,7 +21,7 @@ every session.**
 | 7b | Team attack as a call to roll: a history card anyone answers, GM resolves | done (2026-11-09) |
 | 8 | Targeted actions I: Feint, Trick, Aid | done (2026-11-09) |
 | 9 | Targeted actions II: Grab, Trip, Disarm, Smash, Escape, Block | done (2026-11-09) |
-| 10 | Notes, debts, full test run, hand-off for merge | not started |
+| 10 | Notes, debts, full test run, hand-off for merge | done (2026-11-09) |
 
 Status values: `not started`, `in progress (<what is left>)`, `done (<date>)`.
 
@@ -712,15 +712,16 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
 - [x] A hosted test runs both stages through a real session.
 
 ### Phase 10 — Finish
-- [ ] Every menu tile works; none is disabled except by a rule (the tooltip says
-      which).
-- [ ] `docs/notes/actions.md` gets a "Combat maneuvers" section,
+- [x] Every menu tile works; none is disabled except by a rule (the tooltip says
+      which). Now a test on both rollers; fixed on the way: Block while Blocking with no
+      attack did nothing, now greyed with the reason.
+- [x] `docs/notes/actions.md` gets a "Combat maneuvers" section,
       `conditions-and-damage.md` temporary conditions, `dice-and-rolling.md` the new
       slider/lane/Actions button, and `CLAUDE.md`'s summary paragraph one sentence.
-- [ ] Remaining work goes to `docs/notes/debts.md`.
-- [ ] `ruff check .`, `black --check .`, and the **full `pytest`**. Run the app
+- [x] Remaining work goes to `docs/notes/debts.md`.
+- [x] `ruff check .`, `black --check .`, and the **full `pytest`**. Run the app
       (`run-mm-companion` skill) and screenshot the roller and popup for the user.
-- [ ] Tell the user it's ready for them to call done. They merge it, not us. Remind
+- [x] Tell the user it's ready for them to call done. They merge it, not us. Remind
       them that the hub/relay must be redeployed for the protocol bump (memory:
       deployment notes).
 
@@ -745,6 +746,24 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
 
 Newest first. Each entry: date, phase, what was done, what's next, gotchas, and the
 commit hash.
+
+- **2026-11-09 — Phase 10 (done).** The finish. **Every tile has a road**: a new test on
+  each roller (`test_every_tile_a_player_sees_has_a_road`,
+  `test_every_tile_the_gm_sees_has_a_road`) fails if a built-in tile falls back to
+  `NOT_BUILT` (kept only for a mod's action) and checks every greyed tile says why. **Fixed
+  on the way:** a Blocking creature with no attack could press Block again and nothing
+  happened (the picker had nothing to offer); the sheet's tile and the GM's chooser now
+  grey it with `NO_ATTACKS` (they read `reacting`). Notes: most were written phase by
+  phase; added the "every tile" paragraph and an index of where each kind is documented
+  (`actions.md` "Combat maneuvers"), Block's no-attack case (`dice-and-rolling.md`), and
+  the sentence in `CLAUDE.md`. Debts: a new "Combat maneuvers: what is left overall"
+  (no turn clock, Prone's ±5 never reaching an attack roll, Charge's −2 outside the caps,
+  Recover's once per scene and Aim's lapse untracked, Accurate/Power's duration, the
+  lane growing, no System dot, the chip not naming the power, DC/Routine still two rows).
+  Screenshots (`_driver_shots/`): `actions-popup.png`, `actions-popup-gm.png`,
+  `roller-lane.png` — all as expected. **Full run: 4850 passed** (16 min 56 s), ruff and
+  black clean. **Not merged**: the user calls it done. The hub/relay must be redeployed
+  for protocol v20.
 
 - **2026-11-09 — Phase 9 (done).** Grab, Trip, Disarm, Smash, Escape and Block, player and
   GM. Asked the user two questions, now decisions 19 (a lasting **Holding** chip on the

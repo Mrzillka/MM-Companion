@@ -25,6 +25,7 @@ from mm_companion.core.rules import (
     action_reason,
     attack_choices,
     maneuver_action,
+    reacting,
     self_action,
     self_action_changes,
     self_action_note,
@@ -110,7 +111,9 @@ class GMCombatMixin:
 
     def _actor_reason(self, party: ImpressParty, action: CombatAction | None) -> str:
         """Why *party* cannot take *action* now (``""``: it can) — shown beside it."""
-        if action is None or action.needs_attack or action.kind == COMBAT_KIND_MANEUVER:
+        wants = action is None or action.needs_attack or action.kind == COMBAT_KIND_MANEUVER
+        # Block while Blocking picks the attack that blocks.
+        if wants or reacting(action, party.character):
             if not attack_choices(party.character, self._data):
                 return NO_ATTACKS_MARK
         if action is not None and (

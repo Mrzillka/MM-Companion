@@ -893,7 +893,9 @@ marks, so the maneuvers stay off it), the record's `step` (−2) for each block 
 made, and **no DC**: the attacker's result goes in the DC box by hand (the user's call —
 the GM's judge does not block for anyone). It is **loaded**, not thrown, and the chip's
 count goes up by one (`reaction_changes`), so "Blocking ×2" means one block made. The
-start of the next turn ("Clear temporary") resets it.
+start of the next turn ("Clear temporary") resets it. Readying needs no attack, but a
+block does: while Blocking, a creature with no attack sees the tile greyed with
+`NO_ATTACKS` (the GM's chooser greys it too, `_actor_reason` reading `reacting`).
 
 ### One runner for both rollers (`ui/roller/combat_runner.py`)
 

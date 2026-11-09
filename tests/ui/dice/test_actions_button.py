@@ -112,3 +112,22 @@ def test_a_ruleset_with_no_menu_falls_back_to_the_hosts_own_actions(data, gm) ->
     )
     assert [[i.key for i in s.items] for s in sections] == [["impress", ACTION_REROLL]]
     assert sections[0].items[0].caption == "Impress"
+
+
+def test_every_tile_a_player_sees_has_a_road(qapp, data) -> None:
+    """Phase 10's audit: no built-in tile is greyed as "not built". A tile may still
+    be greyed by a rule (no attack, no session, nothing to reroll), and says which."""
+    section = DiceSection(data, Character.new_default(data))
+    popup = section.panel.open_actions()
+    shown = {tile.key for tile in popup.tiles}
+    wanted = {
+        action_id
+        for menu in data.combat.menu
+        for action_id in menu.items
+        if not data.combat.action(action_id).gm_only
+    }
+    assert shown == wanted
+    not_built = [tile.key for tile in popup.tiles if NOT_BUILT in tile.toolTip()]
+    assert not_built == []
+    greyed = [tile for tile in popup.tiles if not tile.isEnabled()]
+    assert all("<i>" in tile.toolTip() or "<em>" in tile.toolTip() for tile in greyed)

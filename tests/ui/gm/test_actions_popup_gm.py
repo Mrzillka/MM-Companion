@@ -104,3 +104,15 @@ def test_with_several_groups_the_gm_picks_one_off_a_menu(window, monkeypatch) ->
     window._roller.open_actions().tile("team_check").click()
     assert len(_Menu.shown[0]) == 2 and all(text.endswith("(2)") for text in _Menu.shown[0])
     assert opened == [(window._npc_groups[0].id, MODE_TEAM)]
+
+
+def test_every_tile_the_gm_sees_has_a_road(window) -> None:
+    """Phase 10's audit: the GM's menu holds every built-in action, and none of them is
+    greyed as "not built" (a rule may still grey one — no group, nobody on the Scene)."""
+    from mm_companion.ui.action_menu import NOT_BUILT
+
+    data = window._data
+    popup = window._roller.open_actions()
+    wanted = {action_id for menu in data.combat.menu for action_id in menu.items}
+    assert {tile.key for tile in popup.tiles} == wanted
+    assert [tile.key for tile in popup.tiles if NOT_BUILT in tile.toolTip()] == []

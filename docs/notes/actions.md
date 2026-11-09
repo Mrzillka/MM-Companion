@@ -731,6 +731,17 @@ The roller's Actions popup (see [the roller notes](dice-and-rolling.md#the-actio
 offers the combat maneuvers and actions out of `actions.json`'s `combat` block. The
 plan they are built to, phase by phase, is `docs/plans/combat-maneuvers.md`.
 
+**Every tile has a road.** A host maps each action it runs to `None` or the reason it
+can't run now (`combat_menu`'s *offered*); one it never mentions is greyed `NOT_BUILT`,
+which is now only for a mod's action the app has no road for.
+`test_every_tile_a_player_sees_has_a_road` and `test_every_tile_the_gm_sees_has_a_road`
+fail if a built-in tile falls back to it, and check every greyed tile says why. Where
+each kind is documented: the attack maneuvers below; the self actions, Block and the
+shared runner in [the roller notes](dice-and-rolling.md#the-self-actions-aim-block-charge-defend-recover-drop-prone-stand-finishing-catch);
+the targeted actions in *Aid, Feint and Trick* and *Grab, Trip, Disarm, Smash and
+Escape*; the GM's Team attack tile in *A call to roll*; the temporary conditions they
+leave in [the conditions notes](conditions-and-damage.md).
+
 **The attack maneuvers** (PDF p200) are `core/rules/maneuvers.py`, read generically off
 each record's `bonus` / `penalty` (`attack_check`, `effect_rank`, `defense` — the
 `MANEUVER_*` names) and `lasting`:
@@ -871,6 +882,9 @@ These are in [the debts](debts.md):
   attack);
 - the grab rules past the first hold (improving one, size, carrying, squeezing,
   throwing), the Improved Grab / Hold / Trip / Disarm / Smash advantages, and a block
-  the GM's judge makes by itself.
+  the GM's judge makes by itself;
+- the combat maneuvers' leftovers: no turn clock (temporaries come off by hand), Prone's
+  ±5 never reaching an attack roll, Charge's −2 outside the maneuvers' caps, Recover's
+  once per scene and Aim's lapse untracked.
 
 Counting earlier Impress attempts automatically was dropped: the GM sets the slider.

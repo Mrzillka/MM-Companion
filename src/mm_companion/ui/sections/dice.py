@@ -49,6 +49,7 @@ from mm_companion.core.rules import (
     find_area_power,
     localize_spec,
     power_area_use,
+    reacting,
     recovery_succeeded,
     requested_roll_choices,
     self_action,
@@ -181,7 +182,9 @@ class DiceSection(QGroupBox):
                 offered[action.id] = action.gm_runs
             elif self_action(self._data, action.id) is not None:
                 reason = action_reason(self._data, action, self._character)
-                offered[action.id] = reason or (attacks if action.needs_attack else None)
+                # Block while Blocking picks the attack that blocks.
+                wants = action.needs_attack or reacting(action, self._character)
+                offered[action.id] = reason or (attacks if wants else None)
             elif targeted_action(self._data, action.id) is not None:
                 offered[action.id] = self._targeted_reason(action) or (
                     attacks if action.needs_attack else None

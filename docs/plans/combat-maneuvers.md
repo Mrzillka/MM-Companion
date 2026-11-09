@@ -783,7 +783,7 @@ commit hash.
   readout change invalidates up to the panel before the view re-divides. (5) After the
   session moved to the desktop app, `python` on PATH is Inkscape's: use
   `.venv/Scripts/python.exe`. Notes: dice-and-rolling.md "The panel's layout".
-  Commit: (this one).
+  Full suite: 4939 passed. Commit: 32f690e.
 
 - **2026-11-10 — Roller and popup fixes (the user asked).** Committed together with the
   "Roller polish" entry below, which had been left uncommitted. (1) **The die did not

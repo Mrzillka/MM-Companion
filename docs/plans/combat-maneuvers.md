@@ -787,7 +787,7 @@ commit hash.
   with a lane line (loading a trait no longer grows it). **Tests:** the affected run
   picked nearly everything — 4926 passed, 1 failed (that regression test, fixed and
   re-run). Files: `ui/action_grid.py`, `ui/dice_roller.py`, `ui/roller/action_lane.py`,
-  the theme's `action-grid.*` tokens. Commit: see the next commit.
+  the theme's `action-grid.*` tokens. Commit: 5ab9d20.
 
 - **2026-11-09 — Roller polish (the user asked).** (1) **Snug, arrowless spin boxes**:
   the roller's DC box, Bonus/Penalty box and the lane's boxes have no ▲▼ and are

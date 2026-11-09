@@ -834,11 +834,15 @@ def build(target: str):
         panel = win._sheet.dice.panel
         panel.load_spec(attack_choices(win._sheet.character, win._sheet.data)[0].spec)
         panel._modifier_spin.setValue(-2)
+        from mm_companion.core.rules import maneuver_trade
+
+        data = win._sheet.data
         panel.start_action_line(
             "all_out_attack",
             "All-Out Attack",
             limit=lambda spec: (3, ""),
             needs_attack=True,
+            describe=lambda amount: maneuver_trade(data, "all_out_attack", amount),
         )
         win.resize(1400, 900)
     elif target in ("roll-demo", "roll-demo-table"):

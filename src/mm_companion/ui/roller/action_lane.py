@@ -41,7 +41,13 @@ from PySide6.QtWidgets import (
 from mm_companion.core.rules import RollSpec, same_attack
 from mm_companion.ui import theme
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import ElidingLabel, discard_widget, make_spin_box, tinted_style
+from mm_companion.ui.widgets import (
+    ElidingLabel,
+    discard_widget,
+    make_spin_box,
+    muted_style,
+    tinted_style,
+)
 
 #: ``limit(spec) -> (maximum, reason)``: how far a configurable line may go for the
 #: attack *spec* (``None`` when no attack is loaded), and why not when that is 0.
@@ -54,6 +60,10 @@ LineShift = Callable[[RollSpec, Sequence[tuple[str, "int | None"]]], RollSpec]
 #: ``fits(spec) -> reason``: why a fixed line cannot ride on the attack *spec* (``""``
 #: when it can) — Aim on an attack that makes no attack check.
 LineFit = Callable[[RollSpec | None], str]
+
+#: ``describe(value) -> caption``: what a configurable line's value trades, in words —
+#: "+3 attack, −3 Defense" — shown under its slider (``""`` for nothing).
+LineDescribe = Callable[[int], str]
 
 #: Why a line that needs an attack is greyed out while none is loaded.
 NEEDS_ATTACK = "Load an attack first: pick one off the Actions popup or a power card."
@@ -78,10 +88,12 @@ class ActionLine(QWidget):
         tooltip: str = "",
         tone: str = "tint.better",
         fits: LineFit | None = None,
+        describe: LineDescribe | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.key = key
+        self._describe = describe
         self._fits = fits
         self.name = name
         self.needs_attack = needs_attack
@@ -95,9 +107,13 @@ class ActionLine(QWidget):
         # Greyed for want of an attack (see :meth:`bind`): nothing to work a limit for.
         self._unloaded = False
 
-        row = QHBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(int(theme.metric("space.xs")))
+        outer.addLayout(row)
 
         self._name = ElidingLabel(name)
         self._name.setStyleSheet(tinted_style(tone, bold=True))
@@ -113,6 +129,8 @@ class ActionLine(QWidget):
         self._slider: QSlider | None = None
         self._spin: QSpinBox | None = None
         self._caption: QLabel | None = None
+        #: What a configurable line's value trades, under its slider — see *describe*.
+        self._trade: ElidingLabel | None = None
         if limit is not None:
             self._slider = QSlider(Qt.Orientation.Horizontal)
             self._slider.setRange(0, 0)
@@ -123,6 +141,15 @@ class ActionLine(QWidget):
             self._spin.valueChanged.connect(lambda _v: self.valueChanged.emit(self.key))
             row.addWidget(self._slider, stretch=1)
             row.addWidget(self._spin)
+            if describe is not None:
+                # Under the slider rather than beside it: the strip is narrow, and the
+                # trade is a sentence, not a number. Elided, so it never widens the roller.
+                self._trade = ElidingLabel("")
+                self._trade.setAlignment(Qt.AlignmentFlag.AlignRight)
+                self._trade.setStyleSheet(muted_style())
+                outer.addWidget(self._trade)
+                self._spin.valueChanged.connect(self._sync_trade)
+                self._sync_trade()
         else:
             self._caption = QLabel(fixed)
             self._caption.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -138,6 +165,17 @@ class ActionLine(QWidget):
         self.setToolTip(tooltip)
 
     # -- state ----------------------------------------------------------------
+
+    def _sync_trade(self) -> None:
+        if self._trade is None or self._describe is None or self._spin is None:
+            return
+        text = self._describe(self._spin.value())
+        self._trade.setText(text)
+        self._trade.setToolTip(text)
+
+    def trade(self) -> str:
+        """The caption under the slider — what the value trades — or ``""``."""
+        return self._trade.text() if self._trade is not None else ""
 
     @property
     def configurable(self) -> bool:
@@ -209,7 +247,7 @@ class ActionLine(QWidget):
     def _set_available(self, available: bool, reason: str) -> None:
         self._available = available
         self._reason = reason
-        for widget in (self._name, self._slider, self._spin, self._caption):
+        for widget in (self._name, self._slider, self._spin, self._caption, self._trade):
             if widget is not None:
                 widget.setEnabled(available)
         self._name.setStyleSheet(tinted_style(self._tone, bold=True) if available else "")

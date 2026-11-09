@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from datetime import datetime
 
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
@@ -202,6 +203,25 @@ def degree_label(degree: int | None, critical: bool, die: int) -> str:
     if critical:
         text += " — Nat 20!" if die == 20 else " — Nat 1!"
     return text
+
+
+def degree_html(degree: int | None, critical: bool, die: int) -> str:
+    """:func:`degree_label` as rich text that never breaks inside a phrase.
+
+    In the narrow strip a result used to wrap as "Failure (2" over "degrees)". Each
+    phrase is a ``white-space: nowrap`` span, so a line can still break before the "—"
+    of a natural 1 or 20, but never inside "Failure (2 degrees)" or "— Nat 20!". A span
+    rather than non-breaking spaces, so the words read the same to anything searching
+    the text.
+    """
+    text = degree_label(degree, critical, die)
+    if not text:
+        return ""
+    phrases = text.split(" — ")
+    phrases[1:] = [f"— {phrase}" for phrase in phrases[1:]]
+    return " ".join(
+        f"<span style='white-space:nowrap'>{escape_rich_text(phrase)}</span>" for phrase in phrases
+    )
 
 
 def roll_parameters(roll: dict) -> dict:
@@ -510,8 +530,8 @@ def roll_headline(roll: dict) -> str:
     degree = roll.get("degree")
     if degree is not None:
         colour = theme.color("tint.better" if int(degree) > 0 else "tint.worse")
-        words = degree_label(int(degree), bool(roll.get("critical")), die)
-        headline += f" · <span style='color:{colour}'>{escape_rich_text(words)}</span>"
+        words = degree_html(int(degree), bool(roll.get("critical")), die)
+        headline += f" · <span style='color:{colour}'>{words}</span>"
     return headline
 
 
@@ -591,13 +611,110 @@ def heading_row(info: QVBoxLayout, line: QWidget) -> QHBoxLayout:
     return buttons
 
 
+#: The dynamic property a card's small button carries when it shows only while the
+#: pointer is over its card (see :func:`show_on_hover`).
+SHOW_ON_HOVER = "mmShowOnHover"
+
+
+def show_on_hover(button: QWidget) -> QWidget:
+    """Hide *button* until the pointer is over its card, keeping its room meanwhile.
+
+    For the ✕ on a card: removing a roll is rare, and a bordered ✕ on every card was
+    the loudest thing in the history, louder than the star beside it. The room is kept
+    so the heading beside it wraps the same either way and nothing moves under the
+    pointer — the quick-roll pills' ``×`` makes the same bargain. The card shows it
+    (:func:`reveal_hover_buttons`, from its enter and leave events).
+    """
+    policy = button.sizePolicy()
+    policy.setRetainSizeWhenHidden(True)
+    button.setSizePolicy(policy)
+    button.setProperty(SHOW_ON_HOVER, True)
+    button.hide()
+    return button
+
+
+def reveal_hover_buttons(card: QWidget, shown: bool) -> None:
+    """Show or hide every :func:`show_on_hover` button on *card*."""
+    for child in card.findChildren(QPushButton):
+        if child.property(SHOW_ON_HOVER):
+            child.setVisible(shown)
+
+
 def remove_button(tooltip: str, on_remove: Callable[[], None]) -> QPushButton:
-    """The GM's ✕ on a card."""
+    """The ✕ on a card: flat, and shown only while the pointer is over the card."""
     button = QPushButton("✕")
+    button.setFlat(True)
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
     button.setToolTip(tooltip)
     button.setFixedWidth(int(theme.metric("column.roll-button")))
     button.clicked.connect(lambda _=False: on_remove())
+    show_on_hover(button)
     return button
+
+
+#: How long a pause between two entries is before the newer one says so.
+GAP_SECONDS = 10 * 60
+
+
+def entry_time(entry: dict) -> datetime | None:
+    """When a log entry was made, in local time — ``None`` when it does not say."""
+    raw = entry.get("timestamp")
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        when = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return when.astimezone() if when.tzinfo is not None else when
+
+
+def gap_text(previous: datetime | None, when: datetime | None) -> str:
+    """What a card says about the pause before it, or ``""`` when there was none worth
+    saying: "25 min later", "2 h 5 min later", or the date and time across a day."""
+    if previous is None or when is None:
+        return ""
+    if previous.tzinfo is None or when.tzinfo is None:
+        previous, when = previous.replace(tzinfo=None), when.replace(tzinfo=None)
+    seconds = (when - previous).total_seconds()
+    if seconds < GAP_SECONDS:
+        return ""
+    if when.date() != previous.date():
+        return when.strftime("%a %d %b · %H:%M")
+    minutes = int(seconds // 60)
+    hours, minutes = divmod(minutes, 60)
+    if not hours:
+        return f"{minutes} min later"
+    return f"{hours} h {minutes} min later" if minutes else f"{hours} h later"
+
+
+def latest_time(card: QWidget) -> datetime | None:
+    """The newest moment a card on screen stands for (see :func:`stamp_card`)."""
+    return getattr(card, "when", None)
+
+
+def stamp_card(card: QWidget, when: datetime | None, previous: datetime | None) -> None:
+    """Say when *card*'s entry was made: on hover, and above its heading after a pause.
+
+    A long session's history used to be one undifferentiated column — the fight before
+    the break read as part of the one after it. The time is the card's tooltip (its
+    buttons keep their own), and a card made :data:`GAP_SECONDS` or more after the one
+    below it opens with a muted line saying how long it had been. The line is part of
+    the card rather than a widget between two, so striking, trimming or replaying
+    cards can never leave one stranded.
+    """
+    card.when = when
+    if when is None:
+        return
+    card.setToolTip(f"{when:%H:%M}")
+    text = gap_text(previous, when)
+    layout = card.layout()
+    info = layout.itemAt(0).layout() if layout is not None and layout.count() else None
+    if not text or info is None:
+        return
+    gap = QLabel(f"⋯ {text}")
+    gap.setObjectName("timeGap")
+    gap.setStyleSheet(muted_style(italic=True))
+    info.insertWidget(0, gap)
 
 
 def fit_button(text: str) -> QPushButton:
@@ -632,9 +749,19 @@ class HistoryCard(QFrame):
         # a negative one so it too has a stable id to remove by. Only an entry with
         # no id at all cannot be struck.
         self.seq = seq if isinstance(seq, int) else None
+        #: When the entry was made (see :func:`stamp_card`), or ``None``.
+        self.when: datetime | None = None
 
     def set_save_state(self, saved_keys: set, room: bool) -> None:
         """No-op unless the card carries a star (see :class:`SessionRollCard`)."""
+
+    def enterEvent(self, event) -> None:  # noqa: N802 - Qt override
+        reveal_hover_buttons(self, True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802 - Qt override
+        reveal_hover_buttons(self, False)
+        super().leaveEvent(event)
 
 
 class NoteCard(HistoryCard):
@@ -1644,6 +1771,7 @@ class RollHistoryPanel(QWidget):
             card.rollPlain.connect(self.rollPlain)
         else:
             card = self._roll_card(roll)
+        stamp_card(card, entry_time(roll), self._newest_time())
         # Newest on top: insert above every existing card (the stretch is last).
         self._layout.insertWidget(0, card)
         self._trim()
@@ -1660,8 +1788,11 @@ class RollHistoryPanel(QWidget):
         table = next(
             (c for c in self.cards() if isinstance(c, GroupTableCard) and c.key == key), None
         )
+        when = entry_time(roll)
         if table is not None:
             table.add_record(roll)
+            if when is not None and (table.when is None or when > table.when):
+                table.when = when
             return
         table = GroupTableCard(key, can_remove=self._gm)
         table.undo_lookup = self._undo.get
@@ -1669,6 +1800,7 @@ class RollHistoryPanel(QWidget):
         table.revealRequested.connect(self._request_reveal)
         table.joinRequested.connect(self.teamJoinRequested)
         table.add_record(roll)
+        stamp_card(table, when, self._newest_time())
         self._layout.insertWidget(0, table)
         self._trim()
         self._empty.setVisible(False)
@@ -1813,6 +1945,11 @@ class RollHistoryPanel(QWidget):
         self._seen.clear()
         self._held.clear()
         self._empty.setVisible(not waiting)
+
+    def _newest_time(self) -> datetime | None:
+        """When the newest stamped entry on screen was made — what a new card's pause
+        is measured from."""
+        return next((t for t in map(latest_time, self.cards()) if t is not None), None)
 
     def _waiting(self) -> list[HistoryCard]:
         """The action cards on screen still waiting on the GM, newest first."""

@@ -4,7 +4,7 @@ dragged to reorder, and kept in the settings.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QMimeData, QPoint, Qt, Signal
+from PySide6.QtCore import QMimeData, QPoint, QSize, Qt, Signal
 from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import (
     QApplication,
@@ -47,9 +47,18 @@ def _params_label(params: dict) -> str:
     return f"{modifier:+d}"
 
 
-def _quick_label(params: dict) -> str:
-    """A chip's caption: its name if it has one, otherwise its parameters."""
-    return params.get("name") or _params_label(params)
+#: What an unnamed quick roll is captioned by, before its modifier: "d20 +2".
+PLAIN_CHIP = "d20"
+
+
+def quick_label(params: dict) -> str:
+    """A chip's caption: what it rolls and at what — "Perception +7", or "d20 +2".
+
+    Both halves, always. A chip used to show its name *or* its numbers, so a named one
+    hid its modifier and an unnamed one was a bare "+2" that said nothing of what it
+    rolled.
+    """
+    return f"{params.get('name') or PLAIN_CHIP} {_params_label(params)}"
 
 
 class _QuickRollButton(QToolButton):
@@ -71,6 +80,22 @@ class _QuickRollButton(QToolButton):
         self.setText(text)
         self.setAutoRaise(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        """The caption's width and a little air — not the platform's tool-button padding.
+
+        The style asked for ~30px more than the text, which with the room kept for the
+        ``×`` made a two-character pill three times its caption. The theme draws a tool
+        button's box as just its focus ring, so the text needs that ring's width either
+        side and nothing more.
+        """
+        hint = super().sizeHint()
+        chrome = int(theme.metric("space.sm")) + int(theme.metric("focus.width"))
+        snug = self.fontMetrics().horizontalAdvance(self.text()) + 2 * chrome
+        return QSize(min(hint.width(), snug), hint.height())
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        return self.sizeHint()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt override
         if event.button() == Qt.MouseButton.LeftButton:
@@ -384,9 +409,9 @@ class RollerQuickRollsMixin:
         layout.setContentsMargins(int(theme.metric("space.sm")), small, small, small)
         layout.setSpacing(small)
 
-        roll_button = _QuickRollButton(_quick_label(entry), index)
+        roll_button = _QuickRollButton(quick_label(entry), index)
         roll_button.setToolTip(
-            f"Roll it — {_params_label(entry)}. Drag to reorder; right-click to rename."
+            "Click to roll it. Drag to reorder; right-click to rename or remove."
         )
         roll_button.clicked.connect(lambda _=False, e=entry: self._apply_quick_roll(e))
         layout.addWidget(roll_button)

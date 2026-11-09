@@ -48,6 +48,7 @@
     "splash.background": "#2b2b3a",
     "splash.text": "#ffffff",
     "dice.face": "#ffffff",
+    "dice.critical": "#d9a521",
 
     "_paper.background": "A printed or exported sheet (File > Print, Export as PDF) is drawn in its own palette whatever the theme, since a dark preset on paper is a page of ink. These are that palette. Literal #rrggbb only: paper has no window palette for a palette() value to read.",
     "paper.background": "#ffffff",

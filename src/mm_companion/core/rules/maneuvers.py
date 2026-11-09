@@ -50,6 +50,7 @@ __all__ = [
     "maneuver_action",
     "maneuver_caption",
     "maneuver_limit",
+    "maneuver_trade",
     "maneuver_values",
     "shift_maneuvers",
 ]
@@ -58,6 +59,13 @@ __all__ = [
 _NOUNS = {
     MANEUVER_ATTACK_CHECK: "attack bonus",
     MANEUVER_EFFECT_RANK: "effect rank",
+    MANEUVER_DEFENSE: "Defense",
+}
+
+#: ...and how each is named in the short caption beside a maneuver's slider.
+_SHORT_NOUNS = {
+    MANEUVER_ATTACK_CHECK: "attack",
+    MANEUVER_EFFECT_RANK: "effect",
     MANEUVER_DEFENSE: "Defense",
 }
 
@@ -192,6 +200,25 @@ def maneuver_caption(game_data: GameData, picks: Iterable[Pick]) -> str:
         action = maneuver_action(game_data, action_id)
         if action is not None and amount and amount > 0:
             parts.append(f"{action.name} +{amount}")
+    return ", ".join(parts)
+
+
+def maneuver_trade(game_data: GameData, action_id: str, amount: int) -> str:
+    """What *amount* of the maneuver *action_id* trades, for the caption beside its
+    slider: ``"+3 attack, −3 Defense"`` (``""`` for anything but a maneuver).
+
+    A bare number beside the slider said how far it was set and nothing of what that
+    moved; the tooltip had the rule, but the trade is what a player weighs each turn.
+    """
+
+    action = maneuver_action(game_data, action_id)
+    if action is None:
+        return ""
+    parts = []
+    if action.bonus:
+        parts.append(f"+{amount} {_SHORT_NOUNS.get(action.bonus, action.bonus)}")
+    if action.penalty:
+        parts.append(f"−{amount} {_SHORT_NOUNS.get(action.penalty, action.penalty)}")
     return ", ".join(parts)
 
 

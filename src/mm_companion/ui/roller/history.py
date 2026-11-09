@@ -4,6 +4,8 @@ each removable and saveable as a quick roll.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
@@ -28,11 +30,14 @@ from mm_companion.ui.roll_history import (
     chain_widgets,
     escape_rich_text,
     heading_row,
+    latest_time,
     quick_roll_key,
     remove_button,
     reroll_label,
+    reveal_hover_buttons,
     roll_headline,
     size_history_scroll,
+    stamp_card,
     tighten_card,
 )
 from mm_companion.ui.widgets import (
@@ -169,6 +174,14 @@ class RollCard(QFrame):
         """The quick-roll parameters this card would save."""
         return dict(self._params)
 
+    def enterEvent(self, event) -> None:  # noqa: N802 - Qt override
+        reveal_hover_buttons(self, True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802 - Qt override
+        reveal_hover_buttons(self, False)
+        super().leaveEvent(event)
+
     def set_save_state(self, saved_keys: set, room: bool) -> None:
         """Light this card's star if its roll is among *saved_keys*."""
         self.star.set_state(quick_roll_key(self._params) in saved_keys, room)
@@ -266,10 +279,7 @@ class LocalRollHistory(QWidget):
         card.saveToggled.connect(self.saveToggled)
         card.rollFollowUp.connect(self.rollFollowUp)
         card.removeRequested.connect(lambda c=card: self._remove_card(c))
-        # Newest on top: insert above every existing card (the stretch is last).
-        self._layout.insertWidget(0, card)
-        self._trim()
-        self._sync_empty()
+        self._place(card)
         record = local_record(
             int(roll["die"]),
             int(roll["bonus"]),
@@ -289,9 +299,7 @@ class LocalRollHistory(QWidget):
         shows, which is the point of it living in the lower module.
         """
         card = NoteCard({"text": text}, show_author=False)
-        self._layout.insertWidget(0, card)
-        self._trim()
-        self._sync_empty()
+        self._place(card)
         announce_entry({"kind": KIND_NOTE, "player_name": "You", "text": text}, self)
 
     def add_request(self, spec: object) -> None:
@@ -315,9 +323,7 @@ class LocalRollHistory(QWidget):
         )
         card.rollRequested.connect(self.rollFollowUp)
         card.removeRequested.connect(lambda _seq, c=card: self._remove_card(c))
-        self._layout.insertWidget(0, card)
-        self._trim()
-        self._sync_empty()
+        self._place(card)
         announce_entry(
             {
                 "kind": KIND_REQUEST,
@@ -326,6 +332,15 @@ class LocalRollHistory(QWidget):
             },
             self,
         )
+
+    def _place(self, card: QWidget) -> None:
+        """Put *card* at the top (newest first), stamped with the time it was made."""
+        newest = next((t for t in map(latest_time, self._entries()) if t is not None), None)
+        stamp_card(card, datetime.now().astimezone(), newest)
+        # Newest on top: insert above every existing card (the stretch is last).
+        self._layout.insertWidget(0, card)
+        self._trim()
+        self._sync_empty()
 
     def cards(self) -> list[RollCard]:
         """The roll cards on screen, newest first (notes carry no parameters)."""

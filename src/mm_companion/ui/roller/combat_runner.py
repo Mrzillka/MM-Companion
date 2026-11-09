@@ -38,6 +38,7 @@ from mm_companion.core.rules import (
     line_key,
     maneuver_action,
     maneuver_limit,
+    maneuver_trade,
     reacting,
     reaction_changes,
     reaction_spec,
@@ -294,6 +295,7 @@ class CombatRunner:
             needs_attack=True,
             tooltip=action.tooltip,
             tone=tone,
+            describe=lambda amount: maneuver_trade(self._data, action_id, amount),
         )
 
     def start_self_action(self, action_id: str):

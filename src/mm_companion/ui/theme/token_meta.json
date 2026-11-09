@@ -130,6 +130,7 @@
     "splash.background": {"label": "Background", "hint": "The startup splash screen."},
     "splash.text": {"label": "Text", "hint": "On the splash screen."},
     "dice.face": {"label": "Die face", "hint": "The rolled number in the dice roller."},
+    "dice.critical": {"label": "Natural 20", "hint": "The glow round the die when it lands on a natural 20. A #rrggbb: the glow is a wash of it.", "washed": true},
     "paper.background": {"label": "Paper", "hint": "The page of a printed or exported sheet, whatever the theme. A #rrggbb."},
     "paper.ink": {"label": "Ink", "hint": "Text on a printed sheet. A #rrggbb."},
     "paper.muted": {"label": "Muted ink", "hint": "Secondary text on a printed sheet, and its page footer. A #rrggbb."},

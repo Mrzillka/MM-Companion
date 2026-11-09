@@ -257,7 +257,7 @@ def test_a_saved_roll_keeps_the_name_it_was_rolled_under(qapp: QApplication) -> 
     # The name came with the roll — no dialog, and no DC.
     assert view.panel._quick_rolls == [{"bonus": 9, "penalty": 0, "name": "Athletics"}]
     labels = {b.text() for b in view.panel._quick_container.findChildren(QAbstractButton)}
-    assert "Athletics" in labels
+    assert "Athletics +9" in labels
 
 
 def test_a_quick_roll_leaves_the_dc_box_alone(qapp: QApplication) -> None:
@@ -324,7 +324,7 @@ def test_named_quick_roll_shows_its_name(qapp: QApplication) -> None:
 
     assert view.panel._quick_rolls == [{"bonus": 1, "penalty": 0, "name": "Perception"}]
     labels = {b.text() for b in view.panel._quick_container.findChildren(QAbstractButton)}
-    assert "Perception" in labels
+    assert "Perception +1" in labels
 
 
 def test_reordering_moves_and_persists(qapp: QApplication) -> None:
@@ -452,7 +452,7 @@ def test_renaming_a_chip_persists_and_recaptions_it(
 
     assert storage.load_settings()["quick_rolls"] == [dict(entry, name="Perception")]
     labels = {b.text() for b in view.panel._quick_container.findChildren(QAbstractButton)}
-    assert "Perception" in labels
+    assert "Perception +1" in labels
 
     # And an empty answer puts the numbers back.
     monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("  ", True)))
@@ -1277,7 +1277,7 @@ def test_the_dc_box_is_one_box_and_empty_means_no_dc(qapp: QApplication) -> None
     # It was a checkbox beside a box that sat greyed at 15: two controls, one number.
     view = DiceRollerView()
     panel = view.panel
-    assert panel.dc() is None and panel._dc_spin.text() == "—"
+    assert panel.dc() is None and panel._dc_spin.text() == "none"
     panel.set_dc(18)
     assert panel.dc() == 18 and panel._roll_parameters()[2] == 18
     panel.set_dc(None)

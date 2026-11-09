@@ -87,6 +87,46 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   - The bottom strip used to clip the die below the window (a column of four in a short
     strip); the slimmer panel makes the one row of four, and no longer needs fixing on
     its own.
+- **The polish pass** (2026-11-10, the user's call after a second review):
+  - **A pill says what it rolls and at what** (`quick_label`): "Perception +7", and an
+    unnamed one "d20 +2" (`PLAIN_CHIP`). It used to show the name *or* the numbers.
+    `_QuickRollButton.sizeHint` is the caption plus `space.sm` + `focus.width` either
+    side: the platform asked ~30px more, which made a short pill a slab.
+  - **The die glows with how the roll went** for `OUTCOME_GLOW_MS` (`outcome_token`,
+    `_glow_outcome`): green or red when graded, `dice.critical` (gold, a colour token
+    of its own) on a natural 20 and red on a natural 1, DC or not. Routine checks and a
+    lucky re-roll's lifted die never glow as naturals. The glow outranks the armed ring
+    while it lasts and is put out when the next roll starts. A graded **total** wears
+    the same tint in the readout.
+  - **A result never breaks inside a phrase** (`degree_html`): "Failure (2 degrees)"
+    and "— Nat 20!" are each a `white-space:nowrap` span, so a narrow card wraps the
+    whole grade to its own line instead of "Failure (2" over "degrees)". Spans rather
+    than `&nbsp;`, which changed the words for anything searching the text (a test
+    looking for "Nat 20" was the first to notice). `degree_label` stays plain text.
+  - **A maneuver line says what its slider trades** (`maneuver_trade`, the lane's
+    `describe`): "+3 attack, −3 Defense", muted and elided under the slider.
+  - **Keyboard**: `Ctrl+R` rolls (as a click of the die would), `Ctrl+Shift+R`
+    rerolls, `Ctrl+T` takes 10 — `WindowShortcut`s on the panel, so they work with the
+    pointer on the sheet and go away with the Dice block.
+  - **The DC box says "none"** (`DC_NONE`) rather than "—", and a set DC is drawn as a
+    tinted **capsule** round the label and box (`#dcPair`, `_mark_dc`). Tinting the
+    text alone was tried and read as a disabled field; the capsule is the frame's, not
+    the spin box's (theme rule 4), and its border is there transparent at rest so it
+    costs no pixels to appear.
+  - **A card's ✕ shows only under the pointer** (`show_on_hover`, revealed by the
+    card's enter/leave), flat, its room kept so the heading never re-wraps — the pills'
+    bargain. It is the GM's on a shared card and everyone's on a private one.
+  - **A card knows when it was made** (`stamp_card`): its time is the card's tooltip,
+    and a card `GAP_SECONDS` (10 min) or more after the one below it opens with a
+    muted "⋯ 25 min later" (or the date across a day). The line is *inside* the newer
+    card, never a widget between two, so striking, trimming and replaying cannot strand
+    one. Session cards read the record's `timestamp`; private ones are stamped now.
+  - **In a row, the quick rolls go under the controls** (`_place_quick_rolls`, into the
+    settings grid's `QUICK_ROW`): a row is two columns — controls, die — not three. In a
+    short wide bottom strip the third column was an empty slab beside a pill or two,
+    width the history now gets. `row_minimum_width` / `row_natural_width` count the
+    controls column as the wider of the two, whichever layout holds the pills, so the
+    reflow decides the same either way. Compact takes them out first.
 - **Deferral is a window, not a flag, and that was a bug first.** The shared history
   holds one's *own* roll back so the card lands as the die settles rather than the
   instant the server answers. Only the roller's `sessionRollRevealed` lets a held roll

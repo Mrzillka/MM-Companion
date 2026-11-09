@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from mm_companion.core.character import Character
 from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
 from mm_companion.core.rules import (
@@ -41,7 +43,14 @@ def test_an_attack_power_is_offered_by_name_with_its_attack_line(data) -> None:
     (choice,) = attack_choices(_hero(data, _blast()), data)
     assert targetable_attack(choice.spec)
     assert choice.caption.startswith("Blast: ")
-    assert choice.spec.label in choice.caption
+    # Off its card the line carries the power's name, on the chip and in the history.
+    assert choice.spec.label == choice.caption
+
+
+def test_two_attacks_alike_on_their_cards_are_told_apart_once_picked(data) -> None:
+    one, two = attack_choices(_hero(data, _blast(), replace(_blast(), name="Bolt")), data)
+    assert one.spec.label != two.spec.label
+    assert one.spec.label.startswith("Blast: ") and two.spec.label.startswith("Bolt: ")
 
 
 def test_an_area_power_is_an_area_choice_keyed_for_the_area_window(data) -> None:

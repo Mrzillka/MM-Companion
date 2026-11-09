@@ -668,8 +668,9 @@ ask for a check nobody had provoked.
   question `post_note` already answers, so `DiceSection.request_roll` is that method
   written twice — session first, private history off the air. The GM window answers
   for itself, because it owns its history and the view's fallback stands down there.
-- **The DC box is a plain spin box where 0 means no DC.** The Difficulty Class row
-  above it needs a checkbox because the panel has to tell "no DC" from "DC 0" for a
+- **The DC box is a plain spin box where 0 means no DC.** The DC row above it (the
+  "DC" box and its number, then Routine, in one `FlowContainer` that wraps them onto
+  two lines only when the roller is too narrow) needs a checkbox because the panel has to tell "no DC" from "DC 0" for a
   roll it *grades*; nobody asks for a roll against DC 0. It is also **arrowless**:
   the theme reserves ~50px for the arrows the platform style draws, which took 148px
   of a 210px cell and clipped the trait name to "Trai".
@@ -772,6 +773,11 @@ action brought (`KIND_BEST_OF` and `dc_from_total`).
   read at each opening. `choose_attack()` returns the spec picked; it loads nothing.
   Every chooser opened off the popup goes through `action_menu.choose_from_menu`, the
   one `QMenu` a test stands in for (`action_menu.QMenu`), at `panel.menu_point()`.
+  **A picked attack's label is its caption** ("Blast: Attack +8 vs. Defense"): off its
+  card, a bare "Attack +8 vs. Defense" on the chip and in the history could be any of
+  the character's attacks. A card's own 🎲 keeps the card's label, under the power's
+  name already. `same_attack` compares labels, so the same attack loaded once off its
+  card and once off the picker counts as two (the lane resets its values).
 - **The Attack tile** (`DiceSection.start_attack`): the picker, then — when the Scene
   has someone to aim at — a target menu whose first line is `SKIP_TARGET`. A target
   goes the aimed-attack road (`aim_attack`: declared to the GM, rolled at once).

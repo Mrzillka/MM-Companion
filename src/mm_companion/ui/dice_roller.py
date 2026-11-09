@@ -77,7 +77,7 @@ from mm_companion.ui.action_menu import (
     action_tooltip,
     choose_from_menu,
 )
-from mm_companion.ui.flow_layout import FlowLayout
+from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.reflow import ReflowBox
 from mm_companion.ui.roll_history import (
     HIDDEN_MARK,
@@ -137,6 +137,10 @@ NO_DC_WARNING = (
     "⚠ No DC and no target: the hit was not judged. Put the target's Defense in the "
     "DC box, or aim the attack at a creature."
 )
+
+#: The roller's Difficulty Class box: ticked, the roll is judged against the number.
+DC_LABEL = "DC"
+DC_HINT = "Difficulty Class: tick it to judge the roll against this number."
 
 #: The roller's take-10 box (PDF p17): a routine check, rolled as a 10.
 ROUTINE_LABEL = "Routine (take 10)"
@@ -483,15 +487,32 @@ class DiceRollerPanel(
         self._lane.changed.connect(self._on_lane_changed)
         grid.addWidget(self._lane, 2, 0, 1, 3)
 
-        self._dc_check = QCheckBox("Difficulty Class")
+        # The DC box and Routine share a row, side by side while the roller is wide
+        # enough and wrapping (DC above Routine) when it is not: the roller is narrow in
+        # compact mode and in the strip, and a fixed row would hold it open.
+        self._dc_check = QCheckBox(DC_LABEL)
+        self._dc_check.setToolTip(DC_HINT)
         self._dc_spin = make_spin_box(0, 60, value=15)
         self._dc_spin.setEnabled(False)
         self._dc_check.toggled.connect(self._dc_spin.setEnabled)
-        # Spanning the label *and* slider columns: on its own in column 0 this
-        # checkbox's caption is by far the widest thing there and would hold that
-        # column open to its width, stealing the room from the sliders beside it.
-        grid.addWidget(self._dc_check, 3, 0, 1, 2)
-        grid.addWidget(self._dc_spin, 3, 2)
+        dc_pair = QWidget()
+        pair = QHBoxLayout(dc_pair)
+        pair.setContentsMargins(0, 0, 0, 0)
+        pair.addWidget(self._dc_check)
+        pair.addWidget(self._dc_spin)
+
+        # Take 10 (PDF p17): for a check made under no pressure, and for any attack or
+        # interaction against a minion (p25). One roll's worth — it unticks once the
+        # roll is made, so it is never left on for the next one against a villain.
+        self._routine_check = QCheckBox(ROUTINE_LABEL)
+        self._routine_check.setToolTip(help_markup(ROUTINE_HINT))
+
+        self._dc_row = FlowContainer()
+        flow = FlowLayout(self._dc_row, spacing=max(grid.horizontalSpacing(), 0) * 3)
+        flow.setContentsMargins(0, 0, 0, 0)
+        flow.addWidget(dc_pair)
+        flow.addWidget(self._routine_check)
+        grid.addWidget(self._dc_row, 3, 0, 1, 3)
 
         self._hidden_check = QCheckBox("Hidden roll")
         self._hidden_check.setToolTip(
@@ -502,14 +523,6 @@ class DiceRollerPanel(
         if self._hidden_option:
             grid.addWidget(self._hidden_check, row, 0, 1, 3)
             row += 1
-
-        # Take 10 (PDF p17): for a check made under no pressure, and for any attack or
-        # interaction against a minion (p25). One roll's worth — it unticks once the
-        # roll is made, so it is never left on for the next one against a villain.
-        self._routine_check = QCheckBox(ROUTINE_LABEL)
-        self._routine_check.setToolTip(help_markup(ROUTINE_HINT))
-        grid.addWidget(self._routine_check, row, 0, 1, 3)
-        row += 1
 
         self._build_request_row(grid, row)
         self._build_action_row(grid, row + 1)

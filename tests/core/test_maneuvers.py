@@ -162,7 +162,7 @@ def test_all_out_raises_the_attack_check_and_names_it(data) -> None:
     hero = _hero(data)
     spec = apply_maneuvers(_attack(hero, data), [(ALL_OUT, 3)], data)
     assert spec.modifier == 9
-    assert spec.label == "Attack +9 vs. Defense (All-Out Attack +3)"
+    assert spec.label.endswith("Attack +9 vs. Defense (All-Out Attack +3)")
     assert spec.follow_up.dc == 18  # the save is untouched
 
 

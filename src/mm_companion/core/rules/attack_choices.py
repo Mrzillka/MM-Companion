@@ -14,7 +14,7 @@ reads no game data.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ..character import Character
 from ..data_loader import GameData
@@ -61,13 +61,18 @@ def attack_choices(
 
     An effect with no attack check (Perception range) has no such line — its save is the
     whole attack — so it is not offered: nothing here could change a check it never makes.
+
+    Each spec's label is its caption — the power's name in front of the card's line —
+    since it leaves the card behind: on the roller's chip and in the history, a bare
+    "Attack +8 vs. Defense" could be any of the character's attacks.
     """
 
     return [
-        AttackChoice(_caption(name, spec), spec)
+        AttackChoice(caption, replace(spec, label=caption))
         for name, specs in _build_rolls(char, game_data, npc=npc)
         for spec in specs
         if targetable_attack(spec)
+        for caption in (_caption(name, spec),)
     ]
 
 

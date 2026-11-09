@@ -325,7 +325,7 @@ def test_at_a_table_a_target_aims_the_attack(qapp, data, menu, monkeypatch) -> N
     monkeypatch.setattr("mm_companion.ui.action_menu.QMenu", _Pick)
     section.start_attack()
     ((spec, target),) = aimed
-    assert target.name == "Thug" and spec.label.startswith("Attack")
+    assert target.name == "Thug" and spec.label.startswith("Blast: Attack")
     assert section.panel.current_spec() is None  # aimed rolls; nothing left loaded
 
 

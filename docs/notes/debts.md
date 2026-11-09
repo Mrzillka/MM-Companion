@@ -169,11 +169,6 @@ the targeted actions' own). Each of these was seen and left on purpose.
   the start of the next turn, which matters only for a second attack in one turn.
 - **Several lines grow the lane** by one line each (the lane reserves one). Accepted
   unless it bothers someone in play.
-- **The loaded chip does not name the power.** An attack picked off the picker shows
-  the card's label ("Rolling: Attack +0 vs. Defense"), so two attacks look alike on
-  the chip; the picker's caption names them.
-- **The DC and Routine rows stay two rows**, not the one row §1's sketch of the plan
-  shows.
 - **No dot on the System block.** Nothing temporary moves Initiative or Speed yet; add
   a `StatMark` there when something does.
 

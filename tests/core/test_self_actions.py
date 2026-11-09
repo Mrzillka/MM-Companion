@@ -98,7 +98,7 @@ def test_charge_takes_two_off_the_attack_and_says_so(data) -> None:
     hero = _hero(data)
     spec = apply_actions(_attack(hero, data), [("charge", None)], data, hero)
     assert spec.modifier == 4
-    assert spec.label == "Attack +4 vs. Defense (Charge)"
+    assert spec.label.endswith("Attack +4 vs. Defense (Charge)")
 
 
 def test_lines_and_maneuvers_are_named_together(data) -> None:

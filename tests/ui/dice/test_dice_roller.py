@@ -1236,3 +1236,18 @@ def test_the_die_stays_put_whatever_the_readout_says(qapp) -> None:
         assert panel._readout.sizeHint().width() <= panel._die_part.width()
     finally:
         panel.close()
+
+
+def test_the_dc_box_and_routine_share_a_row_and_wrap_when_narrow(qapp: QApplication) -> None:
+    view = DiceRollerView()
+    view.show()
+    panel = view.panel
+
+    _settled(qapp, view, 360, 800)  # the right-hand pinned strip's shape
+    dc = panel._dc_check.mapTo(panel, panel._dc_check.rect().center()).y()
+    routine = panel._routine_check.mapTo(panel, panel._routine_check.rect().center()).y()
+    assert abs(dc - routine) < panel._dc_check.height()
+
+    row = panel._dc_row
+    one_line = row.heightForWidth(row.width())
+    assert row.heightForWidth(panel._dc_check.sizeHint().width() + 10) > one_line

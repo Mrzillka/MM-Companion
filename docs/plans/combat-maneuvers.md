@@ -747,6 +747,22 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
 Newest first. Each entry: date, phase, what was done, what's next, gotchas, and the
 commit hash.
 
+- **2026-11-09 — After phase 10 (the user asked).** Two of phase 10's debts paid.
+  (1) **The chip names the power**: `core.rules.attack_choices` puts each choice's caption
+  in its spec's label ("Blast: Attack +8 vs. Defense"), so the chip, the history and the
+  GM's "Thug: Blast: …" say which attack; a card's own 🎲 is unchanged. `same_attack`
+  compares labels, so one attack loaded once off the card and once off the picker counts
+  as two (the lane resets) — accepted. Three tests that pinned the bare label now read
+  the end of it. (2) **DC and Routine share a row** (§1's sketch): the "DC" box (renamed
+  from "Difficulty Class", which is its tooltip now) with its number, then Routine, in a
+  `FlowContainer` across the grid, wrapping onto two lines only when the roller is
+  narrow; the GM's Hidden roll stays its own row. New tests:
+  `test_two_attacks_alike_on_their_cards_are_told_apart_once_picked`,
+  `test_the_dc_box_and_routine_share_a_row_and_wrap_when_narrow`. **Tests:** a full run
+  with the chip change found only the three label tests (fixed); a second full run was
+  stopped by the system (low memory) at 75% with no failure, and the last quarter's 47
+  files were run after in two batches: 1277 passed.
+
 - **2026-11-09 — Phase 10 (done).** The finish. **Every tile has a road**: a new test on
   each roller (`test_every_tile_a_player_sees_has_a_road`,
   `test_every_tile_the_gm_sees_has_a_road`) fails if a built-in tile falls back to

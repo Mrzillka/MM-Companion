@@ -18,7 +18,7 @@ from mm_companion import __version__
 from mm_companion.core import diagnostics
 from mm_companion.core.mods import initialize_mods
 from mm_companion.core.storage import ensure_workspace, get_workspace
-from mm_companion.ui import loading, theme
+from mm_companion.ui import gc_guard, loading, theme
 from mm_companion.ui.app_icon import app_icon
 
 
@@ -120,6 +120,9 @@ def main() -> int:
     _route_qt_messages()
 
     app = QApplication(sys.argv)
+    # Python's cycle collector would otherwise run on whichever thread is allocating,
+    # and destroy a Qt object there — fatal off the GUI thread (see ui/gc_guard).
+    gc_guard.install(app)
     # The application icon is Qt's default for every top-level window, so no
     # window needs to set it individually.
     app.setWindowIcon(app_icon())

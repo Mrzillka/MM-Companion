@@ -94,10 +94,8 @@ class DiceRollerView(ReflowBox, QWidget):
         self._given_history = history
         if history is None:
             self.panel.localRoll.connect(self._add_local_card)
-        # Held so the same object can be disconnected again; a fresh lambda per
-        # sync would leave the old one attached and stack up.
+        # The bridge whose end :meth:`_on_session_end` is watching for (see :meth:`_follow`).
         self._session_bridge: SessionBridge | None = None
-        self._on_session_end = lambda *_: self._sync_session()
 
         self._history_part = self._build_history_panel()
         # Connected only now that the histories exist for it to reach.
@@ -418,6 +416,19 @@ class DiceRollerView(ReflowBox, QWidget):
         if bridge is not None:
             for signal in (bridge.disconnected, bridge.stopped, bridge.kicked):
                 signal.connect(self._on_session_end)
+
+    def _on_session_end(self, *_args: object) -> None:
+        """The followed session ended: show the private history again.
+
+        A method and not a lambda kept on ``self``, and that is a crash fix. A lambda
+        that closes over ``self`` and is stored on it is a reference cycle, so a
+        dropped view outlived its last reference and waited for Python's cycle
+        collector — which runs on whichever thread is allocating at the time, often a
+        session socket thread. A widget destroyed off the GUI thread cannot stop its
+        timers, and the next ``processEvents`` fired one into freed memory (see
+        docs/notes/testing.md, "Qt objects must die on the GUI thread").
+        """
+        self._sync_session()
 
     # -- the local history ---------------------------------------------------
 

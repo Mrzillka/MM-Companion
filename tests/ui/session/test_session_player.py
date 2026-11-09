@@ -17,6 +17,7 @@ GM assumed.
 from __future__ import annotations
 
 import time
+import weakref
 
 import pytest
 from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMessageBox
@@ -743,6 +744,25 @@ def test_a_players_roll_is_resolved_by_the_gm_and_shared(
     # The number on the player's screen is the server's, not one of its own.
     assert wait_for(qapp, lambda: str(recorded.total) in view.panel._readout.text())
     assert wait_for(qapp, lambda: len(view._session_history.cards()) == 1)
+
+
+def test_a_dropped_players_roller_is_freed_on_the_spot(qapp: QApplication, table) -> None:
+    """A roller nobody holds any more goes at once, on the GUI thread.
+
+    It used to keep a lambda over itself to watch the session end — a reference
+    cycle, so a dropped view waited for Python's cycle collector, which ran on a
+    socket thread. A widget destroyed there cannot stop its timers, and the next
+    ``processEvents`` fired one into freed memory: the teardown segfault that killed
+    one CI job in two (docs/notes/testing.md).
+    """
+    _host, player = table
+    set_active_session(player)
+    view = DiceRollerView()
+    gone = weakref.ref(view)
+
+    del view
+
+    assert gone() is None
 
 
 def test_a_players_roller_shows_the_gms_rolls_too(qapp: QApplication, table) -> None:

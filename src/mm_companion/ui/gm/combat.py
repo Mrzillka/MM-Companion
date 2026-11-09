@@ -1,0 +1,386 @@
+"""The GM's combat actions off the Rolls block's Actions popup.
+
+The attack maneuvers, the self actions and the Attack tile are a player's, taken by an
+NPC: a pick first asks **which NPC acts** (a plain menu of the cast, each with its
+picture), and from there the shared :class:`~mm_companion.ui.roller.combat_runner.
+CombatRunner` runs them exactly as it does on a sheet — with that NPC's attacks in the
+picker, its numbers in the caps, its name on every roll, and what the action leaves
+landing on it (and replayed onto its open sheet). Surprise Attack is the GM's alone
+(decision 13 of the combat maneuvers plan): pick a creature on the Scene, and it is
+Vulnerable — or Defenseless — until the start of its next turn.
+
+A team attack's call to roll (``ui/team_call.py``) is joined for an NPC here too: Join on
+the call's table asks which NPC, and that NPC's next attack off the roller is its entry.
+"""
+
+from __future__ import annotations
+
+from PySide6.QtGui import QIcon
+
+from mm_companion.core import npc_groups
+from mm_companion.core.data_loader import CombatAction, ConditionChange
+from mm_companion.core.data_loader.game_data import COMBAT_KIND_MANEUVER
+from mm_companion.core.rules import (
+    RollSpec,
+    action_reason,
+    attack_choices,
+    maneuver_action,
+    reacting,
+    self_action,
+    self_action_changes,
+    self_action_note,
+    targeted_action,
+    targeted_check_spec,
+    targeted_opposed_spec,
+)
+from mm_companion.ui import theme
+from mm_companion.ui.action_menu import (
+    NO_ALLY_AND_OPPONENT,
+    NO_ONE_TO_TARGET,
+    NO_OPPOSED_CHECK,
+    SKIP_TARGET,
+    choose_from_menu,
+)
+from mm_companion.ui.attack_targets import KIND_ATTACK
+from mm_companion.ui.gm.model import _Recovering
+from mm_companion.ui.impress import PARTY_NPC, ImpressParty
+from mm_companion.ui.roller.combat_runner import CombatActor, CombatRunner
+
+#: Why the GM's maneuvers and self actions are greyed with no NPC in the session.
+NO_NPC_TO_ACT = "Add an NPC to the session first: the GM takes these actions as one of them."
+#: Why Surprise Attack is greyed with nobody on the Scene.
+NO_ONE_ON_SCENE = "Put someone on the Scene first: a surprise attack is granted against them."
+#: Beside an NPC in the chooser that has no attack to take an attack action with.
+NO_ATTACKS_MARK = "no attacks"
+#: Join pressed on a team attack the GM has already resolved or called off.
+TEAM_CALL_OVER = "That team attack is over: it was resolved or called off."
+
+
+class GMCombatMixin:
+    """Part of :class:`~mm_companion.ui.gm_window.GMWindow`; see the module docstring."""
+
+    def _setup_combat(self) -> None:
+        """Wire the shared combat runner onto the Rolls block's roller (no actor yet)."""
+        self._combat = CombatRunner(
+            self._data, self._roller, note=lambda text: self._post_note(text), parent=self
+        )
+
+    # -- the popup ------------------------------------------------------------
+
+    def combat_offered(self) -> dict[str, str | None]:
+        """What the GM's Actions popup runs of the combat block: every maneuver and self
+        action (an NPC takes it, so they wait for one in the cast) and the actions the GM
+        grants (Surprise Attack: someone must be on the Scene)."""
+        acting = None if self._acting_parties() else NO_NPC_TO_ACT
+        offered: dict[str, str | None] = {KIND_ATTACK: acting}
+        for action in self._data.combat.actions:
+            if action.kind == COMBAT_KIND_MANEUVER or self_action(self._data, action.id):
+                offered[action.id] = acting
+            elif action.gm_runs and action.options:
+                offered[action.id] = None if self._scene else NO_ONE_ON_SCENE
+            elif targeted_action(self._data, action.id) is not None:
+                offered[action.id] = acting or (None if self._scene else NO_ONE_TO_TARGET)
+        return offered
+
+    def _gm_combat_action(self, kind: str) -> bool:
+        """Run *kind* if it is one of the combat actions; whether it was."""
+        if kind == KIND_ATTACK:
+            self._gm_attack()
+            return True
+        action = self._data.combat.action(kind)
+        if action is not None and action.gm_runs and action.options:
+            self._grant(action)
+            return True
+        if targeted_action(self._data, kind) is not None:
+            self._gm_targeted(kind)
+            return True
+        if maneuver_action(self._data, kind) is None and self_action(self._data, kind) is None:
+            return False
+        party = self._choose_actor(action)
+        if party is not None:
+            self._combat.act_as(self._actor_for(party))
+            self._combat.start(kind)
+        return True
+
+    # -- who acts -------------------------------------------------------------
+
+    def _acting_parties(self) -> list[ImpressParty]:
+        """The NPCs that can act, in the board's order (group members one by one)."""
+        sources, _targets = self.impress_parties()
+        return [p for p in sources if p.kind == PARTY_NPC and p.character is not None]
+
+    def _actor_reason(self, party: ImpressParty, action: CombatAction | None) -> str:
+        """Why *party* cannot take *action* now (``""``: it can) — shown beside it."""
+        wants = action is None or action.needs_attack or action.kind == COMBAT_KIND_MANEUVER
+        # Block while Blocking picks the attack that blocks.
+        if wants or reacting(action, party.character):
+            if not attack_choices(party.character, self._data):
+                return NO_ATTACKS_MARK
+        if action is not None and (
+            self_action(self._data, action.id) is not None
+            or targeted_action(self._data, action.id) is not None
+        ):
+            reason = action_reason(self._data, action, party.character, gm=True)
+            if reason:
+                return reason.rstrip(".")
+        return ""
+
+    def _choose_actor(
+        self, action: CombatAction | None, *, skip_ref: str = ""
+    ) -> ImpressParty | None:
+        """Which NPC takes *action* (``None``: the Attack tile): picked off a plain menu
+        at the Actions button — each with its picture, its group and whether it is a
+        minion, greyed with the reason when it cannot — or the only one there is.
+        *skip_ref* leaves one creature out (the target of a team attack)."""
+        parties = [p for p in self._acting_parties() if not skip_ref or p.ref != skip_ref]
+        if not parties:
+            self._show_notice(NO_NPC_TO_ACT, theme.color("text.muted.rich"))
+            return None
+        reasons = [self._actor_reason(p, action) for p in parties]
+        if len(parties) == 1:
+            if reasons[0]:
+                self._show_notice(
+                    f"{parties[0].name}: {reasons[0]}.", theme.color("text.muted.rich")
+                )
+                return None
+            return parties[0]
+        captions = []
+        for party, reason in zip(parties, reasons, strict=True):
+            text = party.name
+            group = npc_groups.group_of(self._npc_groups, party.source)
+            if group is not None:
+                text += f" · {group.name}"
+            if party.minion:
+                text += " (minion)"
+            if reason:
+                text += f" — {reason}"
+            captions.append(text)
+        index = choose_from_menu(
+            self,
+            captions,
+            self._roller.menu_point(),
+            disabled=[i for i, reason in enumerate(reasons) if reason],
+            icons=[self._portrait_icon(p.ref) for p in parties],
+        )
+        return parties[index] if index is not None else None
+
+    def _portrait_icon(self, ref: str) -> QIcon | None:
+        portrait = self._scene_board.portrait(ref)
+        return QIcon(portrait) if portrait is not None else None
+
+    def _actor_for(self, party: ImpressParty) -> CombatActor:
+        """*party* (an NPC of the cast) as the roller's actor: its live model, its name
+        on the rolls, and what it does landing on it."""
+        key = party.source
+        return CombatActor(
+            party.character,
+            name=party.name,
+            key=key,
+            minion=self.rolls_as_minion(party.character),
+            land=lambda requests: self._land_npc_requests(key, requests),
+            throw=lambda spec, load: self._npc_throw(key, spec, load),
+        )
+
+    def _npc_throw(self, key: str, spec: RollSpec, load: bool) -> None:
+        """Roll (or load) a check an NPC's action makes — Recover's recovery check,
+        Stand's Acrobatics. One that sheds a condition when made is held, as the chip's
+        🎲 holds it, so the result takes the condition off this NPC."""
+        entry = self._npc_state.get(key)
+        minion = self.rolls_as_minion(entry.character if entry is not None else None)
+        if spec.recovers:
+            # Set first, as _roll_npc_recovery does: a roll can come back before
+            # roll_spec returns.
+            self._recovering = _Recovering(key, spec)
+        if load:
+            self._roller.load_spec(spec, minion=minion, localize=False)
+        elif not self._roller.roll_spec(spec, minion=minion) and spec.recovers:
+            self._recovering = None
+
+    def _follow_actor(self, key: str) -> None:
+        """An NPC's own card or sheet rolled something: the lines on the lane were
+        another NPC's, so they go (their limits read that one's numbers)."""
+        actor = self._combat.actor
+        if actor is not None and actor.key != key:
+            self._combat.act_as(None)
+
+    # -- the Attack tile --------------------------------------------------------
+
+    def _gm_attack(self) -> None:
+        """The Attack tile on the GM's roller: which NPC, which of its attacks, and —
+        when the Scene has anyone else on it — optionally at whom ("Skip" first). Aimed,
+        it goes the GM's own aimed-attack road; skipped, it is loaded onto the chip."""
+        party = self._choose_actor(None)
+        if party is None:
+            return
+        self._combat.act_as(self._actor_for(party))
+        spec = self._combat.choose_attack()
+        if spec is None:
+            return
+        targets = self._aim_targets_for(party.source)
+        if targets:
+            captions = [SKIP_TARGET] + [
+                f"{t.name} (minion)" if t.minion else t.name for t in targets
+            ]
+            index = choose_from_menu(self, captions, self._roller.menu_point())
+            if index is None:
+                return
+            if index > 0:
+                target = targets[index - 1]
+                self._attack.aim_own(party, spec, target.ref, target.name)
+                return
+        self._combat.load(spec)
+
+    # -- the targeted actions: Aid, Feint, Trick, Grab, Trip, Disarm, Smash, Escape ------
+
+    def _gm_targeted(self, action_id: str) -> None:
+        """A targeted action's tile on the GM's roller: which NPC takes it, against whom
+        (Aid: which ally first, then the opponent), which way, and with which of its
+        attacks. Its check is rolled as that NPC and resolved once the die is in
+        (``TargetedController.act_own``) — a Grab's or a Trip's opposed check rolled for
+        it once the attack has hit."""
+        action = targeted_action(self._data, action_id)
+        if action is None or action.targeted is None:
+            return
+        party = self._choose_actor(action)
+        if party is None:
+            return
+        self._combat.act_as(self._actor_for(party))
+        _sources, scene = self.impress_parties()
+        others = [t for t in scene if t.ref != party.ref]
+        needed = 2 if action.targeted.ally else 1
+        if len(others) < needed:
+            reason = NO_ALLY_AND_OPPONENT if action.targeted.ally else NO_ONE_TO_TARGET
+            self._show_notice(reason, theme.color("text.muted.rich"))
+            return
+        point = self._roller.menu_point()
+        ally = None
+        if action.targeted.ally:
+            ally = self._pick_party(others, point, "Aid {}")
+            if ally is None:
+                return
+            others = [t for t in others if t.ref != ally.ref]
+        target = self._pick_party(others, point, "… against {}" if ally is not None else "{}")
+        if target is None:
+            return
+        option = ""
+        if action.options:
+            index = choose_from_menu(self, [o.name for o in action.options], point)
+            if index is None:
+                return
+            option = action.options[index].id
+        attack = None
+        if action.targeted.uses_attack:
+            attack = self._combat.choose_attack()
+            if attack is None:
+                return
+        check = targeted_check_spec(self._data, action, option, party.character, attack)
+        if check is None:
+            return
+        opposed = targeted_opposed_spec(self._data, action, option, party.character, attack)
+        if action.targeted.opposed is not None and opposed is None:
+            self._show_notice(
+                NO_OPPOSED_CHECK.format(action.name.lower()), theme.color("text.muted.rich")
+            )
+            return
+        self._targeted.act_own(
+            party,
+            action.id,
+            option,
+            target,
+            self._combat.own(check),
+            ally,
+            opposed=self._combat.own(opposed) if opposed is not None else None,
+        )
+
+    def _pick_party(self, parties: list[ImpressParty], point, caption: str) -> ImpressParty | None:
+        """One creature off a plain menu, each line *caption* with its name in."""
+        index = choose_from_menu(
+            self,
+            [caption.format(f"{p.name} (minion)" if p.minion else p.name) for p in parties],
+            point,
+            icons=[self._portrait_icon(p.ref) for p in parties],
+        )
+        return parties[index] if index is not None else None
+
+    # -- a team attack's call to roll --------------------------------------------
+
+    def _gm_team_join(self, call: object) -> None:
+        """Join on a team attack call's table in the GM's history: which NPC joins (not
+        the target), and its next attack off the roller is the entry."""
+        if not isinstance(call, RollSpec):
+            return
+        open_call = self._team_calls.open_call(call.action_id)
+        if open_call is None:
+            self._show_notice(TEAM_CALL_OVER, theme.color("text.muted.rich"))
+            return
+        party = self._choose_actor(None, skip_ref=open_call.target_ref)
+        if party is None:
+            return
+        self._combat.act_as(self._actor_for(party))
+        self._combat.join_team(call)
+
+    # -- what the GM grants -------------------------------------------------------
+
+    def _grant(self, action: CombatAction) -> None:
+        """An action the GM grants against a creature (Surprise Attack): who, which way
+        (its options: vulnerable, or defenseless when completely surprised), and the
+        conditions go on it — an NPC's model, or a player's sheet over the session."""
+        _sources, targets = self.impress_parties()
+        if not targets:
+            self._show_notice(NO_ONE_ON_SCENE, theme.color("text.muted.rich"))
+            return
+        point = self._roller.menu_point()
+        index = choose_from_menu(
+            self,
+            [f"{t.name} (minion)" if t.minion else t.name for t in targets],
+            point,
+            icons=[self._portrait_icon(t.ref) for t in targets],
+        )
+        if index is None:
+            return
+        target = targets[index]
+        choice = choose_from_menu(self, [o.name for o in action.options], point)
+        if choice is None:
+            return
+        changes = self_action_changes(action.effect_for(action.options[choice].id), self._data)
+        if not changes or not self.combat_land(target, changes, what=action.name):
+            return
+        self._post_note(self_action_note(self._data, target.name, action.name, changes))
+
+    def combat_land(
+        self, target: ImpressParty, changes: tuple[ConditionChange, ...], *, what: str = ""
+    ) -> bool:
+        """Put *changes* on *target* (or take them off) — an NPC's model, or a player's
+        sheet over the session — each with its parameter; whether they went. A Surprise
+        Attack's grant, a targeted action's outcome (Feinted, Aided), and the opposing
+        conditions an aimed attack spends all land here."""
+        if target.kind == PARTY_NPC:
+            return self._land_npc_requests(target.source, changes)
+        catalog = self._data.condition_catalog()
+        delivered = True
+        for change in changes:
+            if change.remove:
+                sent = self._bridge.remove_condition(
+                    target.source, change.condition, change.parameter
+                )
+            else:
+                record = catalog.get(change.condition)
+                temporary = (
+                    change.temporary
+                    if change.temporary is not None
+                    else bool(record is not None and record.temporary)
+                )
+                sent = self._bridge.apply_condition(
+                    target.source,
+                    change.condition,
+                    change.parameter,
+                    amount=change.amount,
+                    temporary=temporary,
+                )
+            delivered = bool(sent) and delivered
+        if not delivered and what:
+            self._show_notice(
+                f"Could not reach {target.name} — {what} was not sent.",
+                theme.color("tint.worse"),
+            )
+        return delivered

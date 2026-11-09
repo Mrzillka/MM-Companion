@@ -178,6 +178,17 @@ def test_no_preset_sets_a_font_size(presets, theme_id: str) -> None:
 
 
 @pytest.mark.parametrize("theme_id", BUNDLED)
+def test_a_stated_tool_button_colour_restates_the_disabled_one(presets, theme_id: str) -> None:
+    """The menus' bargain again, for ``QToolButton``: the Actions popup's tiles are
+    tool buttons, and a greyed-out one (an action that cannot run yet) painted exactly
+    like a live one on every styled preset until the disabled colour was restated."""
+    rules = qss.build(presets[theme_id]).splitlines()
+    if not any(r.startswith("QToolButton {") and "color:" in r for r in rules):
+        return  # Classic: no colour stated, so the platform still paints it
+    assert any(r.startswith("QToolButton:disabled") and "color:" in r for r in rules)
+
+
+@pytest.mark.parametrize("theme_id", BUNDLED)
 def test_a_stated_menu_colour_restates_the_disabled_one(presets, theme_id: str) -> None:
     """State a menu's text colour, restate what disabled looks like.
 

@@ -96,6 +96,9 @@ class TraitKeys:
     toughness: str = "TOUGHNESS"
     fortitude: str = "FORTITUDE"
     will: str = "WILL"
+    #: Not a trait on the sheet but the attack check an attack rolls — what a
+    #: condition's ``amountMods`` names to move it (Defensive Attack's −X).
+    attack_check: str = "attack_check"
 
 
 @dataclass(frozen=True)
@@ -390,6 +393,9 @@ class SystemRules:
     #: natural 1 that still hits gives the *target* on their resistance check.
     critical_effect_bonus: int = 5
     critical_miss_resistance_bonus: int = 5
+    #: The common circumstance modifiers (PDF p17), smallest first: the roller's step
+    #: buttons offer each one as a bonus and as a penalty.
+    circumstance_modifiers: tuple[int, ...] = (2, 5)
     trait_keys: TraitKeys = field(default_factory=TraitKeys)
     paired_caps: tuple[PairedCap, ...] = ()
     unscoped_scope_values: tuple[str, ...] = ("All checks",)

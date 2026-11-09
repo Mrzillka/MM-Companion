@@ -235,7 +235,8 @@ CLASSIC_TYPOGRAPHY = {
     "size.card-name": 11.0,
     "size.terms": 8.0,
     "size.cost-total": 12.0,
-    "size.dice-face": 40.0,
+    # Smaller since the result moved beside the die (it was 40 on a 160px die).
+    "size.dice-face": 28.0,
     "scale.inactive": 0.9,
 }
 

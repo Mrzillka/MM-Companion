@@ -4,6 +4,7 @@ requests with them, and the session's minion rules.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import replace
 
@@ -31,12 +32,14 @@ from mm_companion.core.session.model import (
     KIND_REQUEST,
 )
 from mm_companion.ui import theme
+from mm_companion.ui.action_grid import GridSection
+from mm_companion.ui.action_menu import combat_menu
 from mm_companion.ui.action_ui import (
     TABLE_MOD_ID,
     TABLE_SESSION_KEY,
     session_minion_rules,
 )
-from mm_companion.ui.area import KIND_AREA_ATTACK
+from mm_companion.ui.area import AREA_ACTION, KIND_AREA_ATTACK
 from mm_companion.ui.gm.model import (
     ANSWERED_MARK,
     AS_WRITTEN_CAPTION,
@@ -45,7 +48,9 @@ from mm_companion.ui.gm.model import (
     UNTRAINED_MARK,
     _Answering,
 )
+from mm_companion.ui.group_check import MODE_GROUP, MODE_TEAM
 from mm_companion.ui.impress import (
+    IMPRESS_ACTION,
     KIND_IMPRESS,
     PARTY_NPC,
     ImpressParty,
@@ -54,6 +59,18 @@ from mm_companion.ui.roll_history import AnswerContext
 from mm_companion.ui.scene_card import CARD_AREA, CARD_END_TURN, CARD_IMPRESS
 from mm_companion.ui.sections.conditions import condition_display_name
 from mm_companion.ui.undo import absorbing
+
+#: The Actions popup's Team attack tile: a call to roll anyone joins (ui/team_call.py).
+TEAM_ATTACK = "team_attack"
+#: The group tiles (``actions.json``), and the group window each opens.
+TEAM_CHECK = "team_check"
+GROUP_CHECK = "group_check"
+GROUP_ACTIONS = (TEAM_CHECK, GROUP_CHECK)
+
+#: Why the group tiles are greyed out on a board with no group.
+NO_NPC_GROUPS = (
+    "Make an NPC group first: drop one NPC card onto another, or make several with Quick NPC."
+)
 
 
 class GMRollsMixin:
@@ -250,11 +267,49 @@ class GMRollsMixin:
             for cid, parameter in changes
         )
 
+    def action_menu(self, own: Mapping[str, str | None]) -> list[GridSection]:
+        """The Actions popup's sections on the Rolls block's roller (see
+        :func:`~mm_companion.ui.action_menu.combat_menu`): the panel's own actions
+        (*own*: Reroll), Impress and Area, the group actions, which need a group, and
+        the combat actions an NPC takes (:meth:`combat_offered`)."""
+        offered = dict(own)
+        offered.update(self.combat_offered())
+        if self._data.impress.available:
+            offered[KIND_IMPRESS] = None
+        if self._data.area.available:
+            offered[KIND_AREA_ATTACK] = None
+        groups = None if self._npc_groups else NO_NPC_GROUPS
+        for key in GROUP_ACTIONS:
+            offered[key] = groups
+        offered[TEAM_ATTACK] = self._team_calls.reason()
+        return combat_menu(self._data, offered, gm=True, fallback=[IMPRESS_ACTION, AREA_ACTION])
+
     def _on_roller_action(self, kind: str) -> None:
+        if self._gm_combat_action(kind):
+            return
         if kind == KIND_IMPRESS:
             self._impress.open_new()
         elif kind == KIND_AREA_ATTACK:
             self._area.open_new()
+        elif kind == TEAM_ATTACK:
+            self._team_calls.open_new(self._aim_targets())
+        elif kind in GROUP_ACTIONS:
+            group_id = self._choose_group()
+            if group_id is None:
+                return
+            self._group_check(group_id, MODE_TEAM if kind == TEAM_CHECK else MODE_GROUP)
+
+    def _choose_group(self) -> str | None:
+        """Which NPC group acts: the only one there is, or the one picked off a menu of
+        them at the pointer (each with its member count)."""
+        groups = list(self._npc_groups)
+        if len(groups) <= 1:
+            return groups[0].id if groups else None
+        menu = QMenu(self)
+        for group in groups:
+            menu.addAction(f"{group.name} ({len(group.members)})").setData(group.id)
+        chosen = menu.exec(QCursor.pos())
+        return chosen.data() if chosen is not None else None
 
     def _on_scene_action(self, ref: str, action: str) -> None:
         """A creature's card on the board, right-clicked: end its turn, or have it act."""
@@ -344,6 +399,7 @@ class GMRollsMixin:
         """A pinned tile on an NPC's card: roll (or load) it as that creature rolls."""
         if not isinstance(spec, RollSpec):
             return
+        self._follow_actor(name)
         entry = self._npc_state.get(name)
         minion = self.rolls_as_minion(entry.character if entry is not None else None)
         if load:
@@ -352,7 +408,7 @@ class GMRollsMixin:
             self._roller.roll_spec(spec, minion=minion)
 
     def _request_roll(self, spec: object) -> None:
-        """Ask the table to roll something — the Request row's handler.
+        """Ask the table to roll something — the Ask to Roll form's handler.
 
         The twin of :meth:`~mm_companion.ui.sections.dice.DiceSection.request_roll`,
         and it has to be written out here for the reason

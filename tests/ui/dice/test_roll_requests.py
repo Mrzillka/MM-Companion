@@ -109,13 +109,14 @@ def test_every_choice_travels_at_zero_with_a_key_that_localizes(data) -> None:
 # -- the control row ---------------------------------------------------------
 
 
-def test_the_row_is_hidden_until_a_host_supplies_traits(qapp: QApplication) -> None:
-    """A roller with no ruleset behind it is the panel it always was."""
+def test_ask_to_roll_is_greyed_until_a_host_supplies_traits(qapp: QApplication) -> None:
+    """A roller with no ruleset behind it has nothing to ask for, and says so."""
     panel = dice_roller.DiceRollerPanel()
-    assert not panel._request_button.isVisibleTo(panel)
+    assert panel.request_reason() is not None
+    assert not panel._request_form.isVisible()  # a popup off the Actions tile, never a row
 
     panel.set_roll_choices(requested_roll_choices(load_game_data()))
-    assert panel._request_button.isVisibleTo(panel)
+    assert panel.request_reason() is None
 
 
 def test_the_ask_button_waits_for_a_real_trait(qapp: QApplication) -> None:

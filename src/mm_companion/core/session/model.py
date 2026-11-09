@@ -228,6 +228,9 @@ class RollRecord:
     #: Rolled **as a minion** (PDF p25): a natural 20 on it is no added success and
     #: no critical, so it raises no save's DC. Stamped by the server from the request.
     minion: bool = False
+    #: The die **not** kept, on a roll made twice for the higher (Aim, PDF p200);
+    #: 0 for every other roll. Stamped by the server that rolled both.
+    other_die: int = 0
     timestamp: str = field(default_factory=utc_now)
 
     @property
@@ -261,6 +264,7 @@ class RollRecord:
             "reroll": self.reroll,
             "routine": self.routine,
             "minion": self.minion,
+            "other_die": self.other_die,
             "timestamp": self.timestamp,
         }
 
@@ -289,6 +293,7 @@ class RollRecord:
             reroll=bool(raw.get("reroll", False)),
             routine=raw.get("routine") is True,
             minion=raw.get("minion") is True,
+            other_die=_die(raw.get("other_die")),
             timestamp=str(raw.get("timestamp", "")) or utc_now(),
         )
 
@@ -311,6 +316,7 @@ class RollRecord:
         natural: bool = True,
         routine: bool = False,
         minion: bool = False,
+        other_die: int = 0,
     ) -> RollRecord:
         """Build a record from a resolved check (``None`` when no DC was set).
 
@@ -336,7 +342,15 @@ class RollRecord:
             reroll=reroll,
             routine=routine,
             minion=minion,
+            other_die=other_die,
         )
+
+
+def _die(value: object) -> int:
+    """A die face off the wire, or 0 for a missing or junk one."""
+    if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 20:
+        return value
+    return 0
 
 
 @dataclass
@@ -491,6 +505,7 @@ class SessionState:
         natural: bool = True,
         routine: bool = False,
         minion: bool = False,
+        other_die: int = 0,
     ) -> RollRecord:
         """Build a :class:`RollRecord` from a resolved check and append it.
 
@@ -513,6 +528,7 @@ class SessionState:
             natural=natural,
             routine=routine,
             minion=minion,
+            other_die=other_die,
         )
         self.rolls.append(record)
         self.touch()

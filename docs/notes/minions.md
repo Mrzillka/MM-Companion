@@ -27,9 +27,11 @@ The two numbers are data, in `system.json`'s `minions` block: `impressBonus` (5)
 
 ## Decisions the user made (2026-10-27)
 
-- **Full automation, plus take-10 on the roller.** The roller's **Routine (take 10)**
-  box is for any check, not only checks against minions, and it is **one-shot**: it
-  unticks after each roll, so nobody takes 10 against a villain by accident. A routine
+- **Full automation, plus take-10 on the roller.** The roller's **Take 10** is for any
+  check, not only checks against minions, and it is **one-shot**. It was a box that
+  unticked after each roll; since 2026-11-10 it is a button that makes the check at once
+  (see [the dice notes](dice-and-rolling.md)), so nobody takes 10 against a villain by
+  accident. A routine
   roll travels as `RollRequest.routine`, the server sets the die to `ROUTINE_DIE`
   (never natural), the history reads "routine 10", and it cannot be rerolled.
 - **Players see a badge** on a minion's scene card (protocol v18's scene `minion` key).
@@ -94,7 +96,12 @@ it. These paths pass it, through `GMWindow.rolls_as_minion`:
 - a card's pinned tiles (`_npc_roll`);
 - history answers (`_roll_as`);
 - the area window's NPC attacker (`area_roll_attack`);
-- every Impress and area group line (`group_line(minion=)`).
+- every Impress and area group line (`group_line(minion=)`);
+- the combat actions an NPC takes off the GM's Actions popup (`CombatActor.minion`).
+
+**A Finishing Attack's hit is still a critical for a minion.** The book (p25) takes away
+only the added success of "a roll of 20"; Finishing's critical comes from the maneuver,
+not the die, and `judge_attack` ORs `critical_hit` in after the minion check.
 
 A minion's save also travels with its outcome list cut to the worst rung
 (`minion_save_spec`), so every seat's card reads what the GM's table applies, with no

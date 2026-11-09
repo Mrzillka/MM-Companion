@@ -137,6 +137,9 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
   Guarded twice, on the `test_input_arrow_columns` precedent: the *rule* in
   `tests/ui/theme/test_theme_qss.py`, the *consequence* in `tests/ui/theme/test_menu_disabled_paint.py`,
   which paints the bar and measures the glyph's ink.
+  `QToolButton:disabled` is restated (rule test only) for the same reason: the Actions popup's tiles are
+  tool buttons, and a greyed-out tile painted exactly like a live one on every styled
+  preset until it was (`test_a_stated_tool_button_colour_restates_the_disabled_one`).
 - `ui/drop_feedback.py` — `DropFeedback` gives one drop target its idle / accept
   / **reject** styling from tokens. Use it in a `dragEnterEvent` instead of
   open-coding a highlight, and call `show_reject()` on the else branch: a bare
@@ -216,6 +219,14 @@ preset — the same rule for the *look* that "no game rules in Python" is for th
   lazily, at paint time, and `importlib.resources.as_file`'s extraction of a zipped
   install is gone by then. It also does the aspect-ratio fitting itself, since
   `QSvgRenderer` stretches to whatever rectangle it is handed and the d20 is not square.
+  The **action icons** (`ui/assets/actions/<key>.svg`, the Actions popup's tiles) are
+  the other shape: one drawing per `icon` key from `actions.json`, single-colour line art
+  on a 24×24 grid, recoloured at render time (`tinted_svg_pixmap` fills over the alpha
+  with `SourceIn`) in the tile's own palette `ButtonText`, normal and disabled — so they
+  follow every preset with no file per theme. An icon key is game data a mod may write,
+  so `action_icon_resource` accepts plain `[a-z0-9_-]` words only and draws
+  `generic.svg` for anything else or missing. A new folder of assets needs adding to
+  **both** `pyproject.toml`'s package-data and `installer/mm_companion.spec`.
   Each drawing comes in **variants**, held in the `DIE_VARIANTS` / `HERO_POINT_VARIANTS`
   registries, and **which one is a theme token** — `theme.asset("die")` /
   `theme.asset("hero-point")`, read at the call site (`d20_pixmap`,

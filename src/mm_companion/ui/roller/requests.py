@@ -1,13 +1,15 @@
-"""The roller's Request row: the GM picks a trait and a difficulty and asks the table to
-roll it.
+"""The roller's Ask to Roll form: pick a trait and a difficulty and ask the table to roll
+it. Opened from the Actions popup's **Ask** tile.
 """
 
 from __future__ import annotations
 
 from dataclasses import replace
 
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtWidgets import (
     QComboBox,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -18,111 +20,127 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core.rules import RollSpec
 from mm_companion.ui import theme
+from mm_companion.ui.action_menu import NO_REQUEST_TRAITS
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import (
+    BOLD_STYLE,
     make_spin_box,
 )
+
+#: The form's heading.
+REQUEST_TITLE = "Ask the table to roll"
 
 
 class RollerRequestsMixin:
     """Part of :class:`~mm_companion.ui.dice_roller.DiceRollerPanel`; see the module docstring."""
 
-    def _build_request_row(self, grid: QGridLayout, row: int) -> None:
-        """The Request row: a trait, a difficulty, and a button that asks the table.
+    def _build_request_form(self) -> QFrame:
+        """The Ask to Roll form: a trait, a difficulty, and a button that asks the table.
 
-        Below the roll's own controls because it is a different verb: everything
-        above rolls something *here*, this asks somebody else to. It sits **on the
-        same grid** as the rows above, cell for cell (it used to be one free-running
-        line that lined up with nothing and read as a broken second form).
+        It used to be a row of the roller itself, always on screen — three greyed
+        controls on the busiest part of the panel, for a verb used a few times a
+        session and only ever at a table. So it lives in a small popup the Actions
+        popup's **Ask** tile opens (:meth:`open_request`), and the roller keeps its
+        height for the controls that roll something *here*.
 
-        The DC box is a plain spin box where **0 means no DC**, unlike the Difficulty
-        Class row: that checkbox tells "no DC" from "DC 0" for a roll the panel
-        grades, and nobody asks for a roll against DC 0.
+        Built once and kept: it remembers the last trait and difficulty between
+        openings, and it is a child of the panel, so it is never a window without a
+        parent. ``Qt.Popup`` makes it close on a click outside, as a menu does.
 
-        The row is hidden until a host supplies traits (:meth:`set_roll_choices`).
+        The DC box is a plain spin box where **0 means no DC**, the same as the
+        roller's own DC box.
         """
+
+        form = QFrame(self, Qt.WindowType.Popup)
+        form.setObjectName("requestForm")
+        form.setFrameShape(QFrame.Shape.StyledPanel)
+        form.hide()
+        grid = QGridLayout(form)
+        pad = int(theme.metric("space.md"))
+        grid.setContentsMargins(pad, pad, pad, pad)
+        grid.setColumnStretch(1, 1)
+
+        title = QLabel(REQUEST_TITLE)
+        title.setStyleSheet(BOLD_STYLE)
+        grid.addWidget(title, 0, 0, 1, 2)
 
         self._request_combo = QComboBox()
         self._request_combo.setToolTip("What to ask the table to roll")
-        # Short on purpose: a placeholder is measured into the combo's size hint even
-        # when the minimum-contents policy below has capped everything else, so a
-        # roomier "— choose a trait —" would cost the block a hundred pixels of width
-        # to say what the "Request" caption beside it already says.
         self._request_combo.setPlaceholderText("Trait…")
         # A combo box asks to be as wide as its longest entry, a skill name the
-        # ruleset chose; left alone that made the Dice block (and the pinned strip)
-        # demand half again the width it needs. So it shrinks and stretches, like
-        # the Power Constructor's term combos; the popup still shows names in full.
+        # ruleset chose; the popup still shows names in full.
         self._request_combo.setSizeAdjustPolicy(
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
-        self._request_combo.setMinimumContentsLength(8)
+        self._request_combo.setMinimumContentsLength(12)
         self._request_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        # And an explicit floor, which *replaces* the hint-derived one rather than
-        # raising it (``qSmartMinSize``) — so this, and not the longest skill name,
-        # is how narrow the slider column can be squeezed. A trait name is worth
-        # about this much either way.
         self._request_combo.setMinimumWidth(int(theme.metric("column.request-trait")))
         guard_wheel(self._request_combo)
         self._request_combo.currentIndexChanged.connect(self._on_request_trait_changed)
+        self._request_label = QLabel("Trait")
+        grid.addWidget(self._request_label, 1, 0)
+        grid.addWidget(self._request_combo, 1, 1)
 
-        # The difficulty and the button share the spin-box column, so the row ends
-        # exactly where the Bonus and Penalty boxes above it end.
         self._request_part = QWidget()
         line = QHBoxLayout(self._request_part)
         line.setContentsMargins(0, 0, 0, 0)
-        line.setSpacing(int(theme.metric("space.xs")))
-
+        line.setSpacing(int(theme.metric("space.sm")))
         # Arrowless: the theme reserves a right-hand column for the arrows the
-        # platform style draws — 50px under ``windows11`` — which is more than the
-        # two digits it frames, and would leave "Ask" no room in this cell. It takes
-        # the cell's slack, so the button beside it stays exactly as wide as its word.
-        self._request_dc = make_spin_box(0, 60, value=0, buttons=False)
-        self._request_dc.setToolTip("The difficulty to ask for — 0 for no DC")
+        # platform style draws, which is more than the two digits it frames.
+        self._request_dc = make_spin_box(0, 60, value=0, buttons=False, snug=True)
+        self._request_dc.setToolTip("The difficulty to ask for — none, or a number")
         # And it says so: a bare "0" read as a DC of nothing, which nobody means.
         self._request_dc.setSpecialValueText("—")
-        self._request_dc.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        line.addWidget(self._request_dc, stretch=1)
+        line.addWidget(self._request_dc)
+        line.addStretch(1)
 
         self._request_button = QPushButton("Ask")
-        self._request_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self._request_button.setDefault(True)
         self._request_button.setToolTip(
             "Put this roll in everyone's history, for them to roll on their own sheet"
         )
         self._request_button.clicked.connect(self._emit_request)
         line.addWidget(self._request_button)
+        grid.addWidget(QLabel("DC"), 2, 0)
+        grid.addWidget(self._request_part, 2, 1)
+        return form
 
-        self._request_label = QLabel("Request")
-        grid.addWidget(self._request_label, row, 0)
-        grid.addWidget(self._request_combo, row, 1)
-        grid.addWidget(self._request_part, row, 2)
-        self._show_request_row(False)
+    def open_request(self, at: QPoint | None = None) -> QFrame:
+        """Show the Ask to Roll form at *at* (global), or under the Actions button."""
 
-    def _show_request_row(self, visible: bool) -> None:
-        """Show or hide the Request row as one thing, and say the panel changed size.
+        form = self._request_form
+        if at is None:
+            button = self._actions_button
+            at = button.mapToGlobal(button.rect().bottomLeft())
+        form.adjustSize()
+        screen = self.screen().availableGeometry() if self.screen() is not None else None
+        if screen is not None:
+            at = QPoint(
+                max(screen.left(), min(at.x(), screen.right() - form.width())),
+                max(screen.top(), min(at.y(), screen.bottom() - form.height())),
+            )
+        form.move(at)
+        form.show()
+        self._request_combo.setFocus()
+        return form
 
-        The ``contentChanged`` is not optional: a splitter child with no stretch
-        keeps the pixels it was given, so without it the view never re-divides and
-        the block keeps the room a row it no longer shows was using (or grows past
-        the window for one it now does).
-        """
+    def request_reason(self) -> str | None:
+        """Why Ask to Roll cannot run (``None`` when it can): there must be traits."""
 
-        for widget in (self._request_label, self._request_combo, self._request_part):
-            widget.setVisible(visible)
-        self.updateGeometry()
-        self.contentChanged.emit()
+        return None if any(spec is not None for spec in self._request_specs) else NO_REQUEST_TRAITS
 
     # -- asking the table to roll --------------------------------------------
 
     def set_roll_choices(self, groups: object) -> None:
-        """Fill the Request row's combobox from *groups*, or hide the row.
+        """Fill the Ask to Roll form's combobox from *groups*.
 
         *groups* is what
         :func:`~mm_companion.core.rules.pins.requested_roll_choices` returns — a
         list of titled groups of values, each carrying a template
         :class:`~mm_companion.core.rules.RollSpec`. The panel is handed the answer
         rather than the game data: it reads no ruleset. The group titles go in as
-        disabled items, as in the Power Constructor's trait combo.
+        disabled items, as in the Power Constructor's trait combo. With none, the Ask
+        tile is greyed (:meth:`request_reason`).
         """
 
         self._request_combo.blockSignals(True)
@@ -146,7 +164,6 @@ class RollerRequestsMixin:
         # table nobody had chosen anything for.
         self._request_combo.setCurrentIndex(-1)
         self._sync_request_button()
-        self._show_request_row(any(spec is not None for spec in self._request_specs))
 
     def _disable_request_headings(self) -> None:
         """Grey the group titles so only the traits under them can be picked."""
@@ -159,10 +176,10 @@ class RollerRequestsMixin:
                     item.setEnabled(False)
 
     def _requested_spec(self) -> RollSpec | None:
-        """The trait the Request row names, with its DC folded in, or ``None``.
+        """The trait the form names, with its DC folded in, or ``None``.
 
         ``dc`` of 0 is *no* DC and not a difficulty of zero — see
-        :meth:`_build_request_row`.
+        :meth:`_build_request_form`.
         """
 
         index = self._request_combo.currentIndex()
@@ -177,10 +194,9 @@ class RollerRequestsMixin:
     def _on_request_trait_changed(self) -> None:
         """Re-check the button, and say in the tooltip what the combo may be clipping.
 
-        In the pinned strip this combo is the width the block can spare, which is
-        rarely the width of a skill name — the same elide-plus-tooltip bargain
-        ``ElidingLabel`` strikes, and the only one available: a combo box does not
-        tooltip its own clipped text.
+        The combo may be narrower than a skill name — the same elide-plus-tooltip
+        bargain ``ElidingLabel`` strikes, and the only one available: a combo box does
+        not tooltip its own clipped text.
         """
 
         self._sync_request_button()
@@ -201,4 +217,5 @@ class RollerRequestsMixin:
 
         spec = self._requested_spec()
         if spec is not None:
+            self._request_form.hide()
             self.rollRequested.emit(spec)

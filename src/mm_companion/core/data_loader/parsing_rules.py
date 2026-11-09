@@ -788,6 +788,7 @@ def _parse_system(raw: dict) -> SystemRules:
         toughness=tk_raw.get("toughness", defaults.trait_keys.toughness),
         fortitude=tk_raw.get("fortitude", defaults.trait_keys.fortitude),
         will=tk_raw.get("will", defaults.trait_keys.will),
+        attack_check=tk_raw.get("attack_check", defaults.trait_keys.attack_check),
     )
     paired_caps = tuple(
         PairedCap(cap=p["cap"], traits=tuple(p["traits"]), label=p["label"])
@@ -802,6 +803,15 @@ def _parse_system(raw: dict) -> SystemRules:
         critical_effect_bonus=int(sys.get("criticalEffectBonus", defaults.critical_effect_bonus)),
         critical_miss_resistance_bonus=int(
             sys.get("criticalMissResistanceBonus", defaults.critical_miss_resistance_bonus)
+        ),
+        circumstance_modifiers=tuple(
+            sorted(
+                {
+                    abs(int(step))
+                    for step in sys.get("circumstanceModifiers", defaults.circumstance_modifiers)
+                    if int(step)
+                }
+            )
         ),
         trait_keys=trait_keys,
         paired_caps=paired_caps,

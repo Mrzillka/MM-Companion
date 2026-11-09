@@ -49,7 +49,6 @@ from mm_companion.core.session.model import (
 )
 from mm_companion.core.session.net import DEFAULT_PORT
 from mm_companion.ui import loading, theme
-from mm_companion.ui.area import AREA_ACTION
 from mm_companion.ui.area_gm import AreaController
 from mm_companion.ui.attack_gm import AttackController
 from mm_companion.ui.block_canvas import BlockCanvas
@@ -66,6 +65,7 @@ from mm_companion.ui.compact import CompactController
 from mm_companion.ui.connection_indicator import install_connection_indicator
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.gm.actions import GMActionsMixin
+from mm_companion.ui.gm.combat import GMCombatMixin
 from mm_companion.ui.gm.hosting import GMHostingMixin
 from mm_companion.ui.gm.model import (
     BIND_ADDRESS,
@@ -90,9 +90,6 @@ from mm_companion.ui.gm.pins import GMPinsMixin
 from mm_companion.ui.gm.players import GMPlayersMixin
 from mm_companion.ui.gm.rolls import GMRollsMixin
 from mm_companion.ui.gm.scene import GMSceneMixin
-from mm_companion.ui.impress import (
-    IMPRESS_ACTION,
-)
 from mm_companion.ui.impress_gm import ImpressController
 from mm_companion.ui.npc_group import NPCGroupCard
 from mm_companion.ui.npc_window import NPCWindow
@@ -105,6 +102,8 @@ from mm_companion.ui.scene_board import NO_SCENE_GM, SceneBoard
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.session_bridge import SessionBridge, last_session, set_active_session
 from mm_companion.ui.session_dialogs import HostOptions
+from mm_companion.ui.targeted_gm import TargetedController
+from mm_companion.ui.team_call import TeamCallController
 from mm_companion.ui.toasts import ToastCard, ToastStack
 from mm_companion.ui.widgets import (
     ConfirmButton,
@@ -115,6 +114,7 @@ __all__ = ["SCENE_NPC", "SCENE_PLAYER", "GMWindow", "register_base_gm_blocks"]
 
 class GMWindow(
     GMRollsMixin,
+    GMCombatMixin,
     GMActionsMixin,
     GMHostingMixin,
     GMPlayersMixin,
@@ -322,7 +322,7 @@ class GMWindow(
 
         self._connect_bridge()
         # Runs every Impress this window resolves — a player's, or an NPC's from the
-        # roller's Action row (see mm_companion.ui.impress_gm).
+        # roller's Actions popup (see mm_companion.ui.impress_gm).
         self._impress = ImpressController(self._data, self._bridge, self, self)
         # And every area attack: a player's declaration lands in the history with a
         # Resolve button, and an NPC's starts from its sheet (mm_companion.ui.area_gm).
@@ -330,6 +330,12 @@ class GMWindow(
         # And every aimed attack: a player's lands with Accept / Decline, the GM's own
         # (a card's tile, an NPC sheet) runs straight through (mm_companion.ui.attack_gm).
         self._attack = AttackController(self._data, self._bridge, self, self)
+        # And every team attack called to roll: anyone joins with their next attack,
+        # and the GM resolves it off its card (mm_companion.ui.team_call).
+        self._team_calls = TeamCallController(self._data, self._bridge, self, self._attack, self)
+        # And every Aid, Feint and Trick: a player's lands with Accept / Decline, the GM's
+        # own runs straight through (mm_companion.ui.targeted_gm).
+        self._targeted = TargetedController(self._data, self._bridge, self, self)
         self._refresh_idle_status()
         self._refresh_trouble()
         self._refresh_rolls()
@@ -509,6 +515,7 @@ class GMWindow(
         self._scene_board.actionRequested.connect(self._on_scene_action)
         self._scene_board.removeConditionRequested.connect(self._remove_scene_condition)
         self._scene_board.recoveryRequested.connect(self._roll_scene_recovery)
+        self._scene_board.clearTemporaryRequested.connect(self._clear_scene_temporary)
         self._scene_board.set_recovery_probe(self._scene_can_recover)
         # Every pixel of the box below the buttons, and no trailing stretch: the
         # board's drop target fills what it is given, so what a GM aims a dragged
@@ -624,6 +631,8 @@ class GMWindow(
         self._history.rollFollowUp.disconnect(self._roller.roll_spec)
         self._history.rollAnswer.connect(self._on_history_roll)
         self._history.rollPlain.connect(self._roller.roll_spec)
+        # A team attack's call joined here: one of the GM's NPCs joins it.
+        self._history.teamJoinRequested.connect(self._gm_team_join)
         # The roll an NPC answered with, once it is back: what failing did goes on it.
         self._roller.sessionRollRevealed.connect(self._on_answer_back)
         # And a recovery check an NPC rolled: what making it sheds comes off it.
@@ -632,22 +641,19 @@ class GMWindow(
         # else's and comes back on the shared feed. Before that there is no
         # session to record it in, so it is shown as a card and nothing more.
         self._roller.localRoll.connect(self._show_offline_roll)
-        # The Request row, on the same terms a player's block gives it: the traits
-        # come from the ruleset (a request is answered on someone else's sheet, so
-        # they are character-free) and this window decides where the ask goes.
+        # Ask to Roll, on the same terms a player's block gives it: the traits come
+        # from the ruleset (a request is answered on someone else's sheet, so they are
+        # character-free) and this window decides where the ask goes.
         self._roller.set_roll_choices(requested_roll_choices(self._data))
+        self._roller.set_modifier_steps(self._data.system.circumstance_modifiers)
         self._roller.rollRequested.connect(self._request_roll)
-        # The Action row: the GM impresses, or spreads an attack over an area, for
-        # anybody — an NPC of theirs or a player — exactly where a player's Impress
-        # button is on their sheet.
-        actions = []
-        if self._data.impress.available:
-            actions.append(IMPRESS_ACTION)
-        if self._data.area.available:
-            actions.append(AREA_ACTION)
-        if actions:
-            self._roller.set_actions(actions)
+        # The Actions popup: the GM impresses, spreads an attack over an area, or has
+        # a group act, for anybody — an NPC of theirs or a player — from the same
+        # button a player's sheet has (see GMRollsMixin.action_menu).
+        self._roller.set_action_menu(self.action_menu)
         self._roller.actionRequested.connect(self._on_roller_action)
+        # The maneuvers and self actions, taken as the NPC each pick asks for.
+        self._setup_combat()
         layout.addWidget(self._view)
         return box
 

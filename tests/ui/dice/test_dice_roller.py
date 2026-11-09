@@ -19,13 +19,20 @@ from __future__ import annotations
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QBoxLayout, QInputDialog, QLabel, QPushButton
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import (
+    QAbstractButton,
+    QApplication,
+    QBoxLayout,
+    QInputDialog,
+    QLabel,
+)
 
 from mm_companion.core import storage
 from mm_companion.core.dice import resolve_check
 from mm_companion.core.rules import RollSpec
 from mm_companion.core.session.model import new_session
-from mm_companion.ui import dice_roller
+from mm_companion.ui import dice_roller, theme
 from mm_companion.ui.dice_roller import DiceRollerPanel, degree_text
 from mm_companion.ui.roll_history import (
     HISTORY_FLOOR_HEIGHT,
@@ -87,18 +94,29 @@ def test_roll_without_dc_shows_total_and_records_history(
 ) -> None:
     monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 12)
     view = DiceRollerView()
-    view.panel._bonus_spin.setValue(4)
-    view.panel._penalty_spin.setValue(1)  # net modifier +3
-    view.panel._dc_check.setChecked(False)
+    view.panel._modifier_spin.setValue(3)
+    view.panel.set_dc(None)
 
     view.panel._finish_roll()
 
     cards = view._local_history.cards()
     assert len(cards) == 1
-    assert cards[0]._params == {"name": "", "bonus": 4, "penalty": 1}
+    assert cards[0]._params == {"name": "", "bonus": 3, "penalty": 0}
     text = view.panel._readout.text()
     assert "15" in text  # die 12 + net modifier 3
     assert "Success" not in text and "Failure" not in text  # no DC → no degree
+
+
+def test_clicking_the_die_rolls(qapp: QApplication, instant_die) -> None:
+    # Through the button itself: ``clicked`` hands its ``checked`` flag to a slot that
+    # takes an argument, and once ``_start_roll`` took a ``before`` callback the die
+    # called ``False(…)`` and never rolled. Every other test called the methods.
+    view = DiceRollerView()
+    view.panel._modifier_spin.setValue(2)
+    QTest.mouseClick(view.panel._die_button, Qt.MouseButton.LeftButton)
+    cards = view._local_history.cards()
+    assert len(cards) == 1
+    assert "13" in view.panel._readout.text()  # 11 + 2
 
 
 def test_roll_with_dc_shows_degree_of_success(
@@ -106,9 +124,7 @@ def test_roll_with_dc_shows_degree_of_success(
 ) -> None:
     monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 20)
     view = DiceRollerView()
-    view.panel._bonus_spin.setValue(5)
-    view.panel._penalty_spin.setValue(0)
-    view.panel._dc_check.setChecked(True)
+    view.panel._modifier_spin.setValue(5)
     view.panel._dc_spin.setValue(15)
 
     view.panel._finish_roll()
@@ -119,7 +135,7 @@ def test_roll_with_dc_shows_degree_of_success(
 
 def test_reroll_waits_for_a_roll_to_throw_again(qapp: QApplication) -> None:
     view = DiceRollerView()
-    assert not view.panel._reroll_button.isEnabled()
+    assert not view.panel.can_reroll
     assert view.panel.reroll() is False
 
 
@@ -130,13 +146,11 @@ def test_reroll_throws_the_last_roll_again_with_a_lucky_die(
     monkeypatch.setattr(dice_roller, "reroll_d20", lambda *a, **k: (14, False))
     view = DiceRollerView()
     panel = view.panel
-    panel._bonus_spin.setValue(5)
-    panel._penalty_spin.setValue(1)
-    panel._dc_check.setChecked(True)
+    panel._modifier_spin.setValue(4)
     panel._dc_spin.setValue(15)
     panel._start_roll()
     panel._finish_roll()
-    assert panel._reroll_button.isEnabled()
+    assert panel.can_reroll
     # The roll spent its sliders, and the player has since touched the DC.
     panel._dc_spin.setValue(25)
 
@@ -144,7 +158,7 @@ def test_reroll_throws_the_last_roll_again_with_a_lucky_die(
     panel._finish_roll()
 
     newest = view._local_history.cards()[0]._params
-    assert (newest["bonus"], newest["penalty"]) == (5, 1)  # the last roll's, not the inputs'
+    assert (newest["bonus"], newest["penalty"]) == (4, 0)  # the last roll's, not the inputs'
     text = panel._readout.text()
     assert "18" in text and "vs DC 15" in text  # die 14 + 4 against the old DC
     assert "reroll" in text.lower()
@@ -156,46 +170,45 @@ def test_a_roll_spends_the_bonus_and_penalty(
     """A circumstance modifier is for one check, not for every roll after it."""
     monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 12)
     view = DiceRollerView()
-    view.panel._bonus_spin.setValue(4)
-    view.panel._penalty_spin.setValue(1)
+    view.panel._modifier_spin.setValue(-3)
 
     view.panel._finish_roll()
 
-    # The roll itself still carried them …
-    assert view._local_history.cards()[0]._params["bonus"] == 4
-    # … and then they were gone.
-    assert view.panel._bonus_spin.value() == 0
-    assert view.panel._penalty_spin.value() == 0
+    # The roll itself still carried it …
+    assert view._local_history.cards()[0]._params["penalty"] == 3
+    # … and then it was gone.
+    assert view.panel._modifier_spin.value() == 0
 
 
 def test_an_abandoned_roll_keeps_its_bonus(qapp: QApplication) -> None:
     """Nobody answered, so the player will throw it again — as it was."""
     view = DiceRollerView()
-    view.panel._bonus_spin.setValue(3)
+    view.panel._modifier_spin.setValue(3)
     view.panel._rolling = True
 
     view.panel._abandon_roll("No answer")
 
-    assert view.panel._bonus_spin.value() == 3
+    assert view.panel._modifier_spin.value() == 3
 
 
 def test_a_set_bonus_or_penalty_is_highlighted(qapp: QApplication) -> None:
     view = DiceRollerView()
     panel = view.panel
-    assert panel._bonus_label.styleSheet() == ""
-    assert panel._penalty_spin.styleSheet() == ""
+    assert panel._modifier_label.styleSheet() == ""
+    assert panel._modifier_spin.styleSheet() == ""
 
-    panel._bonus_spin.setValue(2)
-    assert "bold" in panel._bonus_label.styleSheet()
-    assert "bold" in panel._bonus_spin.styleSheet()
-    assert panel._penalty_label.styleSheet() == ""
+    panel._modifier_spin.setValue(2)
+    # Colour only: bold text is wider, and the roller grew with it.
+    assert "bold" not in panel._modifier_label.styleSheet()
+    assert theme.color("tint.better") in panel._modifier_spin.styleSheet()
+    assert theme.color("tint.better") in panel._modifier_label.styleSheet()
 
-    panel._penalty_spin.setValue(1)
-    assert "bold" in panel._penalty_label.styleSheet()
+    panel._modifier_spin.setValue(-1)
+    assert theme.color("tint.worse") in panel._modifier_label.styleSheet()
 
-    panel._bonus_spin.setValue(0)
-    assert panel._bonus_label.styleSheet() == ""
-    assert panel._bonus_spin.styleSheet() == ""
+    panel._modifier_spin.setValue(0)
+    assert panel._modifier_label.styleSheet() == ""
+    assert panel._modifier_spin.styleSheet() == ""
 
 
 def test_a_named_quick_roll_lets_go_of_its_name_once_rolled(
@@ -214,7 +227,7 @@ def test_a_named_quick_roll_lets_go_of_its_name_once_rolled(
         "penalty": 0,
     }
     assert view.panel.current_spec() is None
-    assert view.panel._bonus_spin.value() == 0
+    assert view.panel._modifier_spin.value() == 0
 
 
 def test_saving_a_roll_adds_a_persisted_quick_roll(qapp: QApplication) -> None:
@@ -222,8 +235,9 @@ def test_saving_a_roll_adds_a_persisted_quick_roll(qapp: QApplication) -> None:
 
     view.panel._add_quick_roll({"bonus": 4, "penalty": 1})
 
+    # Saved by the net, the one number the Bonus/Penalty slider loads.
     assert view.panel._quick_flow.count() == 1
-    assert storage.load_settings()["quick_rolls"] == [{"bonus": 4, "penalty": 1}]
+    assert storage.load_settings()["quick_rolls"] == [{"bonus": 3, "penalty": 0}]
 
     # De-duplicated by name *and* numbers: the same roll twice is one chip, but the
     # same numbers under another name is a different roll and gets its own.
@@ -242,7 +256,7 @@ def test_a_saved_roll_keeps_the_name_it_was_rolled_under(qapp: QApplication) -> 
 
     # The name came with the roll — no dialog, and no DC.
     assert view.panel._quick_rolls == [{"bonus": 9, "penalty": 0, "name": "Athletics"}]
-    labels = {b.text() for b in view.panel._quick_container.findChildren(QPushButton)}
+    labels = {b.text() for b in view.panel._quick_container.findChildren(QAbstractButton)}
     assert "Athletics" in labels
 
 
@@ -250,14 +264,13 @@ def test_a_quick_roll_leaves_the_dc_box_alone(qapp: QApplication) -> None:
     """The difficulty belongs to the situation in front of you, not to the chip."""
     view = DiceRollerView()
     view.panel._add_quick_roll({"bonus": 9, "penalty": 0}, name="Athletics")
-    view.panel._dc_check.setChecked(True)
     view.panel._dc_spin.setValue(21)
 
     view.panel._apply_quick_roll(view.panel._quick_rolls[0])
 
-    assert view.panel._dc_check.isChecked() is True
+    assert view.panel.dc() is not None
     assert view.panel._dc_spin.value() == 21
-    assert view.panel._bonus_spin.value() == 9
+    assert view.panel._modifier_spin.value() == 9
     assert view.panel.current_spec().label == "Athletics"
 
 
@@ -310,7 +323,7 @@ def test_named_quick_roll_shows_its_name(qapp: QApplication) -> None:
     view.panel._add_quick_roll({"bonus": 1, "penalty": 0}, name="Perception")
 
     assert view.panel._quick_rolls == [{"bonus": 1, "penalty": 0, "name": "Perception"}]
-    labels = {b.text() for b in view.panel._quick_container.findChildren(QPushButton)}
+    labels = {b.text() for b in view.panel._quick_container.findChildren(QAbstractButton)}
     assert "Perception" in labels
 
 
@@ -397,7 +410,7 @@ def test_a_history_cards_star_follows_the_strip(
 ) -> None:
     monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 9)
     view = DiceRollerView()
-    view.panel._bonus_spin.setValue(2)
+    view.panel._modifier_spin.setValue(2)
     view.panel._finish_roll()
     star = view._local_history.cards()[0].star
 
@@ -416,7 +429,7 @@ def test_a_full_strip_disables_an_unsaved_cards_star(
 ) -> None:
     monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 9)
     view = DiceRollerView()
-    view.panel._bonus_spin.setValue(20)  # not a roll any of the chips below match
+    view.panel._modifier_spin.setValue(20)  # not a roll any of the chips below match
     view.panel._finish_roll()
 
     for bonus in range(MAX_QUICK_ROLLS):
@@ -438,7 +451,7 @@ def test_renaming_a_chip_persists_and_recaptions_it(
     view.panel._rename_quick_roll(entry)
 
     assert storage.load_settings()["quick_rolls"] == [dict(entry, name="Perception")]
-    labels = {b.text() for b in view.panel._quick_container.findChildren(QPushButton)}
+    labels = {b.text() for b in view.panel._quick_container.findChildren(QAbstractButton)}
     assert "Perception" in labels
 
     # And an empty answer puts the numbers back.
@@ -846,7 +859,7 @@ def test_the_roll_comes_from_the_server_not_the_panel(
     # Any local roll would use this; the server has its own rng.
     monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 1)
     view = DiceRollerView()
-    view.panel._bonus_spin.setValue(4)
+    view.panel._modifier_spin.setValue(4)
 
     view.panel._start_roll()
     qapp.processEvents()
@@ -865,9 +878,8 @@ def test_the_session_roll_is_graded_against_the_dc(
 ) -> None:
     monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
     view = DiceRollerView()
-    view.panel._dc_check.setChecked(True)
     view.panel._dc_spin.setValue(10)
-    view.panel._bonus_spin.setValue(20)  # cannot fail
+    view.panel._modifier_spin.setValue(20)  # cannot fail
 
     view.panel._start_roll()
     qapp.processEvents()
@@ -906,7 +918,7 @@ def test_a_session_that_never_answers_releases_the_die(
 
     assert dice_roller.NO_ANSWER in view.panel._readout.text()
     assert view.panel._die_button.isEnabled()
-    assert view.panel._bonus_spin.isEnabled()
+    assert view.panel._modifier_spin.isEnabled()
 
 
 def test_a_roll_that_cannot_be_sent_says_so(
@@ -1130,26 +1142,25 @@ def test_clearing_the_chip_takes_back_the_dc_it_brought(qapp) -> None:
     """
     panel = DiceRollerPanel()
     panel.load_spec(RollSpec(label="Toughness", modifier=0, dc=18))
-    assert panel._dc_check.isChecked()
+    assert panel.dc() is not None
     assert panel._dc_spin.value() == 18
 
     panel.load_spec(None)
 
-    assert not panel._dc_check.isChecked()
+    assert panel.dc() is None
 
 
 def test_a_dc_the_player_typed_is_left_alone(qapp) -> None:
     """The guard on the one above: only a DC the chip supplied is withdrawn."""
     panel = DiceRollerPanel()
-    panel._dc_check.setChecked(True)
     panel._dc_spin.setValue(15)
 
     panel.load_spec(RollSpec(label="Athletics", modifier=4))  # brings no DC of its own
-    assert panel._dc_check.isChecked()
+    assert panel.dc() is not None
     assert panel._dc_spin.value() == 15
 
     panel.load_spec(None)
-    assert panel._dc_check.isChecked()
+    assert panel.dc() is not None
     assert panel._dc_spin.value() == 15
 
 
@@ -1159,7 +1170,6 @@ def test_a_lifted_twenty_is_not_read_as_a_natural_one(
     monkeypatch.setattr(dice_roller, "roll_d20", lambda *a, **k: 4)
     monkeypatch.setattr(dice_roller, "reroll_d20", lambda *a, **k: (20, False))
     view = DiceRollerView()
-    view.panel._dc_check.setChecked(True)
     view.panel._dc_spin.setValue(15)
     view.panel._start_roll()
     view.panel._finish_roll()
@@ -1178,7 +1188,7 @@ def test_an_abandoned_roll_is_not_offered_for_a_reroll(qapp: QApplication) -> No
     panel._abandon_roll("No answer")
 
     assert panel._last_roll is None
-    assert not panel._reroll_button.isEnabled()
+    assert not panel.can_reroll
     assert panel.reroll() is False
 
 
@@ -1240,3 +1250,191 @@ def test_the_die_stays_put_whatever_the_readout_says(qapp) -> None:
         assert panel._readout.sizeHint().width() <= panel._die_part.width()
     finally:
         panel.close()
+
+
+def test_the_dc_take_10_and_actions_share_a_row_and_wrap_when_narrow(
+    qapp: QApplication,
+) -> None:
+    view = DiceRollerView()
+    view.show()
+    panel = view.panel
+
+    _settled(qapp, view, 360, 800)  # the right-hand pinned strip's shape
+
+    def middle(widget) -> int:
+        return widget.mapTo(panel, widget.rect().center()).y()
+
+    dc = middle(panel._dc_spin)
+    assert abs(dc - middle(panel._routine_button)) < panel._routine_button.height()
+    assert abs(dc - middle(panel._actions_button)) < panel._actions_button.height()
+
+    row = panel._toolbar
+    one_line = row.heightForWidth(row.width())
+    assert row.heightForWidth(panel._routine_button.sizeHint().width() + 10) > one_line
+
+
+def test_the_dc_box_is_one_box_and_empty_means_no_dc(qapp: QApplication) -> None:
+    # It was a checkbox beside a box that sat greyed at 15: two controls, one number.
+    view = DiceRollerView()
+    panel = view.panel
+    assert panel.dc() is None and panel._dc_spin.text() == "—"
+    panel.set_dc(18)
+    assert panel.dc() == 18 and panel._roll_parameters()[2] == 18
+    panel.set_dc(None)
+    assert panel.dc() is None and panel._roll_parameters()[2] is None
+
+
+_UNJUDGED = RollSpec(
+    label="Attack +7 vs. Defense",
+    modifier=7,
+    follow_up=RollSpec(label="Toughness vs. 21", dc=21, kind="resistance"),
+)
+
+
+@pytest.mark.parametrize("width", [370, 320])
+@pytest.mark.parametrize(
+    "layout,pills", [("auto", False), ("compact", False), ("compact", True), ("extended", False)]
+)
+def test_a_long_result_is_never_cut_off(
+    qapp: QApplication, instant_die: None, layout: str, pills: bool, width: int
+) -> None:
+    # The unjudged-attack warning runs to several lines. The splitter used to size the
+    # panel off its size hint, worked out for a template result, and nothing asked again
+    # after the roll — so the warning and the bottom of the die were cut off (the
+    # user's report, Compact in the 370px strip). With pills beside it the result wraps
+    # at the die's width, which is the tallest it gets.
+    view = DiceRollerView()
+    view.set_layout(layout)
+    view.show()
+    if pills:
+        view.panel._add_quick_roll({"bonus": 5, "penalty": 0}, name="Perception")
+    _settled(qapp, view, width, 620)
+    view.panel.roll_spec(_UNJUDGED)
+    _settled(qapp, view, width, 620)
+
+    die = view.panel._die_part
+    assert dice_roller.NO_DC_WARNING.split(":")[0] in view.panel._readout.text()
+    assert die.height() >= die.heightForWidth(die.width())
+    bottom = die.mapTo(view.panel, die.rect().bottomLeft()).y()
+    assert bottom <= view.panel.height()
+
+
+def test_compact_stacks_the_result_only_beside_quick_rolls(qapp: QApplication) -> None:
+    # Alone in the row, the die part used to stack anyway: the result squeezed to the
+    # die's width under it, with the rest of the row empty.
+    view = DiceRollerView()
+    view.set_layout("compact")
+    view.show()
+    _settled(qapp, view, 370, 620)
+    panel = view.panel
+    assert panel._die_box.direction() is QBoxLayout.Direction.LeftToRight
+
+    panel._add_quick_roll({"bonus": 2, "penalty": 0})
+    _settled(qapp, view, 370, 620)
+    assert panel._die_box.direction() is QBoxLayout.Direction.TopToBottom
+
+    panel._remove_quick_roll(panel._quick_rolls[0])
+    _settled(qapp, view, 370, 620)
+    assert panel._die_box.direction() is QBoxLayout.Direction.LeftToRight
+
+
+def test_take_10_makes_the_check_now_as_a_routine_one(
+    qapp: QApplication, instant_die: None
+) -> None:
+    view = DiceRollerView()
+    panel = view.panel
+    rolls: list[dict] = []
+    panel.localRoll.connect(rolls.append)
+    panel._modifier_spin.setValue(3)
+    panel.set_dc(12)
+    panel._routine_button.click()
+    assert [(r["die"], r["routine"], r["dc"]) for r in rolls] == [(10, True, 12)]
+    assert rolls[0]["bonus"] == 3
+    # One roll's worth: the die's next click is a die roll again.
+    panel._on_die_clicked()
+    assert rolls[-1]["routine"] is False
+
+
+def test_the_roller_does_not_widen_when_the_bonus_leaves_zero(qapp: QApplication) -> None:
+    # The tint used to be bold, and bold text is wider: the label and the box grew,
+    # and the roller with them, each time the value left 0. Under the real sheet,
+    # since a widget's own sheet on an unthemed app changes its style and its size.
+    previous = qapp.styleSheet()
+    theme.apply(qapp)
+    try:
+        view = DiceRollerView()
+        view.show()
+        panel = view.panel
+        _settled(qapp, view, 360, 800)
+        widths = {panel.minimumSizeHint().width()}
+        for value in (7, -25, 30, 0):
+            panel._modifier_spin.setValue(value)
+            _settled(qapp, view, 360, 800)
+            widths.add(panel.minimumSizeHint().width())
+        assert len(widths) == 1
+    finally:
+        qapp.setStyleSheet(previous)
+
+
+def test_the_circumstance_steps_sit_either_side_of_the_modifier_box(
+    qapp: QApplication,
+) -> None:
+    view = DiceRollerView()
+    view.show()
+    panel = view.panel
+    assert panel._step_buttons == []  # none until a host says what they are
+    panel.set_modifier_steps((5, 2, 2, 0))
+    _settled(qapp, view, 360, 800)
+    captions = [b.text() for b in panel._step_buttons]
+    assert sorted(captions) == sorted(["−5", "−2", "+2", "+5"])
+
+    def left(widget) -> int:
+        return widget.mapTo(panel, widget.rect().topLeft()).x()
+
+    order = sorted([*panel._step_buttons, panel._modifier_spin], key=left)
+    assert [w.text() for w in order] == ["−5", "−2", panel._modifier_spin.text(), "+2", "+5"]
+    spin = panel._modifier_spin
+    # Snug: the slack goes to the stretch after the last step, not into the box.
+    last = max(panel._step_buttons, key=left)
+    right_edge = last.mapTo(panel, last.rect().topRight()).x()
+    assert panel._settings_part.width() - right_edge > spin.sizeHint().width()
+
+    # A step adds to the box, so +2 twice is +4, and a penalty takes it back down.
+    by_caption = {b.text(): b for b in panel._step_buttons}
+    by_caption["+2"].click()
+    by_caption["+2"].click()
+    by_caption["−5"].click()
+    assert spin.value() == -1
+
+    # Set again, the old buttons go rather than doubling up.
+    panel.set_modifier_steps((2,))
+    assert [b.text() for b in panel._step_buttons] == ["−2", "+2"]
+
+
+def test_the_hosts_hand_the_roller_the_rulesets_steps(qapp: QApplication) -> None:
+    from mm_companion.core.data_loader import load_game_data
+
+    steps = load_game_data().system.circumstance_modifiers
+    assert steps == (2, 5)  # PDF p17: +/-2 minor, +/-5 major
+
+
+def test_loading_a_trait_does_not_change_the_roll_box_height(qapp: QApplication) -> None:
+    # The chip used to be hidden when empty, so loading a trait added a row and the
+    # roller jumped taller. Its slot now keeps the chip's height, empty or not.
+    view = DiceRollerView()
+    view.show()
+    panel = view.panel
+    _settled(qapp, view, 360, 800)
+    roll_box = panel._chip_slot.parentWidget()
+    empty = (roll_box.sizeHint().height(), panel._chip_slot.height())
+    assert panel._chip_slot.height() > 0 and not panel._spec_chip.isVisible()
+
+    panel.load_spec(RollSpec(label="Fortitude", modifier=6))
+    _settled(qapp, view, 360, 800)
+    assert panel._spec_chip.isVisible()
+    assert (roll_box.sizeHint().height(), panel._chip_slot.height()) == empty
+
+    panel.load_spec(None)
+    _settled(qapp, view, 360, 800)
+    assert not panel._spec_chip.isVisible()
+    assert (roll_box.sizeHint().height(), panel._chip_slot.height()) == empty

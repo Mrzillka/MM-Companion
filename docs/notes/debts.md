@@ -106,6 +106,73 @@ of the turn economy should hang off:
 - **There is no turn tracker.** The GM ends each creature's turn by hand; initiative
   order is on the board, but nothing walks it.
 
+## Aid, Feint and Trick: what is left
+
+Built in phase 8 of the combat maneuvers (see [the actions notes](actions.md#aid-feint-and-trick)).
+
+- **Off the air they are greyed.** With no session there is no Scene to pick the target
+  off and no GM to resolve it. An offline version would roll the check and leave a
+  "Resist Feint vs. DC" request card, as an offline Impress does.
+- **The opposing conditions count in aimed attacks only.** An unaimed attack (the DC
+  box standing for the Defense), an area's primary and a team attack's entries neither
+  count nor spend them; the bearer takes them off by hand.
+- **They are matched by name.** The parameter is the name the GM's board showed when
+  the action landed; renaming a creature (or a namesake's number shifting) leaves one
+  that never matches.
+- **Feint's "corresponding" attack bonus.** The target resists with the better of both
+  combat skills, since an attack does not record whether it is close or ranged.
+
+## Grab, Trip, Disarm, Smash, Escape and Block: what is left
+
+Built in phase 9 of the combat maneuvers (see [the actions
+notes](actions.md#grab-trip-disarm-smash-and-escape)).
+
+- **Off the air they are greyed**, as Aid, Feint and Trick are (Block is not: it is a
+  self action).
+- **Only the first hold.** Improving a hold with a later Grab (cumulative degrees, no
+  attack check; a failed one frees the target), the size rules (a target three sizes
+  smaller; one too big for more than a partial hold), and carrying, squeezing,
+  throwing or wielding a held creature are the GM's to run by hand.
+- **The advantages are not read.** Improved Grab, Improved Hold (−5 to Escape),
+  Improved Trip, Improved Disarm and Improved Smash change nothing yet.
+- **"Close" is not checked.** A Grab, a Trip or a Block may be made with any attack the
+  picker offers; a spec does not record its range.
+- **Two holds share one bundle.** Holding (Ana) and Holding (Bo) give Hindered and
+  Vulnerable the same provenance, so letting go of one takes both bundles' members.
+- **The GM's judge does not block.** A Blocking creature's block is rolled by hand with
+  the attacker's result in the DC box (the user's call, 2026-11-09).
+- **Narrated outcomes stay narrated.** A disarmed item, a smashed object's Damage and a
+  trip's extra distance are said in the history; nothing tracks them.
+
+## Combat maneuvers: what is left overall
+
+The feature as a whole (`docs/plans/combat-maneuvers.md`; the two sections above hold
+the targeted actions' own). Each of these was seen and left on purpose.
+
+- **No turn clock.** Temporary conditions last "until the start of your next turn", and
+  the player or the GM takes them off with **Clear temporary**. End turn does not clear
+  them (the user's call: they end at the *start* of the creature's next turn). A turn
+  tracker would clear a creature's temporaries as its turn starts.
+- **Prone's ±5 on attacks never reaches an attack roll.** `condition_attack_mods`
+  (close +5 against a prone target, ranged −5, and the prone attacker's own −5) is read
+  by the Conditions block's display only; `power_rolls` folds in the amount mods
+  (`condition_attack_check_mod`) but not these. Found in phase 1; out of the feature's
+  scope.
+- **Charge's −2 is not in the maneuvers' caps.** `maneuver_values` reads the attack's
+  modifier before the lines' fixed shifts, so a +2 attack charged (+0) can still be
+  doubled by All-Out to +4.
+- **Recover works "once per scene"** says its tooltip; nothing counts it.
+- **Aim's "lost if your next standard action is not that attack"** is not tracked. The
+  line stays (greyed) through a roll that is not an attack, and the player drops it with
+  its ✕.
+- **Accurate and Power** change only the attack being made. By the book they last until
+  the start of the next turn, which matters only for a second attack in one turn.
+- **Every line grows the roller** by a row: the empty lane takes no room (the user's
+  call, 2026-11-09; the Actions button moved to the toolbar above the lane on
+  2026-11-10, so it no longer moves). Accepted.
+- **No dot on the System block.** Nothing temporary moves Initiative or Speed yet; add
+  a `StatMark` there when something does.
+
 ## PySide6 is capped below 6.12, and 6.11.3 is excluded
 
 `pyproject.toml` pins `PySide6>=6.6,<6.12,!=6.11.3`, so CI and the release builds get

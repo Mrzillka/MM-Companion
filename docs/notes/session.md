@@ -238,7 +238,9 @@ The shape:
   character sheet's `ConditionsSection` chips: one gesture wherever a chip appears.
   It replaced a visible `×`, which is the trade — a third of the width of a caption
   like "Hit ×3" back, at the cost of an affordance you cannot see, so the helper
-  writes "Right-click to remove" into the tooltip. A chip that *cannot* be removed
+  writes "Right-click to remove" into the tooltip. A **temporary** condition's chip
+  carries a visible ✕ as well (`_ConditionChip.arm_removal`, when built
+  `temporary=True`): it is the one condition taken off every turn. A chip that *cannot* be removed
   (an offline player's) still swallows the click: falling through to the card's
   "Remove player" is not what someone aiming at a chip asked for. A **scene card**'s
   chips take the same gesture on the GM's board (`SceneCard.removeConditionRequested`
@@ -748,6 +750,18 @@ The shape:
   reason: a v18 server strips it without a word, so a worst-of save clicked on the
   target's card would roll their better number. v18 never shipped, so the hub goes
   from v17 to v19 in one redeploy.
+- **Protocol v20 carries temporary conditions** (combat maneuvers). `ApplyCondition`
+  gains `amount` and `temporary`; `ClearTemporary(player_id)` is the GM's "Clear
+  temporary" on a player's card (relayed by the server like the other GM commands, and
+  raised on the player's side as `conditionCommand("clear_temporary", …)`, which
+  `ConditionReceiver` turns into the Conditions block's `clear_temporary_conditions`);
+  and `_sanitize_scene_conditions` keeps a scene condition's `amount` (bounded by
+  `MAX_SCENE_AMOUNT`) and `temporary`. Bumped for the v13 reason: a v19 server strips the
+  scene keys and drops the command without a word. **Redeploy the hub** with the release
+  that ships it. Still v20 (unreleased): `RollRequest.twice` rolls two dice and keeps the
+  higher (Aim), with the dropped die on the record as `other_die` (0 for any other roll),
+  and a spec's `critical_hit` (a Finishing Attack: every hit a critical) is whitelisted
+  by `sanitize_spec`.
 - **A join code is version 2, and a public-server session's is 24 characters.**
   Version 1 spelled the relay URL out byte by byte and came to 130 characters for
   a session on the hub. `discovery.encode_join_code` now packs every field as

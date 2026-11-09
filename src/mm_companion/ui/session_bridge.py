@@ -321,6 +321,7 @@ class SessionBridge(QObject):
         reroll: bool = False,
         routine: bool = False,
         minion: bool = False,
+        twice: bool = False,
     ) -> bool:
         """Put one roll to the session, whichever end of it this app is on.
 
@@ -337,7 +338,8 @@ class SessionBridge(QObject):
         *other* seats can act on it — see ``docs/mm-session-architecture.md``.
         ``reroll`` asks the server for a lucky re-roll (a die of 11-20). ``routine``
         takes 10 instead of rolling, and ``minion`` rolls as a minion, whose natural
-        20 is no added success (both protocol v18).
+        20 is no added success (both protocol v18). ``twice`` rolls two dice and keeps
+        the higher (Aim, v20).
         """
         if self._server is not None:
             self._server.roll(
@@ -350,6 +352,7 @@ class SessionBridge(QObject):
                 reroll=reroll,
                 routine=routine,
                 minion=minion,
+                twice=twice,
             )
             return True
         if self._client is not None:
@@ -363,6 +366,7 @@ class SessionBridge(QObject):
                 reroll=reroll,
                 routine=routine,
                 minion=minion,
+                twice=twice,
             )
         return False
 
@@ -449,12 +453,32 @@ class SessionBridge(QObject):
             return self._client.request_kick(player_id, reason)
         return False
 
-    def apply_condition(self, player_id: str, condition_id: str, parameter: str | None = None):
+    def apply_condition(
+        self,
+        player_id: str,
+        condition_id: str,
+        parameter: str | None = None,
+        *,
+        amount: int | None = None,
+        temporary: bool = False,
+    ):
         """Put a condition on a player's live sheet."""
         if self._server is not None:
-            return self._server.apply_condition(player_id, condition_id, parameter)
+            return self._server.apply_condition(
+                player_id, condition_id, parameter, amount=amount, temporary=temporary
+            )
         if self._client is not None:
-            return self._client.apply_condition(player_id, condition_id, parameter)
+            return self._client.apply_condition(
+                player_id, condition_id, parameter, amount=amount, temporary=temporary
+            )
+        return False
+
+    def clear_temporary(self, player_id: str) -> bool:
+        """Take every temporary condition off a player's live sheet."""
+        if self._server is not None:
+            return self._server.clear_temporary(player_id)
+        if self._client is not None:
+            return self._client.clear_temporary(player_id)
         return False
 
     def remove_condition(self, player_id: str, condition_id: str, parameter: str | None = None):
@@ -1078,6 +1102,8 @@ class SessionBridge(QObject):
             self.conditionCommand.emit("apply", payload)
         elif kind == session_client.EVENT_REMOVE_CONDITION:
             self.conditionCommand.emit("remove", payload)
+        elif kind == session_client.EVENT_CLEAR_TEMPORARY:
+            self.conditionCommand.emit("clear_temporary", payload)
         elif kind == session_client.EVENT_SET_HERO_POINTS:
             self.heroPointsCommand.emit(int(payload.get("value", 0)))
         elif kind == session_client.EVENT_KICKED:

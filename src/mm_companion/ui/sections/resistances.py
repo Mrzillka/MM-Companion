@@ -46,6 +46,7 @@ from mm_companion.core.rules import (
     resistance_points_spent,
     resistance_roll,
     resistance_total,
+    temporary_marks,
     trait_bonuses,
 )
 from mm_companion.ui.lock import set_widget_locked
@@ -56,6 +57,7 @@ from mm_companion.ui.sections.stat_table import (
     set_stat_value,
 )
 from mm_companion.ui.sections.titled_section import TitledSection
+from mm_companion.ui.stat_mark import mark_item
 
 
 class ResistancesSection(TitledSection):
@@ -212,6 +214,10 @@ class ResistancesSection(TitledSection):
             bonuses,
             cond_effects,
         )
+        # A temporary condition's dot on the total it moves (All-Out Attack's Defense).
+        marks = temporary_marks(self._character, self._data)
+        for key, item in self._resistance_total.items():
+            mark_item(item, marks.get(key))
 
     def _base_value(self, res: Resistance) -> int | None:
         """This resistance's base, or ``None`` where there is no trait to derive from.

@@ -1,7 +1,7 @@
 """The GM's team check and group check for an NPC group (PDF p18).
 
 Opened from an NPC group's ☰ menu (``ui/npc_group.py``). Both pick one trait — an
-ability, a resistance, a skill or initiative, the same list the roller's Request row
+ability, a resistance, a skill or initiative, the same list the roller's Ask to Roll form
 offers (``rules.requested_roll_choices``) — and each member rolls it at their own
 number (``localize_spec``), with one situational adjustment on every roll:
 

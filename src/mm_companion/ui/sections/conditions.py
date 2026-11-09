@@ -32,16 +32,21 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.core.character import AppliedCondition, Character
-from mm_companion.core.components import MECH_RANDOM_ACTION
+from mm_companion.core.components import MECH_RANDOM_ACTION, TONE_BENEFIT
 from mm_companion.core.data_loader import Condition, GameData
 from mm_companion.core.rules import (
+    applied_condition_name,
     apply_condition,
+    apply_condition_requests,
     apply_damage_step,
     apply_recovery,
     apply_use_costs,
     can_recover,
+    clear_temporary,
+    clear_temporary_note,
     damage_steps,
     decrement_condition,
+    has_temporary,
     recovery_check,
     recovery_hint,
     recovery_roll,
@@ -154,22 +159,38 @@ def matching_condition(
 
 
 def condition_display_name(applied: AppliedCondition, record: Condition | None) -> str:
-    """Fold the chosen parameter and stacking count into the shown name (§6):
-    ``Impaired`` + ``Attack`` → "Attack Impaired"; ``Hit`` ×3 → "Hit ×3".
+    """Fold the chosen parameter, stacking count and amount into the shown name (§6):
+    ``Impaired`` + ``Attack`` → "Attack Impaired"; ``Hit`` ×3 → "Hit ×3"; an All-Out
+    Attack at 3 → "All-Out Attack -3".
 
     Module-level because a condition reads the same wherever it is shown — this
-    block's chips and the GM window's player cards both name them through here.
+    block's chips and the GM window's player cards both name them through here. The
+    wording itself is :func:`~mm_companion.core.rules.applied_condition_name`'s, so the
+    dots' tooltips (built in ``core``) name a condition exactly as its chip does.
     """
-    name = record.name if record else applied.condition_id
-    if applied.parameter:
-        ptype = record.parameter.type if record and record.parameter else ""
-        if ptype in ("trait_select", "sense_select"):
-            name = f"{applied.parameter} {name}"
-        else:
-            name = f"{name} ({applied.parameter})"
-    if applied.count > 1:
-        name = f"{name} ×{applied.count}"
-    return name
+    return applied_condition_name(applied, record)
+
+
+def condition_tone_token(record: Condition | None) -> str:
+    """The tint a condition's chip is drawn in: the record's ``tone``.
+
+    ``tint.better`` for a benefit (Defending, Aided), ``tint.worse`` for everything
+    else — which is every condition there was before tones, so none changed colour.
+    Module-level because every chip reads it: the sheet's, the simple sheet's and all
+    three GM cards'.
+    """
+    return "tint.better" if record is not None and record.tone == TONE_BENEFIT else "tint.worse"
+
+
+#: The tooltip line a temporary condition's chip carries.
+TEMPORARY_HINT = "Temporary: it ends at the start of the next turn (Clear temporary)."
+#: What "Clear temporary" says about itself, on the sheet and on every GM card.
+CLEAR_TEMPORARY_TEXT = "Clear temporary"
+CLEAR_TEMPORARY_TIP = (
+    "Take off every temporary condition — do this at the start of the creature's turn."
+)
+#: The glyph on a temporary chip that takes just that one off.
+DISMISS_GLYPH = "✕"
 
 
 def condition_tooltip(
@@ -196,6 +217,8 @@ def condition_tooltip(
         parts.append(html.escape(record.effect))
     if record.recovery and record.recovery != "n/a":
         parts.append(f"<i>Recovery:</i> {html.escape(record.recovery)}")
+    if applied.temporary:
+        parts.append(f"<i>{html.escape(TEMPORARY_HINT)}</i>")
     return "<p>" + "</p><p>".join(parts) + "</p>"
 
 
@@ -216,6 +239,8 @@ class ConditionsSection(QGroupBox):
     #: by the Dice block (or, on an NPC sheet, the GM window's roller), which reports
     #: a made one back on ``recovery-requested`` (:meth:`recover_condition`).
     rollRequested = Signal(object)
+    #: A line for the roll history — what a "Clear temporary" took off.
+    noteRequested = Signal(str)
 
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -242,6 +267,14 @@ class ConditionsSection(QGroupBox):
         self._add_condition_button.clicked.connect(self._show_condition_menu)
         header.addWidget(self._add_condition_button)
         header.addStretch()
+        # Shown only while something temporary is on: there is no turn clock, so the
+        # player clears them by hand at the start of their turn.
+        self._clear_temporary_button = QToolButton()
+        self._clear_temporary_button.setText(CLEAR_TEMPORARY_TEXT)
+        self._clear_temporary_button.setToolTip(CLEAR_TEMPORARY_TIP)
+        self._clear_temporary_button.clicked.connect(self.clear_temporary_conditions)
+        header.addWidget(self._clear_temporary_button)
+        self._clear_temporary_button.hide()
         outer.addLayout(header)
 
         # One titled sub-group of chips per category (General / Damage / …), each with
@@ -286,28 +319,73 @@ class ConditionsSection(QGroupBox):
     def _choose_condition(self, condition: Condition) -> None:
         """Apply a picked condition, prompting for its parameter first if it needs one."""
         # Imported lazily to avoid a construction-time cycle through the dialog.
-        from mm_companion.ui.sections.condition_dialog import prompt_condition_parameter
+        from mm_companion.ui.sections.condition_dialog import (
+            prompt_condition_amount,
+            prompt_condition_parameter,
+        )
 
         go_ahead, parameter = prompt_condition_parameter(
             condition, self._data, self._character, self
         )
+        if not go_ahead:
+            return
+        go_ahead, amount = prompt_condition_amount(condition, self)
         if go_ahead:
-            self.apply_condition_by_id(condition.id, parameter)
+            self.apply_condition_by_id(condition.id, parameter, amount=amount)
 
-    def apply_condition_by_id(self, condition_id: str, parameter: str | None = None) -> bool:
+    def apply_condition_by_id(
+        self,
+        condition_id: str,
+        parameter: str | None = None,
+        *,
+        amount: int | None = None,
+        temporary: bool = False,
+    ) -> bool:
         """Apply a condition by id, with no menu and no prompt.
 
         The seam a *remote* GM applies through (``ui/session_player.py``), so a
         condition the GM sends bundles, supersedes and stacks through the same
         resolver a locally applied one does — and marks the sheet dirty the same
-        way. Returns whether the id was one the catalog knows.
+        way. *amount* and *temporary* are the resolver's (All-Out Attack −3, a
+        feint's temporary Vulnerable). Returns whether the id was one the catalog
+        knows.
         """
         if condition_id not in self._conditions_by_id:
             return False
-        apply_condition(self._character, condition_id, self._data, parameter=parameter)
+        apply_condition(
+            self._character,
+            condition_id,
+            self._data,
+            parameter=parameter,
+            amount=amount,
+            temporary=temporary,
+        )
         self._render_conditions()
         self._emit_conditions_changed()
         return True
+
+    def clear_temporary_conditions(self, *, note: bool = True) -> bool:
+        """Take off every temporary condition — the "Clear temporary" button.
+
+        One edit, so one undo step, and a line in the history naming what went. Also
+        the seam the GM's "Clear temporary" reaches a player's sheet (or an open NPC
+        sheet) through; the GM's window writes its own line naming the creature, and
+        passes *note* false so the history does not say it twice. Returns whether
+        anything was temporary.
+        """
+        removed = clear_temporary(self._character)
+        if not removed:
+            return False
+        self._render_conditions()
+        self._emit_conditions_changed()
+        text = clear_temporary_note(removed, self._data) if note else ""
+        if text:
+            self.noteRequested.emit(text)
+        return True
+
+    def has_temporary(self) -> bool:
+        """Whether "Clear temporary" would take anything off."""
+        return has_temporary(self._character)
 
     def remove_condition_by_id(self, condition_id: str, parameter: str | None = None) -> bool:
         """Shed one instance of a condition by id; the twin of
@@ -405,6 +483,22 @@ class ConditionsSection(QGroupBox):
         self._render_conditions()
         self._emit_conditions_changed()
 
+    def take_conditions(self, payload: object) -> None:
+        """The roller asks for conditions on this character — the
+        ``condition-requested`` handler.
+
+        *payload* is a tuple of requests, each either ``(condition_id, amount)`` — what an
+        attack maneuver leaves until the start of the next turn (All-Out Attack −3 on
+        Defense), put on **temporary**, replacing the amount (one All-Out a turn) — or a
+        :class:`~mm_companion.core.data_loader.ConditionChange` from a self action
+        (Defend's Defending, Drop Prone's Prone, Stand's Hindered and Prone off). Any
+        other entry is ignored — a mod block publishes here too.
+        """
+        if not apply_condition_requests(self._character, payload, self._data):
+            return
+        self._render_conditions()
+        self._emit_conditions_changed()
+
     def roll_confused(self, applied: AppliedCondition) -> None:
         """Roll this turn's random action for a Confused-style condition."""
         self._roll_confused(applied)
@@ -456,6 +550,7 @@ class ConditionsSection(QGroupBox):
         for category, (head, rule, container) in self._category_sections.items():
             for widget in (head, rule, container):
                 widget.setVisible(category in used)
+        self._clear_temporary_button.setVisible(has_temporary(self._character))
         self._refit_containers()
 
     def _refit_containers(self) -> None:
@@ -476,6 +571,17 @@ class ConditionsSection(QGroupBox):
         chip = QFrame()
         chip.setFrameShape(QFrame.Shape.StyledPanel)
         chip.setToolTip(self._condition_tooltip(applied, record))
+        # A benefit, or anything temporary, wears its tone — green or red — so the
+        # borrowed numbers stand out from the conditions that simply are. A lasting
+        # hindrance keeps the plain panel every chip had before tones.
+        if applied.temporary or (record is not None and record.tone == TONE_BENEFIT):
+            token = condition_tone_token(record)
+            chip.setObjectName("conditionChip")
+            chip.setStyleSheet(
+                f"#conditionChip {{ border: {int(theme.metric('border.width'))}px solid"
+                f" {theme.color(token)}; background: {theme.wash(token, 0.12)};"
+                f" border-radius: {int(theme.metric('radius.chip'))}px; }}"
+            )
         chip_layout = QHBoxLayout(chip)
         chip_layout.setContentsMargins(6, 1, 2, 1)
         chip_layout.setSpacing(2)
@@ -527,8 +633,18 @@ class ConditionsSection(QGroupBox):
             recover_button.clicked.connect(lambda checked=False, a=applied: self.roll_recovery(a))
             chip_layout.addWidget(recover_button)
 
-        # Right-click, not a "×" button — the same gesture the GM cards' chips use,
-        # so shedding a condition is one thing to learn wherever a chip appears.
+        # A temporary chip gets a visible ✕ as well: it is the one kind of condition
+        # that is taken off routinely, every turn, often one at a time.
+        if applied.temporary:
+            dismiss = QToolButton()
+            dismiss.setText(DISMISS_GLYPH)
+            dismiss.setAutoRaise(True)
+            dismiss.setToolTip(f"Take off {name}")
+            dismiss.clicked.connect(lambda checked=False, a=applied: self._shed_condition(a))
+            chip_layout.addWidget(dismiss)
+
+        # Right-click as well — the same gesture the GM cards' chips use, so shedding
+        # a condition is one thing to learn wherever a chip appears.
         # Installed last so it wins over nothing: the die button above keeps its own
         # left-click, and the two do not collide.
         attach_context_removal(chip, lambda a=applied: self._shed_condition(a), what=name)

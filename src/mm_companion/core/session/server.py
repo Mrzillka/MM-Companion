@@ -68,6 +68,7 @@ from .protocol import (
     ActionRequest,
     ApplyCondition,
     CharacterSnapshot,
+    ClearTemporary,
     ErrorMessage,
     GroupRollRequest,
     Hello,
@@ -540,6 +541,7 @@ class SessionServer:
         reroll: bool = False,
         routine: bool = False,
         minion: bool = False,
+        twice: bool = False,
     ) -> RollRecord:
         """Resolve a roll for the GM (or for *player_id*) and publish it.
 
@@ -561,6 +563,7 @@ class SessionServer:
             reroll=reroll,
             routine=routine,
             minion=minion,
+            twice=twice,
         )
 
     def note(self, text: str, *, player_id: str | None = None) -> RollRecord:
@@ -754,13 +757,29 @@ class SessionServer:
         return records
 
     def apply_condition(
-        self, player_id: str, condition_id: str, parameter: str | None = None
+        self,
+        player_id: str,
+        condition_id: str,
+        parameter: str | None = None,
+        *,
+        amount: int | None = None,
+        temporary: bool = False,
     ) -> bool:
         """Tell one player's client to put a condition on their live sheet."""
         return self.send_to(
             player_id,
-            ApplyCondition(player_id=player_id, condition_id=condition_id, parameter=parameter),
+            ApplyCondition(
+                player_id=player_id,
+                condition_id=condition_id,
+                parameter=parameter,
+                amount=amount,
+                temporary=temporary,
+            ),
         )
+
+    def clear_temporary(self, player_id: str) -> bool:
+        """Tell one player's client to take every temporary condition off their sheet."""
+        return self.send_to(player_id, ClearTemporary(player_id=player_id))
 
     def remove_condition(
         self, player_id: str, condition_id: str, parameter: str | None = None
@@ -1320,6 +1339,7 @@ class SessionServer:
                 reroll=message.reroll,
                 routine=message.routine,
                 minion=message.minion,
+                twice=message.twice,
             )
         elif isinstance(message, NoteRequest):
             self._record_note(slot, message.text)
@@ -1336,7 +1356,10 @@ class SessionServer:
             self.reveal_roll(message.seq)
         elif isinstance(message, Ping):
             self._send_quietly(connection, Pong(nonce=message.nonce))
-        elif isinstance(message, (ApplyCondition, RemoveCondition, SetHeroPoints)) and slot.is_gm:
+        elif (
+            isinstance(message, (ApplyCondition, RemoveCondition, ClearTemporary, SetHeroPoints))
+            and slot.is_gm
+        ):
             # A GM driving a headless server from a remote app: relay the command
             # on to the player it names.
             self.send_to(message.player_id, message)
@@ -1420,6 +1443,7 @@ class SessionServer:
         reroll: bool = False,
         routine: bool = False,
         minion: bool = False,
+        twice: bool = False,
     ) -> RollRecord:
         bonus = _clamp(bonus, MAX_ROLL_MODIFIER)
         penalty = _clamp(penalty, MAX_ROLL_MODIFIER)
@@ -1437,6 +1461,17 @@ class SessionServer:
             die, natural, reroll = ROUTINE_DIE, False, False
         else:
             die, natural = reroll_d20(self._rng) if reroll else (roll_d20(self._rng), True)
+        other_die = 0
+        if twice and not routine:
+            # Aim: a second die, the higher kept. Dice, not rules — the server rolls
+            # it for the reason it rolls the first.
+            second, second_natural = (
+                reroll_d20(self._rng) if reroll else (roll_d20(self._rng), True)
+            )
+            if second > die:
+                die, natural, other_die = second, second_natural, die
+            else:
+                other_die = second
         if dc is not None:
             result = resolve_check(
                 bonus - penalty, dc, roll=die, natural=natural, added_success=not minion
@@ -1457,6 +1492,7 @@ class SessionServer:
                 natural=natural,
                 routine=routine,
                 minion=minion,
+                other_die=other_die,
             )
             self._append_roll(record)
 

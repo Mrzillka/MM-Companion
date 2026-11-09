@@ -9,7 +9,6 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -30,6 +29,7 @@ from mm_companion.ui.roll_history import (
     escape_rich_text,
     heading_row,
     quick_roll_key,
+    remove_button,
     reroll_label,
     roll_headline,
     size_history_scroll,
@@ -38,6 +38,16 @@ from mm_companion.ui.roll_history import (
 from mm_companion.ui.widgets import (
     discard_widget,
 )
+
+#: What the private history says before there is anything in it — and how to keep a roll.
+LOCAL_EMPTY_TEXT = (
+    "No rolls yet. Click the die, or a trait on the sheet. ☆ on a roll keeps it as a quick " "roll."
+)
+
+#: The name a roll made with nothing loaded goes under, so no card is a bare number.
+PLAIN_ROLL = "d20"
+#: ...and a routine check made with nothing loaded.
+PLAIN_ROUTINE = "Take 10"
 
 
 def local_record(
@@ -72,7 +82,7 @@ def local_record(
 
 class RollCard(QFrame):
     """One history entry: the die, the modifier breakdown, and (with a DC) the
-    degree of success — plus a star to save its parameters and a ``−`` to drop it."""
+    degree of success — plus a star to save its parameters and a ``✕`` to drop it."""
 
     #: This card's star was clicked — see
     #: :attr:`~mm_companion.ui.roll_history.SessionRollCard.saveToggled`, which is
@@ -114,18 +124,18 @@ class RollCard(QFrame):
         # one line (see roll_headline).
         headline = roll_headline(local_record(die, bonus, penalty, dc, result, routine=routine))
         # What was rolled leads, the way the shared history's card names the player —
-        # a private history of bare numbers is unreadable a few rolls later.
-        shown = reroll_label(label, reroll)
-        if shown:
-            headline = (
-                f"<span style='color:{theme.color('accent.dice')}'>"
-                f"{escape_rich_text(shown)}</span><br>"
-                f"{headline}"
-            )
+        # a private history of bare numbers is unreadable a few rolls later. A roll with
+        # nothing loaded is still named, plainly, so every card starts the same way.
+        shown = reroll_label(label or (PLAIN_ROUTINE if routine else PLAIN_ROLL), reroll)
+        headline = (
+            f"<span style='color:{theme.color('accent.dice')}'>"
+            f"{escape_rich_text(shown)}</span><br>"
+            f"{headline}"
+        )
         title = QLabel(headline)
         title.setTextFormat(Qt.TextFormat.RichText)
         title.setWordWrap(True)
-        # The star and the − sit beside the first line, as on the shared history's
+        # The star and the ✕ sit beside the first line, as on the shared history's
         # card (see heading_row), so the chain's buttons below get the card's width.
         buttons = heading_row(info, title)
 
@@ -151,11 +161,9 @@ class RollCard(QFrame):
         self.star.clicked.connect(lambda: self.saveToggled.emit(dict(self._params)))
         buttons.addWidget(self.star, alignment=Qt.AlignmentFlag.AlignTop)
 
-        remove_button = QPushButton("−")
-        remove_button.setFixedWidth(24)
-        remove_button.setToolTip("Remove this roll from history")
-        remove_button.clicked.connect(self.removeRequested.emit)
-        buttons.addWidget(remove_button, alignment=Qt.AlignmentFlag.AlignTop)
+        # ✕, as on every other card: a "−" read as "collapse".
+        remove = remove_button("Remove this roll from history", self.removeRequested.emit)
+        buttons.addWidget(remove, alignment=Qt.AlignmentFlag.AlignTop)
 
     def parameters(self) -> dict:
         """The quick-roll parameters this card would save."""
@@ -204,6 +212,12 @@ class LocalRollHistory(QWidget):
         self._container = QWidget()
         self._layout = QVBoxLayout(self._container)
         self._layout.addStretch()
+        # Inside the list, as the shared history's is, so it costs no height of its own;
+        # it sinks under the cards and is shown only while there are none.
+        self._empty = QLabel(LOCAL_EMPTY_TEXT)
+        self._empty.setWordWrap(True)
+        self._empty.setEnabled(False)
+        self._layout.insertWidget(0, self._empty)
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
@@ -255,6 +269,7 @@ class LocalRollHistory(QWidget):
         # Newest on top: insert above every existing card (the stretch is last).
         self._layout.insertWidget(0, card)
         self._trim()
+        self._sync_empty()
         record = local_record(
             int(roll["die"]),
             int(roll["bonus"]),
@@ -276,6 +291,7 @@ class LocalRollHistory(QWidget):
         card = NoteCard({"text": text}, show_author=False)
         self._layout.insertWidget(0, card)
         self._trim()
+        self._sync_empty()
         announce_entry({"kind": KIND_NOTE, "player_name": "You", "text": text}, self)
 
     def add_request(self, spec: object) -> None:
@@ -301,6 +317,7 @@ class LocalRollHistory(QWidget):
         card.removeRequested.connect(lambda _seq, c=card: self._remove_card(c))
         self._layout.insertWidget(0, card)
         self._trim()
+        self._sync_empty()
         announce_entry(
             {
                 "kind": KIND_REQUEST,
@@ -325,14 +342,14 @@ class LocalRollHistory(QWidget):
 
         Wider than :meth:`cards` on purpose: that one answers "what could be saved
         to the quick-roll strip", this one answers "what is in the list", which is
-        the question :meth:`_trim` has to ask. The layout holds nothing but cards
-        and its trailing stretch, so every widget item is one.
+        the question :meth:`_trim` has to ask. The layout holds nothing but cards,
+        the empty-state line and its trailing stretch, so every other widget is one.
         """
         found = []
         for index in range(self._layout.count()):
             item = self._layout.itemAt(index)
             widget = item.widget() if item is not None else None
-            if widget is not None:
+            if widget is not None and widget is not self._empty:
                 found.append(widget)
         return found
 
@@ -349,6 +366,11 @@ class LocalRollHistory(QWidget):
             discard_widget(widget)
 
     def _remove_card(self, card: QWidget) -> None:
-        """Drop one card from the list — a roll's ``−`` or a request's ``✕``."""
+        """Drop one card from the list — a roll's or a request's ``✕``."""
         self._layout.removeWidget(card)
         discard_widget(card)
+        self._sync_empty()
+
+    def _sync_empty(self) -> None:
+        """Show the empty-state line exactly while there are no cards."""
+        self._empty.setVisible(not self._entries())

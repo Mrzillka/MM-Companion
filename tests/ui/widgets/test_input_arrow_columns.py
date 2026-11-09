@@ -50,7 +50,7 @@ from PySide6.QtWidgets import (
 
 from mm_companion.ui import theme
 from mm_companion.ui.lock import set_widget_locked
-from mm_companion.ui.widgets import make_spin_box
+from mm_companion.ui.widgets import make_signed_spin_box, make_spin_box
 
 PRESETS = ["classic", "slate-dark", "parchment-light", "crimson-gold"]
 
@@ -305,3 +305,41 @@ def test_a_locked_spin_box_gives_its_whole_width_to_the_value(styled_app, preset
     assert (
         _spin_rects(spin)[2].width() == unlocked_edit.width()
     ), f"{where}unlocking did not put the arrow column back"
+
+
+@pytest.mark.parametrize("preset", PRESETS)
+@pytest.mark.parametrize("kind", ["plain", "signed", "arrowless", "signed-arrowless"])
+def test_a_snug_spin_box_fits_its_values_and_keeps_its_arrows(
+    styled_app, preset: str, kind: str
+) -> None:
+    """As wide as its values, not as Qt's roomy sum (the arrows counted twice).
+
+    At its own hint the box must still show its widest value in full and keep the text
+    field off any arrows, and it must never be wider than a plain box of that range.
+    The roller's boxes are the arrowless kinds.
+    """
+    _dress(styled_app, preset)
+    arrows = "arrowless" not in kind
+    if kind.startswith("signed"):
+        spin = make_signed_spin_box(30, buttons=arrows, snug=True)
+        plain = make_signed_spin_box(30, buttons=arrows)
+    else:
+        spin = make_spin_box(0, 60, buttons=arrows, snug=True)
+        plain = make_spin_box(0, 60, buttons=arrows)
+    for box in (spin, plain):
+        box.ensurePolished()
+    spin.resize(spin.sizeHint())
+    styled_app.processEvents()
+    where = _under(styled_app, preset)
+
+    assert spin.sizeHint().width() <= plain.sizeHint().width(), f"{where}wider than plain"
+    if arrows and styled_app.property("test_base_style") == "windows11":
+        # Where the arrows were counted twice: the reason the snug box exists.
+        assert spin.sizeHint().width() < plain.sizeHint().width(), f"{where}no narrower"
+    up, down, edit = _spin_rects(spin)
+    if arrows:
+        assert not edit.intersects(up) and not edit.intersects(down), f"{where}over arrows"
+    metrics = spin.fontMetrics()
+    values = (spin.minimum(), spin.maximum())
+    widest = max(metrics.horizontalAdvance(spin.textFromValue(v)) for v in values)
+    assert widest < edit.width(), f"{where}the widest value does not fit"

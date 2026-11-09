@@ -8,8 +8,11 @@ from mm_companion.core import library
 from mm_companion.core.character import AppliedCondition
 from mm_companion.core.rules import (
     apply_condition,
+    apply_condition_requests,
     apply_damage_step,
     apply_recovery,
+    clear_temporary,
+    clear_temporary_note,
     damage_step_summary,
     damage_steps,
     decrement_condition,
@@ -33,14 +36,51 @@ class GMNpcConditionsMixin:
 
     # -- NPC conditions -----------------------------------------------------
 
-    def _apply_npc_condition(self, name: str, condition_id: str, parameter: object) -> None:
-        """Apply a condition straight onto the NPC's local model, and persist it."""
+    def _apply_npc_condition(
+        self, name: str, condition_id: str, parameter: object, amount: object = None
+    ) -> None:
+        """Apply a condition straight onto the NPC's local model, and persist it.
+
+        *amount* sizes one that moves traits by an amount (All-Out Attack −3).
+        """
         entry = self._npc_state.get(name)
         if entry is None:
             return
         subject = str(parameter) if parameter else None
-        apply_condition(entry.character, condition_id, self._data, parameter=subject)
-        self._after_npc_condition_change(entry, [(condition_id, subject)], applying=True)
+        size = amount if isinstance(amount, int) and not isinstance(amount, bool) else None
+        apply_condition(entry.character, condition_id, self._data, parameter=subject, amount=size)
+        self._after_npc_condition_change(
+            entry, [(condition_id, subject)], applying=True, amount=size
+        )
+
+    def _clear_npc_temporary(self, name: str) -> None:
+        """Take every temporary condition off an NPC — its card's "Clear temporary".
+
+        The start of the creature's turn, called by the GM since there is no turn
+        clock. One line in the history names the creature and what went.
+        """
+        entry = self._npc_state.get(name)
+        if entry is None:
+            return
+        removed = clear_temporary(entry.character)
+        if not removed:
+            return
+        self._after_npc_condition_change(entry, [], applying=False, clearing=True)
+        note = clear_temporary_note(removed, self._data)
+        if note:
+            self._post_note(f"{entry.summary.name}: {note}")
+
+    def _land_npc_requests(self, name: str, requests: tuple) -> bool:
+        """Put what a combat action asks for on an NPC — the GM's roller acting as it
+        (All-Out Attack's −Defense once the die settles, Defend's Defending, a Surprise
+        Attack's temporary Vulnerable). Read as the sheet reads it
+        (:func:`~mm_companion.core.rules.apply_condition_requests`), so an open sheet
+        replaying the same payload lands the same thing. Whether anything changed."""
+        entry = self._npc_state.get(name)
+        if entry is None or not apply_condition_requests(entry.character, requests, self._data):
+            return False
+        self._after_npc_condition_change(entry, [], applying=True, requests=requests)
+        return True
 
     def _remove_npc_condition(self, name: str, condition_id: str, parameter: object) -> None:
         """Take one condition off the NPC's model again."""
@@ -214,6 +254,9 @@ class GMNpcConditionsMixin:
         changes: list[tuple[str, str | None]],
         *,
         applying: bool,
+        amount: int | None = None,
+        clearing: bool = False,
+        requests: tuple = (),
     ) -> None:
         """Restate the NPC's card and persist one or more condition changes.
 
@@ -222,6 +265,11 @@ class GMNpcConditionsMixin:
         the same changes through its conditions block so the open sheet stays in
         sync and owns its own save; otherwise write the model to its file now —
         **once**, however many conditions a damage rung brought with it.
+
+        *amount* rides along with an applied condition that has one; *clearing*
+        replays a "Clear temporary" (with no *changes*) rather than ids; *requests*
+        replays a combat action's ``condition-requested`` payload (temporary flags and
+        amounts kept) through the open sheet's ``take_conditions``.
         """
         window = self._window_for(entry.path)
         section = getattr(window.sheet, "conditions", None) if window is not None else None
@@ -232,9 +280,14 @@ class GMNpcConditionsMixin:
             # on the sheet would roll one back and not the other — exactly the
             # disagreement the replay exists to prevent.
             with absorbing(window.sheet):
+                if clearing:
+                    # The window writes the history line, naming the creature.
+                    section.clear_temporary_conditions(note=False)
+                if requests:
+                    section.take_conditions(requests)
                 for condition_id, parameter in changes:
                     if applying:
-                        section.apply_condition_by_id(condition_id, parameter)
+                        section.apply_condition_by_id(condition_id, parameter, amount=amount)
                     else:
                         section.remove_condition_by_id(condition_id, parameter)
         else:

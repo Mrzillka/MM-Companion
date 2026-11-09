@@ -26,13 +26,14 @@ other roll, so there is one way to say "and +2 for cover".
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from ..character import Character
 from ..data_loader import Effect, GameData, ResistanceOutcome
 from ..powers import Power, PowerEffectInstance
 from .area import area_dodge_bonus
 from .conditions import (
+    condition_attack_check_mod,
     condition_check_penalty,
     condition_scope_penalty,
     resistance_condition_effect,
@@ -313,6 +314,29 @@ class RollSpec:
     #: :data:`KIND_BEST_OF` / :data:`KIND_WORST_OF`, because the kind has to stay
     #: :data:`KIND_POWER_SAVE` — that is how a pin or a team attack finds the save.
     pick: str = ""
+    #: The trait keys whose condition mods are folded into :attr:`modifier` — an attack
+    #: check carries ``system.trait_keys.attack_check`` — so a card can put the stat's
+    #: dot (:func:`~.conditions.temporary_marks`) beside the line. **Local only**, for
+    #: :attr:`costs`' reason: it describes this sheet, not the roll — and left out of
+    #: equality, so a spec rebuilt off the wire is still the roll it was.
+    marks: tuple[str, ...] = field(default=(), compare=False)
+    #: On a power's save: the effect rank it is made against (its DC less the effect's
+    #: DC base), which an attack maneuver trades against (Accurate and Power Attack,
+    #: :mod:`.maneuvers`). 0 when unknown. **Local only**, for :attr:`marks`' reason: the
+    #: DC and the ladder's rank are what travel, and both are shifted with it.
+    effect_rank: int = field(default=0, compare=False)
+    #: On an attack: **every** hit is a critical hit, not only a natural 20's — a
+    #: Finishing Attack's (p201). On the wire, so the GM's judge and the target's card
+    #: raise the save as the attacker's did.
+    critical_hit: bool = False
+    #: Roll the die twice and keep the better — Aim (p200). **Local only**: what the
+    #: server is asked for is the roll request's ``twice``, and the record carries the
+    #: other die, so a spec rebuilt off the wire is still the roll it was.
+    roll_twice: bool = field(default=False, compare=False)
+    #: A roll the roller loads for its own sheet once this one has settled — the
+    #: slammer's save against their own Slam Attack (p202). **Local only**, for
+    #: :attr:`roll_twice`'s reason; it is already filled in for this sheet.
+    then: RollSpec | None = field(default=None, compare=False)
 
     def follow_ups(self) -> tuple[RollSpec, ...]:
         """Every roll this one provokes: :attr:`follow_up`, then :attr:`also`."""
@@ -372,6 +396,8 @@ class RollSpec:
             raw["recovers_parameter"] = self.recovers_parameter
         if self.pick:
             raw["pick"] = self.pick
+        if self.critical_hit:
+            raw["critical_hit"] = True
         if self.follow_up is not None:
             raw["follow_up"] = self.follow_up.to_dict()
         if self.also:
@@ -424,6 +450,7 @@ class RollSpec:
             recovers=str(raw.get("recovers", "")),
             recovers_parameter=str(raw.get("recovers_parameter", "")),
             pick=str(raw.get("pick", "")),
+            critical_hit=raw.get("critical_hit") is True,
             also=(
                 tuple(s for s in (cls.from_dict(a) for a in also) if s is not None)
                 if isinstance(also, list)
@@ -684,7 +711,9 @@ def follow_up_for_result(
         if natural_20:
             label = f"{label} — natural 20, DC {dc}"
         return replace(follow_up, dc=dc, dc_from_total=False, label=label)
-    if natural_20:
+    # A Finishing Attack's every hit is a critical (p201), and a natural 20 on one adds
+    # nothing more: the follow-up is offered only on a hit, so this is that hit.
+    if natural_20 or spec.critical_hit:
         bonus = game_data.system.critical_effect_bonus
         if bonus and follow_up.dc is not None:
             raised = follow_up.dc + bonus
@@ -1093,6 +1122,16 @@ def _damage_measured(
     return replace(ladder, rank=max(0, rank), penetrating=penetrating_ranks(effect, game_data))
 
 
+def _effect_rank(effect: PowerEffectInstance, game_data: GameData, dc: int | None) -> int:
+    """The rank a save of *effect* at *dc* is made against, read back off the DC as
+    :func:`_damage_measured` does (0 when either part is unknown)."""
+
+    base = effect_resistance_dc_base(effect, game_data)
+    if dc is None or base is None:
+        return 0
+    return max(0, dc - base)
+
+
 def _effect_roll_parts(
     effect: PowerEffectInstance, game_data: GameData, char: Character | None, prefix: str
 ) -> _EffectRolls:
@@ -1126,6 +1165,7 @@ def _effect_roll_parts(
             ladder=_damage_measured(
                 effect_spec_ladder(effect, game_data, base_effect), effect, game_data, numbers.dc
             ),
+            effect_rank=_effect_rank(effect, game_data, numbers.dc),
         )
 
     opposed: RollSpec | None = None
@@ -1176,12 +1216,20 @@ def _effect_roll_parts(
         dc = numbers.check_dc
         against = _check_against(check_row.value)
         hint = "" if dc is not None else f"The target's {against} goes in the DC box."
+        actor = numbers.check_actor
+        marks: tuple[str, ...] = ()
+        if numbers.attack_check:
+            shift, because = _attack_condition(char, game_data)
+            actor += shift
+            hint = " ".join(part for part in (hint, because) if part)
+            marks = (game_data.system.trait_keys.attack_check,)
         check = RollSpec(
-            label=named(_check_label(check_row.value, numbers.check_actor, effect, game_data)),
-            modifier=numbers.check_actor,
+            label=named(_check_label(check_row.value, actor, effect, game_data)),
+            modifier=actor,
             dc=dc,
             kind=KIND_POWER_CHECK,
             hint=hint,
+            marks=marks,
             follow_up=provoked[0] if provoked else None,
             also=tuple(provoked[1:]),
         )
@@ -1232,30 +1280,51 @@ def _counted_use(
     return part
 
 
-def _linked_check(power: Power, attack, parts: list[_EffectRolls], prefixes: list[str]) -> RollSpec:
+def _attack_condition(char: Character | None, game_data: GameData) -> tuple[int, str]:
+    """What the wielder's conditions add to an attack check, and the hint saying so."""
+
+    if char is None:
+        return 0, ""
+    shift, because = condition_attack_check_mod(char, game_data)
+    return shift, (f"Conditions: {because}." if shift else "")
+
+
+def _linked_check(
+    power: Power,
+    attack,
+    parts: list[_EffectRolls],
+    prefixes: list[str],
+    char: Character | None,
+    game_data: GameData,
+) -> RollSpec:
     """The one attack check a Linked group rolls, provoking every member's save."""
 
     members = [parts[i] for i in attack.indices]
     provoked = [fu for part in members if part.check is not None for fu in part.check.follow_ups()]
     names = " + ".join(prefixes[i] for i in attack.indices if prefixes[i])
-    label = f"Attack {attack.bonus:+d} vs. {attack.against}"
+    shift, because = _attack_condition(char, game_data)
+    bonus = attack.bonus + shift
+    label = f"Attack {bonus:+d} vs. {attack.against}"
     differ = len(set(attack.bonuses)) > 1
     hint = f"The target's {attack.against} goes in the DC box. One roll lands every linked effect."
     if differ:
         hint += " The effects' bonuses differ; this rolls the ruleset's pick of them."
+    if because:
+        hint += f" {because}"
     costs = tuple(
         dict.fromkeys(c for part in members if part.check is not None for c in part.check.costs)
     )
     spends = tuple(i for part in members if part.check is not None for i in part.check.spends)
     return RollSpec(
         label=f"{names}: {label}" if names else label,
-        modifier=attack.bonus,
+        modifier=bonus,
         kind=KIND_POWER_CHECK,
         hint=hint,
         follow_up=provoked[0] if provoked else None,
         also=tuple(provoked[1:]),
         costs=costs,
         spends=spends,
+        marks=(game_data.system.trait_keys.attack_check,),
     )
 
 
@@ -1306,7 +1375,7 @@ def power_rolls(power: Power, char: Character | None, game_data: GameData) -> li
             if part.check is not None:
                 specs.append(part.check)
         elif index == attack.indices[0]:
-            specs.append(_linked_check(power, attack, parts, prefixes))
+            specs.append(_linked_check(power, attack, parts, prefixes, char, game_data))
         specs.extend(part.after)
     return specs
 

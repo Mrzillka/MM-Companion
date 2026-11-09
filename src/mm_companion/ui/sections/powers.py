@@ -91,6 +91,7 @@ from mm_companion.core.rules import (
     powers_points_spent,
     pushable_effects,
     stunt_source,
+    temporary_marks,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.cards import (
@@ -931,6 +932,7 @@ class PowersSection(
             pins=self._pins,
             pin_ref=lambda index, pid=power.id: PinRef(PIN_POWER, pid, index),
             simple=self._simple,
+            marks=temporary_marks(self._character, self._data),
         )
         footer.rollRequested.connect(self.rollRequested)
         footer.targetRequested.connect(self.targetRequested)

@@ -13,12 +13,12 @@ it). The area attack's primary judges its hit with the same function.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ..dice import resolve_check
 from .rolls import KIND_AREA, KIND_IMPRESS, RollSpec
 
-__all__ = ["AttackVerdict", "aimed_attack", "judge_attack", "targetable_attack"]
+__all__ = ["AttackVerdict", "aimed_attack", "judge_attack", "same_attack", "targetable_attack"]
 
 
 def targetable_attack(spec: RollSpec) -> bool:
@@ -27,6 +27,20 @@ def targetable_attack(spec: RollSpec) -> bool:
     """
 
     return spec.follow_up is not None and not spec.rolled_by_target and spec.kind != KIND_AREA
+
+
+def same_attack(one: RollSpec | None, other: RollSpec | None) -> bool:
+    """Whether two specs are the same attack, whoever it is aimed at: the aimed copy of
+    a line (:func:`~mm_companion.ui.attack_targets.aimed_spec` adds its target, action
+    id, title and actor) is still the line the roller's maneuvers were set for."""
+
+    if one is None or other is None:
+        return one is other
+
+    def bare(spec: RollSpec) -> RollSpec:
+        return replace(spec, targets=(), action_id="", title="", actor="")
+
+    return bare(one) == bare(other)
 
 
 def aimed_attack(spec: RollSpec | None) -> bool:
@@ -67,6 +81,7 @@ def judge_attack(
     natural: bool = True,
     added_success: bool = True,
     routine_total: int | None = None,
+    critical_hit: bool = False,
 ) -> AttackVerdict:
     """Judge an attack of *modifier* that rolled *die* against *defense_dc*.
 
@@ -75,6 +90,7 @@ def judge_attack(
     *natural* false a routine 10 or a lucky re-roll's lifted die. *routine_total* is what
     a routine check would have come to — given only when the target is a minion and the
     session lets attacks on minions be routine — and a hit by it is a hit.
+    *critical_hit* makes every hit a critical (a Finishing Attack's, p201).
     """
 
     result = resolve_check(
@@ -84,7 +100,7 @@ def judge_attack(
     by_routine = False
     if not hit and routine_total is not None and routine_total >= defense_dc:
         hit = by_routine = True
-    critical = bool(result.critical and die == 20 and natural and added_success)
+    critical = bool(result.critical and die == 20 and natural and added_success) or critical_hit
     return AttackVerdict(
         hit=hit, critical=critical and hit, degree=result.degree, by_routine=by_routine
     )

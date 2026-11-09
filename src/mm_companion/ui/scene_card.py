@@ -40,11 +40,16 @@ from mm_companion.ui import theme
 from mm_companion.ui.card_chips import (
     InitiativeBadge,
     _ConditionChip,
+    clear_temporary_button,
     start_card_drag,
 )
 from mm_companion.ui.defeat_look import apply_defeat_look, defeated_pixmap
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
-from mm_companion.ui.sections.conditions import condition_display_name, condition_tooltip
+from mm_companion.ui.sections.conditions import (
+    condition_display_name,
+    condition_tone_token,
+    condition_tooltip,
+)
 from mm_companion.ui.widgets import discard_widget, muted_style
 
 #: How wide one card's column is, so a row of them lines up in the flow. Stated
@@ -212,6 +217,8 @@ class SceneCard(QFrame):
     actionRequested = Signal(str, str)
     #: ``(ref, condition_id, parameter)`` — take this condition off (GM only).
     removeConditionRequested = Signal(str, str, object)
+    #: The entry's ref — the GM asked to take every temporary condition off it.
+    clearTemporaryRequested = Signal(str)
     #: ``(ref, condition_id, parameter)`` — roll its recovery check (GM only).
     recoveryRequested = Signal(str, str, object)
 
@@ -334,6 +341,11 @@ class SceneCard(QFrame):
         self._chips = FlowContainer()
         self._chip_flow = FlowLayout(self._chips)
         layout.addWidget(self._chips)
+        # The GM's "Clear temporary", under the chips; never on a player's screen.
+        self._clear_temporary = clear_temporary_button(
+            lambda: self.clearTemporaryRequested.emit(self.ref), compact=True
+        )
+        layout.addWidget(self._clear_temporary, alignment=Qt.AlignmentFlag.AlignLeft)
 
         self.set_entry(entry)
         self.set_portrait(portrait)
@@ -503,19 +515,26 @@ class SceneCard(QFrame):
             if widget is not None:
                 discard_widget(widget)
         shown = 0
+        temporary = False
         for item in raw:
             if not isinstance(item, dict):
                 continue
+            amount = item.get("amount")
             applied = AppliedCondition(
                 condition_id=str(item.get("id", "")),
                 parameter=item.get("parameter") or None,
                 count=int(item.get("count", 1) or 1),
+                amount=amount if isinstance(amount, int) and not isinstance(amount, bool) else None,
+                temporary=item.get("temporary") is True,
             )
+            temporary = temporary or applied.temporary
             record = self._conditions_by_id.get(applied.condition_id)
             chip = _ConditionChip(
                 condition_display_name(applied, record),
                 tooltip=condition_tooltip(applied, record, self._conditions_by_id),
                 compact=True,
+                tone=condition_tone_token(record),
+                temporary=applied.temporary,
                 parent=self._chips,
             )
             # A GM takes a condition off here as on the creature's own card — the
@@ -527,6 +546,7 @@ class SceneCard(QFrame):
             self._chip_flow.addWidget(chip)
             shown += 1
         self._chips.setVisible(bool(shown))
+        self._clear_temporary.setVisible(bool(self._gm and self.ref and temporary))
 
     def _arm_gm_chip(self, chip: _ConditionChip, cid: str, param: str | None) -> None:
         """Right-click takes it off; a 🎲 rolls it off, where the GM says it can be."""

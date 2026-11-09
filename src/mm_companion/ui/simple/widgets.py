@@ -27,12 +27,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from mm_companion.core.rules import PinRef, RollSpec
+from mm_companion.core.rules import PinRef, RollSpec, TemporaryMark
 from mm_companion.ui import theme
 from mm_companion.ui.roll_click import ROLL_TOOLTIP, attach_roll_click
 from mm_companion.ui.sections.column_flow import column_count, even_split
 from mm_companion.ui.simple.registry import SimpleContext
 from mm_companion.ui.simple.style import set_font, term_label, tint, value_label
+from mm_companion.ui.stat_mark import StatMark
 from mm_companion.ui.widgets import discard_widget, no_reentry
 
 SpecFactory = Callable[[], "RollSpec | None"]
@@ -145,14 +146,33 @@ class StatBox(QFrame):
         self._note = term_label(wrap=False)
         self._note.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(self._caption)
-        layout.addWidget(self._value)
+        # The value with a temporary condition's dot after it, and the dot's width
+        # mirrored before it so the number stays centred whether or not it is marked.
+        value_row = QHBoxLayout()
+        value_row.setContentsMargins(0, 0, 0, 0)
+        value_row.setSpacing(0)
+        self.mark = StatMark()
+        value_row.addSpacing(self.mark.sizeHint().width())
+        value_row.addWidget(self._value, stretch=1)
+        value_row.addWidget(self.mark, alignment=Qt.AlignmentFlag.AlignVCenter)
+        layout.addLayout(value_row)
         layout.addWidget(self._note)
         self._note.hide()
 
-    def set_value(self, text: str, *, moved: int = 0, note: str = "", tooltip: str = "") -> None:
-        """Show *text*; *moved* tints it (+ boosted, - penalised); *note* is small print."""
+    def set_value(
+        self,
+        text: str,
+        *,
+        moved: int = 0,
+        note: str = "",
+        tooltip: str = "",
+        mark: TemporaryMark | None = None,
+    ) -> None:
+        """Show *text*; *moved* tints it (+ boosted, - penalised); *note* is small print;
+        *mark* is a temporary condition's dot beside it."""
         self._value.setText(text)
         tint(self._value, moved)
+        self.mark.set_mark(mark)
         self._note.setText(note)
         self._note.setVisible(bool(note))
         if tooltip:
@@ -210,6 +230,7 @@ class SimpleLine(QWidget):
         strike: bool = False,
         moved: int = 0,
         trailing: QWidget | None = None,
+        mark: TemporaryMark | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("simpleLine")
@@ -233,6 +254,13 @@ class SimpleLine(QWidget):
             self.value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             tint(self.value, moved)
             top.addWidget(self.value)
+        # A temporary condition's dot after the value. Only when there is one: a line
+        # is rebuilt whenever its numbers move, so there is no row to hold steady.
+        self.mark: StatMark | None = None
+        if mark is not None:
+            self.mark = StatMark()
+            top.addWidget(self.mark, alignment=Qt.AlignmentFlag.AlignVCenter)
+            self.mark.set_mark(mark)
         outer.addLayout(top)
         self.terms: QLabel | None = None
         if terms:

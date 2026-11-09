@@ -752,7 +752,7 @@ commit hash.
   failure up to there was the not-built example (fixed). The phase's own files and the
   sheet / GM / widget files past 71% that it could touch are green (249 tests); the rest
   of the last 29% is left to phase 10's full run. Next: phase 9 (Grab, Trip, Disarm,
-  Smash, Escape, Block). Commit: (see the next commit).
+  Smash, Escape, Block). Commit: 923679d.
 
 - **2026-11-09 — Phase 7b (done).** The team attack as a call to roll. Asked the user two
   questions, now decision 16 (the tile is the call only; a small setup window). How it

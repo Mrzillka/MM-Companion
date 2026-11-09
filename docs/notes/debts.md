@@ -106,6 +106,22 @@ of the turn economy should hang off:
 - **There is no turn tracker.** The GM ends each creature's turn by hand; initiative
   order is on the board, but nothing walks it.
 
+## Aid, Feint and Trick: what is left
+
+Built in phase 8 of the combat maneuvers (see [the actions notes](actions.md#aid-feint-and-trick)).
+
+- **Off the air they are greyed.** With no session there is no Scene to pick the target
+  off and no GM to resolve it. An offline version would roll the check and leave a
+  "Resist Feint vs. DC" request card, as an offline Impress does.
+- **The opposing conditions count in aimed attacks only.** An unaimed attack (the DC
+  box standing for the Defense), an area's primary and a team attack's entries neither
+  count nor spend them; the bearer takes them off by hand.
+- **They are matched by name.** The parameter is the name the GM's board showed when
+  the action landed; renaming a creature (or a namesake's number shifting) leaves one
+  that never matches.
+- **Feint's "corresponding" attack bonus.** The target resists with the better of both
+  combat skills, since an attack does not record whether it is close or ranged.
+
 ## PySide6 is capped below 6.12, and 6.11.3 is excluded
 
 `pyproject.toml` pins `PySide6>=6.6,<6.12,!=6.11.3`, so CI and the release builds get

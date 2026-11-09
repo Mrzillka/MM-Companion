@@ -586,6 +586,19 @@ click**: it rolls, as it always did. Its **right click** lists the Scene's creat
   - several (a Linked power): `AttackWindow`, a resistance and an adjustment per save;
   - a player target: asked for each save in turn, as an area attack asks.
   Decline settles the card; nothing else happens.
+- **What Aid, Feint and Trick left counts here, and is spent here.** Before judging, the
+  controller reads the opposing conditions between the two (`rules.opposing_effects`):
+  the attacker's Aided Attack or Trick Advantage naming the target goes on the check,
+  the target's Aided Defense on its Defense, and a Feinted target's Defense is judged as
+  if Vulnerable (`rules.defense_against`). Each counted instance comes off its bearer,
+  hit or miss, through the GM window's `combat_land` (an NPC's model, a player's remove
+  command). The card says which ("with Aided Attack (Thug) +5, Thug: Feinted (Ana)").
+- **The saves come back through the session.** The controller hands every roll to its
+  runs first (`take_roll`), as the area and Impress controllers do. It did not at
+  first, so at a live table an NPC's save was rolled by the server and never landed,
+  and a player's asked save was never gathered; off the air the group is rolled in
+  place, which is all the tests saw. `test_a_hosted_aimed_attacks_save_comes_back_and_lands`
+  watches it through a real hosted session.
 - **The GM's own** aimed attacks (an NPC card's tile, an NPC sheet's line through
   `ATTACK_REQUESTED` in `OUTWARD_REQUESTS`) skip the card and run once the die is in.
   Offline rolls reach the controller through `_show_offline_roll`, which now marks a
@@ -751,6 +764,58 @@ each record's `bonus` / `penalty` (`attack_check`, `effect_rank`, `defense` — 
   a call to roll anyone answers with their own roller, the GM resolving (see *A call to
   roll*, under Team attack).
 
+## Aid, Feint and Trick
+
+The targeted combat actions (PDF p200, p202, p204–205), phase 8 of the combat maneuvers
+plan. Each is one check by the actor, read off its `actions.json` record's `targeted`
+block (`core/rules/targeted.py`):
+
+- **Aid** — an attack check (one of the actor's, off the attack picker) against DC 10,
+  judged as an attack is (`judge_attack`, so a natural 20 adds a degree). One degree
+  gives the **ally** Aided Attack or Aided Defense +2 **against the opponent**, three
+  +5 — Attack or Defense is the tile's option.
+- **Feint** — an attack check (the picker again; −5 as a simple action, an option),
+  opposed by the target's best of Close Combat, Ranged Combat, Deception and Insight
+  (the user's call: an attack does not record close or ranged, so both combat skills
+  count). A win leaves the target **Feinted** against the feinter.
+- **Trick** — Deception, opposed by the target's Deception or Insight. A win leaves the
+  target **Tricked** (narrative: heedless of the risk of acting against the trickster);
+  losing by two or more degrees gives the target **Trick Advantage** (+5) against the
+  trickster.
+
+What they leave are the **opposing** conditions (see [the conditions
+notes](conditions-and-damage.md)): counted and spent by the next aimed attack between the
+two they name (see *Aimed attacks*), never by "Clear temporary" (decision 17).
+
+- **The data.** `targeted`: `check` (`"attack"`, or `{kind, trait}`), `dc` or `resist`
+  (the target's candidates, a `KIND_BEST_OF` key), `ally`. `wins` / `losses` (on the
+  action or an option, merged as an option's fields are) are ladders of `{degrees,
+  applies}`: the deepest rung the actor's degrees of success (or of failure) reach lands.
+  Each `applies` entry names `on` (`target` / `ally`) and `against` (`actor` /
+  `target`), whose name becomes the parameter (`concrete_changes`). In an opposed check
+  the actor's degree is the target's mirrored (`actor_degree`: each degree the target
+  failed by is one the actor won by).
+- **The check** (`targeted_check_spec`) is the attack's line with what it would force
+  taken out — no save, no ladder — and **no `marks`**, so the attack maneuvers neither
+  ride on it nor are spent by it (a line on the lane greys while it is on the chip).
+- **A player** picks the tile (greyed off the air, `NEEDS_A_TABLE`; with nobody on the
+  Scene, `NO_ONE_TO_TARGET`; Aid without two, `NO_ALLY_AND_OPPONENT`), the creature
+  (Aid: "Aid Bo", then "… against Thug"), the option and the attack, and
+  `DiceSection.start_targeted` declares it (`KIND_TARGETED`, a `TargetedDeclaration` —
+  in `ui/attack_targets.py`, the half every seat shares) from the roll itself
+  (`before=`), as an aimed attack does. The check's spec carries the action id, the
+  title "Feint: Ana → Thug" and the actor as its row.
+- **The GM** (`ui/targeted_gm.py`, `TargetedController`) gets an `ActionCard` with
+  **Accept / Decline**. Accept judges a fixed DC at once, or has the target resist the
+  check's total (`opposed_dc`, a minion's 20 adding nothing): an NPC's line rolled by
+  the server at the GM roller's adjustment, a player asked (`targeted_resist_spec`, their
+  own sheet picks the best candidate). What lands goes on through `combat_land`, and a
+  player bearer is told. The GM's own tile (`GMCombatMixin._gm_targeted`) asks which NPC,
+  whom, which way and which attack, and `act_own` rolls the check as that NPC and
+  resolves it with no card.
+- One table per action in the history: the actor's check and the target's resistance
+  are its two rows.
+
 ## Not done yet
 
 These are in [the debts](debts.md):
@@ -759,6 +824,8 @@ These are in [the debts](debts.md):
   Stunned is on (only a damage-caused one is rolled off with Stamina), and a memory of
   impressions that outlives the GM's app;
 - the area pieces left out: a Hero Point inside the table, and Nullify and Move Object
-  areas.
+  areas;
+- Aid, Feint and Trick off the air, and the opposing conditions in anything but an
+  aimed attack (an unaimed roll, an area's primary, a team attack).
 
 Counting earlier Impress attempts automatically was dropped: the GM sets the slider.

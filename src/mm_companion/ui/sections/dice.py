@@ -52,13 +52,18 @@ from mm_companion.core.rules import (
     recovery_succeeded,
     requested_roll_choices,
     self_action,
+    targeted_action,
+    targeted_check_spec,
 )
 from mm_companion.core.session.protocol import sanitize_mod_payload
 from mm_companion.ui import theme
 from mm_companion.ui.action_grid import GridSection
 from mm_companion.ui.action_menu import (
+    NEEDS_A_TABLE,
+    NO_ALLY_AND_OPPONENT,
     NO_AREAS,
     NO_ATTACKS,
+    NO_ONE_TO_TARGET,
     SKIP_TARGET,
     choose_from_menu,
     combat_menu,
@@ -67,10 +72,14 @@ from mm_companion.ui.action_ui import sets_up_own_actions
 from mm_companion.ui.area import KIND_AREA_ATTACK, AreaDialog
 from mm_companion.ui.attack_targets import (
     KIND_ATTACK,
+    KIND_TARGETED,
     AttackDeclaration,
     SceneTarget,
+    TargetedDeclaration,
     aimed_spec,
     session_targets,
+    targeted_roll_spec,
+    targeted_table_title,
 )
 from mm_companion.ui.impress import IMPRESS_ACTION, KIND_IMPRESS, ImpressDialog, new_action_id
 from mm_companion.ui.roller.combat_runner import (
@@ -171,6 +180,10 @@ class DiceSection(QGroupBox):
             elif self_action(self._data, action.id) is not None:
                 reason = action_reason(self._data, action, self._character)
                 offered[action.id] = reason or (attacks if action.needs_attack else None)
+            elif targeted_action(self._data, action.id) is not None:
+                offered[action.id] = self._targeted_reason(action) or (
+                    attacks if action.needs_attack else None
+                )
         if self._data.area.available:
             offered[KIND_AREA_ATTACK] = (
                 None if area_choices(self._character, self._data) else NO_AREAS
@@ -367,6 +380,9 @@ class DiceSection(QGroupBox):
         if kind == KIND_AREA_ATTACK:
             self.start_area_tile()
             return None
+        if targeted_action(self._data, kind) is not None:
+            self.start_targeted(kind)
+            return None
         if self.combat.start(kind):
             return None
         if kind != KIND_IMPRESS:
@@ -420,6 +436,93 @@ class DiceSection(QGroupBox):
                 self.aim_attack((spec, targets[index - 1]))
                 return
         panel.load_spec(spec)
+
+    @staticmethod
+    def _targeted_reason(action) -> str | None:
+        """Why a targeted action's tile is greyed on a sheet: no table to take it at, or
+        nobody (Aid: not both an ally and an opponent) on the Scene."""
+        targets = session_targets(live_session())
+        if targets is None:
+            return NEEDS_A_TABLE
+        if action.targeted is not None and action.targeted.ally and len(targets) < 2:
+            return NO_ALLY_AND_OPPONENT
+        return None if targets else NO_ONE_TO_TARGET
+
+    def start_targeted(self, action_id: str) -> bool:
+        """A targeted action's tile — Aid, Feint, Trick (see
+        :mod:`~mm_companion.ui.targeted_gm`): against whom off the Scene (Aid: the ally,
+        then the opponent), which way, and — for an attack check — which attack. The
+        action is declared to the GM (``KIND_TARGETED``) from the roll itself, and the
+        check rolled here; the GM accepts it and resolves the rest. Whether it went."""
+        action = targeted_action(self._data, action_id)
+        bridge = live_session()
+        targets = session_targets(bridge)
+        if action is None or action.targeted is None or bridge is None or not targets:
+            return False
+        if self._targeted_reason(action) or self.view.panel.rolling:
+            return False
+        panel = self.view.panel
+        point = panel.menu_point()
+        ally = None
+        if action.targeted.ally:
+            index = choose_from_menu(self, [f"Aid {t.name}" for t in targets], point)
+            if index is None:
+                return False
+            ally = targets[index]
+            targets = [t for t in targets if t.ref != ally.ref]
+        caption = "… against {}" if ally is not None else "{}"
+        index = choose_from_menu(
+            self,
+            [caption.format(f"{t.name} (minion)" if t.minion else t.name) for t in targets],
+            point,
+        )
+        if index is None:
+            return False
+        target = targets[index]
+        option = ""
+        if action.options:
+            index = choose_from_menu(self, [o.name for o in action.options], point)
+            if index is None:
+                return False
+            option = action.options[index].id
+        attack = None
+        if action.targeted.check is None:
+            attack = panel.choose_attack()
+            if attack is None:
+                return False
+        check = targeted_check_spec(self._data, action, option, self._character, attack)
+        if check is None:
+            return False
+        name = library.display_name(self._character)
+        action_id = new_action_id()
+        title = targeted_table_title(
+            action.name, name, target.name, ally.name if ally is not None else ""
+        )
+        spec = targeted_roll_spec(check, action_id, title, name)
+        declaration = TargetedDeclaration(
+            action_id,
+            action.id,
+            target.ref,
+            target.name,
+            spec,
+            name,
+            option,
+            ally.ref if ally is not None else "",
+            ally.name if ally is not None else "",
+        )
+
+        def declare(_made_of: RollSpec | None) -> bool:
+            if bridge.send_action_request(KIND_TARGETED, action_id, declaration.to_dict()):
+                return True
+            notify_window(
+                self.window(),
+                f"Could not reach the GM — the {action.name.lower()} was not sent.",
+                theme.color("tint.worse"),
+            )
+            return False
+
+        self.perform_roll(spec, before=declare)
+        return True
 
     def start_area_tile(self) -> AreaDialog | None:
         """The Area tile: the area this sheet's cards offer — straight away when there

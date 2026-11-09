@@ -19,7 +19,7 @@ every session.**
 | 6 | Self actions: Aim, Charge/Slam, Defend, Recover, Drop Prone, Stand, Finishing, Surprise, Catch | done (2026-11-09) |
 | 7 | The GM's side: NPC chooser first, conditions on the NPC | done (2026-11-09) |
 | 7b | Team attack as a call to roll: a history card anyone answers, GM resolves | done (2026-11-09) |
-| 8 | Targeted actions I: Feint, Trick, Aid | not started |
+| 8 | Targeted actions I: Feint, Trick, Aid | done (2026-11-09) |
 | 9 | Targeted actions II: Grab, Trip, Disarm, Smash, Escape, Block | not started |
 | 10 | Notes, debts, full test run, hand-off for merge | not started |
 
@@ -134,6 +134,18 @@ Status values: `not started`, `in progress (<what is left>)`, `done (<date>)`.
     tile starts the call only** — the NPC-group window is reached from the group's ☰ menu
     alone. The GM sets the call up in a **small window**: the target (the Scene) and one
     signed Bonus/Penalty, then **Send**.
+17. **What Feint, Aid and Trick leave is spent by the roll it is for** (asked 2026-11-09,
+    phase 8; resolves §5's end-of-turn point). Not cleared by "Clear temporary". **Aid:**
+    the aider picks the **ally and the opponent** off the Scene and **Attack or Defense**;
+    the ally's bonus counts on (and is spent by) the ally's next attack judged against that
+    opponent, or that opponent's next attack judged against the ally. **Feint:** the target
+    is Vulnerable against the feinter, and it comes off once the feinter's next attack on
+    it is judged. (Trick follows the same rule — my reading: its results are spent by the
+    tricked creature's next attack on the trickster.)
+18. **Feint's check** (asked 2026-11-09, phase 8): pick **one of your attacks** (the attack
+    picker; −5 as a simple action). The target resists with the highest of its Close
+    Combat, Ranged Combat, Deception or Insight (the app can't tell which combat skill
+    "corresponds").
 
 ---
 
@@ -188,7 +200,7 @@ Each one shifts **X, 0 ≤ X ≤ 5**, from one value to another.
 
 | Action | Kind | What the app does |
 |---|---|---|
-| Aid | targeted (ally + opponent) | attack vs DC 10. 1 degree: the ally gets green **Aided +2** (attack *or* Defense vs that opponent, until the end of the ally's next turn). 3+ degrees: +5 |
+| Aid | targeted (ally + opponent) | attack vs DC 10. 1 degree: the ally gets green **Aided Attack / Aided Defense +2** against that opponent, spent by the next attack between them (decision 17). 3+ degrees: +5 |
 | Aim | self | the next attack rolls twice and keeps the better (`KIND_BEST_OF` exists). The line has no slider |
 | Block | self, reaction | green **Blocking** (until next turn). Rolling a block = close attack bonus vs the attacker's result (in the DC box). Each block after the first in a round is −2 more (the condition's `count`) |
 | Catch | self | Agility vs DC 10 loader |
@@ -197,13 +209,13 @@ Each one shifts **X, 0 ≤ X ≤ 5**, from one value to another.
 | Disarm | targeted | attack −2 vs Defense. Then the attack's Damage rank vs the target's Strength rank (opposed). A win: the target drops the item (narrated) |
 | Drop Prone | self | apply Prone (not temporary — it lasts until Stand) |
 | Escape | self | Strength *or* Sleight of Hand vs the grab DC (DC box). 1 degree ends the hold (removes Restrained/Bound from self). 2+: also move |
-| Feint | targeted | attack, Deception or Insight, vs the highest of the target's attack bonus, Deception or Insight. Success: the target is **Vulnerable** (temporary, against your next attack, until the end of your next turn). As a simple action: −5 |
+| Feint | targeted | an **attack check** (book p202; the plan first said "attack, Deception or Insight", which is the target's side) vs the highest of the target's Close Combat, Ranged Combat, Deception or Insight (decision 18). Success: the target is **Feinted** — Vulnerable against the feinter's next attack, spent by it. As a simple action: −5 |
 | Grab | targeted | close attack vs Defense. Then Strength vs the target's Strength or Dodge. 1 degree: **Restrained**. 2+: **Bound**. The grabber is Hindered + Vulnerable while holding (temporary, cleared on release) |
 | Impress | targeted | exists (`core.rules.impress`) — moved into the menu |
 | Recover | self | green **Recovering** +2 Defense, temporary, plus the existing recovery roll for the most severe damage condition (`core.rules.recovery`). Once per scene (noted on the chip tooltip, not enforced) |
 | Smash | targeted | attack −2 (−5 against a hand-held object) vs Defense. A hit: Damage to the object (narrated) |
 | Stand | self | DC 20 Acrobatics *or* speed-rank check, **or** accept **Hindered** (temporary) — either way Prone comes off |
-| Trick | targeted | Deception vs the target's Deception or Insight. A win: the target is Unaware (temporary). 2+ degrees of failure: the opponent gets +5 against you (green on *them*) |
+| Trick | targeted | Deception vs the target's Deception or Insight. A win: the target is **Tricked** (narrative: unaware of the risk *if its action against you fails* — not the Unaware condition, whose all-senses form is Defenseless). 2+ degrees of failure: the opponent gets **Trick Advantage** +5 against you. Both spent by its next attack on you |
 | Trip | targeted | close attack vs Defense. Then close attack bonus *or* Strength vs the target's Strength or Dodge. A win: **Prone** |
 | Area / Team attack / Team check / Group check | existing | moved into the menu (Team ones are GM-only, from a group) |
 | Reroll | dice | moved into the menu |
@@ -477,6 +489,24 @@ widget, log failures.
   `_choose_actor(skip_ref=)`, `TEAM_CALL_OVER`; `gm/rolls.py`'s `TEAM_ACTIONS` became
   `GROUP_ACTIONS` (team and group check). **No wire change**: the call is a request
   record whose spec uses only keys v20 already carries.
+- **As built (phase 8):** core `core/rules/targeted.py` — `targeted_action`,
+  `targeted_title`, `targeted_check_spec`, `targeted_resist_spec`, `actor_degree`,
+  `targeted_outcome`, `concrete_changes`, `targeted_outcome_text`, and the opposing half:
+  `OpposingEffects`, `opposing_effects`, `defense_against`, `opposing_spent`. Loader:
+  `TargetedRules` (`CombatAction.targeted`), `DegreeOutcome` (`CombatEffect.wins` /
+  `losses`), `ConditionChange.parameter` / `on` / `against` (`TARGETED_ON_*`,
+  `TARGETED_AGAINST_*`), `OpposingRule` (`Condition.opposing`, `OPPOSING_ATTACKING` /
+  `_ATTACKED`), `MECH_OPPOSING`. Data: `aided` split into `aided_attack` /
+  `aided_defense`; new `feinted`, `tricked`; `trick_advantage` reshaped — all
+  `opposing`, none temporary. UI: `ui/targeted_gm.py` (`TargetedController`,
+  `TargetedHost`), `ui/attack_targets.py` (`KIND_TARGETED`, `TargetedDeclaration`,
+  `targeted_roll_spec`, `targeted_table_title`), `DiceSection.start_targeted` /
+  `_targeted_reason`, `GMCombatMixin._gm_targeted` / `_pick_party` / `combat_land`
+  (was `_grant_to`, now carrying the parameter), `GMWindow._targeted`;
+  `action_menu.NEEDS_A_TABLE` / `NO_ONE_TO_TARGET` / `NO_ALLY_AND_OPPONENT`.
+  `AttackController.resolve` reads `opposing_effects` and spends them (`_spend`). **No
+  wire change**: the declaration rides the action channel, the outcome is ordinary
+  `ApplyCondition` / `RemoveCondition` with a parameter.
 - **Targeted actions** reuse the targeting layer: the target is picked off the Scene
   (`ui/attack_targets.py`), the GM accepts on an `ActionCard`, the server rolls the
   NPC's side, and a player is asked. A two-stage action (Grab, Trip, Disarm) is the
@@ -631,12 +661,15 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
       `npc-groups.md`), the plan.
 
 ### Phase 8 — Targeted actions I
-- [ ] Feint (the actor picks attack/Deception/Insight; the target resists with the
-      highest; a simple-action −5 toggle; Vulnerable, temporary).
-- [ ] Trick (Deception vs Deception/Insight; Unaware temporary; 2+ failure → +5 to
-      them).
-- [ ] Aid (attack vs DC 10; pick the ally and the opponent; Aided +2 / +5 temporary,
-      attack *or* Defense).
+- [x] Feint (one of the actor's attacks, decision 18; the target resists with the best
+      of Close Combat, Ranged Combat, Deception, Insight; −5 as a simple action, an
+      option; Feinted against the feinter, spent by its next attack — decision 17).
+- [x] Trick (Deception vs Deception/Insight; Tricked; 2+ failure → Trick Advantage +5 to
+      them; both spent by their next attack on the trickster).
+- [x] Aid (attack vs DC 10; pick the ally and the opponent; Aided Attack / Aided Defense
+      +2 / +5 against the opponent, spent by the next attack between them).
+- [x] The aimed-attack judge counts and spends the opposing conditions.
+- [x] Fixed on the way: an aimed attack's save never came back at a live table.
 
 ### Phase 9 — Targeted actions II
 - [ ] Grab (attack vs Defense → Strength vs the target's Strength/Dodge; Restrained /
@@ -663,11 +696,8 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
 
 ## 5. Open points (resolve with the user when reached; record the answer in §1)
 
-- **Effects that last to the *end* of a turn** (Aided: the ally's next turn; Feint's
-  Vulnerable and Trick Advantage: the actor's next turn). "Clear temporary" is a
-  start-of-turn clear, so these can't simply be `temporary`. Phase 1 leaves Aided and
-  Trick Advantage lasting (removed by hand). Decide in phase 8: a second flag
-  (`untilEndOfTurn`), clearing them by hand, or accepting the early clear.
+- ~~Effects that last to the *end* of a turn.~~ **Resolved in phase 8** (decision 17):
+  they are spent by the attack they are for, not by a turn.
 - ~~The GM's hit judging ignores conditions.~~ **Resolved in phase 5**: the aimed
   attack, the area window's primary and the team attack judge against
   `defense_class_in_play`, so Vulnerable now halves the DC too (a visible change).
@@ -683,6 +713,46 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
 
 Newest first. Each entry: date, phase, what was done, what's next, gotchas, and the
 commit hash.
+
+- **2026-11-09 — Phase 8 (done).** Aid, Feint and Trick, player and GM. Asked the user
+  two questions, now decisions 17 (what they leave is **spent by the attack it is for**,
+  never by Clear temporary — resolves §5's end-of-turn point) and 18 (Feint rolls one of
+  the actor's attacks; the target resists with both combat skills, Deception or
+  Insight). Rules re-read: Aid p200, Feint p202, Trick p204–205. §3.3 "As built (phase
+  8)" has the names; `actions.md` "Aid, Feint and Trick" the detail. How it works: the
+  conditions they leave are **opposing** ones (a new `opposing` block on the record:
+  `attack` / `defense` / `defenseAs` / `spentBy`, parameter = the creature they name);
+  nothing on a sheet moves for one; the GM's aimed-attack judge reads both sides, counts
+  them and takes them off, hit or miss. A player's action is declared (`KIND_TARGETED`)
+  from its roll and the GM accepts it on a card; the GM's own NPC acts off the tile with
+  no card. **Fixed on the way (a shipped bug):** `AttackController.take_roll` never
+  handed rolls to its runs, so at a **live** table an aimed attack's NPC save was rolled
+  by the server and never landed, and a player's asked save was never gathered — offline
+  (all the tests) the group is rolled in place. Found with a hosted experiment; now
+  `test_a_hosted_aimed_attacks_save_comes_back_and_lands`. Worth a mention in the next
+  release notes. Tests: `tests/core/test_targeted_actions.py` (17),
+  `tests/ui/gm/test_targeted_gm.py` (12, one hosted), `tests/ui/dice/test_targeted_ui.py`
+  (4); `test_temporary_conditions.py` moved off the old `aided` (a synthetic `scoped`
+  record keeps the parameter-scoped `amountMods` tested); `test_actions_button.py`'s
+  not-built example is Grab now. **Decisions I made (small):** (1) Trick's win is a new
+  narrative **Tricked**, not the Unaware condition (all-senses Unaware is Defenseless and
+  Disabled — far more than the book's "unaware of the risk"); (2) Trick's results are
+  spent like Feint's (decision 17 extended, recorded there); (3) `aided` became
+  `aided_attack` / `aided_defense` (one parameter can't hold both Attack/Defense and the
+  opponent); (4) the check carries **no `marks`**, so maneuvers neither ride on it nor are
+  spent (a lane line greys while it is on the chip, and comes back with an attack);
+  (5) the tiles are greyed off the air (debt); (6) Aid is judged with `judge_attack` (a
+  natural 20 adds a degree); (7) a player's declaration and its helpers live in
+  `ui/attack_targets.py`, so the sheet does not import the GM's controller.
+  **Gotchas:** (1) pytest fixtures imported from another test module trip ruff's F811
+  when used as parameters — define them locally; (2) `open(p, "w")` in a Python edit
+  script writes CRLF on Windows — pass `newline="\n"` (or `""` to keep the file's own);
+  (3) heredocs with backticks still break the Bash tool. **Tests:** the affected run
+  (a full run on this branch) was **stopped at 71% by the system (low memory)**; its one
+  failure up to there was the not-built example (fixed). The phase's own files and the
+  sheet / GM / widget files past 71% that it could touch are green (249 tests); the rest
+  of the last 29% is left to phase 10's full run. Next: phase 9 (Grab, Trip, Disarm,
+  Smash, Escape, Block). Commit: (see the next commit).
 
 - **2026-11-09 — Phase 7b (done).** The team attack as a call to roll. Asked the user two
   questions, now decision 16 (the tile is the call only; a small setup window). How it

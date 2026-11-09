@@ -88,12 +88,14 @@
       "attack_mod": "Alters attack checks made by or against the character",
       "random_action": "The character's action each turn is rolled randomly, not chosen",
       "narrative": "Effect is a GM narrative call, not an engine-computed number",
-      "amount_mod": "Moves the traits listed in 'amountMods' by the applied instance's amount (a maneuver's +/-X)"
+      "amount_mod": "Moves the traits listed in 'amountMods' by the applied instance's amount (a maneuver's +/-X)",
+      "opposing": "Counts only between the bearer and the creature its parameter names, in an attack the GM's app judges between the two; see 'opposingNote'"
     },
     "parameterNote": "Some conditions must be qualified with a subject when applied — which trait, sense, descriptor, or controller they concern. That is the 'parameter' block. type='trait_select'/'sense_select'/'descriptor_text'/'character_ref' drives a combobox or text input in the UI; the chosen value is stored on the applied-condition instance and folded into the displayed name (e.g. 'Impaired' + trait 'Attack' -> 'Attack Impaired'). A condition with parameter.required=false but present is narrative-scoped only.",
     "toneNote": "'tone' is what a condition does to its bearer on balance: 'benefit' (drawn green) or 'hindrance' (drawn red). A record without one is a hindrance.",
     "amountNote": "Some conditions are applied with an amount (All-Out Attack -3). 'amountMods' lists the traits that amount moves, each {trait, sign, parameter?}: 'trait' is a trait key (a resistance key such as DEF, or system.json's trait_keys.attack_check for attack checks), 'sign' is +1 or -1, and 'parameter' limits the entry to an instance applied with that parameter. 'defaultAmount' is the amount an instance gets when applied without one (Defending's +2); 'maxAmount' is the largest the rules allow, which is as high as the '+' menu offers when it asks for one. Re-applying such a condition replaces its amount rather than stacking, unless it is 'stacking'.",
     "temporaryNote": "A temporary condition lasts until the start of its bearer's next turn and is removed then, by hand, with 'Clear temporary' (there is no turn clock). 'temporary': true makes a record temporary wherever it is applied from; an action may also apply any other condition temporarily (a feint's Vulnerable).",
+    "opposingNote": "'opposing' is what a condition does only between its bearer and the creature its parameter names (Aid, Feint, Trick): 'attack' and 'defense' move the bearer's attack check against that creature, or the bearer's Defense against its attack, by the amount times the value; 'defenseAs' judges the bearer's Defense against it as if under that condition (a feint's Vulnerable). 'spentBy' says which judged attack uses it up: 'attacking' (the bearer's next attack on that creature) or 'attacked' (that creature's next attack on the bearer). Such a condition is not temporary and is left alone by 'Clear temporary'.",
     "debilitationNote": "Debilitating an ability cascades into hard conditions (see each entry's 'debilitates.cascade'): Strength->Incapacitated, Stamina->Dying (stabilize at -5), Agility->Paralyzed, any Mental (INT/AWE/PRE)->Unaware until restored to >= -5, Attack->auto-fail attacks, Defense->Defenseless, Initiative->acts last. Debilitated Skills read as untrained; Debilitated Advantages/Powers stop functioning. Absent (rank '-') traits behave like debilitated with a few extras (no Stamina treats Dying as Dead). The engine drives this from the chosen trait, not a hardcoded per-condition branch."
   },
   "conditions": [
@@ -1271,68 +1273,144 @@
       "temporary": true
     },
     {
-      "id": "aided",
-      "name": "Aided",
-      "tooltip": "An ally's help: a bonus on your attack check, or to your Defense, against one opponent.",
+      "id": "aided_attack",
+      "name": "Aided Attack",
+      "tooltip": "An ally's help: a bonus on your next attack against one opponent.",
       "category": "condition",
       "group": "maneuver",
       "includes": [],
       "supersedes": [],
       "mechanisms": [
-        "amount_mod"
-      ],
-      "stacking": false,
-      "parameter": {
-        "type": "descriptor_text",
-        "required": true,
-        "label": "Bonus to",
-        "help": "Which of your numbers the ally's help improves.",
-        "options": [
-          "Attack",
-          "Defense"
-        ]
-      },
-      "debilitates": null,
-      "effect": "An ally's successful Aid grants +2 (or +5 for a strong success) on either your next attack check or your Defense against one named opponent. It lasts until the end of your next turn.",
-      "recovery": "Ends at the end of your next turn.",
-      "tone": "benefit",
-      "amountMods": [
-        {
-          "trait": "attack_check",
-          "sign": 1,
-          "parameter": "Attack"
-        },
-        {
-          "trait": "DEF",
-          "sign": 1,
-          "parameter": "Defense"
-        }
-      ],
-      "defaultAmount": 2
-    },
-    {
-      "id": "trick_advantage",
-      "name": "Trick Advantage",
-      "tooltip": "Someone's trick on you failed badly: a bonus on your checks against them.",
-      "category": "condition",
-      "group": "maneuver",
-      "includes": [],
-      "supersedes": [],
-      "mechanisms": [
-        "narrative"
+        "opposing"
       ],
       "stacking": false,
       "parameter": {
         "type": "character_ref",
-        "required": false,
+        "required": true,
+        "label": "Against",
+        "help": "The opponent the ally's help is against."
+      },
+      "debilitates": null,
+      "effect": "An ally's successful Aid: +2 (or +5 for a strong success) on your next attack check against the named opponent. Counted when that attack is judged, then gone.",
+      "recovery": "Spent by your next attack on the named opponent.",
+      "tone": "benefit",
+      "defaultAmount": 2,
+      "maxAmount": 5,
+      "opposing": {
+        "attack": 1,
+        "spentBy": "attacking"
+      }
+    },
+    {
+      "id": "aided_defense",
+      "name": "Aided Defense",
+      "tooltip": "An ally's help: a bonus to your Defense against one opponent's next attack.",
+      "category": "condition",
+      "group": "maneuver",
+      "includes": [],
+      "supersedes": [],
+      "mechanisms": [
+        "opposing"
+      ],
+      "stacking": false,
+      "parameter": {
+        "type": "character_ref",
+        "required": true,
+        "label": "Against",
+        "help": "The opponent the ally's help is against."
+      },
+      "debilitates": null,
+      "effect": "An ally's successful Aid: +2 (or +5 for a strong success) to your Defense against the named opponent's next attack. Counted when that attack is judged, then gone.",
+      "recovery": "Spent by the named opponent's next attack on you.",
+      "tone": "benefit",
+      "defaultAmount": 2,
+      "maxAmount": 5,
+      "opposing": {
+        "defense": 1,
+        "spentBy": "attacked"
+      }
+    },
+    {
+      "id": "feinted",
+      "name": "Feinted",
+      "tooltip": "Misled by a feint: vulnerable to that one opponent's next attack.",
+      "category": "condition",
+      "group": "maneuver",
+      "includes": [],
+      "supersedes": [],
+      "mechanisms": [
+        "opposing"
+      ],
+      "stacking": false,
+      "parameter": {
+        "type": "character_ref",
+        "required": true,
+        "label": "Against",
+        "help": "Whoever feinted."
+      },
+      "debilitates": null,
+      "effect": "A successful Feint leaves you unprepared: the named opponent's next attack on you is judged as if you were Vulnerable (Defense halved). Then it is gone.",
+      "recovery": "Spent by the named opponent's next attack on you.",
+      "tone": "hindrance",
+      "opposing": {
+        "defenseAs": "vulnerable",
+        "spentBy": "attacked"
+      }
+    },
+    {
+      "id": "tricked",
+      "name": "Tricked",
+      "tooltip": "Taken in by a trick: heedless of the risk of acting against one opponent.",
+      "category": "condition",
+      "group": "maneuver",
+      "includes": [],
+      "supersedes": [],
+      "mechanisms": [
+        "narrative",
+        "opposing"
+      ],
+      "stacking": false,
+      "parameter": {
+        "type": "character_ref",
+        "required": true,
+        "label": "Against",
+        "help": "Whoever tricked you."
+      },
+      "debilitates": null,
+      "effect": "A successful Trick: you are unaware of the danger if your next action against the named opponent fails, which the GM narrates. Gone once that action is made.",
+      "recovery": "Spent by your next attack on the named opponent.",
+      "tone": "hindrance",
+      "opposing": {
+        "spentBy": "attacking"
+      }
+    },
+    {
+      "id": "trick_advantage",
+      "name": "Trick Advantage",
+      "tooltip": "Someone's trick on you failed badly: a bonus on your next action against them.",
+      "category": "condition",
+      "group": "maneuver",
+      "includes": [],
+      "supersedes": [],
+      "mechanisms": [
+        "opposing"
+      ],
+      "stacking": false,
+      "parameter": {
+        "type": "character_ref",
+        "required": true,
         "label": "Against",
         "help": "The character whose trick failed."
       },
       "debilitates": null,
-      "effect": "An opponent's Trick failed by two or more degrees, leaving them open: you get +5 on your next check against them.",
-      "recovery": "Ends once used, or at the GM's call.",
+      "effect": "An opponent's Trick failed by two or more degrees, leaving them open: +5 on your next attack check against them. Counted when that attack is judged, then gone.",
+      "recovery": "Spent by your next attack on the named opponent.",
       "tone": "benefit",
-      "defaultAmount": 5
+      "defaultAmount": 5,
+      "opposing": {
+        "attack": 1,
+        "spentBy": "attacking"
+      }
     }
   ]
 }

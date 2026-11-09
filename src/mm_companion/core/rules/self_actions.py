@@ -319,14 +319,17 @@ def apply_condition_changes(
     character: Character, changes: Iterable[ConditionChange], game_data: GameData
 ) -> bool:
     """Put *changes* on *character* (or take them off: every directly applied instance,
-    with what it bundles). Whether anything changed."""
+    with what it bundles — only the one naming the change's parameter, when it names
+    one). Whether anything changed."""
     changed = False
     for change in changes:
         if change.remove:
             for applied in [
                 c
                 for c in character.conditions
-                if c.condition_id == change.condition and c.provenance is None
+                if c.condition_id == change.condition
+                and c.provenance is None
+                and (change.parameter is None or c.parameter == change.parameter)
             ]:
                 if applied in character.conditions:
                     remove_condition(character, applied)
@@ -338,6 +341,7 @@ def apply_condition_changes(
             character,
             change.condition,
             game_data,
+            parameter=change.parameter,
             amount=change.amount,
             temporary=bool(change.temporary),
         )

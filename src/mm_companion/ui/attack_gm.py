@@ -46,18 +46,22 @@ from mm_companion.core.rules import (
     PICK_WORST,
     AttackVerdict,
     MinionRules,
+    OpposingEffects,
     RollSpec,
     TeamEntry,
     TeamOption,
     answer_rung,
     combine_team_attack,
     critical_answer,
+    defense_against,
     defense_class_in_play,
     follow_ups_for_result,
     is_choice_key,
     judge_attack,
     localize_spec,
     minion_save_spec,
+    opposing_effects,
+    opposing_spent,
     resistance_total,
     resolve_rung,
     routine_total,
@@ -122,6 +126,8 @@ class AttackHost(Protocol):
     def minion_rules(self) -> MinionRules: ...
 
     def roller_adjustment(self) -> int: ...
+
+    def combat_land(self, party: ImpressParty, changes: tuple) -> bool: ...
 
 
 @dataclass
@@ -243,8 +249,18 @@ class AttackController(QObject):
         return aimed
 
     def take_roll(self, roll: object) -> None:
-        """A roll came in: an aimed attack's own die, when its spec says so."""
-        if not isinstance(roll, dict) or roll.get("group") or roll.get("kind", "roll") != "roll":
+        """A roll came in: a save one of the aimed attacks rolled or asked for (its run
+        gathers it), or an aimed attack's own die, when its spec says so."""
+        if not isinstance(roll, dict):
+            return
+        # The saves come back through the session like any roll: a server group for an
+        # NPC, a player's answer to the ask. Nothing handed them to the run at first, so
+        # at a live table a save was rolled and never landed (off the air the group is
+        # rolled in place, which is all the tests saw).
+        for aimed in list(self._aimed.values()):
+            if aimed.run.take_roll(roll):
+                return
+        if roll.get("group") or roll.get("kind", "roll") != "roll":
             return
         raw = roll.get("spec")
         # Off the air the GM's own roll carries the spec itself, not its wire form.
@@ -322,8 +338,20 @@ class AttackController(QObject):
         rules = self._host.minion_rules()
         spec = aimed.declaration.spec
         die = int(roll.get("die", 0))
-        modifier = int(roll.get("bonus", 0)) - int(roll.get("penalty", 0))
-        dc = defense_class_in_play(target.character, self._data)
+        # What Aid, Feint and Trick left between these two counts in this attack, and
+        # is spent by it, hit or miss (decision 17 of the combat maneuvers plan).
+        opposing = opposing_effects(
+            aimed.source.character,
+            aimed.source.name,
+            target.character,
+            target.name,
+            self._data,
+        )
+        modifier = int(roll.get("bonus", 0)) - int(roll.get("penalty", 0)) + opposing.attack
+        dc = defense_against(target.character, self._data, opposing)
+        if opposing.any:
+            aimed.said.append("with " + ", ".join(opposing.notes))
+            self._spend(aimed, target, opposing)
         routine = None
         if rules.routine_attacks and target.minion and not aimed.source.minion:
             routine = routine_total(modifier)
@@ -336,9 +364,10 @@ class AttackController(QObject):
             routine_total=routine,
             critical_hit=spec.critical_hit,
         )
-        total = total_of(roll)
+        total = total_of(roll) + opposing.attack
         if not verdict.hit:
-            self._finish(aimed, f"Missed — {total} against Defense DC {dc}.")
+            missed = f"Missed — {total} against Defense DC {dc}."
+            self._finish(aimed, "; ".join([*aimed.said, missed]))
             return
         how = (
             "routine hit" if verdict.by_routine else ("critical hit" if verdict.critical else "hit")
@@ -373,6 +402,15 @@ class AttackController(QObject):
             self._open_window(aimed, target, saves)
             return
         self._ask_player(aimed, target, list(saves))
+
+    def _spend(self, aimed: _Aimed, target: ImpressParty, opposing: OpposingEffects) -> None:
+        """Take the opposing conditions this attack counted off whoever bore them."""
+        for party, spent in (
+            (aimed.source, opposing.attacker_spent),
+            (target, opposing.target_spent),
+        ):
+            if spent and not self._host.combat_land(party, opposing_spent(spent)):
+                aimed.said.append(f"could not clear {party.name}'s used-up conditions")
 
     def _crit_minion(self, aimed, target, saves, rules) -> None:
         """A critical hit on a minion: every save's worst, unrolled (PDF p197)."""

@@ -17,6 +17,7 @@ from .game_data import (
     CombatOption,
     CombatRules,
     ConditionChange,
+    DegreeOutcome,
     Impression,
     ImpressRules,
     KillRule,
@@ -24,6 +25,7 @@ from .game_data import (
     RecoveryRule,
     ResistOptions,
     SlamRules,
+    TargetedRules,
 )
 from .parsing_rules import (
     _extras,
@@ -62,6 +64,7 @@ from .traits import (
     Debilitation,
     DefenseMod,
     Field,
+    OpposingRule,
     ParameterSpec,
     RandomActionRow,
     RecoveryCheck,
@@ -369,6 +372,20 @@ def _parse_condition(c: dict) -> Condition:
         default_amount=(int(c["defaultAmount"]) if c.get("defaultAmount") is not None else None),
         max_amount=(int(c["maxAmount"]) if c.get("maxAmount") is not None else None),
         temporary=bool(c.get("temporary", False)),
+        opposing=_parse_opposing(c.get("opposing")),
+    )
+
+
+def _parse_opposing(raw) -> OpposingRule | None:
+    """A condition's ``opposing`` block (see :class:`OpposingRule`)."""
+
+    if not isinstance(raw, dict):
+        return None
+    return OpposingRule(
+        attack=_optional_int(raw.get("attack")) or 0,
+        defense=_optional_int(raw.get("defense")) or 0,
+        defense_as=str(raw.get("defenseAs", "") or ""),
+        spent_by=str(raw.get("spentBy", "") or ""),
     )
 
 
@@ -660,9 +677,50 @@ def _parse_condition_changes(raw: object, *, remove: bool = False) -> tuple:
                     amount=_optional_int(entry.get("amount")),
                     temporary=temporary if isinstance(temporary, bool) else None,
                     remove=remove,
+                    on=str(entry.get("on", "") or ""),
+                    against=str(entry.get("against", "") or ""),
                 )
             )
     return tuple(changes)
+
+
+def _parse_degree_outcomes(raw: object) -> tuple[DegreeOutcome, ...]:
+    """A targeted action's ``wins`` / ``losses`` ladder, shallowest rung first."""
+
+    rungs = [
+        DegreeOutcome(
+            max(1, _optional_int(r.get("degrees")) or 1),
+            _parse_condition_changes(r.get("applies")),
+        )
+        for r in (raw if isinstance(raw, list) else ())
+        if isinstance(r, dict)
+    ]
+    return tuple(sorted(rungs, key=lambda r: r.degrees))
+
+
+def _parse_check(raw: object) -> CombatCheck | None:
+    if isinstance(raw, dict) and raw.get("kind"):
+        return CombatCheck(
+            str(raw["kind"]), str(raw.get("trait", "")), _optional_int(raw.get("dc"))
+        )
+    return None
+
+
+def _parse_targeted(raw: object) -> TargetedRules | None:
+    """A targeted action's ``targeted`` block (see :class:`TargetedRules`)."""
+
+    if not isinstance(raw, dict):
+        return None
+    return TargetedRules(
+        check=_parse_check(raw.get("check")),
+        dc=_optional_int(raw.get("dc")),
+        resist=tuple(
+            (str(r["kind"]), str(r.get("trait", "")))
+            for r in raw.get("resist", ()) or ()
+            if isinstance(r, dict) and r.get("kind")
+        ),
+        ally=bool(raw.get("ally", False)),
+    )
 
 
 def _parse_combat_effect(raw: dict) -> CombatEffect:
@@ -686,14 +744,10 @@ def _parse_combat_effect(raw: dict) -> CombatEffect:
         ),
         applies=_parse_condition_changes(raw.get("applies"))
         + _parse_condition_changes(raw.get("removes"), remove=True),
-        check=(
-            CombatCheck(
-                str(check["kind"]), str(check.get("trait", "")), _optional_int(check.get("dc"))
-            )
-            if isinstance(check, dict) and check.get("kind")
-            else None
-        ),
+        check=_parse_check(check),
         clears=str(raw.get("clears", "")),
+        wins=_parse_degree_outcomes(raw.get("wins")),
+        losses=_parse_degree_outcomes(raw.get("losses")),
     )
 
 
@@ -744,6 +798,7 @@ def _parse_combat_action(raw: dict) -> CombatAction:
             if isinstance(recovery, dict)
             else None
         ),
+        targeted=_parse_targeted(raw.get("targeted")),
     )
 
 

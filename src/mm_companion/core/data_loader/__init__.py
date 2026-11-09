@@ -55,6 +55,7 @@ from .game_data import (
     CombatOption,
     CombatRules,
     ConditionChange,
+    DegreeOutcome,
     GameData,
     Impression,
     ImpressRules,
@@ -64,6 +65,7 @@ from .game_data import (
     RecoveryRule,
     ResistOptions,
     SlamRules,
+    TargetedRules,
 )
 from .merge import (
     _deep_merge,
@@ -171,6 +173,7 @@ from .traits import (
     Debilitation,
     DefenseMod,
     Field,
+    OpposingRule,
     ParameterSpec,
     RandomActionRow,
     RecoveryCheck,
@@ -201,6 +204,9 @@ __all__ = [
     "CombatOption",
     "CombatRules",
     "ConditionChange",
+    "DegreeOutcome",
+    "OpposingRule",
+    "TargetedRules",
     "Condition",
     "ConditionCategory",
     "ConditionGroup",

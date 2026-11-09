@@ -329,12 +329,38 @@ class AmountMod:
     ``trait`` is a trait key — a resistance's (``DEF``) or a roll's
     (``system.trait_keys.attack_check`` for attack checks); ``sign`` is ``+1`` or ``−1``,
     multiplied by the applied instance's amount. ``parameter``, when set, limits the mod to
-    an instance applied with that parameter (Aided's "Attack" or "Defense").
+    an instance applied with that parameter.
     """
 
     trait: str
     sign: int = 1
     parameter: str = ""
+
+
+#: What spends an ``opposing`` condition (:attr:`OpposingRule.spent_by`): the bearer's
+#: next attack on the creature its parameter names, or that creature's next attack on
+#: the bearer.
+OPPOSING_ATTACKING = "attacking"
+OPPOSING_ATTACKED = "attacked"
+
+
+@dataclass(frozen=True)
+class OpposingRule:
+    """What a condition does only between its bearer and the creature its parameter
+    names — Aid's bonus, a Feint's Vulnerable, a Trick (decision 17 of the combat
+    maneuvers plan). Counted in one attack the GM's app judges between the two, and
+    spent by it (:attr:`spent_by`: :data:`OPPOSING_ATTACKING` / :data:`OPPOSING_ATTACKED`).
+
+    :attr:`attack` and :attr:`defense` are multiplied by the applied amount: the
+    bearer's attack check against that creature, the bearer's Defense against its
+    attack. :attr:`defense_as` judges the bearer's Defense against it as if under that
+    condition (a feint's ``vulnerable``).
+    """
+
+    attack: int = 0
+    defense: int = 0
+    defense_as: str = ""
+    spent_by: str = ""
 
 
 @dataclass(frozen=True)
@@ -404,6 +430,9 @@ class Condition:
     #: Always applied as temporary — gone at the start of the bearer's next turn — from
     #: wherever it is applied, the "+" menu included.
     temporary: bool = False
+    #: What it does only between the bearer and the creature its parameter names, and
+    #: which judged attack spends it (Aid, Feint, Trick). ``None`` for every other.
+    opposing: OpposingRule | None = None
 
 
 @dataclass(frozen=True)

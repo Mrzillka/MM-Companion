@@ -28,9 +28,16 @@ from mm_companion.core.rules import (
     self_action,
     self_action_changes,
     self_action_note,
+    targeted_action,
+    targeted_check_spec,
 )
 from mm_companion.ui import theme
-from mm_companion.ui.action_menu import SKIP_TARGET, choose_from_menu
+from mm_companion.ui.action_menu import (
+    NO_ALLY_AND_OPPONENT,
+    NO_ONE_TO_TARGET,
+    SKIP_TARGET,
+    choose_from_menu,
+)
 from mm_companion.ui.attack_targets import KIND_ATTACK
 from mm_companion.ui.gm.model import _Recovering
 from mm_companion.ui.impress import PARTY_NPC, ImpressParty
@@ -68,6 +75,8 @@ class GMCombatMixin:
                 offered[action.id] = acting
             elif action.gm_runs and action.options:
                 offered[action.id] = None if self._scene else NO_ONE_ON_SCENE
+            elif targeted_action(self._data, action.id) is not None:
+                offered[action.id] = acting or (None if self._scene else NO_ONE_TO_TARGET)
         return offered
 
     def _gm_combat_action(self, kind: str) -> bool:
@@ -78,6 +87,9 @@ class GMCombatMixin:
         action = self._data.combat.action(kind)
         if action is not None and action.gm_runs and action.options:
             self._grant(action)
+            return True
+        if targeted_action(self._data, kind) is not None:
+            self._gm_targeted(kind)
             return True
         if maneuver_action(self._data, kind) is None and self_action(self._data, kind) is None:
             return False
@@ -210,6 +222,63 @@ class GMCombatMixin:
                 return
         self._combat.load(spec)
 
+    # -- Aid, Feint, Trick -------------------------------------------------------------
+
+    def _gm_targeted(self, action_id: str) -> None:
+        """A targeted action's tile on the GM's roller: which NPC takes it, against whom
+        (Aid: which ally first, then the opponent), which way, and with which of its
+        attacks. Its check is rolled as that NPC and resolved once the die is in
+        (``TargetedController.act_own``)."""
+        action = targeted_action(self._data, action_id)
+        if action is None or action.targeted is None:
+            return
+        party = self._choose_actor(action)
+        if party is None:
+            return
+        self._combat.act_as(self._actor_for(party))
+        _sources, scene = self.impress_parties()
+        others = [t for t in scene if t.ref != party.ref]
+        needed = 2 if action.targeted.ally else 1
+        if len(others) < needed:
+            reason = NO_ALLY_AND_OPPONENT if action.targeted.ally else NO_ONE_TO_TARGET
+            self._show_notice(reason, theme.color("text.muted.rich"))
+            return
+        point = self._roller.menu_point()
+        ally = None
+        if action.targeted.ally:
+            ally = self._pick_party(others, point, "Aid {}")
+            if ally is None:
+                return
+            others = [t for t in others if t.ref != ally.ref]
+        target = self._pick_party(others, point, "… against {}" if ally is not None else "{}")
+        if target is None:
+            return
+        option = ""
+        if action.options:
+            index = choose_from_menu(self, [o.name for o in action.options], point)
+            if index is None:
+                return
+            option = action.options[index].id
+        attack = None
+        if action.targeted.check is None:
+            attack = self._combat.choose_attack()
+            if attack is None:
+                return
+        check = targeted_check_spec(self._data, action, option, party.character, attack)
+        if check is None:
+            return
+        self._targeted.act_own(party, action.id, option, target, self._combat.own(check), ally)
+
+    def _pick_party(self, parties: list[ImpressParty], point, caption: str) -> ImpressParty | None:
+        """One creature off a plain menu, each line *caption* with its name in."""
+        index = choose_from_menu(
+            self,
+            [caption.format(f"{p.name} (minion)" if p.minion else p.name) for p in parties],
+            point,
+            icons=[self._portrait_icon(p.ref) for p in parties],
+        )
+        return parties[index] if index is not None else None
+
     # -- a team attack's call to roll --------------------------------------------
 
     def _gm_team_join(self, call: object) -> None:
@@ -251,21 +320,26 @@ class GMCombatMixin:
         if choice is None:
             return
         changes = self_action_changes(action.effect_for(action.options[choice].id), self._data)
-        if not changes or not self._grant_to(target, changes, action.name):
+        if not changes or not self.combat_land(target, changes, what=action.name):
             return
         self._post_note(self_action_note(self._data, target.name, action.name, changes))
 
-    def _grant_to(
-        self, target: ImpressParty, changes: tuple[ConditionChange, ...], what: str
+    def combat_land(
+        self, target: ImpressParty, changes: tuple[ConditionChange, ...], *, what: str = ""
     ) -> bool:
-        """Put *changes* on *target*; whether they went."""
+        """Put *changes* on *target* (or take them off) — an NPC's model, or a player's
+        sheet over the session — each with its parameter; whether they went. A Surprise
+        Attack's grant, a targeted action's outcome (Feinted, Aided), and the opposing
+        conditions an aimed attack spends all land here."""
         if target.kind == PARTY_NPC:
             return self._land_npc_requests(target.source, changes)
         catalog = self._data.condition_catalog()
         delivered = True
         for change in changes:
             if change.remove:
-                sent = self._bridge.remove_condition(target.source, change.condition, None)
+                sent = self._bridge.remove_condition(
+                    target.source, change.condition, change.parameter
+                )
             else:
                 record = catalog.get(change.condition)
                 temporary = (
@@ -276,12 +350,12 @@ class GMCombatMixin:
                 sent = self._bridge.apply_condition(
                     target.source,
                     change.condition,
-                    None,
+                    change.parameter,
                     amount=change.amount,
                     temporary=temporary,
                 )
             delivered = bool(sent) and delivered
-        if not delivered:
+        if not delivered and what:
             self._show_notice(
                 f"Could not reach {target.name} — {what} was not sent.",
                 theme.color("tint.worse"),

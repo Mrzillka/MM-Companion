@@ -80,8 +80,8 @@ def test_a_players_menu_follows_the_data_and_leaves_out_the_gms_tiles(qapp, data
     assert titles == ["Attack Maneuvers", "Actions", "Area & Group", "Dice"]
     assert popup.tile("impress").isEnabled()
     # What this version cannot run yet is shown, greyed, saying so.
-    aid = popup.tile("aid")
-    assert not aid.isEnabled() and NOT_BUILT in aid.toolTip()
+    grab = popup.tile("grab")  # phase 9: not built yet
+    assert not grab.isEnabled() and NOT_BUILT in grab.toolTip()
 
 
 @pytest.mark.parametrize("gm", [False, True])

@@ -259,15 +259,53 @@ COMBAT_CHECK_SKILL = "skill"
 COMBAT_CHECK_SPEED = "speed"
 
 
+#: Who a targeted action's outcome lands on (:attr:`ConditionChange.on`), and whose
+#: name it is applied against (:attr:`ConditionChange.against`).
+TARGETED_ON_TARGET = "target"
+TARGETED_ON_ALLY = "ally"
+TARGETED_AGAINST_ACTOR = "actor"
+TARGETED_AGAINST_TARGET = "target"
+
+
 @dataclass(frozen=True)
 class ConditionChange:
     """One condition a combat action puts on the actor, or takes off (``applies`` /
-    ``removes``). *temporary* ``None`` leaves it to the condition's own record."""
+    ``removes``). *temporary* ``None`` leaves it to the condition's own record.
+
+    A targeted action's outcome also says who it lands :attr:`on` (``target`` or
+    ``ally``) and whom it is :attr:`against` (``actor`` or ``target``: that one's name
+    becomes the :attr:`parameter`, the creature an ``opposing`` condition is about).
+    """
 
     condition: str
     amount: int | None = None
     temporary: bool | None = None
     remove: bool = False
+    parameter: str | None = None
+    on: str = ""
+    against: str = ""
+
+
+@dataclass(frozen=True)
+class DegreeOutcome:
+    """One rung of a targeted action's ``wins`` or ``losses`` ladder: what lands once the
+    actor's degrees of success (or of failure) reach :attr:`degrees`."""
+
+    degrees: int
+    applies: tuple[ConditionChange, ...] = ()
+
+
+@dataclass(frozen=True)
+class TargetedRules:
+    """How a targeted action is rolled (Aid, Feint, Trick): the actor's :attr:`check`
+    (``None``: the attack loaded) against a fixed :attr:`dc`, or opposed by the target's
+    best of :attr:`resist` (``(kind, trait id)`` pairs). With :attr:`ally` the outcome
+    lands on an ally, the target being the opponent (Aid)."""
+
+    check: CombatCheck | None = None
+    dc: int | None = None
+    resist: tuple[tuple[str, str], ...] = ()
+    ally: bool = False
 
 
 @dataclass(frozen=True)
@@ -336,6 +374,10 @@ class CombatEffect:
     applies: tuple[ConditionChange, ...] = ()
     check: CombatCheck | None = None
     clears: str = ""
+    #: A targeted action's ladders: what lands as the actor's degrees of success (or of
+    #: failure) reach each rung.
+    wins: tuple[DegreeOutcome, ...] = ()
+    losses: tuple[DegreeOutcome, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -384,6 +426,8 @@ class CombatAction:
     gm_runs: str = ""
     slam: SlamRules | None = None
     recovery: RecoveryRule | None = None
+    #: How a targeted action is rolled (Aid, Feint, Trick); ``None`` for every other.
+    targeted: TargetedRules | None = None
 
     @property
     def tile_caption(self) -> str:

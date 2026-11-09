@@ -116,7 +116,7 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   makes any condition so (a feint's Vulnerable). Re-applying replaces the amount rather
   than stacking, and an instance stays temporary only if both old and new are — a lasting
   Vulnerable is not shortened by a temporary one. The shown name ("All-Out Attack -3",
-  "Aided (Attack) +5") is `core.rules.applied_condition_name`, which the UI's
+  "Aided Attack (Thug) +5") is `core.rules.applied_condition_name`, which the UI's
   `condition_display_name` delegates to, so a dot's tooltip names a condition exactly as
   its chip does. Three readers fold the amounts in, all display-only: the Defense row's
   `resistance_condition_effect` (a `delta` after the halve/zero `op`, so Vulnerable +
@@ -127,9 +127,22 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   check takes it once). `temporary_marks` says per trait key whether the temporary ones
   leave it better or worse (an override such as halving is always worse; a net zero is
   not marked), and `clear_temporary` removes every temporary instance, umbrella members
-  included, returning what went. The seven records live in the `maneuver` group, so the
-  "+" menu offers them. Aided and Trick Advantage are *not* temporary: they last to the
-  end of a turn, which a start-of-turn clear would cut short.
+  included, returning what went. The maneuvers' records live in the `maneuver` group, so
+  the "+" menu offers them.
+- **Some conditions count only against one creature** (`opposing`, phase 8 of the
+  combat maneuvers: Aided Attack, Aided Defense, Feinted, Tricked, Trick Advantage). The
+  parameter (a `character_ref`, "Against") names that creature, and the record's
+  `opposing` block (`OpposingRule`) says what the condition does in an attack between
+  the two: `attack` / `defense` times the amount on the bearer's check or Defense,
+  `defenseAs` (Feinted judges the bearer's Defense as if Vulnerable), and `spentBy` —
+  `attacking` (the bearer's next attack on that creature) or `attacked` (its next attack
+  on the bearer). Nothing on a sheet moves for one: no `amountMods`, no dot. The GM's
+  aimed-attack judge reads both sides (`core.rules.opposing_effects`,
+  `defense_against`) and takes the counted instances off, hit or miss
+  (`opposing_spent`, by parameter). They are not temporary — the user's call: a
+  start-of-turn clear would take a feint away before the feinter's next attack — so
+  "Clear temporary" leaves them. The match is by the **name** the GM's board shows
+  (numbered namesakes included), the same names `{source}` uses.
 - **The roller puts the maneuvers' ones on** (phase 5). An attack rolled with All-Out or
   Defensive Attack on the roller's lane raises `condition-requested` with
   `((condition_id, amount), …)` once the die has settled; the Conditions block's

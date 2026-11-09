@@ -10,7 +10,8 @@ from __future__ import annotations
 import pytest
 
 from mm_companion.core.character import AppliedCondition, Character
-from mm_companion.core.components import TONE_BENEFIT, TONE_HINDRANCE, TONES
+from mm_companion.core.components import MECH_AMOUNT_MOD, TONE_BENEFIT, TONE_HINDRANCE, TONES
+from mm_companion.core.data_loader import AmountMod, Condition
 from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
 from mm_companion.core.rules import (
     MARK_BETTER,
@@ -35,7 +36,8 @@ NEW_RECORDS = (
     "defensive_attack",
     "defending",
     "recovering",
-    "aided",
+    "aided_attack",
+    "aided_defense",
     "blocking",
     "trick_advantage",
 )
@@ -47,6 +49,29 @@ def hero(data) -> Character:
     char.abilities.update({"STR": 4, "STA": 5, "AGL": 3, "AWE": 2, "ATK": 7})
     char.resistances["DEF"] = 8
     return char
+
+
+@pytest.fixture
+def scoped(data, monkeypatch) -> str:
+    """A lasting record whose amount moves the attack check or Defense by its parameter.
+
+    No shipped record scopes its amount so any more — Aid's bonus became the opposing
+    ``aided_attack`` / ``aided_defense`` (phase 8) — but the engine reads it, and a mod's
+    record may.
+    """
+    record = Condition(
+        name="Scoped",
+        id="scoped",
+        mechanisms=(MECH_AMOUNT_MOD,),
+        tone=TONE_BENEFIT,
+        amount_mods=(
+            AmountMod(data.system.trait_keys.attack_check, 1, "Attack"),
+            AmountMod("DEF", 1, "Defense"),
+        ),
+        default_amount=2,
+    )
+    monkeypatch.setitem(data.condition_catalog(), "scoped", record)
+    return "scoped"
 
 
 def _name(char: Character, data, index: int = 0) -> str:
@@ -168,13 +193,13 @@ def test_amounts_sum_per_trait_and_opposites_cancel(hero, data) -> None:
     assert condition_amount_mods(hero, data) == {attack_key: -1}
 
 
-def test_a_parameter_scoped_amount_counts_only_for_its_parameter(hero, data) -> None:
-    apply_condition(hero, "aided", data, parameter="Defense")
+def test_a_parameter_scoped_amount_counts_only_for_its_parameter(hero, data, scoped) -> None:
+    apply_condition(hero, scoped, data, parameter="Defense")
     assert condition_amount_mods(hero, data) == {"DEF": 2}
     hero.conditions.clear()
-    apply_condition(hero, "aided", data, parameter="Attack", amount=5)
+    apply_condition(hero, scoped, data, parameter="Attack", amount=5)
     assert condition_amount_mods(hero, data) == {data.system.trait_keys.attack_check: 5}
-    assert _name(hero, data) == "Aided (Attack) +5"
+    assert _name(hero, data) == "Scoped (Attack) +5"
 
 
 def test_defense_shows_the_amount_but_the_build_stays_condition_free(hero, data) -> None:
@@ -255,8 +280,8 @@ def test_marks_follow_each_stats_own_sign(hero, data) -> None:
     assert marks["DEF"].sources == ("Defensive Attack +2",)
 
 
-def test_a_lasting_condition_leaves_no_mark(hero, data) -> None:
-    apply_condition(hero, "aided", data, parameter="Defense")
+def test_a_lasting_condition_leaves_no_mark(hero, data, scoped) -> None:
+    apply_condition(hero, scoped, data, parameter="Defense")
     assert not hero.conditions[0].temporary
     assert temporary_marks(hero, data) == {}
 

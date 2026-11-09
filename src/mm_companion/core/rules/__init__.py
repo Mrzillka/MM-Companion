@@ -26,7 +26,8 @@ its spec's ladder does to it) sits on ``rolls``, and so does ``recovery`` (the c
 that rolls a condition off, and what making it sheds).
 ``maneuvers`` (the attack maneuvers' caps and the spec they shift) sits on ``rolls`` and
 ``derived`` (the Defense in play). ``team_call`` (a team attack anyone joins) sits on
-``team_attack`` and ``maneuvers``.
+``team_attack`` and ``maneuvers``. ``targeted`` (Aid, Feint, Trick, and the opposing
+conditions they leave) sits on ``rolls``, ``derived`` and ``targeting``.
 
 ``costs`` moved above ``powers_terms`` (it used to sit beside it) when Morph's Metamorph
 needed a note saying what its alternate forms cost: the rules put that budget at "the
@@ -84,6 +85,7 @@ from .runtime import *  # noqa: F401,F403
 from .self_actions import *  # noqa: F401,F403
 from .size import *  # noqa: F401,F403
 from .subbuilds import *  # noqa: F401,F403
+from .targeted import *  # noqa: F401,F403
 from .targeting import *  # noqa: F401,F403
 from .team_attack import *  # noqa: F401,F403
 from .team_call import *  # noqa: F401,F403

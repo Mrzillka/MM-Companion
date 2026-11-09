@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 from PySide6.QtWidgets import QApplication
 
@@ -446,3 +448,38 @@ def test_a_tumbling_die_declares_nothing(qapp, data, monkeypatch) -> None:
     monkeypatch.setattr(type(panel), "rolling", property(lambda self: True))
     sheet.dice.aim_attack((_attack_spec(data), SceneTarget("r2", "Thug")))
     assert sent == []  # no die, so no card waiting on one at the GM's
+
+
+# -- through a hosted session ---------------------------------------------------------------
+
+
+def _host(qapp, window: GMWindow) -> None:
+    import random
+
+    from mm_companion.core.session import discovery
+    from mm_companion.ui.session_dialogs import HostOptions
+    from tests.ui.gm.test_team_call import _wait
+
+    window.bridge._publish_session = lambda port, **kw: discovery.Reachability(
+        host="127.0.0.1", port=port, method=discovery.METHOD_LAN
+    )
+    window.start_hosting(HostOptions(name="Table", port=0, tunnel="", relay="", use_relay=False))
+    _wait(qapp, lambda: window.bridge.hosting)
+    window.bridge.server._rng = random.Random(4)
+
+
+def test_a_hosted_aimed_attacks_save_comes_back_and_lands(qapp, window: GMWindow, data) -> None:
+    """The NPC's save is a server group roll, which comes back through the session like
+    any roll. Nothing handed it to the attack's run at first, so at a live table the save
+    was rolled and never landed (off the air, the only case tested, it is rolled in place)."""
+    from tests.ui.gm.test_team_call import _wait
+
+    _host(qapp, window)
+    brute = _npc(window, "Brute")
+    _npc(window, "Thug")
+    sources, _targets = window.impress_parties()
+    source = next(p for p in sources if p.name == "Thug")
+    spec = replace(_attack_spec(data), modifier=40)  # a sure hit: there is a save to wait on
+    aimed = window._attack.aim_own(source, spec, _ref(window, brute), "Brute")
+    _wait(qapp, lambda: aimed.done)
+    assert any("vs DC" in part and ":" in part for part in aimed.said[1:]), aimed.said

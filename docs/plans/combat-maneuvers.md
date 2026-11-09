@@ -778,7 +778,7 @@ commit hash.
   for `resolve_group` had no lead die — an NPC's opposed check is a lead-only group, so the
   new tests stage one; (2) heredocs with backticks still break the Bash tool (three times
   this session) — scripts go in the scratchpad. Next: phase 10 (every tile checked, notes,
-  `CLAUDE.md`'s sentence, debts, full run, screenshots, hand-off). **Tests:** the affected run (a full run on this branch) was **stopped at 87% by the system (low memory)**, with no failure up to there; the popup, window-flash and theme files past 87% were run after and are green (378). The rest of the last 13% (the other widget files, the main/start/mods windows) does not touch this change and is left to phase 10's full run. Commit: COMMIT_HASH.
+  `CLAUDE.md`'s sentence, debts, full run, screenshots, hand-off). **Tests:** the affected run (a full run on this branch) was **stopped at 87% by the system (low memory)**, with no failure up to there; the popup, window-flash and theme files past 87% were run after and are green (378). The rest of the last 13% (the other widget files, the main/start/mods windows) does not touch this change and is left to phase 10's full run. Commit: b771d60.
 
 - **2026-11-09 — Phase 8 (done).** Aid, Feint and Trick, player and GM. Asked the user
   two questions, now decisions 17 (what they leave is **spent by the attack it is for**,

@@ -122,6 +122,15 @@ def test_the_request_row_lines_up_with_the_sliders_and_spin_boxes(qapp, data) ->
         row, column, _rows, columns = grid.getItemPosition(grid.indexOf(widget))
         return column, columns
 
-    # The trait under the sliders, the difficulty and its button under the spin boxes.
-    assert cell(panel._request_combo) == cell(panel._modifier_slider)
-    assert cell(panel._request_part) == cell(panel._modifier_spin)
+    # The slider and its box share the two right-hand columns, so the trait starts
+    # under the slider and the difficulty and its button end where the box ends.
+    modifier = next(
+        index
+        for index in range(grid.count())
+        if grid.itemAt(index).layout() is not None
+        and grid.itemAt(index).layout().indexOf(panel._modifier_spin) >= 0
+    )
+    _row, column, _rows, columns = grid.getItemPosition(modifier)
+    assert (column, columns) == (1, 2)
+    assert cell(panel._request_combo) == (1, 1)
+    assert cell(panel._request_part) == (2, 1)

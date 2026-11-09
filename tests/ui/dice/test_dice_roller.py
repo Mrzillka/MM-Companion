@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import pytest
 from PySide6.QtCore import Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QBoxLayout, QInputDialog, QLabel, QPushButton
 
 from mm_companion.core import storage
@@ -98,6 +99,18 @@ def test_roll_without_dc_shows_total_and_records_history(
     text = view.panel._readout.text()
     assert "15" in text  # die 12 + net modifier 3
     assert "Success" not in text and "Failure" not in text  # no DC → no degree
+
+
+def test_clicking_the_die_rolls(qapp: QApplication, instant_die) -> None:
+    # Through the button itself: ``clicked`` hands its ``checked`` flag to a slot that
+    # takes an argument, and once ``_start_roll`` took a ``before`` callback the die
+    # called ``False(…)`` and never rolled. Every other test called the methods.
+    view = DiceRollerView()
+    view.panel._modifier_spin.setValue(2)
+    QTest.mouseClick(view.panel._die_button, Qt.MouseButton.LeftButton)
+    cards = view._local_history.cards()
+    assert len(cards) == 1
+    assert "13" in view.panel._readout.text()  # 11 + 2
 
 
 def test_roll_with_dc_shows_degree_of_success(
@@ -181,8 +194,9 @@ def test_a_set_bonus_or_penalty_is_highlighted(qapp: QApplication) -> None:
     assert panel._modifier_spin.styleSheet() == ""
 
     panel._modifier_spin.setValue(2)
-    assert "bold" in panel._modifier_label.styleSheet()
-    assert "bold" in panel._modifier_spin.styleSheet()
+    # Colour only: bold text is wider, and the roller grew with it.
+    assert "bold" not in panel._modifier_label.styleSheet()
+    assert theme.color("tint.better") in panel._modifier_spin.styleSheet()
     assert theme.color("tint.better") in panel._modifier_label.styleSheet()
 
     panel._modifier_spin.setValue(-1)
@@ -1251,3 +1265,82 @@ def test_the_dc_box_and_routine_share_a_row_and_wrap_when_narrow(qapp: QApplicat
     row = panel._dc_row
     one_line = row.heightForWidth(row.width())
     assert row.heightForWidth(panel._dc_check.sizeHint().width() + 10) > one_line
+
+
+def test_the_roller_does_not_widen_when_the_bonus_leaves_zero(qapp: QApplication) -> None:
+    # The tint used to be bold, and bold text is wider: the label and the box grew,
+    # and the roller with them, each time the value left 0. Under the real sheet,
+    # since a widget's own sheet on an unthemed app changes its style and its size.
+    previous = qapp.styleSheet()
+    theme.apply(qapp)
+    try:
+        view = DiceRollerView()
+        view.show()
+        panel = view.panel
+        _settled(qapp, view, 360, 800)
+        widths = {panel.minimumSizeHint().width()}
+        for value in (7, -25, 30, 0):
+            panel._modifier_spin.setValue(value)
+            _settled(qapp, view, 360, 800)
+            widths.add(panel.minimumSizeHint().width())
+        assert len(widths) == 1
+    finally:
+        qapp.setStyleSheet(previous)
+
+
+def test_the_bonus_slider_takes_the_slack_and_its_box_sits_at_the_edge(
+    qapp: QApplication,
+) -> None:
+    view = DiceRollerView()
+    view.show()
+    panel = view.panel
+    _settled(qapp, view, 360, 800)  # stacked: the Roll group has the width
+    spin, slider = panel._modifier_spin, panel._modifier_slider
+    assert spin.width() <= spin.sizeHint().width()  # snug: it does not stretch
+    assert slider.width() > spin.width()
+    # At the right edge, where the chip above it (and the lane's boxes under it) end.
+    edge = panel._chip_slot
+    right = spin.mapTo(panel, spin.rect().topRight()).x()
+    assert abs(right - edge.mapTo(panel, edge.rect().topRight()).x()) <= 1
+
+
+def test_a_rule_parts_dc_and_routine_while_they_share_a_line(qapp: QApplication) -> None:
+    view = DiceRollerView()
+    view.show()
+    panel = view.panel
+    rule = panel._dc_separator
+
+    _settled(qapp, view, 360, 800)
+    assert rule.width() > 0
+    left = panel._dc_spin.mapTo(panel, panel._dc_spin.rect().topRight()).x()
+    right = panel._routine_check.mapTo(panel, panel._routine_check.rect().topLeft()).x()
+    centre = rule.mapTo(panel, rule.rect().center()).x()
+    assert left < centre < right
+
+    # Wrapped, the rule would start or end a line: it gets no room at all.
+    row = panel._dc_row
+    narrow = panel._dc_check.sizeHint().width() + panel._dc_spin.sizeHint().width() + 20
+    row.layout().setGeometry(row.rect().adjusted(0, 0, narrow - row.width(), 0))
+    assert rule.width() == 0
+
+
+def test_loading_a_trait_does_not_change_the_roll_box_height(qapp: QApplication) -> None:
+    # The chip used to be hidden when empty, so loading a trait added a row and the
+    # roller jumped taller. Its slot now keeps the chip's height, empty or not.
+    view = DiceRollerView()
+    view.show()
+    panel = view.panel
+    _settled(qapp, view, 360, 800)
+    roll_box = panel._chip_slot.parentWidget()
+    empty = (roll_box.sizeHint().height(), panel._chip_slot.height())
+    assert panel._chip_slot.height() > 0 and not panel._spec_chip.isVisible()
+
+    panel.load_spec(RollSpec(label="Fortitude", modifier=6))
+    _settled(qapp, view, 360, 800)
+    assert panel._spec_chip.isVisible()
+    assert (roll_box.sizeHint().height(), panel._chip_slot.height()) == empty
+
+    panel.load_spec(None)
+    _settled(qapp, view, 360, 800)
+    assert not panel._spec_chip.isVisible()
+    assert (roll_box.sizeHint().height(), panel._chip_slot.height()) == empty

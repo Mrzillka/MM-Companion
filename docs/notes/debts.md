@@ -167,8 +167,8 @@ the targeted actions' own). Each of these was seen and left on purpose.
   its ✕.
 - **Accurate and Power** change only the attack being made. By the book they last until
   the start of the next turn, which matters only for a second attack in one turn.
-- **Several lines grow the lane** by one line each (the lane reserves one). Accepted
-  unless it bothers someone in play.
+- **Every line grows the roller** by a row: the empty lane takes no room, with the
+  Actions button in its row (the user's call, 2026-11-09). Accepted.
 - **No dot on the System block.** Nothing temporary moves Initiative or Speed yet; add
   a `StatMark` there when something does.
 

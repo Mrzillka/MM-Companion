@@ -11,7 +11,16 @@ through rather than reinvent. When building new sheet widgets, use it:
   `readonly_item`, `hline_separator`) and the shared inline style snippets
   (`muted_style`, `tinted_style`, `BOLD_STYLE`) that keep construction consistent
   and wheel-guarded. Build spin boxes and read-only table cells through these, not
-  by hand.
+  by hand. **`snug=True`** (`SnugSpinBox`, `SnugSignedSpinBox`; the roller's arrowless
+  boxes) makes a box as wide as its widest value and no wider, and stops it
+  stretching. Qt's own hint is roomy: a spare space after the value, and on a box
+  with arrows the arrows counted twice (Qt adds the platform's, and the theme's
+  arrow-column `padding-right` adds them again: ~40px too wide under `windows11`).
+  The snug box measures instead of summing: where the style puts the text field in a
+  probe-width box, and where the line edit puts its text area inside that field (the
+  sheet's padding lands there too, which a first version missed and clipped "15" to
+  "1"). That chrome plus the widest value, rounded up, is the hint, and never more
+  than Qt's.
 - `ui/wheel_guard.py` — `guard_wheel(*widgets)` stops nested spin boxes, combo
   boxes, and inner tables from hijacking the scroll: a guarded widget only reacts
   to the wheel once it has keyboard focus, otherwise the wheel is redirected to a
@@ -57,7 +66,11 @@ through rather than reinvent. When building new sheet widgets, use it:
   which is the rule every adaptive widget on the sheet follows: a minimum is a
   refusal, and a minimum that moved with the decision would be reading a width it
   had itself just set. Reach for one of the three rather than inventing a fourth.
-- `ui/flow_layout.py` — a reflowing layout for wrapping widget rows. **Host a
+- `ui/flow_layout.py` — a reflowing layout for wrapping widget rows.
+  `add_separator(FlowRule(...))` puts a rule between two items that is drawn only
+  while they share a line: where the line wraps around it, it gets no room and no
+  size, decided in the wrapping pass itself. A `FlowRule` is sized by its hint, never
+  fixed, because a fixed size cannot be given zero. **Host a
   `FlowLayout` in a `FlowContainer`, never a bare `QWidget`.** The layout answers
   `hasHeightForWidth` with *no*, on purpose: Qt evaluates that at the parent's
   **hint** width, which for a flow is one item's, so every item claims a row of its
@@ -70,14 +83,20 @@ through rather than reinvent. When building new sheet widgets, use it:
   Neither container asks a second time, which is why the host has to answer right.
 - **`ActionGridPopup`** (`ui/action_grid.py`) is the reusable "pick one, by picture"
   popup: titled `GridSection`s of square `GridItem` tiles (icon over an elided caption,
-  sized by the `action-grid.*` tokens), one `FlowLayout` per section, so the columns
-  follow the width. It is a frameless `Qt.Popup` **parented to its anchor** (never
-  parentless — see the standing rule), closes on a pick, Esc or a click outside, walks
-  its tiles with the arrow keys (enabled tiles only), and `show_under(anchor)` sizes it
-  for the anchor's screen (scrolling only if taller) and keeps it on that screen. It
-  closes *before* emitting `picked(key)`, so whatever the pick opens next (a menu, a
-  window) is not fighting it. A disabled tile keeps its tooltip, which is where to say
-  why. Rules-free: the roller's sections come from `ui/action_menu.py`.
+  sized by the `action-grid.*` tokens, the caption by `size.action-tile`), one
+  `FlowLayout` per section, so the columns follow the width. **Short sections share a
+  row** (a *shelf*, `_shelve`): consecutive sections that each fit one line and together
+  fit the row sit side by side, in fixed rows rather than flows. It is a frameless
+  `Qt.Popup` **parented to its anchor** (never parentless — see the standing rule),
+  closes on a pick, Esc or a click outside, and walks its tiles with the arrow keys
+  (enabled tiles only). `show_under(anchor)` opens it **under the anchor**, scrolling
+  when the room below is short, and above only where there is more room — it used to
+  flip above whenever it did not fit, run off the top and land in the screen's corner.
+  It **emits `picked(key)` while still open**, then closes: a menu the pick leads to
+  opens over it at `follow_up_point()` (the tile's centre, set only during the pick),
+  and a second pick during the first is ignored. Hosts open their windows non-modally,
+  so nothing waits on the popup. A disabled tile keeps its tooltip, which is where to
+  say why. Rules-free: the roller's sections come from `ui/action_menu.py`.
 - **`WrappingButton`** (`ui/widgets.py`) is a push button whose caption word-wraps, for
   any button whose caption is data rather than a word (a roll's "🎲 Toughness vs. … vs.
   DC 15"). A `QPushButton` reports its one-line caption as its minimum width, so one

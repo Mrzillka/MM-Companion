@@ -5,10 +5,10 @@ rides on the next roll: its name, a ``✕`` to cancel it, then either a slider a
 box over ``0..X_max`` (a configurable action, All-Out Attack +1..+5) or a fixed caption
 (``"roll twice"``). The roll spends the lines it used, as it spends the slider.
 
-**The lane keeps one line's height even when empty**, so picking an action never
-resizes the roller: an invisible placeholder line stands in the layout while there is
-no real one (``retainSizeWhenHidden``). That is a size the *chrome* decides, the same
-for every character, not a minimum read off content.
+**The lane takes no room while it is empty**: it hides, and the roller's Actions
+button, under it, moves up into its row. It used to hold one line's height open so the
+first action never resized the roller, but the blank row read as a gap (the user's
+call, 2026-11-09): the roller now grows a row when the first line comes on.
 
 Rules-free like the rest of the panel: the limit of a configurable line comes from a
 callable the host hands in (``limit(spec) -> (maximum, reason)``), and the panel decides
@@ -117,7 +117,7 @@ class ActionLine(QWidget):
             self._slider = QSlider(Qt.Orientation.Horizontal)
             self._slider.setRange(0, 0)
             guard_wheel(self._slider)
-            self._spin = make_spin_box(0, 0)
+            self._spin = make_spin_box(0, 0, buttons=False, snug=True)
             self._slider.valueChanged.connect(self._spin.setValue)
             self._spin.valueChanged.connect(self._slider.setValue)
             self._spin.valueChanged.connect(lambda _v: self.valueChanged.emit(self.key))
@@ -127,9 +127,9 @@ class ActionLine(QWidget):
             self._caption = QLabel(fixed)
             self._caption.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             # As tall as a configurable line's spin box, so swapping one kind of line
-            # for the other (or for the lane's placeholder) never moves the roller.
+            # for the other never moves the roller.
             # A spin box's height is chrome, the same for every character.
-            probe = make_spin_box(0, 0, guarded=False)
+            probe = make_spin_box(0, 0, buttons=False, guarded=False)
             probe.setParent(self)
             self._caption.setMinimumHeight(probe.sizeHint().height())
             discard_widget(probe)
@@ -220,7 +220,7 @@ class ActionLine(QWidget):
 
 
 class ActionLane(QWidget):
-    """The column of :class:`ActionLine`\\ s under the slider, one line tall when empty."""
+    """The column of :class:`ActionLine`\\ s under the slider, hidden while empty."""
 
     #: A line came or went, so the panel's height may have moved.
     changed = Signal()
@@ -234,18 +234,14 @@ class ActionLane(QWidget):
         self._column = QVBoxLayout(self)
         self._column.setContentsMargins(0, 0, 0, 0)
         self._column.setSpacing(int(theme.metric("space.xs")))
-        # The stand-in that holds one line's height while there is no line. Built the
-        # same way as a configurable line, so it is exactly as tall; parented (by the
-        # layout) before it is hidden, so it is never a window of its own.
-        self._placeholder = ActionLine("", "", limit=lambda _spec: (0, ""))
-        self._column.addWidget(self._placeholder)
-        self._placeholder.hide()
-        self._reserve(True)
+        # Empty, so hidden (only ever hide() here: the lane may not have a parent yet).
+        self.hide()
 
-    def _reserve(self, reserve: bool) -> None:
-        policy = self._placeholder.sizePolicy()
-        policy.setRetainSizeWhenHidden(reserve)
-        self._placeholder.setSizePolicy(policy)
+    def _show_lines(self) -> None:
+        """Shown while it holds a line, hidden (no room at all) while it holds none.
+        Only reached once the lane is in the roller, so it is never shown parentless."""
+        if self.parentWidget() is not None:
+            self.setVisible(bool(self._lines))
 
     def lines(self) -> list[ActionLine]:
         return list(self._lines)
@@ -267,7 +263,7 @@ class ActionLane(QWidget):
             self._column.addWidget(line)
         line.removed.connect(self.remove)
         line.valueChanged.connect(self._relimit_others)
-        self._reserve(False)
+        self._show_lines()
         self._relimit_others(line.key)
         self.changed.emit()
         return line
@@ -279,7 +275,7 @@ class ActionLane(QWidget):
         self._lines.remove(line)
         self._column.removeWidget(line)
         discard_widget(line)
-        self._reserve(not self._lines)
+        self._show_lines()
         self._relimit_others(key)
         self.changed.emit()
 

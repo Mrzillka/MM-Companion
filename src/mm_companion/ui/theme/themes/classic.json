@@ -89,9 +89,9 @@
     "mark.size": 6,
 
     "_action-grid.tile": "The Actions popup: each tile is a square this many pixels on a side, its icon above its caption.",
-    "action-grid.tile": 80,
-    "action-grid.icon": 30,
-    "action-grid.gap": 6,
+    "action-grid.tile": 64,
+    "action-grid.icon": 24,
+    "action-grid.gap": 4,
     "_action-grid.columns": "How many tiles a row of the Actions popup holds when the screen has room for them.",
     "action-grid.columns": 6,
 
@@ -204,6 +204,7 @@
     "size.card-name": 11.0,
     "size.pin-value": 11.0,
     "size.terms": 8.0,
+    "size.action-tile": 8.0,
     "size.version": 8.0,
     "size.cost-total": 12.0,
     "size.quick-npc-level": 12.0,

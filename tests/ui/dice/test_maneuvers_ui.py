@@ -118,6 +118,30 @@ def test_a_tile_with_no_attack_loaded_asks_for_one_and_starts_at_the_maximum(
     assert line.available
 
 
+def test_the_attack_picker_opens_over_the_popup_on_the_tile(qapp, data, menu) -> None:
+    # Not under the button once the popup has gone: on the tile picked, with the
+    # popup still open behind it, as a submenu of it (the user asked, 2026-11-09).
+    section = DiceSection(data, _hero(data))
+    popup = section.panel.open_actions()
+    tile = popup.tile(ALL_OUT)
+    centre = tile.mapToGlobal(tile.rect().center())
+    seen: list[tuple[object, bool]] = []
+    exec_ = _Menu.exec
+
+    def watch(self, at):
+        seen.append((at, popup.isVisible()))
+        return exec_(self, at)
+
+    menu.exec = watch
+    try:
+        tile.click()
+    finally:
+        menu.exec = exec_
+    assert seen == [(centre, True)]
+    assert not popup.isVisible()
+    assert section.panel.action_lines()[0].key == ALL_OUT
+
+
 def test_dismissing_the_picker_calls_the_maneuver_off(qapp, data, menu) -> None:
     section = DiceSection(data, _hero(data))
     _Menu.pick = None

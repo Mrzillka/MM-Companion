@@ -175,6 +175,10 @@ The block's minimum is *exactly* its content — no more, and no less — and th
 history is the one thing inside it that scrolls. Four separate things make that true,
 and the bug that motivated them was a single click: loading a stat into the roller
 shows the spec chip, the panel grows ~50px, and the strip answered with a scrollbar.
+(The chip no longer grows the panel at all: it sits in `_chip_slot`, a `QStackedWidget`
+that shows a dashed empty outline, `#specSlot`, with a muted `CHIP_SLOT_HINT` in it,
+until something is loaded, and is as tall as the chip either way. `contentChanged` still
+fires for the readout under the die, and for the action lane, which *does* grow.)
 - **The panel says when it changed size** (`contentChanged`, above). Without it the
   splitter kept handing the panel its old share *plus* the chip.
 - **The history is the elastic part**, and its two heights are deliberately different
@@ -484,18 +488,20 @@ had their look. Three things fall out of it:
   by the roll (below), so a chip left standing would be naming numbers that are gone.
 
 **And the slider is spent by the roll.** Bonus/Penalty is **one two-way slider**
-(−20..+20, centred, `MODIFIER_LIMIT`; a `SignedSpinBox` that keeps its arrows, `+3` /
-`-3`) — it used to be two sliders, a Bonus and a Penalty. It is a circumstance of
+(−30..+30, centred, `MODIFIER_LIMIT`; a snug, arrowless `SignedSpinBox`, `+3` / `-3`,
+at the right edge of the row with the slider taking the slack) — it used to be two sliders, a Bonus and a Penalty. It is a circumstance of
 *one* check — cover against this attack, Extra Effort's "+2 on a single check" — yet a
 value left in it used to ride along on every roll after it, unnoticed.
 `_spend_extras` zeroes it (and drops the action lines the roll used, below) beside each
 `_settle_spec`, i.e. at the end of both paths that produce a number and **not** in
 `_abandon_roll`, for the same reason the chip survives there. While it holds anything,
-`_mark_extras` tints its label and spin box (`tint.better` above 0, `tint.worse` below,
-bold) so a pending charge is as visible as a loaded trait. The wire and the history
+`_mark_extras` tints its label and spin box (`tint.better` above 0, `tint.worse` below)
+so a pending charge is as visible as a loaded trait. **Colour only, never bold:** bold
+text is wider, so the label and the box grew, and the roller with them, each time the
+value left 0 (`test_the_roller_does_not_widen_when_the_bonus_leaves_zero`). The wire and the history
 still speak a non-negative bonus/penalty **pair**, split from the net in
 `_roll_parameters`; a quick roll's identity (`quick_roll_key`) is read by that net, so a
-chip saved as "+4 and −1" before the change is the same chip as the +3 it now loads. Only `color` and weight go on the spin box — a `border`, `padding` or
+chip saved as "+4 and −1" before the change is the same chip as the +3 it now loads. Only `color` goes on the spin box — a `border`, `padding` or
 `background` there trips rule 4 of the theme notes. Note what this did to tests that
 call `_start_roll()` and then `_finish_roll()` under a zero `ROLL_DURATION_MS`: the
 first call already finishes the roll, so that pair is *two* rolls, and the second now
@@ -669,8 +675,9 @@ ask for a check nobody had provoked.
   written twice — session first, private history off the air. The GM window answers
   for itself, because it owns its history and the view's fallback stands down there.
 - **The DC box is a plain spin box where 0 means no DC.** The DC row above it (the
-  "DC" box and its number, then Routine, in one `FlowContainer` that wraps them onto
-  two lines only when the roller is too narrow) needs a checkbox because the panel has to tell "no DC" from "DC 0" for a
+  "DC" box and its number, a rule, then Routine, in one `FlowContainer` that wraps
+  them onto two lines only when the roller is too narrow, the rule dropping out
+  then) needs a checkbox because the panel has to tell "no DC" from "DC 0" for a
   roll it *grades*; nobody asks for a roll against DC 0. It is also **arrowless**:
   the theme reserves ~50px for the arrows the platform style draws, which took 148px
   of a 210px cell and clipped the trait name to "Trai".
@@ -724,8 +731,9 @@ of NPCs — often fewer. Two answers, and they are independent.
 
 ## The Actions button
 
-Under the Request row, one centred **Actions** button (the old Action row of push
-buttons — Reroll, Impress, Area — is gone). It opens the **Actions popup**
+Under the action lane — right under the Bonus/Penalty slider while the lane is empty,
+under its last line otherwise — one centred **Actions** button (the old Action row of
+push buttons — Reroll, Impress, Area — is gone). It opens the **Actions popup**
 (`ui/action_grid.py`, see [the UI utilities notes](ui-utilities.md)): titled sections of
 square icon tiles, built from `actions.json`'s `combat` block by
 `ui/action_menu.combat_menu`. The panel reads no game data, so the **host builds the
@@ -772,7 +780,10 @@ action brought (`KIND_BEST_OF` and `dc_from_total`).
   The panel reads no game data, so the host hands it in: `set_attack_choices(callable)`,
   read at each opening. `choose_attack()` returns the spec picked; it loads nothing.
   Every chooser opened off the popup goes through `action_menu.choose_from_menu`, the
-  one `QMenu` a test stands in for (`action_menu.QMenu`), at `panel.menu_point()`.
+  one `QMenu` a test stands in for (`action_menu.QMenu`), at `panel.menu_point()`:
+  **on the tile just picked, over the still-open popup** (`ActionGridPopup.
+  follow_up_point`), like a submenu — closing the popup first and opening a small menu
+  under the button read as the popup vanishing. Outside a pick, under the button.
   **A picked attack's label is its caption** ("Blast: Attack +8 vs. Defense"): off its
   card, a bare "Attack +8 vs. Defense" on the chip and in the history could be any of
   the character's attacks. A card's own 🎲 keeps the card's label, under the power's
@@ -796,11 +807,13 @@ and spin over `0..X_max` (*configurable*) or a fixed caption. The panel's way in
 `start_action_line(key, name, limit=…, fixed=…, needs_attack=…)`; re-picking an action
 replaces its line.
 
-- **It holds one line's height when empty**, so picking an action never resizes the
-  roller: a hidden placeholder line with `retainSizeWhenHidden`, dropped (retain off)
-  while there is a real line. A fixed line is as tall as a spin box (measured off one,
-  then discarded), so every kind of line is the same height. Lines past the first grow
-  the lane (accepted).
+- **It takes no room when empty**: the lane hides, and the Actions button under it
+  moves up into its row. It used to hold one line's height open (a hidden placeholder
+  line with `retainSizeWhenHidden`) so the first action never resized the roller, but
+  the blank row read as a gap; the user chose the button there instead (2026-11-09), so
+  **every line grows the roller a row** (`contentChanged` covers it). A fixed line is as
+  tall as a spin box (measured off one, then discarded), so every kind of line is the
+  same height.
 - **The limit is the host's**: `limit(spec) -> (maximum, reason)`, the loaded attack in.
   The panel only decides whether the loaded spec *is* an attack (`loaded_attack`).
 - **A line that needs an attack** with none loaded opens the picker first and loads

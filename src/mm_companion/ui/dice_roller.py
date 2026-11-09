@@ -60,6 +60,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSlider,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -77,7 +78,7 @@ from mm_companion.ui.action_menu import (
     action_tooltip,
     choose_from_menu,
 )
-from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
+from mm_companion.ui.flow_layout import FlowContainer, FlowLayout, FlowRule
 from mm_companion.ui.reflow import ReflowBox
 from mm_companion.ui.roll_history import (
     HIDDEN_MARK,
@@ -127,9 +128,11 @@ NOT_SENT = "The roll could not be sent to the session."
 # same guard: a loaded chip arms the die, so the panel has to be obvious about it.
 CHIP_PREFIX = "🎲 Rolling: "
 IDLE_PROMPT = "Click the die to roll."
+#: Written in the chip's empty slot.
+CHIP_SLOT_HINT = "Click a trait on a sheet to roll it"
 
 #: How far the one Bonus/Penalty slider runs either way from 0.
-MODIFIER_LIMIT = 20
+MODIFIER_LIMIT = 30
 MODIFIER_LABEL = "Bonus/Penalty"
 
 #: Written under an attack rolled with no DC and at no one: nothing judged the hit.
@@ -469,7 +472,7 @@ class DiceRollerPanel(
         grid.setColumnStretch(1, 1)
 
         self._spec_chip = self._build_spec_chip()
-        grid.addWidget(self._spec_chip, 0, 0, 1, 3)
+        grid.addWidget(self._build_chip_slot(), 0, 0, 1, 3)
 
         # One two-way slider, centred on 0: a bonus to the right, a penalty to the
         # left. It used to be two, which spent a row of the panel saying one number.
@@ -477,22 +480,28 @@ class DiceRollerPanel(
         self._modifier_label = QLabel(MODIFIER_LABEL)
         self._modifier_spin.valueChanged.connect(self._mark_extras)
 
+        # The slider and its box share the two right-hand columns, so the slider takes
+        # all the slack and the snug box sits at the right edge, as on the lane's lines.
+        modifier = QHBoxLayout()
+        modifier.addWidget(self._modifier_slider, stretch=1)
+        modifier.addWidget(self._modifier_spin)
         grid.addWidget(self._modifier_label, 1, 0)
-        grid.addWidget(self._modifier_slider, 1, 1)
-        grid.addWidget(self._modifier_spin, 1, 2)
+        grid.addLayout(modifier, 1, 1, 1, 2)
 
-        # The action lane: one line per action riding on the next roll. It holds a
-        # line's height even when empty, so picking an action never resizes the roller.
+        # The action lane: one line per action riding on the next roll, and the
+        # Actions button under its last line — in the lane's row while it is empty, so
+        # that row is never a blank gap (the user's call; it used to be held open).
         self._lane = ActionLane()
         self._lane.changed.connect(self._on_lane_changed)
         grid.addWidget(self._lane, 2, 0, 1, 3)
+        self._build_action_row(grid, 3)
 
         # The DC box and Routine share a row, side by side while the roller is wide
         # enough and wrapping (DC above Routine) when it is not: the roller is narrow in
         # compact mode and in the strip, and a fixed row would hold it open.
         self._dc_check = QCheckBox(DC_LABEL)
         self._dc_check.setToolTip(DC_HINT)
-        self._dc_spin = make_spin_box(0, 60, value=15)
+        self._dc_spin = make_spin_box(0, 60, value=15, buttons=False, snug=True)
         self._dc_spin.setEnabled(False)
         self._dc_check.toggled.connect(self._dc_spin.setEnabled)
         dc_pair = QWidget()
@@ -511,25 +520,29 @@ class DiceRollerPanel(
         flow = FlowLayout(self._dc_row, spacing=max(grid.horizontalSpacing(), 0) * 3)
         flow.setContentsMargins(0, 0, 0, 0)
         flow.addWidget(dc_pair)
+        # A rule between the two, shown only while they share a line. Drawn in the
+        # group frame's colour: a sunken QFrame line vanishes on a dark preset.
+        self._dc_separator = FlowRule(int(theme.metric("border.width")), dc_pair)
+        self._dc_separator.setStyleSheet(f"background: {theme.color('border.group')};")
+        flow.add_separator(self._dc_separator)
         flow.addWidget(self._routine_check)
-        grid.addWidget(self._dc_row, 3, 0, 1, 3)
+        grid.addWidget(self._dc_row, 4, 0, 1, 3)
 
         self._hidden_check = QCheckBox("Hidden roll")
         self._hidden_check.setToolTip(
             "Roll without anyone else seeing it. A hidden roll is never sent to the players."
         )
         self._hidden_check.setVisible(self._hidden_option)
-        row = 4
+        row = 5
         if self._hidden_option:
             grid.addWidget(self._hidden_check, row, 0, 1, 3)
             row += 1
 
         self._build_request_row(grid, row)
-        self._build_action_row(grid, row + 1)
         return group
 
     def _build_action_row(self, grid: QGridLayout, row: int) -> None:
-        """The **Actions** button, centred under the Request row, across the grid.
+        """The **Actions** button, centred across the grid under the action lane.
 
         It opens the Actions popup (:meth:`open_actions`): the combat maneuvers, the
         other actions, the actions taken against other characters (Impress, Area) and
@@ -656,9 +669,44 @@ class DiceRollerPanel(
         layout.addWidget(clear, alignment=Qt.AlignmentFlag.AlignVCenter)
         return chip
 
+    def _build_chip_slot(self) -> QStackedWidget:
+        """Where the chip lands: an empty dashed outline until something is loaded.
+
+        The chip used to be hidden when empty, so loading a trait added a row and the
+        whole roller jumped taller (and back on ✕). A stack is as tall as its tallest
+        page, so the slot keeps the chip's height either way. Swapped by
+        :meth:`load_spec`. Dashed in the group frame's colour: ``border.empty`` is
+        a palette role under Classic, which comes out as the background.
+        """
+        self._chip_slot = QStackedWidget()
+        self._chip_slot.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        self._chip_empty = QFrame()
+        self._chip_empty.setObjectName("specSlot")
+        self._chip_empty.setStyleSheet(
+            "#specSlot {"
+            f" border: {int(theme.metric('border.width'))}px dashed"
+            f" {theme.color('border.group')};"
+            f" border-radius: {int(theme.metric('radius.chip'))}px;"
+            "}"
+        )
+        # A muted line saying what goes here, so the empty slot reads as a place
+        # waiting for something rather than a gap. Elided: it must never widen the roller.
+        hint = QHBoxLayout(self._chip_empty)
+        hint.setContentsMargins(int(theme.metric("space.md")), 0, int(theme.metric("space.md")), 0)
+        self._chip_hint = ElidingLabel(CHIP_SLOT_HINT)
+        self._chip_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._chip_hint.setStyleSheet(f"color: {theme.color('text.muted')};")
+        self._chip_hint.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        hint.addWidget(self._chip_hint)
+        self._chip_empty.setToolTip(CHIP_SLOT_HINT)
+        self._chip_slot.addWidget(self._chip_empty)
+        self._chip_slot.addWidget(self._spec_chip)
+        self._chip_slot.setCurrentWidget(self._chip_empty)
+        return self._chip_slot
+
     def _make_modifier(self) -> tuple[QSlider, QWidget]:
-        """The Bonus/Penalty slider, −20..+20 and centred, linked two-way to a signed
-        spin box (``+3`` / ``-3``) that keeps its arrows."""
+        """The Bonus/Penalty slider, −30..+30 and centred, linked two-way to a signed
+        spin box (``+3`` / ``-3``) with no arrows, as wide as "-30" and no wider."""
         slider = QSlider(Qt.Orientation.Horizontal)
         slider.setRange(-MODIFIER_LIMIT, MODIFIER_LIMIT)
         slider.setValue(0)
@@ -666,7 +714,7 @@ class DiceRollerPanel(
         slider.setTickPosition(QSlider.TickPosition.TicksBelow)
         slider.setTickInterval(MODIFIER_LIMIT)
         guard_wheel(slider)
-        spin = make_signed_spin_box(MODIFIER_LIMIT, buttons=True)
+        spin = make_signed_spin_box(MODIFIER_LIMIT, snug=True)
         slider.valueChanged.connect(spin.setValue)
         spin.valueChanged.connect(slider.setValue)
         return slider, spin
@@ -676,14 +724,15 @@ class DiceRollerPanel(
 
         The slider is spent by the next roll (:meth:`_spend_extras`), so a value
         sitting in it is a pending charge on that roll and has to be as visible as
-        a loaded trait. Only ``color`` and weight go on the spin box: a ``border``,
+        a loaded trait. Only ``color`` goes on the spin box: a ``border``,
         ``padding`` or ``background`` there would lay its edit field over the arrows
-        (rule 4 in the theme notes).
+        (rule 4 in the theme notes). Not bold either, on the label or the box: bold
+        text is wider, so the roller grew sideways each time the value left 0.
         """
         value = self._modifier_spin.value()
         style = ""
         if value:
-            style = tinted_style("tint.better" if value > 0 else "tint.worse")
+            style = tinted_style("tint.better" if value > 0 else "tint.worse", bold=False)
         self._modifier_label.setStyleSheet(style)
         self._modifier_spin.setStyleSheet(f"QSpinBox {{ {style} }}" if style else "")
 
@@ -731,7 +780,12 @@ class DiceRollerPanel(
             return []
 
     def menu_point(self) -> QPoint:
-        """Where a chooser opened from the Actions popup appears: under its button."""
+        """Where a chooser opened from the Actions popup appears: over the popup, on
+        the tile just picked (a submenu of it), or under the button outside a pick."""
+        popup = self._action_popup
+        point = popup.follow_up_point() if popup is not None else None
+        if point is not None:
+            return point
         button = self._actions_button
         return button.mapToGlobal(button.rect().bottomLeft())
 
@@ -844,7 +898,10 @@ class DiceRollerPanel(
         self._die_button.setObjectName("dieButton")
         self._die_button.setFlat(True)
         self._die_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._die_button.clicked.connect(self._start_roll)
+        # Not ``_start_roll`` itself: ``clicked`` passes its ``checked`` flag to a slot
+        # that takes an argument, and ``_start_roll``'s first one is the ``before``
+        # callback — the die called ``False(…)`` and never rolled.
+        self._die_button.clicked.connect(self._on_die_clicked)
 
         self._face = QLabel("?")
         self._face.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1010,7 +1067,7 @@ class DiceRollerPanel(
         elif had_own_dc:
             self._dc_check.setChecked(False)
             self._dc_spin.setValue(0)
-        self._spec_chip.setVisible(spec is not None)
+        self._chip_slot.setCurrentWidget(self._spec_chip if spec is not None else self._chip_empty)
         if spec is not None:
             caption = spec_caption(spec)
             self._spec_label.setText(caption)
@@ -1024,8 +1081,9 @@ class DiceRollerPanel(
         self._lane.bind(self.loaded_attack())
         self._prompt_readout(replace_result=spec is not None)
         self.updateGeometry()
-        # Showing the chip makes this panel taller — the bug this used to cause is
-        # written up on :attr:`contentChanged`.
+        # The chip's slot keeps its height, but the readout under the die may not —
+        # the bug a change of height used to cause is written up on
+        # :attr:`contentChanged`.
         self.contentChanged.emit()
 
     def _prompt_readout(self, *, replace_result: bool) -> None:
@@ -1215,6 +1273,10 @@ class DiceRollerPanel(
         self._rerolling = True
         self._start_roll()
         return True
+
+    def _on_die_clicked(self) -> None:
+        """The die was clicked: roll what the panel holds."""
+        self._start_roll()
 
     def _start_roll(self, before: Callable[[RollSpec | None], bool] | None = None) -> bool:
         """Begin a roll: lock the inputs, tumble the die, then reveal the result.

@@ -92,7 +92,8 @@ Status values: `not started`, `in progress (<what is left>)`, `done (<date>)`.
    player, and conditions land on that NPC.
 7. **The slider** runs from −20 to +20, centred, and its spin box shows the sign. Extra
    Effort's +2 lands on it. A maneuver line is **spent by the roll** like the slider.
-   Its condition stays. With no action picked, the lane is **empty reserved space**.
+   Its condition stays. With no action picked, the lane is **empty reserved space**
+   (*superseded by decision 21*).
 8. **Clearing:** an ✕ on each chip, plus a **"Clear temporary"** button on the
    Conditions block and on the GM's cards, **shown only while a temporary condition
    exists**. The GM's **End turn** does *not* clear them (they last until the *start* of
@@ -157,6 +158,16 @@ Status values: `not started`, `in progress (<what is left>)`, `done (<date>)`.
     a green Blocking chip on; each press while Blocking picks the attack and loads a
     block check (−2 per block already made) with the DC box left for the attacker's
     result, and adds to the chip's count. The GM's aimed-attack judge does **not** block.
+21. **The empty roller** (asked 2026-11-09, after phase 10: "with two empty lines the
+    roller seems too empty"). **The Actions button moves into the lane's row**: an empty
+    lane takes no room, the button sits right under Bonus/Penalty, and under the last
+    line once there are lines (so each line grows the roller a row). The chip's empty
+    slot keeps its height and gets a muted hint ("Click a trait on a sheet to roll it").
+    Offered against: muted hints in both slots, or a hint in the chip only.
+22. **The Actions popup** (asked 2026-11-09, same request): **smaller**, and **under the
+    Actions button** (it had opened in the screen's top-right corner). A menu a pick
+    leads to (All-Out Attack → which attack) opens **over the popup, on the tile**, like
+    a submenu, not after the popup has closed.
 
 ---
 
@@ -365,15 +376,15 @@ widget, log failures.
   token (add tokens such as `grid.tile`, `grid.icon`, `grid.gap` to the presets). A
   disabled tile keeps its tooltip, which says why ("Load an attack first").
 - **The roller (`ui/dice_roller.py`):**
-  - one `Bonus/Penalty` slider −20..+20, centred. The spin box is a signed
+  - one `Bonus/Penalty` slider −30..+30 (was ±20), centred. The spin box is a signed
     `make_spin_box` (`+3` / `−3`). It keeps the tint of `_mark_extras`, `better` above 0
     and `worse` below. `adjustment()` keeps its name and meaning. The net-to-pair split
     for the wire stays. `add_bonus` adds. `_spend_extras` zeroes it;
-  - an **action lane** under it: a `QWidget` whose height reserves **one line even when
-    empty** (an invisible placeholder line of the same height — not a minimum size, see
-    the standing rule). Each active action is an `ActionLine`: its name, ✕, then a slider
-    and spin over `0..X_max` (configurable) or a fixed caption (`"−2 attack"`, `"roll
-    twice"`). A second line grows the lane (rare; accepted);
+  - an **action lane** under it, **hidden while empty** with the Actions button under it
+    (decision 21; it first reserved one line's height with an invisible placeholder).
+    Each active action is an `ActionLine`: its name, ✕, then a slider and spin over
+    `0..X_max` (configurable) or a fixed caption (`"−2 attack"`, `"roll twice"`). Each
+    line grows the roller a row;
   - **the attack picker:** a picked `needsAttack` action with no attack on the chip
     opens a plain `QMenu` of the character's attack specs (`power_rolls`, filtered by
     `targetable_attack` / has an attack check). The host supplies that list, since the
@@ -746,6 +757,56 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
 
 Newest first. Each entry: date, phase, what was done, what's next, gotchas, and the
 commit hash.
+
+- **2026-11-10 — Roller and popup fixes (the user asked).** Committed together with the
+  "Roller polish" entry below, which had been left uncommitted. (1) **The die did not
+  roll** — since phase 5: `clicked` hands its `checked` flag to a slot that takes an
+  argument, and `_start_roll`'s first one became the `before` callback, so a click called
+  `False(…)` and raised. The die has its own slot (`_on_die_clicked`); a scan of every
+  `clicked/toggled.connect(self.x)` found no other such trap. No test had clicked the die
+  itself: `test_clicking_the_die_rolls` does now. (2) **The popup is smaller and opens
+  under the button**: tiles 80→64px, icons 30→24, gap 6→4, captions at
+  `size.action-tile` (8pt, so "Group check" still fits); short sections share a row
+  (`_shelve`: Area & Group beside Dice). 522×582 → 416×398 on the sheet. It used to flip
+  above the button whenever it did not fit below, run off the top, and be clamped to the
+  screen's top edge — the "top right corner". Now under the button, scrolling when short,
+  above only where there is more room. (3) **A pick's follow-up menu opens over the
+  popup, on the tile** (decision 22): the popup emits `picked` while still open and
+  closes after; `follow_up_point()` is the tile's centre during the pick, and
+  `panel.menu_point()` uses it, so every chooser (attack, target, NPC, option) lands
+  there. A re-entrant pick is ignored. Checked on the real display: the attack menu sits
+  on the All-Out tile with the grid open behind it. (4) **The empty roller** (decision
+  21, asked): the lane hides while empty and the Actions button moved into its row; the
+  chip slot has a muted hint. New tests: `test_a_pick_reports_the_key_while_open_then_
+  closes`, `test_a_second_pick_while_the_first_is_handled_is_ignored`,
+  `test_short_sections_share_a_row`, `test_it_stays_under_its_anchor_and_scrolls_when_
+  short_of_room`, `test_it_opens_above_only_where_there_is_more_room`,
+  `test_the_attack_picker_opens_over_the_popup_on_the_tile`,
+  `test_an_empty_lane_takes_no_room_and_the_actions_button_moves_up` (replaces the
+  reserved-height test). `test_dice_section`'s strip regression now grows the roller
+  with a lane line (loading a trait no longer grows it). **Tests:** the affected run
+  picked nearly everything — 4926 passed, 1 failed (that regression test, fixed and
+  re-run). Files: `ui/action_grid.py`, `ui/dice_roller.py`, `ui/roller/action_lane.py`,
+  the theme's `action-grid.*` tokens. Commit: see the next commit.
+
+- **2026-11-09 — Roller polish (the user asked).** (1) **Snug, arrowless spin boxes**:
+  the roller's DC box, Bonus/Penalty box and the lane's boxes have no ▲▼ and are
+  `make_spin_box(buttons=False, snug=True)` / `make_signed_spin_box(snug=True)`, as wide
+  as their widest value (two digits, or "-30"). Qt's hint is roomy (and counts the
+  arrows twice under the theme's padding); the snug box measures the text area from
+  the style instead (`SnugSpinBox` in `ui/widgets.py`). A rule now parts DC from
+  Routine (`FlowLayout.add_separator` + `FlowRule`), dropped when the row wraps. The Bonus/Penalty slider and box now share the
+  two right-hand grid columns, so the slider takes the slack and the box sits at the
+  right edge, as on the lane. (2) **Bonus/Penalty runs −30..+30** (`MODIFIER_LIMIT`).
+  (3) **The roller no longer widens** when the bonus leaves 0: the tint was bold, and
+  bold text is wider; it is colour only now. New tests:
+  `test_the_roller_does_not_widen_when_the_bonus_leaves_zero`,
+  `test_the_bonus_slider_takes_the_slack_and_its_box_sits_at_the_edge`,
+  `test_a_snug_spin_box_fits_its_values_and_keeps_its_arrows` (every style × preset),
+  `test_a_rule_parts_dc_and_routine_while_they_share_a_line`,
+  `test_loading_a_trait_does_not_change_the_roll_box_height`. (4) **The chip has a
+  slot**: a dashed empty outline as tall as the chip (`_chip_slot`, a stack), so
+  loading or clearing a trait no longer changes the roller's height.
 
 - **2026-11-09 — After phase 10 (the user asked).** Two of phase 10's debts paid.
   (1) **The chip names the power**: `core.rules.attack_choices` puts each choice's caption

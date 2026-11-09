@@ -10,13 +10,14 @@ resolve their theme tokens in one place instead of a dozen f-strings.
 from __future__ import annotations
 
 import html
+import math
 import re
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from functools import wraps
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QFont, QFontMetrics, QMouseEvent, QPalette
+from PySide6.QtGui import QFont, QFontMetrics, QFontMetricsF, QMouseEvent, QPalette
 from PySide6.QtWidgets import (
     QAbstractScrollArea,
     QApplication,
@@ -28,6 +29,9 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSpinBox,
+    QStyle,
+    QStyleOptionFrame,
+    QStyleOptionSpinBox,
     QTableWidgetItem,
     QToolButton,
     QToolTip,
@@ -46,15 +50,18 @@ def make_spin_box(
     buttons: bool = True,
     max_width: int | None = None,
     guarded: bool = True,
+    snug: bool = False,
 ) -> QSpinBox:
     """Build a range-bounded spin box.
 
     ``buttons=False`` hides the up/down arrows, ``max_width`` caps the width for
     the compact stat/skill columns, and ``guarded`` (the default) installs the
     wheel guard so the box only reacts to the wheel once focused. Pass
-    ``guarded=False`` when the caller guards the box itself in a batch.
+    ``guarded=False`` when the caller guards the box itself in a batch. ``snug``
+    makes the box as wide as its widest value and no wider, and keeps it from
+    stretching (see :class:`SnugSpinBox`).
     """
-    spin = QSpinBox()
+    spin = SnugSpinBox() if snug else QSpinBox()
     spin.setRange(minimum, maximum)
     if value is not None:
         spin.setValue(value)
@@ -83,12 +90,76 @@ class SignedSpinBox(QSpinBox):
         return f"{value:+d}" if value else "0"
 
 
+class _Snug:
+    """A spin box as wide as its widest value and no wider, that does not stretch.
+
+    Qt's own hint is roomy: a spare space after the value, and, on a box with arrows,
+    the arrows counted twice. Qt sizes a box from its value plus the arrows the
+    platform style draws; the theme then adds a right-hand padding as wide as those
+    same arrows, to keep the value from under them (see ``_arrow_column_rules`` in
+    :mod:`mm_companion.ui.theme.qss`). Under ``windows11`` a box for "15" came out
+    ~70px wider than its text field needed.
+
+    So the width is measured instead of summed: ask the style where the text field
+    sits in a box of a probe width, and everything else (frame, padding, any arrows)
+    is the chrome. The hint is that chrome plus the widest value, never more than
+    Qt's. Measured at every call, so a theme or style switch reaches it.
+    """
+
+    _PROBE = 200
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.setSizePolicy(QSizePolicy.Policy.Maximum, self.sizePolicy().verticalPolicy())
+
+    def _snug(self, size: QSize) -> QSize:
+        probe = QRect(0, 0, self._PROBE, size.height())
+        option = QStyleOptionSpinBox()
+        self.initStyleOption(option)
+        option.rect = probe
+        field = self.style().subControlRect(
+            QStyle.ComplexControl.CC_SpinBox, option, QStyle.SubControl.SC_SpinBoxEditField, self
+        )
+        # And inside the field, the line edit keeps its own margins (the sheet's
+        # padding lands on it too): where its text area sits in a probe-wide edit.
+        edit = self.lineEdit()
+        frame = QStyleOptionFrame()
+        frame.initFrom(edit)
+        frame.lineWidth = 0
+        frame.rect = probe
+        inner = edit.style().subElementRect(QStyle.SubElement.SE_LineEditContents, frame, edit)
+        if field.width() <= 0 or inner.width() <= 0:  # a style that will not say
+            return size
+        metrics = QFontMetricsF(self.font())
+        affix = self.prefix() + self.suffix()
+        texts = [self.textFromValue(v) + affix for v in (self.minimum(), self.maximum())]
+        texts.append(self.specialValueText())
+        text = math.ceil(max(metrics.horizontalAdvance(t) for t in texts))
+        # QLineEdit draws 2px in from either side of that area, and the cursor is 1px.
+        chrome = (self._PROBE - field.width()) + (self._PROBE - inner.width()) + 5
+        return QSize(min(size.width(), chrome + text), size.height())
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        return self._snug(super().sizeHint())
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        return self._snug(super().minimumSizeHint())
+
+
+class SnugSpinBox(_Snug, QSpinBox):
+    """A :class:`QSpinBox` sized to its values (see :class:`_Snug`)."""
+
+
+class SnugSignedSpinBox(_Snug, SignedSpinBox):
+    """A :class:`SignedSpinBox` sized to its values (see :class:`_Snug`)."""
+
+
 def make_signed_spin_box(
-    limit: int, *, max_width: int | None = None, buttons: bool = False
+    limit: int, *, max_width: int | None = None, buttons: bool = False, snug: bool = False
 ) -> SignedSpinBox:
     """A wheel-guarded :class:`SignedSpinBox` from -*limit* to +*limit*, arrowless
-    unless *buttons* (the roller's Bonus/Penalty box keeps its arrows)."""
-    spin = SignedSpinBox()
+    unless *buttons*. ``snug`` as for :func:`make_spin_box`."""
+    spin = SnugSignedSpinBox() if snug else SignedSpinBox()
     spin.setRange(-limit, limit)
     spin.setValue(0)
     if not buttons:

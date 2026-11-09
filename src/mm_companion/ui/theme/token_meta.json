@@ -283,6 +283,7 @@
     "size.card-name": {"label": "Power name"},
     "size.pin-value": {"label": "GM card: pinned number", "hint": "The number on each pinned tile of an NPC card."},
     "size.terms": {"label": "Game terms", "hint": "The small print under a power's effects."},
+    "size.action-tile": {"label": "Actions popup captions", "hint": "The name under each tile's drawing in the roller's Actions popup."},
     "size.simple-name": {"label": "Simple sheet: hero name", "hint": "The character's name across the top of the simple sheet."},
     "size.simple-value": {"label": "Simple sheet: key values", "hint": "The numbers a player reads mid-fight — ability and defence totals, skill bonuses, a power's rank and DC."},
     "size.simple-label": {"label": "Simple sheet: names", "hint": "What a value belongs to — a skill, an advantage, a power."},

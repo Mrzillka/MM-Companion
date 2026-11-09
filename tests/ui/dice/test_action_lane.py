@@ -101,6 +101,7 @@ def test_one_signed_slider_runs_both_ways_from_zero(qapp) -> None:
     panel = view.panel
     assert panel._modifier_slider.minimum() == -MODIFIER_LIMIT
     assert panel._modifier_slider.maximum() == MODIFIER_LIMIT
+    assert MODIFIER_LIMIT == 30  # wide enough for any circumstance (2026-11-09)
     assert panel._modifier_slider.value() == 0
     panel._modifier_spin.setValue(3)
     assert panel._modifier_spin.text() == "+3"
@@ -137,16 +138,29 @@ def test_an_old_quick_roll_with_both_numbers_loads_as_its_net(qapp) -> None:
 # -- the lane --------------------------------------------------------------------------
 
 
-def test_the_lane_holds_one_lines_height_even_when_empty(qapp) -> None:
+def test_an_empty_lane_takes_no_room_and_the_actions_button_moves_up(qapp) -> None:
+    # The lane used to hold a blank line open; the Actions button sits in its row now
+    # (the user's call, 2026-11-09), and moves down under each line that comes on.
     view = DiceRollerView()
+    view.resize(400, 900)
+    view.show()
+    qapp.processEvents()
     panel = view.panel
-    empty = panel._lane.sizeHint().height()
-    assert empty > 0
+    button = panel._actions_button
+
+    def just_under_the_slider() -> bool:
+        slider = panel._modifier_slider.geometry().bottom()
+        return button.geometry().top() > slider and panel._lane.isHidden()
+
+    assert just_under_the_slider()
     panel.start_action_line("charge", "Charge", fixed="-2 attack")
-    assert panel._lane.sizeHint().height() == empty
+    qapp.processEvents()
+    assert panel._lane.isVisible()
+    assert button.geometry().top() > panel._lane.geometry().bottom()
     panel.action_lines()[0].removed.emit("charge")
+    qapp.processEvents()
     assert panel.action_lines() == []
-    assert panel._lane.sizeHint().height() == empty
+    assert just_under_the_slider()
 
 
 def test_a_configurable_line_starts_at_its_maximum(qapp) -> None:

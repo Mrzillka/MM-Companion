@@ -52,13 +52,55 @@ def test_a_long_caption_is_elided_to_the_tile(qapp) -> None:
     assert tile.accessibleName() == "An exceedingly long caption indeed"
 
 
-def test_a_pick_closes_the_popup_then_reports_the_key(qapp) -> None:
+def test_a_pick_reports_the_key_while_open_then_closes(qapp) -> None:
+    # Open while the pick is handled, so a menu it leads to opens over the popup, on
+    # the tile picked (All-Out Attack -> which attack), like a submenu.
     anchor, popup = _popup(qapp)
     popup.show_under(anchor)
-    seen: list[tuple[str, bool]] = []
-    popup.picked.connect(lambda key: seen.append((key, popup.isVisible())))
+    tile = popup.tile("a3")
+    centre = tile.mapToGlobal(tile.rect().center())
+    seen: list[tuple[str, bool, object]] = []
+    popup.picked.connect(lambda key: seen.append((key, popup.isVisible(), popup.follow_up_point())))
+    tile.click()
+    assert seen == [("a3", True, centre)]
+    assert not popup.isVisible()
+    assert popup.follow_up_point() is None
+
+
+def test_a_second_pick_while_the_first_is_handled_is_ignored(qapp) -> None:
+    anchor, popup = _popup(qapp)
+    popup.show_under(anchor)
+    seen: list[str] = []
+
+    def handle(key: str) -> None:
+        seen.append(key)
+        popup.tile("a4").click()  # a click that closed the follow-up menu, say
+
+    popup.picked.connect(handle)
     popup.tile("a3").click()
-    assert seen == [("a3", False)]
+    assert seen == ["a3"]
+
+
+def test_short_sections_share_a_row(qapp) -> None:
+    def section(name: str, count: int) -> GridSection:
+        return GridSection(name, tuple(GridItem(f"{name}{i}", name) for i in range(count)))
+
+    sections = [section("p", 2), section("q", 1), section("r", 8), section("s", 1)]
+    sections.append(section("t", 1))
+    anchor, popup = _popup(qapp, sections)
+    popup.show_under(anchor)
+    qapp.processEvents()
+    content = popup._scroll.widget()
+
+    def top(key: str) -> int:
+        return popup.tile(key).mapTo(content, popup.tile(key).rect().topLeft()).y()
+
+    assert top("p0") == top("q0")  # side by side
+    assert top("r0") > top("q0")  # a long section has its rows to itself
+    assert top("s0") == top("t0") > top("r7")
+    assert [t.text() for t in popup._titles] == ["p", "q", "r", "s", "t"]
+    # And the popup is as tall as what it holds: nothing scrolls.
+    assert not popup._scroll.verticalScrollBar().isVisible()
 
 
 def test_escape_closes_it_and_enter_picks_the_focused_tile(qapp) -> None:
@@ -118,6 +160,32 @@ def test_it_opens_on_screen_under_its_anchor(qapp) -> None:
     screen = anchor.screen().availableGeometry()
     assert screen.contains(popup.frameGeometry().topLeft())
     assert popup.parentWidget() is anchor
+
+
+def test_it_stays_under_its_anchor_and_scrolls_when_short_of_room(qapp) -> None:
+    # It used to flip above when it did not fit below, run off the top of the screen,
+    # and be pulled down to the screen's top edge, nowhere near the button.
+    anchor, popup = _popup(qapp, _sections(count=30))
+    screen = anchor.screen().availableGeometry()
+    anchor.move(screen.left() + 100, screen.top() + screen.height() // 3)
+    qapp.processEvents()
+    popup.show_under(anchor)
+    button = anchor.frameGeometry()
+    bottom = anchor.mapToGlobal(anchor.rect().bottomLeft()).y()
+    assert popup.y() == bottom + 1
+    assert popup.frameGeometry().bottom() <= screen.bottom()
+    assert popup.frameGeometry().top() > button.top()
+
+
+def test_it_opens_above_only_where_there_is_more_room(qapp) -> None:
+    anchor, popup = _popup(qapp, _sections(count=30))
+    screen = anchor.screen().availableGeometry()
+    anchor.move(screen.left() + 100, screen.bottom() - 150)
+    qapp.processEvents()
+    popup.show_under(anchor)
+    top = anchor.mapToGlobal(anchor.rect().topLeft()).y()
+    assert popup.frameGeometry().bottom() < top
+    assert popup.frameGeometry().top() >= screen.top()
 
 
 class _ParentlessShows(QObject):

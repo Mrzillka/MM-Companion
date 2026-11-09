@@ -59,11 +59,19 @@ def test_the_self_actions_load_with_their_effects(data) -> None:
     assert charge.slam.rank_bonus == 1 and charge.slam.self_resistance == "TOUGHNESS"
     assert self_action(data, "aim").effect.roll_twice
     assert self_action(data, "catch").effect.check.dc == 10
-    assert self_action(data, "stand").requires == "prone"
+    assert self_action(data, "stand").requires == ("prone",)
     assert self_action(data, "drop_prone").refused_by == "prone"
     assert self_action(data, "recover").recovery.fatigue
     assert self_action(data, "accurate_attack") is None  # a maneuver, not a self action
-    assert self_action(data, "block") is None  # a self action that does nothing yet
+    assert self_action(data, "block").reaction.step == -2
+    # A record that does nothing (a mod's action this version cannot run) is none.
+    from dataclasses import replace
+
+    from mm_companion.core.data_loader import CombatAction, CombatRules
+
+    blank = CombatAction("mod_blank", "Blank", kind="self")
+    modded = replace(data, combat=CombatRules(actions=(*data.combat.actions, blank)))
+    assert self_action(modded, "mod_blank") is None
 
 
 def test_an_option_overrides_its_action_field_by_field(data) -> None:

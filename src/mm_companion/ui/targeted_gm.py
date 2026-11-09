@@ -1,5 +1,6 @@
-"""Targeted combat actions, the GM's half — Aid, Feint and Trick (combat maneuvers
-plan, phase 8; the rules are :mod:`~mm_companion.core.rules.targeted`).
+"""Targeted combat actions, the GM's half — Aid, Feint, Trick (combat maneuvers plan,
+phase 8) and Grab, Trip, Disarm, Smash, Escape (phase 9); the rules are
+:mod:`~mm_companion.core.rules.targeted`.
 
 A player picks the tile, the creature (and for Aid the ally) off the Scene, and one of
 their attacks; their app declares it (:data:`KIND_TARGETED`) and rolls the check. This
@@ -8,13 +9,22 @@ controller ties the two together by the declaration's ``action_id`` and puts an
 
 **Accept** settles it:
 
-* **against a DC** (Aid's 10): the check's degree, judged as an attack is;
-* **opposed** (Feint, Trick): the target resists the check's total with the best of its
-  candidates — rolled by the server for a creature nobody plays, asked of a player;
+* **against a DC** (Aid's 10), or one **derived from the target** (Escape: 10 + the
+  grabber's Strength): the check's degree, judged as an attack is;
+* **against the target's Defense** (Grab, Trip, Disarm, Smash): judged as an aimed attack
+  is — the opposing conditions between the two counted and spent, a minion target hit on
+  the routine result. A miss ends it; a hit lands Smash's outcome, or goes on to …
+* **an opposed stage** (Grab, Trip, Disarm): the actor's check (worked out on their
+  sheet, carried in the declaration) — rolled by the server for an NPC, asked of a
+  player — and then …
+* **the target's resistance** (Feint, Trick, and that stage): the best of its
+  candidates against the actor's total, rolled by the server for a creature nobody
+  plays, asked of a player;
 
-and what the actor's degree lands (``wins`` / ``losses``) goes on the target, or on the
-ally, each condition naming whom it is against. Those are *opposing* conditions:
-the aimed-attack judge (``ui/attack_gm.py``) counts and spends them.
+and what the actor's degree lands (``wins`` / ``losses``) goes on the target, the ally
+or the actor, each condition naming whom it is against. Aid's, Feint's and Trick's are
+*opposing* conditions: the aimed-attack judge (``ui/attack_gm.py``) counts and spends
+them.
 
 The GM's own (an NPC acting off the Rolls block's Actions popup) needs no accepting:
 :meth:`TargetedController.act_own` rolls the check as the NPC and resolves it once the
@@ -32,19 +42,29 @@ from PySide6.QtCore import QObject
 from PySide6.QtWidgets import QWidget
 
 from mm_companion.core.data_loader import ConditionChange, GameData
-from mm_companion.core.data_loader.game_data import TARGETED_ON_ALLY
+from mm_companion.core.data_loader.game_data import (
+    TARGETED_ON_ACTOR,
+    TARGETED_ON_ALLY,
+    TARGETED_ON_TARGET,
+)
 from mm_companion.core.rules import (
     MinionRules,
+    OpposingEffects,
     RollSpec,
     actor_degree,
     concrete_changes,
+    defense_against,
     judge_attack,
     localize_spec,
     opposed_dc,
+    opposing_effects,
+    opposing_spent,
+    routine_total,
     targeted_action,
-    targeted_outcome,
+    targeted_dc_from,
     targeted_outcome_text,
     targeted_resist_spec,
+    targeted_rung,
     targeted_title,
 )
 from mm_companion.core.session.model import KIND_ROLL
@@ -156,9 +176,12 @@ class TargetedController(QObject):
         target: ImpressParty,
         spec: RollSpec,
         ally: ImpressParty | None = None,
+        *,
+        opposed: RollSpec | None = None,
     ) -> _Targeted | None:
         """One of the GM's own creatures takes a targeted action: roll its check on the
-        GM's roller as it, and resolve it once the die is in (no card to accept)."""
+        GM's roller as it, and resolve it once the die is in (no card to accept).
+        *opposed* is its check in an opposed second stage (Grab's Strength)."""
         action = targeted_action(self._data, action_id)
         if action is None:
             return None
@@ -177,6 +200,7 @@ class TargetedController(QObject):
             option,
             ally.ref if ally is not None else "",
             ally.name if ally is not None else "",
+            opposed,
         )
         act = self._make(declaration, source)
         act.accepted = True
@@ -260,32 +284,49 @@ class TargetedController(QObject):
         return next((p for p in targets if p.ref == ref), None)
 
     def resolve(self, act: _Targeted) -> None:
-        """Judge the check against its DC, or set the target's resistance going."""
+        """Judge the check — against a DC, the target's Defense, or a DC its sheet gives —
+        or set the target's resistance going."""
         if act.resolving or act.done or act.roll is None:
             return
         decl = act.declaration
         action = targeted_action(self._data, decl.action)
-        if action is None:
+        if action is None or action.targeted is None:
             self._finish(act, "That action is not known here.")
             return
+        rules = action.targeted
         target = self._party(decl.target_ref)
         if target is None:
             self._finish(act, f"{decl.target_name} is not on the Scene any more.")
             return
         ally = None
-        if action.targeted is not None and action.targeted.ally:
+        if rules.ally:
             ally = self._party(decl.ally_ref)
             if ally is None:
                 self._finish(act, f"{decl.ally_name or 'The ally'} is not on the Scene any more.")
                 return
+        if (rules.vs_defense or rules.dc_from is not None) and target.character is None:
+            # A player whose sheet has not reached this table: their Defense (or
+            # Strength) is unknown. Not over — the GM accepts again once it is in.
+            waiting = f"{target.name}'s sheet has not reached this table yet"
+            if act.card is None:
+                self._finish(act, f"Cannot judge it: {waiting}.")
+                return
+            act.accepted = False
+            act.card.set_status(f"{waiting} — Accept again once it has.", button=ACCEPT_CAPTION)
+            act.card.button.setEnabled(True)
+            return
         act.resolving = True
         self._lock_card(act)
         roll = act.roll
+        if rules.vs_defense:
+            self._judge_hit(act, action, target, ally, roll)
+            return
         die = int(roll.get("die", 0))
         modifier = int(roll.get("bonus", 0)) - int(roll.get("penalty", 0))
         total = total_of(roll)
-        title = targeted_title(action, decl.option)
         dc = decl.spec.dc
+        if rules.dc_from is not None:
+            dc = targeted_dc_from(self._data, action, target.character)
         if dc is not None:
             verdict = judge_attack(
                 modifier,
@@ -297,7 +338,102 @@ class TargetedController(QObject):
             act.said.append(f"{total} vs DC {dc}")
             self._land(act, action, decl.option, verdict.degree, target, ally)
             return
-        against = opposed_dc(total, die if not roll.get("minion") else 0, self._data)
+        self._resist(act, action, target, ally, total, die, minion=bool(roll.get("minion")))
+
+    def _judge_hit(self, act: _Targeted, action, target, ally, roll: dict) -> None:
+        """The attack of a Grab, Trip, Disarm or Smash against the target's Defense,
+        judged as an aimed attack is: the opposing conditions between the two count and
+        are spent, and a minion target is hit on the routine result. A miss ends it."""
+        decl = act.declaration
+        rules = self._host.minion_rules()
+        die = int(roll.get("die", 0))
+        opposing = opposing_effects(
+            act.source.character, act.source.name, target.character, target.name, self._data
+        )
+        modifier = int(roll.get("bonus", 0)) - int(roll.get("penalty", 0)) + opposing.attack
+        dc = defense_against(target.character, self._data, opposing)
+        if opposing.any:
+            act.said.append("with " + ", ".join(opposing.notes))
+            self._spend(act, target, opposing)
+        routine = None
+        if rules.routine_attacks and target.minion and not act.source.minion:
+            routine = routine_total(modifier)
+        verdict = judge_attack(
+            modifier,
+            die,
+            dc,
+            natural=bool(roll.get("critical")) if die in (1, 20) else not roll.get("routine"),
+            added_success=not roll.get("minion"),
+            routine_total=routine,
+        )
+        total = routine if verdict.by_routine else total_of(roll) + opposing.attack
+        if not verdict.hit:
+            act.said.append(f"missed ({total} vs Defense {dc})")
+            self._finish(act, "; ".join(act.said))
+            return
+        act.said.append(f"hit ({total} vs Defense {dc})")
+        if action.targeted.opposed is None:
+            self._land(act, action, decl.option, max(verdict.degree, 1), target, ally)
+            return
+        self._opposed(act, action, target, ally)
+
+    def _spend(self, act: _Targeted, target, opposing: OpposingEffects) -> None:
+        """Take the opposing conditions the attack counted off whoever bore them."""
+        for party, spent in (
+            (act.source, opposing.attacker_spent),
+            (target, opposing.target_spent),
+        ):
+            if spent and not self._host.combat_land(party, opposing_spent(spent)):
+                act.said.append(f"could not clear {party.name}'s used-up conditions")
+
+    def _opposed(self, act: _Targeted, action, target, ally) -> None:
+        """The second stage of a Grab, Trip or Disarm: the actor's check — rolled by the
+        server for an NPC, asked of a player — whose total the target then resists."""
+        source = act.source
+        spec = act.declaration.opposed
+        if spec is None:
+            self._finish(act, "; ".join([*act.said, "nothing to make the opposed check with"]))
+            return
+
+        def rolled(record: dict) -> None:
+            total = total_of(record)
+            act.said.append(f"{source.name} {total}")
+            die = int(record.get("die", 0))
+            self._resist(act, action, target, ally, total, die, minion=bool(record.get("minion")))
+
+        if source.kind == PARTY_NPC:
+            rules = self._host.minion_rules()
+            own = replace(spec, modifier=spec.modifier + self._host.roller_adjustment())
+            line = group_line(
+                source.name,
+                own,
+                title=act.run.title,
+                minion=source.minion and rules.no_added_success,
+            )
+            if not act.run.roll_group(
+                [],
+                [],
+                lambda pairs: rolled(pairs[0][1]) if pairs else None,
+                lead=line,
+                lead_about=source,
+            ):
+                self._finish(act, "The opposed check did not reach the session — nothing rolled.")
+            return
+        ask = replace(spec, targets=(source.name,))
+        if not act.run.ask(source, ask, source, lambda _about, record: rolled(record)):
+            self._finish(act, f"Could not ask {source.name} for the opposed check — no session.")
+            return
+        if act.card is not None:
+            act.card.set_status(f"Waiting for {source.name}'s roll…", button=ACCEPT_CAPTION)
+
+    def _resist(
+        self, act: _Targeted, action, target, ally, total: int, die: int, *, minion: bool
+    ) -> None:
+        """The target resists the actor's *total* (a natural 20 on *die* counting as an
+        added degree, unless a minion rolled it) with the best of its candidates."""
+        decl = act.declaration
+        title = targeted_title(action, decl.option)
+        against = opposed_dc(total, die if not minion else 0, self._data)
         resist = targeted_resist_spec(self._data, action, title, against)
         if resist is None:
             self._finish(act, "Nothing to resist with.")
@@ -343,31 +479,42 @@ class TargetedController(QObject):
             act.card.set_status(f"Waiting for {target.name}'s roll…", button=ACCEPT_CAPTION)
 
     def _land(self, act, action, option: str, degree: int, target, ally) -> None:
-        """Put what the actor's *degree* lands on its bearers, and settle."""
+        """Put what the actor's *degree* lands on its bearers — the target, the ally, the
+        actor (Grab's Holding) — say what it does that nothing tracks, and settle."""
         decl = act.declaration
+        rung = targeted_rung(action.effect_for(option), degree)
         changes = concrete_changes(
-            targeted_outcome(action.effect_for(option), degree),
+            rung.applies if rung is not None else (),
             actor_name=act.source.name,
             target_name=target.name,
         )
-        if not changes:
+        if not changes and not (rung is not None and rung.text):
             act.said.append("no effect")
             self._finish(act, "; ".join(act.said))
             return
-        for bearer in (target, ally):
+        for role, bearer in (
+            (TARGETED_ON_TARGET, target),
+            (TARGETED_ON_ALLY, ally),
+            (TARGETED_ON_ACTOR, act.source),
+        ):
             if bearer is None:
                 continue
-            role = TARGETED_ON_ALLY if bearer is ally else "target"
             mine = tuple(change for on, change in changes if on == role)
             if not mine:
                 continue
-            text = targeted_outcome_text(self._data, mine, bearer.name)
-            if self._host.combat_land(bearer, mine):
-                act.said.append(text)
-                if bearer.kind == PARTY_PLAYER:
-                    act.run.tell(bearer, f"{decl.spec.title}: {text}")
-            else:
-                act.said.append(f"{text} (not delivered)")
+            text = targeted_outcome_text(self._data, mine, bearer.name, bearer.character)
+            if not self._host.combat_land(bearer, mine):
+                act.said.append(f"{text or bearer.name} (not delivered)")
+                continue
+            if not text:
+                continue
+            act.said.append(text)
+            if bearer.kind == PARTY_PLAYER:
+                act.run.tell(bearer, f"{decl.spec.title}: {text}")
+        if rung is not None and rung.text:
+            act.said.append(
+                rung.text.replace("{actor}", act.source.name).replace("{target}", target.name)
+            )
         self._finish(act, "; ".join(act.said))
 
     # -- saying so ------------------------------------------------------------------------
@@ -388,8 +535,13 @@ class TargetedController(QObject):
         act.card.set_text(text)
         if act.accepted:
             return
+        rules = action.targeted if action is not None else None
         if act.roll is None:
             act.card.set_status("Waiting for the roll…")
+        elif rules is not None and rules.vs_defense:
+            act.card.set_status(f"Accept to judge it against {decl.target_name}'s Defense.")
+        elif rules is not None and rules.dc_from is not None:
+            act.card.set_status(f"Accept to judge it against {decl.target_name}'s hold.")
         elif decl.spec.dc is not None:
             act.card.set_status(f"Accept to judge it against DC {decl.spec.dc}.")
         else:

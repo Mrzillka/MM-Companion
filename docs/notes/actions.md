@@ -816,6 +816,47 @@ two they name (see *Aimed attacks*), never by "Clear temporary" (decision 17).
 - One table per action in the history: the actor's check and the target's resistance
   are its two rows.
 
+## Grab, Trip, Disarm, Smash and Escape
+
+The rest of the targeted actions (PDF p202–205), phase 9 of the combat maneuvers plan,
+on the same road as Aid, Feint and Trick: declared by a player (or the GM's NPC off the
+tile), accepted on a card, resolved by `TargetedController`. What is new is all in the
+`targeted` block, read generically:
+
+- **`check`** may be a list — the actor rolls the best on their own sheet (Escape:
+  Strength or Sleight of Hand) — and a candidate may be `attack` (the attack picked) or
+  `damage` (its Damage rank, `attack_damage_rank`). `uses_attack` is whether the picker
+  asks.
+- **`dc`** may be `"defense"` (`vs_defense`: Grab, Trip, Disarm, Smash) — judged exactly
+  as an aimed attack (`_judge_hit`): `defense_against` with the opposing conditions
+  between the two counted and spent (a feint makes a grab easier, and is used up), a
+  minion target hit on the routine result. A miss ends it. Or `{base, kind, trait}`
+  (`dc_from`: Escape's 10 + the grabber's Strength, `targeted_dc_from`), read off the
+  target's sheet when the GM accepts; a player target whose sheet has not arrived is
+  "accept again", as an aimed attack is.
+- **`opposed`** `{check, resist}` is a second stage after a hit (Grab: Strength against
+  Strength or Dodge; Trip: close attack bonus or Strength against the same; Disarm: the
+  attack's Damage rank against Strength). The actor's half (`targeted_opposed_spec`) is
+  worked out **on the actor's own sheet** and carried in the declaration
+  (`TargetedDeclaration.opposed`), because the GM's app cannot see a player's Damage rank
+  (`effect_rank` is local). The GM's app then rolls it — a lead-only server group for an
+  NPC, an ask for a player — and the target resists its total (`_resist`, shared with
+  Feint and Trick; `targeted_resist_spec` takes the second stage's candidates when there
+  is one). A Disarm with an attack that deals no Damage is refused at the tile
+  (`NO_OPPOSED_CHECK`).
+- **The outcome** may land on the actor too (`on: "actor"`, `TARGETED_ON_ACTOR`): Grab's
+  **Holding** names the target (see [the conditions notes](conditions-and-damage.md)).
+  A rung may carry `removes` (Escape: Restrained and Bound off the actor, Holding naming
+  the actor off the grabber) and `text` — what the app does not track, said in the
+  history with `{actor}` / `{target}` filled in (Disarm's dropped item, Smash's Damage on
+  the object, Trip's extra distance, Escape's move). `targeted_outcome_text` names a
+  removal only when the bearer bore it.
+- **Smash's** two options are its two penalties (−2 worn or carried, −5 hand-held).
+
+The history table: the actor's row holds the attack and the opposed check, the target's
+row its resistance. `test_a_hosted_grab_runs_both_stages_through_the_server` runs both
+stages through a real hosted session.
+
 ## Not done yet
 
 These are in [the debts](debts.md):
@@ -825,7 +866,11 @@ These are in [the debts](debts.md):
   impressions that outlives the GM's app;
 - the area pieces left out: a Hero Point inside the table, and Nullify and Move Object
   areas;
-- Aid, Feint and Trick off the air, and the opposing conditions in anything but an
-  aimed attack (an unaimed roll, an area's primary, a team attack).
+- the targeted actions off the air, and the opposing conditions in anything but an
+  aimed attack or a targeted action's attack (an unaimed roll, an area's primary, a team
+  attack);
+- the grab rules past the first hold (improving one, size, carrying, squeezing,
+  throwing), the Improved Grab / Hold / Trip / Disarm / Smash advantages, and a block
+  the GM's judge makes by itself.
 
 Counting earlier Impress attempts automatically was dropped: the GM sets the slider.

@@ -1267,10 +1267,37 @@
       "stacking": true,
       "parameter": null,
       "debilitates": null,
-      "effect": "When attacked in close combat, you may make an attack check with your close attack bonus against the attacker's result; beating it blocks the attack. Each block after the first in a round takes a cumulative -2 on that check. Each instance counts one block made.",
+      "effect": "When attacked in close combat, you may make an attack check with your close attack bonus against the attacker's result; beating it blocks the attack. Each block after the first in a round takes a cumulative -2 on that check. Taking Block readies it; each block made after that adds one to the count, so the next block is at -2 for every count past the first.",
       "recovery": "Ends at the start of your next turn.",
       "tone": "benefit",
       "temporary": true
+    },
+    {
+      "id": "holding",
+      "name": "Holding",
+      "tooltip": "Holding someone in a grab: hindered and vulnerable while the hold lasts.",
+      "category": "condition",
+      "group": "maneuver",
+      "includes": [
+        "hindered",
+        "vulnerable"
+      ],
+      "supersedes": [],
+      "mechanisms": [
+        "movement_mod",
+        "defense_mod"
+      ],
+      "stacking": false,
+      "parameter": {
+        "type": "character_ref",
+        "required": true,
+        "label": "Holding",
+        "help": "The creature held."
+      },
+      "debilitates": null,
+      "effect": "A successful Grab: while you keep the named creature in a hold you are Hindered and Vulnerable. Ends when you let go (remove it) or when they Escape.",
+      "recovery": "Let go as a free action, or the held creature escapes.",
+      "tone": "hindrance"
     },
     {
       "id": "aided_attack",

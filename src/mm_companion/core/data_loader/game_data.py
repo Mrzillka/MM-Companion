@@ -252,17 +252,23 @@ MANEUVER_EFFECT_RANK = "effect_rank"
 MANEUVER_DEFENSE = "defense"
 
 
-#: What a combat action's ``check`` may roll: an ability, a skill row, or the actor's
-#: speed rank (Stand's "speed rank check").
+#: What a combat action's ``check`` may roll: an ability, a skill row, a resistance, or
+#: the actor's speed rank (Stand's "speed rank check"). A targeted action's check may
+#: also be the **attack** picked (its attack check: Feint, Grab) or that attack's
+#: **damage** rank (Disarm's opposed check).
 COMBAT_CHECK_ABILITY = "ability"
 COMBAT_CHECK_SKILL = "skill"
+COMBAT_CHECK_RESISTANCE = "resistance"
 COMBAT_CHECK_SPEED = "speed"
+COMBAT_CHECK_ATTACK = "attack"
+COMBAT_CHECK_DAMAGE = "damage"
 
 
 #: Who a targeted action's outcome lands on (:attr:`ConditionChange.on`), and whose
 #: name it is applied against (:attr:`ConditionChange.against`).
 TARGETED_ON_TARGET = "target"
 TARGETED_ON_ALLY = "ally"
+TARGETED_ON_ACTOR = "actor"
 TARGETED_AGAINST_ACTOR = "actor"
 TARGETED_AGAINST_TARGET = "target"
 
@@ -293,29 +299,73 @@ class DegreeOutcome:
 
     degrees: int
     applies: tuple[ConditionChange, ...] = ()
-
-
-@dataclass(frozen=True)
-class TargetedRules:
-    """How a targeted action is rolled (Aid, Feint, Trick): the actor's :attr:`check`
-    (``None``: the attack loaded) against a fixed :attr:`dc`, or opposed by the target's
-    best of :attr:`resist` (``(kind, trait id)`` pairs). With :attr:`ally` the outcome
-    lands on an ally, the target being the opponent (Aid)."""
-
-    check: CombatCheck | None = None
-    dc: int | None = None
-    resist: tuple[tuple[str, str], ...] = ()
-    ally: bool = False
+    #: What the rung does that the app does not track, said in the history ("drops
+    #: what they were holding").
+    text: str = ""
 
 
 @dataclass(frozen=True)
 class CombatCheck:
     """A check a combat action rolls: :attr:`kind` (``COMBAT_CHECK_*``) of :attr:`trait`
-    (an ability key or a skill row id; none for speed) against :attr:`dc`."""
+    (an ability key, a skill row id or a resistance key; none for speed, the attack or
+    its damage) against :attr:`dc` — or, as a targeted action's derived DC, :attr:`dc`
+    plus the target's :attr:`trait` (Escape: 10 + the grabber's Strength)."""
 
     kind: str
     trait: str = ""
     dc: int | None = None
+
+
+@dataclass(frozen=True)
+class OpposedStage:
+    """A targeted action's second stage, once its attack has hit (Grab, Trip, Disarm):
+    the actor's best of :attr:`checks` opposed by the target's best of :attr:`resist`
+    (``(kind, trait id)`` pairs)."""
+
+    checks: tuple[CombatCheck, ...] = ()
+    resist: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True)
+class TargetedRules:
+    """How a targeted action is rolled. The actor rolls the best of :attr:`checks` (the
+    attack picked, an ability, a skill …) against one of:
+
+    * a fixed :attr:`dc` (Aid's 10);
+    * the target's Defense (:attr:`vs_defense`: Grab, Trip, Disarm, Smash);
+    * :attr:`dc_from` — a base plus one of the target's traits (Escape);
+    * the target's best of :attr:`resist` (``(kind, trait id)`` pairs), opposing the
+      check's total (Feint, Trick).
+
+    An :attr:`opposed` stage follows a hit (Grab's Strength against Strength or Dodge).
+    With :attr:`ally` the outcome lands on an ally, the target being the opponent (Aid).
+    """
+
+    checks: tuple[CombatCheck, ...] = ()
+    dc: int | None = None
+    vs_defense: bool = False
+    dc_from: CombatCheck | None = None
+    resist: tuple[tuple[str, str], ...] = ()
+    opposed: OpposedStage | None = None
+    ally: bool = False
+
+    @property
+    def uses_attack(self) -> bool:
+        """Whether the action rolls one of the actor's attacks (its check, or its damage
+        rank), so the attack picker asks for one."""
+        stages = self.checks + (self.opposed.checks if self.opposed is not None else ())
+        return any(c.kind in (COMBAT_CHECK_ATTACK, COMBAT_CHECK_DAMAGE) for c in stages)
+
+
+@dataclass(frozen=True)
+class ReactionRule:
+    """A self action taken again while its :attr:`condition` is on (Block): instead of
+    readying, it loads a check made with the attack picked — :attr:`step` more for each
+    one already made this round (the condition's count past the first)."""
+
+    condition: str
+    step: int = 0
+    line: str = ""
 
 
 @dataclass(frozen=True)
@@ -403,9 +453,10 @@ class CombatAction:
     and leaves :attr:`lasting` (a condition id taking X as its amount) on the actor.
 
     A ``self`` or ``loader`` action does its :attr:`effect` (or one of its
-    :attr:`options`'). :attr:`requires` / :attr:`refused_by` name a condition the
-    actor must have (Stand: Prone) or must not (Drop Prone). :attr:`gm_runs` is why a
-    player's tile is greyed when the GM runs the action (Surprise Attack).
+    :attr:`options`'). :attr:`requires` names conditions the actor must have one of
+    (Stand: Prone; Escape: Restrained or Bound), :attr:`refused_by` one it must not
+    (Drop Prone). :attr:`gm_runs` is why a player's tile is greyed when the GM runs the
+    action (Surprise Attack). :attr:`reaction` is what taking it again does (Block).
     """
 
     id: str
@@ -421,13 +472,14 @@ class CombatAction:
     lasting: str = ""
     effect: CombatEffect = field(default_factory=CombatEffect)
     options: tuple[CombatOption, ...] = ()
-    requires: str = ""
+    requires: tuple[str, ...] = ()
     refused_by: str = ""
     gm_runs: str = ""
     slam: SlamRules | None = None
     recovery: RecoveryRule | None = None
-    #: How a targeted action is rolled (Aid, Feint, Trick); ``None`` for every other.
+    #: How a targeted action is rolled (Aid, Feint, Grab …); ``None`` for every other.
     targeted: TargetedRules | None = None
+    reaction: ReactionRule | None = None
 
     @property
     def tile_caption(self) -> str:

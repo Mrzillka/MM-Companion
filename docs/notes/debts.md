@@ -122,6 +122,28 @@ Built in phase 8 of the combat maneuvers (see [the actions notes](actions.md#aid
 - **Feint's "corresponding" attack bonus.** The target resists with the better of both
   combat skills, since an attack does not record whether it is close or ranged.
 
+## Grab, Trip, Disarm, Smash, Escape and Block: what is left
+
+Built in phase 9 of the combat maneuvers (see [the actions
+notes](actions.md#grab-trip-disarm-smash-and-escape)).
+
+- **Off the air they are greyed**, as Aid, Feint and Trick are (Block is not: it is a
+  self action).
+- **Only the first hold.** Improving a hold with a later Grab (cumulative degrees, no
+  attack check; a failed one frees the target), the size rules (a target three sizes
+  smaller; one too big for more than a partial hold), and carrying, squeezing,
+  throwing or wielding a held creature are the GM's to run by hand.
+- **The advantages are not read.** Improved Grab, Improved Hold (−5 to Escape),
+  Improved Trip, Improved Disarm and Improved Smash change nothing yet.
+- **"Close" is not checked.** A Grab, a Trip or a Block may be made with any attack the
+  picker offers; a spec does not record its range.
+- **Two holds share one bundle.** Holding (Ana) and Holding (Bo) give Hindered and
+  Vulnerable the same provenance, so letting go of one takes both bundles' members.
+- **The GM's judge does not block.** A Blocking creature's block is rolled by hand with
+  the attacker's result in the DC box (the user's call, 2026-11-09).
+- **Narrated outcomes stay narrated.** A disarmed item, a smashed object's Damage and a
+  trip's extra distance are said in the history; nothing tracks them.
+
 ## PySide6 is capped below 6.12, and 6.11.3 is excluded
 
 `pyproject.toml` pins `PySide6>=6.6,<6.12,!=6.11.3`, so CI and the release builds get

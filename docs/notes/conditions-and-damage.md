@@ -143,6 +143,13 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   start-of-turn clear would take a feint away before the feinter's next attack — so
   "Clear temporary" leaves them. The match is by the **name** the GM's board shows
   (numbered namesakes included), the same names `{source}` uses.
+- **Holding** (phase 9) is a grab's mark on the grabber: a lasting (not temporary)
+  umbrella of Hindered and Vulnerable whose parameter names the creature held — a hold
+  outlasts a turn, so a temporary one would be cleared at the start of the grabber's
+  turn, which is when they keep it up. Its ✕ is letting go; the held creature's
+  successful Escape takes it off (by parameter) along with their own Restrained or
+  Bound. Two holds at once share the members' provenance, so letting go of one takes
+  both bundles' Hindered and Vulnerable (a debt).
 - **The roller puts the maneuvers' ones on** (phase 5). An attack rolled with All-Out or
   Defensive Attack on the roller's lane raises `condition-requested` with
   `((condition_id, amount), …)` once the die has settled; the Conditions block's

@@ -54,6 +54,7 @@ from mm_companion.core.rules import (
     self_action,
     targeted_action,
     targeted_check_spec,
+    targeted_opposed_spec,
 )
 from mm_companion.core.session.protocol import sanitize_mod_payload
 from mm_companion.ui import theme
@@ -64,6 +65,7 @@ from mm_companion.ui.action_menu import (
     NO_AREAS,
     NO_ATTACKS,
     NO_ONE_TO_TARGET,
+    NO_OPPOSED_CHECK,
     SKIP_TARGET,
     choose_from_menu,
     combat_menu,
@@ -437,10 +439,13 @@ class DiceSection(QGroupBox):
                 return
         panel.load_spec(spec)
 
-    @staticmethod
-    def _targeted_reason(action) -> str | None:
-        """Why a targeted action's tile is greyed on a sheet: no table to take it at, or
-        nobody (Aid: not both an ally and an opponent) on the Scene."""
+    def _targeted_reason(self, action) -> str | None:
+        """Why a targeted action's tile is greyed on a sheet: no table to take it at,
+        nobody (Aid: not both an ally and an opponent) on the Scene, or a condition it
+        needs (Escape: Restrained or Bound)."""
+        reason = action_reason(self._data, action, self._character)
+        if reason:
+            return reason
         targets = session_targets(live_session())
         if targets is None:
             return NEEDS_A_TABLE
@@ -449,11 +454,13 @@ class DiceSection(QGroupBox):
         return None if targets else NO_ONE_TO_TARGET
 
     def start_targeted(self, action_id: str) -> bool:
-        """A targeted action's tile — Aid, Feint, Trick (see
-        :mod:`~mm_companion.ui.targeted_gm`): against whom off the Scene (Aid: the ally,
-        then the opponent), which way, and — for an attack check — which attack. The
-        action is declared to the GM (``KIND_TARGETED``) from the roll itself, and the
-        check rolled here; the GM accepts it and resolves the rest. Whether it went."""
+        """A targeted action's tile — Aid, Feint, Trick, Grab, Trip, Disarm, Smash, Escape
+        (see :mod:`~mm_companion.ui.targeted_gm`): against whom off the Scene (Aid: the
+        ally, then the opponent; Escape: the grabber), which way, and — when it uses an
+        attack — which attack. The action is declared to the GM (``KIND_TARGETED``) from
+        the roll itself, and the check rolled here; the GM accepts it and resolves the
+        rest, asking for the opposed check of a Grab, Trip or Disarm once it has hit
+        (worked out here, and carried in the declaration). Whether it went."""
         action = targeted_action(self._data, action_id)
         bridge = live_session()
         targets = session_targets(bridge)
@@ -486,12 +493,20 @@ class DiceSection(QGroupBox):
                 return False
             option = action.options[index].id
         attack = None
-        if action.targeted.check is None:
+        if action.targeted.uses_attack:
             attack = panel.choose_attack()
             if attack is None:
                 return False
         check = targeted_check_spec(self._data, action, option, self._character, attack)
         if check is None:
+            return False
+        opposed = targeted_opposed_spec(self._data, action, option, self._character, attack)
+        if action.targeted.opposed is not None and opposed is None:
+            notify_window(
+                self.window(),
+                NO_OPPOSED_CHECK.format(action.name.lower()),
+                theme.color("text.muted.rich"),
+            )
             return False
         name = library.display_name(self._character)
         action_id = new_action_id()
@@ -509,6 +524,7 @@ class DiceSection(QGroupBox):
             option,
             ally.ref if ally is not None else "",
             ally.name if ally is not None else "",
+            opposed,
         )
 
         def declare(_made_of: RollSpec | None) -> bool:

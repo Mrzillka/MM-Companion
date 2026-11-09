@@ -11,8 +11,9 @@ The target travels as the Scene entry's opaque ref, and the attack's spec carrie
 declaration's ``action_id`` and the target's name in ``targets`` (all keys the server
 already keeps, so no protocol change).
 
-Aid, Feint and Trick are declared the same way (:data:`KIND_TARGETED`,
-:class:`TargetedDeclaration`); the GM's half of them is ``ui/targeted_gm.py``.
+The targeted combat actions (Aid, Feint, Trick, Grab, Trip, Disarm, Smash, Escape) are
+declared the same way (:data:`KIND_TARGETED`, :class:`TargetedDeclaration`); the GM's
+half of them is ``ui/targeted_gm.py``.
 """
 
 from __future__ import annotations
@@ -91,7 +92,10 @@ KIND_TARGETED = "targeted"
 @dataclass(frozen=True)
 class TargetedDeclaration:
     """A targeted action, as it travels to the GM: which action (and option), the
-    target's Scene ref and name, Aid's ally, and the check the actor rolls."""
+    target's Scene ref and name, Aid's ally, the check the actor rolls, and — for an
+    action with an opposed second stage (Grab, Trip, Disarm) — the actor's check in it,
+    worked out on their own sheet (:attr:`opposed`), which the GM asks them to roll once
+    the attack has hit."""
 
     action_id: str
     action: str
@@ -102,9 +106,10 @@ class TargetedDeclaration:
     option: str = ""
     ally_ref: str = ""
     ally_name: str = ""
+    opposed: RollSpec | None = None
 
     def to_dict(self) -> dict:
-        return {
+        out = {
             "action_id": self.action_id,
             "action": self.action,
             "option": self.option,
@@ -115,6 +120,9 @@ class TargetedDeclaration:
             "spec": self.spec.to_dict(),
             "source_name": self.source_name,
         }
+        if self.opposed is not None:
+            out["opposed"] = self.opposed.to_dict()
+        return out
 
     @classmethod
     def from_dict(cls, raw: object) -> TargetedDeclaration | None:
@@ -138,7 +146,8 @@ class TargetedDeclaration:
             return None
         if not texts["target_ref"]:
             return None
-        return cls(spec=spec, **texts)
+        opposed = RollSpec.from_dict(raw.get("opposed")) if raw.get("opposed") else None
+        return cls(spec=spec, opposed=opposed, **texts)
 
 
 def targeted_roll_spec(spec: RollSpec, action_id: str, title: str, source_name: str) -> RollSpec:

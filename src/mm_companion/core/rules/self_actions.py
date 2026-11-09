@@ -1,5 +1,5 @@
-"""The self actions of the Actions popup: Aim, Charge (and Slam), Defend, Recover, Drop
-Prone, Stand, Finishing Attack and Catch (PDF p200–205).
+"""The self actions of the Actions popup: Aim, Block, Charge (and Slam), Defend, Recover,
+Drop Prone, Stand, Finishing Attack and Catch (PDF p200–205).
 
 Each is an ``actions.json`` ``combat`` record of kind ``self`` or ``loader`` whose
 :class:`~mm_companion.core.data_loader.CombatEffect` says what it does, read here
@@ -13,7 +13,10 @@ generically — no action is named in this module:
   (:func:`self_action_changes` — Defend, Drop Prone, Stand slowly), or a check loaded into
   the roller (:func:`check_spec` — Catch, Stand), whose success sheds ``clears`` through
   the recovery road (:attr:`~.rolls.RollSpec.recovers`);
-- Recover also offers what it may shed (:func:`recover_choices`).
+- Recover also offers what it may shed (:func:`recover_choices`);
+- an action with a ``reaction`` (Block) taken again while its condition is on loads a
+  check with the attack picked instead (:func:`reaction_spec`), and adds one to the
+  condition's count (:func:`reaction_changes`).
 
 A line's key is the action id, or ``"action/option"`` when the action was taken one of
 its ways (:func:`line_key`), so the roll knows a Slam from a plain Charge.
@@ -55,6 +58,7 @@ from .maneuvers import (
 from .movement import speed_lines
 from .recovery import can_recover, recovery_roll
 from .rolls import LADDER_DAMAGE, RollSpec, ability_roll, localize_spec, skill_roll
+from .targeted import bare_attack_check
 
 __all__ = [
     "LINE_KEY_SEPARATOR",
@@ -67,6 +71,9 @@ __all__ = [
     "self_action_changes",
     "line_fit",
     "line_key",
+    "reacting",
+    "reaction_changes",
+    "reaction_spec",
     "recover_choices",
     "self_action",
     "self_action_note",
@@ -93,8 +100,8 @@ def split_line_key(key: str) -> tuple[str, str]:
 
 def self_action(game_data: GameData, action_id: str) -> CombatAction | None:
     """The ``combat`` record of *action_id* when it is a self or loader action that does
-    something — an effect, options or a recovery. A record with none (Block and Escape,
-    run by a later phase) is not one, so its tile stays greyed rather than doing nothing."""
+    something — an effect, options or a recovery. A record with none (a mod's action this
+    app cannot run) is not one, so its tile stays greyed rather than doing nothing."""
     action = game_data.combat.action(action_id)
     if action is None or action.kind not in (COMBAT_KIND_SELF, COMBAT_KIND_LOADER):
         return None
@@ -130,8 +137,9 @@ def action_reason(
     tile for an action the GM runs, a condition it needs or one that rules it out."""
     if action.gm_runs and not gm:
         return action.gm_runs
-    if action.requires and not _has(character, action.requires):
-        return f"Only while {_condition_name(game_data, action.requires)}."
+    if action.requires and not any(_has(character, c) for c in action.requires):
+        names = " or ".join(_condition_name(game_data, c) for c in action.requires)
+        return f"Only while {names}."
     if action.refused_by and _has(character, action.refused_by):
         return f"Already {_condition_name(game_data, action.refused_by)}."
     return None
@@ -378,6 +386,49 @@ def apply_condition_requests(character: Character, requests: object, game_data: 
         apply_condition(character, condition_id, game_data, amount=amount, temporary=True)
         changed = True
     return changed
+
+
+def reacting(action: CombatAction, character: Character | None) -> bool:
+    """Whether taking *action* now is its reaction (Block while Blocking: a block check)
+    rather than its own effect (readying)."""
+    rule = action.reaction
+    return rule is not None and _has(character, rule.condition)
+
+
+def reaction_spec(
+    game_data: GameData, action: CombatAction, character: Character, attack: RollSpec | None
+) -> RollSpec | None:
+    """*action*'s reaction check with the attack picked (Block: the close attack check
+    against the attacker's result, which goes in the DC box): the record's ``step`` for
+    each one already made — the condition's count past the first. ``None`` with no
+    attack, or no reaction."""
+    rule = action.reaction
+    if rule is None or attack is None:
+        return None
+    applied = next(
+        (
+            c
+            for c in character.conditions
+            if c.condition_id == rule.condition and c.provenance is None
+        ),
+        None,
+    )
+    made = max(0, (applied.count if applied is not None else 1) - 1)
+    shift = rule.step * made
+    spec = bare_attack_check(attack)
+    modifier = spec.modifier + shift
+    detail = f"Attack {modifier:+d}"
+    if made:
+        detail += f", {made} earlier {'block' if made == 1 else 'blocks'} {shift:+d}"
+    label = f"{action.name} ({detail})" + (f" {rule.line}" if rule.line else "")
+    return replace(spec, label=label, modifier=modifier, dc=None, hint=action.tooltip)
+
+
+def reaction_changes(action: CombatAction) -> tuple[ConditionChange, ...]:
+    """What making the reaction once does to the actor: one more on the condition's
+    count (the next block is harder)."""
+    rule = action.reaction
+    return (ConditionChange(rule.condition),) if rule is not None else ()
 
 
 def check_spec(

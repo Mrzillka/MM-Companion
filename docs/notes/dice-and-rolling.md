@@ -841,7 +841,7 @@ is measured against, and the local-only `RollSpec.effect_rank` the caps read. On
 **temporary** with its amount (re-applying replaces it: one All-Out a turn). The rules
 and the caps are in [the actions notes](actions.md#combat-maneuvers).
 
-### The self actions (Aim, Charge, Defend, Recover, Drop Prone, Stand, Finishing, Catch)
+### The self actions (Aim, Block, Charge, Defend, Recover, Drop Prone, Stand, Finishing, Catch)
 
 `DiceSection.start_self_action(id)`, read off the record's `CombatEffect` by
 `core/rules/self_actions.py` (no action is named in code). An action with `options` asks
@@ -880,9 +880,20 @@ of three things:
 Recover also offers what it may shed (`recover_choices`): a recovery check for the most
 severe of its `recovery.from` list on the creature that offers one (rolled at once), a
 step down the fatigue ladder, or `RECOVER_DEFENSE_ONLY`; with nothing to shed there is no
-menu. "Once per scene" is in its tooltip, not enforced. `requires` / `refusedBy` grey
-Stand (not Prone) and Drop Prone (already Prone); `gmRuns` greys a player's Surprise
-Attack (the GM grants it, below).
+menu. "Once per scene" is in its tooltip, not enforced. `requires` (any one of a list)
+/ `refusedBy` grey Stand (not Prone), Escape (neither Restrained nor Bound) and Drop
+Prone (already Prone); `gmRuns` greys a player's Surprise Attack (the GM grants it,
+below).
+
+**Block** (phase 9) is a self action with a `reaction`. Taken while not Blocking it does
+its own effect: the green, temporary, stacking **Blocking** chip, and a history line.
+Taken again while Blocking it is a block (`CombatRunner._react`): the attack picker, then
+`core.rules.reaction_spec` — the attack's bare check (`bare_attack_check`: no save, no
+marks, so the maneuvers stay off it), the record's `step` (−2) for each block already
+made, and **no DC**: the attacker's result goes in the DC box by hand (the user's call —
+the GM's judge does not block for anyone). It is **loaded**, not thrown, and the chip's
+count goes up by one (`reaction_changes`), so "Blocking ×2" means one block made. The
+start of the next turn ("Clear temporary") resets it.
 
 ### One runner for both rollers (`ui/roller/combat_runner.py`)
 

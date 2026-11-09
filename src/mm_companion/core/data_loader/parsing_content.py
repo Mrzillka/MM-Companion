@@ -22,6 +22,8 @@ from .game_data import (
     ImpressRules,
     KillRule,
     ManeuverLimits,
+    OpposedStage,
+    ReactionRule,
     RecoveryRule,
     ResistOptions,
     SlamRules,
@@ -690,7 +692,9 @@ def _parse_degree_outcomes(raw: object) -> tuple[DegreeOutcome, ...]:
     rungs = [
         DegreeOutcome(
             max(1, _optional_int(r.get("degrees")) or 1),
-            _parse_condition_changes(r.get("applies")),
+            _parse_condition_changes(r.get("applies"))
+            + _parse_condition_changes(r.get("removes"), remove=True),
+            str(r.get("text", "") or ""),
         )
         for r in (raw if isinstance(raw, list) else ())
         if isinstance(r, dict)
@@ -706,18 +710,53 @@ def _parse_check(raw: object) -> CombatCheck | None:
     return None
 
 
+def _parse_checks(raw: object) -> tuple[CombatCheck, ...]:
+    """A targeted action's ``check``: ``"attack"`` (the attack picked), one
+    ``{kind, trait}``, or a list of them (the actor rolls the best)."""
+
+    if isinstance(raw, str) and raw:
+        return (CombatCheck(raw),)
+    entries = raw if isinstance(raw, list) else [raw]
+    found = []
+    for entry in entries:
+        check = CombatCheck(entry) if isinstance(entry, str) and entry else _parse_check(entry)
+        if check is not None:
+            found.append(check)
+    return tuple(found)
+
+
+def _parse_resist(raw: object) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (str(r["kind"]), str(r.get("trait", "")))
+        for r in (raw if isinstance(raw, list) else ())
+        if isinstance(r, dict) and r.get("kind")
+    )
+
+
 def _parse_targeted(raw: object) -> TargetedRules | None:
-    """A targeted action's ``targeted`` block (see :class:`TargetedRules`)."""
+    """A targeted action's ``targeted`` block (see :class:`TargetedRules`). Its ``dc`` is
+    a number, ``"defense"`` (the target's Defense), or ``{base, kind, trait}`` (a base
+    plus one of the target's traits)."""
 
     if not isinstance(raw, dict):
         return None
+    dc = raw.get("dc")
+    opposed = raw.get("opposed")
+    dc_from = None
+    if isinstance(dc, dict) and dc.get("kind"):
+        dc_from = CombatCheck(
+            str(dc["kind"]), str(dc.get("trait", "")), _optional_int(dc.get("base")) or 0
+        )
     return TargetedRules(
-        check=_parse_check(raw.get("check")),
-        dc=_optional_int(raw.get("dc")),
-        resist=tuple(
-            (str(r["kind"]), str(r.get("trait", "")))
-            for r in raw.get("resist", ()) or ()
-            if isinstance(r, dict) and r.get("kind")
+        checks=_parse_checks(raw.get("check")),
+        dc=_optional_int(dc),
+        vs_defense=dc == "defense",
+        dc_from=dc_from,
+        resist=_parse_resist(raw.get("resist")),
+        opposed=(
+            OpposedStage(_parse_checks(opposed.get("check")), _parse_resist(opposed.get("resist")))
+            if isinstance(opposed, dict)
+            else None
         ),
         ally=bool(raw.get("ally", False)),
     )
@@ -754,6 +793,7 @@ def _parse_combat_effect(raw: dict) -> CombatEffect:
 def _parse_combat_action(raw: dict) -> CombatAction:
     slam = raw.get("slamRules")
     recovery = raw.get("recovery")
+    reaction = raw.get("reaction")
     return CombatAction(
         id=str(raw.get("id", "")),
         name=str(raw.get("name", raw.get("id", ""))),
@@ -777,7 +817,7 @@ def _parse_combat_action(raw: dict) -> CombatAction:
             for o in raw.get("options", ())
             if isinstance(o, dict) and o.get("id")
         ),
-        requires=str(raw.get("requires", "")),
+        requires=_parse_requires(raw.get("requires")),
         refused_by=str(raw.get("refusedBy", "")),
         gm_runs=str(raw.get("gmRuns", "")),
         slam=(
@@ -799,7 +839,24 @@ def _parse_combat_action(raw: dict) -> CombatAction:
             else None
         ),
         targeted=_parse_targeted(raw.get("targeted")),
+        reaction=(
+            ReactionRule(
+                condition=str(reaction["condition"]),
+                step=_optional_int(reaction.get("step")) or 0,
+                line=str(reaction.get("line", "")),
+            )
+            if isinstance(reaction, dict) and reaction.get("condition")
+            else None
+        ),
     )
+
+
+def _parse_requires(raw: object) -> tuple[str, ...]:
+    """``requires``: one condition id, or a list of them (any one will do)."""
+
+    if isinstance(raw, str):
+        return (raw,) if raw else ()
+    return tuple(str(r) for r in raw if isinstance(r, str) and r) if isinstance(raw, list) else ()
 
 
 def _parse_combat(raw: dict) -> CombatRules:

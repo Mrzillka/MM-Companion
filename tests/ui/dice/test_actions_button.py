@@ -79,9 +79,24 @@ def test_a_players_menu_follows_the_data_and_leaves_out_the_gms_tiles(qapp, data
     titles = [t.text() for t in popup._titles]
     assert titles == ["Attack Maneuvers", "Actions", "Area & Group", "Dice"]
     assert popup.tile("impress").isEnabled()
-    # What this version cannot run yet is shown, greyed, saying so.
-    grab = popup.tile("grab")  # phase 9: not built yet
-    assert not grab.isEnabled() and NOT_BUILT in grab.toolTip()
+
+
+def test_an_action_this_version_cannot_run_is_shown_greyed(qapp, data) -> None:
+    """A mod's action the app has no road for is shown, greyed, saying so."""
+    from dataclasses import replace
+
+    from mm_companion.core.data_loader import CombatAction, CombatMenuSection, CombatRules
+
+    blank = CombatAction("mod_blank", "Blank", kind="targeted")
+    combat = CombatRules(
+        menu=(*data.combat.menu, CombatMenuSection("mod", "Mod", ("mod_blank",))),
+        actions=(*data.combat.actions, blank),
+        limits=data.combat.limits,
+    )
+    modded = replace(data, combat=combat)
+    section = DiceSection(modded, Character.new_default(modded))
+    tile = section.panel.open_actions().tile("mod_blank")
+    assert not tile.isEnabled() and NOT_BUILT in tile.toolTip()
 
 
 @pytest.mark.parametrize("gm", [False, True])

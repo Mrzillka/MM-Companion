@@ -20,7 +20,7 @@ every session.**
 | 7 | The GM's side: NPC chooser first, conditions on the NPC | done (2026-11-09) |
 | 7b | Team attack as a call to roll: a history card anyone answers, GM resolves | done (2026-11-09) |
 | 8 | Targeted actions I: Feint, Trick, Aid | done (2026-11-09) |
-| 9 | Targeted actions II: Grab, Trip, Disarm, Smash, Escape, Block | not started |
+| 9 | Targeted actions II: Grab, Trip, Disarm, Smash, Escape, Block | done (2026-11-09) |
 | 10 | Notes, debts, full test run, hand-off for merge | not started |
 
 Status values: `not started`, `in progress (<what is left>)`, `done (<date>)`.
@@ -146,6 +146,17 @@ Status values: `not started`, `in progress (<what is left>)`, `done (<date>)`.
     picker; −5 as a simple action). The target resists with the highest of its Close
     Combat, Ranged Combat, Deception or Insight (the app can't tell which combat skill
     "corresponds").
+19. **The hold** (asked 2026-11-09, phase 9): a grab puts a **lasting "Holding (Thug)"**
+    chip on the grabber (Hindered + Vulnerable, naming the held creature); its ✕ is letting
+    go. **Escape is a targeted action**: the escaper picks the grabber off the Scene, the
+    GM's app judges Strength or Sleight of Hand against **10 + the grabber's Strength**,
+    and a success takes Restrained/Bound off the escaper and Holding off the grabber.
+    (The plan's first idea — temporary Hindered/Vulnerable, Escape a self action with the
+    DC typed in — was turned down: a hold outlasts the turn.)
+20. **Block** (asked 2026-11-09, phase 9): **chip + loaded check.** The first press puts
+    a green Blocking chip on; each press while Blocking picks the attack and loads a
+    block check (−2 per block already made) with the DC box left for the attacker's
+    result, and adds to the chip's count. The GM's aimed-attack judge does **not** block.
 
 ---
 
@@ -208,9 +219,9 @@ Each one shifts **X, 0 ≤ X ≤ 5**, from one value to another.
 | Defend | self | green **Defending** +2 Defense, temporary. No roll |
 | Disarm | targeted | attack −2 vs Defense. Then the attack's Damage rank vs the target's Strength rank (opposed). A win: the target drops the item (narrated) |
 | Drop Prone | self | apply Prone (not temporary — it lasts until Stand) |
-| Escape | self | Strength *or* Sleight of Hand vs the grab DC (DC box). 1 degree ends the hold (removes Restrained/Bound from self). 2+: also move |
+| Escape | targeted (the grabber) | Strength *or* Sleight of Hand vs the grab's effect DC = 10 + the grabber's Strength (decision 19; p202, "effect DC" p17). 1 degree ends the hold: Restrained/Bound off self, Holding off the grabber. 2+: also move (narrated) |
 | Feint | targeted | an **attack check** (book p202; the plan first said "attack, Deception or Insight", which is the target's side) vs the highest of the target's Close Combat, Ranged Combat, Deception or Insight (decision 18). Success: the target is **Feinted** — Vulnerable against the feinter's next attack, spent by it. As a simple action: −5 |
-| Grab | targeted | close attack vs Defense. Then Strength vs the target's Strength or Dodge. 1 degree: **Restrained**. 2+: **Bound**. The grabber is Hindered + Vulnerable while holding (temporary, cleared on release) |
+| Grab | targeted | close attack vs Defense. Then Strength vs the target's Strength or Dodge. 1 degree: **Restrained**. 2+: **Bound**. The grabber is Hindered + Vulnerable while holding: a lasting **Holding (target)** chip (decision 19). A lost opposed check: grabbed, not held (narrated) |
 | Impress | targeted | exists (`core.rules.impress`) — moved into the menu |
 | Recover | self | green **Recovering** +2 Defense, temporary, plus the existing recovery roll for the most severe damage condition (`core.rules.recovery`). Once per scene (noted on the chip tooltip, not enforced) |
 | Smash | targeted | attack −2 (−5 against a hand-held object) vs Defense. A hit: Damage to the object (narrated) |
@@ -507,11 +518,29 @@ widget, log failures.
   `AttackController.resolve` reads `opposing_effects` and spends them (`_spend`). **No
   wire change**: the declaration rides the action channel, the outcome is ordinary
   `ApplyCondition` / `RemoveCondition` with a parameter.
+- **As built (phase 9):** loader — `TargetedRules` reshaped: `checks` (a tuple of
+  `CombatCheck`, best of; was `check`), `dc`, `vs_defense`, `dc_from`, `resist`,
+  `opposed` (`OpposedStage(checks, resist)`), `ally`, and the `uses_attack` property;
+  `COMBAT_CHECK_ATTACK` / `_DAMAGE` / `_RESISTANCE`, `TARGETED_ON_ACTOR`;
+  `DegreeOutcome.text` and a rung's `removes`; `ReactionRule` (`CombatAction.reaction`);
+  `CombatAction.requires` is a tuple (any one). Core (`targeted.py`): `bare_attack_check`,
+  `attack_damage_rank`, `_candidate` / `_best_candidate`, `targeted_opposed_spec`,
+  `targeted_dc_from`, `targeted_rung`; `targeted_resist_spec` reads the opposed stage's
+  candidates; `targeted_outcome_text(character=)` says removals. `self_actions.py`:
+  `reacting`, `reaction_spec`, `reaction_changes`. Data: the six records, the `holding`
+  condition, Blocking's text. UI: `TargetedDeclaration.opposed`;
+  `TargetedController._judge_hit` / `_spend` / `_opposed` / `_resist` (Feint's resist path
+  factored out), `_land` over target / ally / actor plus the rung's text,
+  `act_own(opposed=)`; `DiceSection._targeted_reason` is a method now (reads
+  `action_reason`); `GMCombatMixin._actor_reason` covers targeted actions;
+  `CombatRunner._react`; `action_menu.NO_OPPOSED_CHECK`. **No wire change**: the
+  declaration rides the action channel, the opposed check is an ask or a lead-only group.
 - **Targeted actions** reuse the targeting layer: the target is picked off the Scene
   (`ui/attack_targets.py`), the GM accepts on an `ActionCard`, the server rolls the
   NPC's side, and a player is asked. A two-stage action (Grab, Trip, Disarm) is the
-  aimed-attack road for stage one and the impress road for stage two. Results land in
-  the history as one table per action.
+  aimed-attack judge for stage one (`_judge_hit`) and the Feint road for stage two (the
+  actor's opposed check, then the target's resistance). Results land in the history as
+  one table per action.
 
 ### 3.4 Tests (see `docs/notes/testing.md`)
 
@@ -672,12 +701,15 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
 - [x] Fixed on the way: an aimed attack's save never came back at a live table.
 
 ### Phase 9 — Targeted actions II
-- [ ] Grab (attack vs Defense → Strength vs the target's Strength/Dodge; Restrained /
-      Bound; the grabber Hindered + Vulnerable temporary).
-- [ ] Trip (→ Prone), Disarm (−2; Damage rank vs Strength), Smash (−2 / −5; narrated).
-- [ ] Escape (Strength/Sleight of Hand vs the grab DC; removes the hold from self).
-- [ ] Block (Blocking temporary, stacking −2 per extra block; the roll vs the
-      attacker's result).
+- [x] Grab (attack vs Defense → Strength vs the target's Strength/Dodge; Restrained /
+      Bound; the grabber **Holding** — lasting, decision 19).
+- [x] Trip (→ Prone), Disarm (−2; Damage rank vs Strength), Smash (−2 / −5; narrated).
+- [x] Escape (Strength/Sleight of Hand vs 10 + the grabber's Strength — a targeted action,
+      decision 19; ends the hold on both).
+- [x] Block (Blocking temporary, stacking −2 per extra block; the roll vs the
+      attacker's result in the DC box — decision 20).
+- [x] Stage one judged as an aimed attack: the opposing conditions count and are spent.
+- [x] A hosted test runs both stages through a real session.
 
 ### Phase 10 — Finish
 - [ ] Every menu tile works; none is disabled except by a rule (the tooltip says
@@ -713,6 +745,40 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
 
 Newest first. Each entry: date, phase, what was done, what's next, gotchas, and the
 commit hash.
+
+- **2026-11-09 — Phase 9 (done).** Grab, Trip, Disarm, Smash, Escape and Block, player and
+  GM. Asked the user two questions, now decisions 19 (a lasting **Holding** chip on the
+  grabber; Escape a targeted action against 10 + the grabber's Strength) and 20 (Block:
+  chip + loaded check, the GM's judge does not block). Rules re-read: Block, Disarm,
+  Escape p202; Grab p203; Smash, Stand p204; Trip p205; "effect DC" = 10 + rank p17.
+  §3.3 "As built (phase 9)" has the names; `actions.md` "Grab, Trip, Disarm, Smash and
+  Escape" the detail. How it works: everything is new keys in the `targeted` block, read
+  generically — a list of candidate checks (best of), `"dc": "defense"`, a derived DC,
+  an `opposed` second stage, outcomes `on` the actor, rung `removes` and `text`. Stage one
+  goes through `_judge_hit`, the aimed attack's arithmetic (opposing conditions counted
+  and spent, minion routine hits); a hit leads into the opposed stage, whose actor half is
+  **worked out on the actor's sheet and carried in the declaration** (the GM can't see a
+  player's Damage rank: `effect_rank` is local) and rolled as an ask (player) or a
+  lead-only server group (NPC); then the target's resistance, the Feint path, now
+  `_resist`. Tests: `tests/core/test_targeted_actions_ii.py` (11),
+  `tests/ui/dice/test_targeted_ui_ii.py` (8), `tests/ui/gm/test_targeted_gm_ii.py` (9, one
+  hosted); three older tests that guarded the "not built yet" greying now use a synthetic
+  mod action (`test_actions_button.py`, `test_self_actions.py`) or check Block and
+  Escape's own gating (`test_self_actions_ui.py`). **Every tile in the menu now runs.**
+  **Decisions I made (small):** (1) the opposed checks are the actor's **best** of the
+  candidates (Trip's "close attack bonus or Strength") — the higher is always the better
+  pick — and the target's best too (its "choice" of Strength or Dodge); (2) a Grab or
+  Trip's attack counts and **spends** Aid / Feint / Trick conditions like any aimed attack
+  (it is an attack check between the two); (3) the GM roller's adjustment goes on an NPC's
+  opposed check as it does on its resistance; (4) Block's count bumps when the check is
+  **loaded**, not when it is rolled (the chip's ✕ / Clear temporary undo a stray one), so
+  "Blocking ×2" means one block made; (5) narrated rungs carry `{actor}` / `{target}`
+  placeholders; (6) a lost Grab says "grabbed, but not held" and lands nothing;
+  (7) Escape asks nothing but whom (no option, no attack). **Gotchas:** (1) the test fake
+  for `resolve_group` had no lead die — an NPC's opposed check is a lead-only group, so the
+  new tests stage one; (2) heredocs with backticks still break the Bash tool (three times
+  this session) — scripts go in the scratchpad. Next: phase 10 (every tile checked, notes,
+  `CLAUDE.md`'s sentence, debts, full run, screenshots, hand-off). **Tests:** the affected run (a full run on this branch) was **stopped at 87% by the system (low memory)**, with no failure up to there; the popup, window-flash and theme files past 87% were run after and are green (378). The rest of the last 13% (the other widget files, the main/start/mods windows) does not touch this change and is left to phase 10's full run. Commit: COMMIT_HASH.
 
 - **2026-11-09 — Phase 8 (done).** Aid, Feint and Trick, player and GM. Asked the user
   two questions, now decisions 17 (what they leave is **spent by the attack it is for**,

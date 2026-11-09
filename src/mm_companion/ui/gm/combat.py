@@ -30,11 +30,13 @@ from mm_companion.core.rules import (
     self_action_note,
     targeted_action,
     targeted_check_spec,
+    targeted_opposed_spec,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.action_menu import (
     NO_ALLY_AND_OPPONENT,
     NO_ONE_TO_TARGET,
+    NO_OPPOSED_CHECK,
     SKIP_TARGET,
     choose_from_menu,
 )
@@ -111,7 +113,10 @@ class GMCombatMixin:
         if action is None or action.needs_attack or action.kind == COMBAT_KIND_MANEUVER:
             if not attack_choices(party.character, self._data):
                 return NO_ATTACKS_MARK
-        if action is not None and self_action(self._data, action.id) is not None:
+        if action is not None and (
+            self_action(self._data, action.id) is not None
+            or targeted_action(self._data, action.id) is not None
+        ):
             reason = action_reason(self._data, action, party.character, gm=True)
             if reason:
                 return reason.rstrip(".")
@@ -222,13 +227,14 @@ class GMCombatMixin:
                 return
         self._combat.load(spec)
 
-    # -- Aid, Feint, Trick -------------------------------------------------------------
+    # -- the targeted actions: Aid, Feint, Trick, Grab, Trip, Disarm, Smash, Escape ------
 
     def _gm_targeted(self, action_id: str) -> None:
         """A targeted action's tile on the GM's roller: which NPC takes it, against whom
         (Aid: which ally first, then the opponent), which way, and with which of its
         attacks. Its check is rolled as that NPC and resolved once the die is in
-        (``TargetedController.act_own``)."""
+        (``TargetedController.act_own``) — a Grab's or a Trip's opposed check rolled for
+        it once the attack has hit."""
         action = targeted_action(self._data, action_id)
         if action is None or action.targeted is None:
             return
@@ -260,14 +266,28 @@ class GMCombatMixin:
                 return
             option = action.options[index].id
         attack = None
-        if action.targeted.check is None:
+        if action.targeted.uses_attack:
             attack = self._combat.choose_attack()
             if attack is None:
                 return
         check = targeted_check_spec(self._data, action, option, party.character, attack)
         if check is None:
             return
-        self._targeted.act_own(party, action.id, option, target, self._combat.own(check), ally)
+        opposed = targeted_opposed_spec(self._data, action, option, party.character, attack)
+        if action.targeted.opposed is not None and opposed is None:
+            self._show_notice(
+                NO_OPPOSED_CHECK.format(action.name.lower()), theme.color("text.muted.rich")
+            )
+            return
+        self._targeted.act_own(
+            party,
+            action.id,
+            option,
+            target,
+            self._combat.own(check),
+            ally,
+            opposed=self._combat.own(opposed) if opposed is not None else None,
+        )
 
     def _pick_party(self, parties: list[ImpressParty], point, caption: str) -> ImpressParty | None:
         """One creature off a plain menu, each line *caption* with its name in."""

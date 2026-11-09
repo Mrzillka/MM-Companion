@@ -108,9 +108,13 @@ def test_stand_is_live_only_while_prone(qapp, data) -> None:
     assert not section.panel.open_actions().tile("drop_prone").isEnabled()
 
 
-def test_the_self_actions_not_built_yet_stay_greyed(qapp, data) -> None:
-    popup = DiceSection(data, _hero(data)).panel.open_actions()
-    assert not popup.tile("block").isEnabled() and not popup.tile("escape").isEnabled()
+def test_block_is_live_and_escape_waits_for_a_hold(qapp, data) -> None:
+    hero = _hero(data)
+    section = DiceSection(data, hero)
+    popup = section.panel.open_actions()
+    assert popup.tile("block").isEnabled()
+    escape = popup.tile("escape")
+    assert not escape.isEnabled() and "Restrained or Bound" in escape.toolTip()
 
 
 def test_surprise_attack_is_the_gms_to_grant(qapp, data) -> None:

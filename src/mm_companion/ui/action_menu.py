@@ -40,10 +40,14 @@ SKIP_TARGET = "Skip (no target)"
 
 #: Why the Attack and Area tiles are greyed on a sheet with nothing to use them with.
 NO_ATTACKS = "This character has no attack to make."
-#: Why Aid, Feint and Trick are greyed: they are taken against someone on the Scene.
+#: Why the targeted actions (Aid, Feint, Grab …) are greyed: they are taken against
+#: someone on the Scene.
 NEEDS_A_TABLE = "Join a session first: the GM resolves it against someone on the Scene."
 NO_ONE_TO_TARGET = "Put someone on the Scene first: the action is taken against them."
 NO_ALLY_AND_OPPONENT = "Aid needs both an ally and an opponent on the Scene."
+#: Said when the attack picked cannot make an action's opposed check (Disarm's Damage
+#: rank, with an attack that deals none). ``{}`` is the action's name.
+NO_OPPOSED_CHECK = "That attack cannot make the {} check: it deals no Damage. Pick another."
 
 NO_AREAS = (
     "No area to use: buy an area power, or switch an attack's area use on (right-click "

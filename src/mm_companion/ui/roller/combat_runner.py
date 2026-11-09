@@ -38,6 +38,9 @@ from mm_companion.core.rules import (
     line_key,
     maneuver_action,
     maneuver_limit,
+    reacting,
+    reaction_changes,
+    reaction_spec,
     recover_choices,
     self_action,
     self_action_changes,
@@ -294,20 +297,24 @@ class CombatRunner:
         )
 
     def start_self_action(self, action_id: str):
-        """A self action's tile (Aim, Charge, Defend, Recover, Drop Prone, Stand, Finishing
-        Attack, Catch — see :mod:`~mm_companion.core.rules.self_actions`).
+        """A self action's tile (Aim, Block, Charge, Defend, Recover, Drop Prone, Stand,
+        Finishing Attack, Catch — see :mod:`~mm_companion.core.rules.self_actions`).
 
         One with options asks which first, on a plain menu (Charge or Slam; Stand by a
         check or slowly). Then it rides on the next roll as a lane line, puts conditions
         on the actor at once (with a line in the history), or loads its check onto the
-        chip. Returns the line it started, if any; ``None`` when it was called off or did
-        its work at once.
+        chip. Taken again while its condition is on, Block is a block instead
+        (:meth:`_react`). Returns the line it started, if any; ``None`` when it was called
+        off or did its work at once.
         """
         action = self_action(self._data, action_id)
         actor = self.actor
         if action is None or actor is None:
             return None
         if action_reason(self._data, action, actor.character, gm=bool(actor.name)):
+            return None
+        if reacting(action, actor.character):
+            self._react(action)
             return None
         panel = self._panel
         option = None
@@ -345,6 +352,22 @@ class CombatRunner:
         if check is not None:
             self._throw(check, load=True)
         return None
+
+    def _react(self, action) -> bool:
+        """Block while Blocking: which attack blocks (the picker), then its check is
+        loaded onto the chip — the DC box left for the attacker's result — harder by the
+        record's step for each block already made, which this one adds to. Whether it
+        was loaded."""
+        actor = self.actor
+        attack = self.choose_attack()
+        if actor is None or attack is None:
+            return False
+        spec = reaction_spec(self._data, action, actor.character, attack)
+        if spec is None:
+            return False
+        actor.land(reaction_changes(action))
+        self._throw(spec, load=True)
+        return True
 
     def _start_self_line(self, action, option_id: str, title: str, effect):
         """Put a self action that rides on the next roll on the lane, replacing the same

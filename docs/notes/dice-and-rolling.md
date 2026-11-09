@@ -11,7 +11,7 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   page is no use mid-fight, so it starts in the strip. There is no standalone roller
   window any more (no `Tools` menu, no launcher button): `ui/dice_roller.py` offers
   `DiceRollerPanel` (the roll controls — GM Mode embeds one with `hidden_option=True`;
-  its shape, Request row and quick rolls are mixins in `ui/roller/`, while the rolling
+  its shape, Ask to Roll form and quick rolls are mixins in `ui/roller/`, while the rolling
   stays in `dice_roller.py`, where the test suite patches `roll_d20`), and `ui/roller/`
   holds `LocalRollHistory` (the private list of one's own rolls, in `history.py`) and
   `DiceRollerView` (a panel plus **whichever history is right** — the private one
@@ -30,6 +30,63 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   after the block was built, so `CharacterSheet.sync_session()` fans a duck-typed
   `sync_session` out to the blocks and `attach_player_session` calls it at both ends of
   a session.
+- **The panel's layout** (reworked 2026-11-10, the user's call after a UI/UX review):
+  from the top, the chip slot; **Modifier** — one snug signed box with the
+  circumstance steps either side (`−5 −2 [+0] +2 +5`); one **toolbar** — the DC box,
+  **Take 10**, **Actions ▾** — in a `FlowContainer` that wraps when narrow; the action
+  lane; then the die with its result **beside** it; then the quick-roll pills; then the
+  history under a plain heading. What it replaced, and why:
+  - **No group boxes.** "Roll", "Quick rolls" and "History" were three frames nested in
+    the block's own. The view pads its contents by `space.sm` instead (the Roll box used
+    to supply that), and a history is `view.titled_box` — a muted bold heading over the
+    list, whose scroll area already draws an edge round the cards.
+  - **The steps are data**: `system.circumstanceModifiers` (`[2, 5]`, PDF p17's minor and
+    major), parsed to `SystemRules.circumstance_modifiers` and pushed in by the host with
+    `set_modifier_steps` beside `set_roll_choices` — the panel reads no game data. A step
+    **adds** (`add_bonus`), so +2 twice is +4. They replaced a −30..+30 slider, which is
+    no way to hit +2; the box keeps the full ±30.
+  - **The DC is one box where 0 (`—`) is no DC** (`dc()` / `set_dc()`). It was a checkbox
+    beside a box that sat greyed at 15 while unticked. Nobody grades against DC 0.
+  - **Take 10 is a button** (`take_ten`) that makes the check *now* as a routine one —
+    whatever is loaded, at the modifier and DC set — rather than a checkbox that changed
+    what the next click of the die did. `_routine_next` carries it for that one roll and
+    is cleared by the result *and* by `_abandon_roll` (with no box ticked, nothing would
+    show a stuck flag). It no longer combines with an aimed attack's roll; it did not
+    need to, since the GM's app counts a routine result against a minion by itself
+    (`routine_total`, see [the minions notes](minions.md)).
+  - **The result sits beside the die** (`_arrange_die`), which is smaller (`die.size`
+    120, `size.dice-face` 28): the 160px die with three lines under it was the tallest
+    thing in the strip. Compact mode stacks them again, beside the quick rolls. The
+    readout no longer repeats the loaded trait (`Rolling Athletics — click the die.`):
+    the chip names it and the ring on the die says it is armed, so it just says
+    `IDLE_PROMPT`, muted (`text.muted.rich` — a palette role means nothing in HTML).
+  - **Beside the die, the reflow counts the die part at its preferred width**
+    (`RollerShapeMixin.row_minimum_width`). The readout word-wraps, so its own minimum is
+    a word, and taken at that the slimmer panel "fitted" a row in the 360px strip with
+    the result squeezed to a sliver. A column still narrows as far as it likes.
+  - **And the view counts the panel at its stacked preferred width**
+    (`DiceRollerView.row_minimum_width` → `column_natural_width`) before putting the
+    history beside it, for the same reason one level up: summing the two minimums put
+    the history beside a 114px roller in a 370px strip, with the die cut in half.
+  - **Compact stacks the result under the die only while there are pills beside it**
+    (`sync_die_arrangement`, re-run by `_rebuild_quick_strip`). Alone in the row, the
+    die part takes the row and keeps the result beside it.
+  - **A change of readout re-divides the view** (`_readout_changed`, from
+    `_update_readout` and `_abandon_roll`), and invalidates the layouts between the
+    readout and the panel *first*. Qt passes that invalidation up one level per turn of
+    the event loop, so the view's re-division read the panel's old height and kept it:
+    the unjudged-attack warning, several lines long, was cut off with the bottom of the
+    die (the user's report, 2026-11-10, Compact in the strip).
+    `test_a_long_result_is_never_cut_off` fails if either of the last two is undone.
+  - **The Actions button stays put**: it is on the toolbar *above* the lane, so a pick
+    that adds a line no longer moves it out from under the pointer.
+  - **Ask to Roll is a form off the Actions popup** (see "Asking the table to roll").
+  - **Quick rolls are pills** that are hidden altogether while there are none; the empty
+    private history says how to fill them (`LOCAL_EMPTY_TEXT`). See the quick rolls
+    bullet below.
+  - The bottom strip used to clip the die below the window (a column of four in a short
+    strip); the slimmer panel makes the one row of four, and no longer needs fixing on
+    its own.
 - **Deferral is a window, not a flag, and that was a bug first.** The shared history
   holds one's *own* roll back so the card lands as the die settles rather than the
   instant the server answers. Only the roller's `sessionRollRevealed` lets a held roll
@@ -66,7 +123,7 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   The bridge's event callbacks run on socket threads, so all four roll signals go
   through the internal `_feed` signal to reach the GUI thread, where the timer lives.
   Tests turn it off (`_peer_rolls_land_at_once` in `tests/ui/conftest.py`).
-- **The readout under the die does not decide the die's width.** A word-wrapped
+- **The readout beside the die does not decide the die part's width.** A word-wrapped
   `QLabel` prefers a width worked out from its text, and beside the quick rolls
   (compact) or in a row the die part takes exactly its preferred width — so every roll
   slid the die sideways and re-wrapped the text, worst with a long session label.
@@ -75,7 +132,7 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   markup and fonts, so it follows the theme and never the roll.
 - **A card is as narrow as its longest word, and widens only when it has room.** Every
   roll button on a card is a `WrappingButton` (`roll_button`), and the small buttons
-  (☆, Show, ↶, ✕, the private card's −) sit beside the card's first line
+  (☆, Show, ↶, ✕) sit beside the card's first line
   (`heading_row`), not down its side. There they take width only from the name line,
   which wraps, and every line below gets the card's whole width. Down the side they
   made the card that wide all the way down. "Show" is only as wide as its word
@@ -98,6 +155,15 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   die roll"* (`kind == KIND_ROLL`) rather than *"is this not a note"*: a request has
   no die either, and `RollRecord.from_dict` back-fills `KIND_ROLL` for a log line
   written before any of this, so the test is safe on replayed history.
+- **Quick rolls** are pills (`_QuickChip`): the caption is a flat `QToolButton` — a
+  push button asks for the platform's default width, which made every pill a slab —
+  that rolls on a click and **drags** to reorder once the pointer passes the drag
+  distance (it used to need a `⠿` grip), and a `×` shown only while the pointer is over
+  the pill, its room kept while hidden so the row never re-wraps under the pointer
+  (right-click ▸ Remove does the same). The whole part is hidden while the strip is
+  empty. Private history cards are titled `d20` (or `Take 10`) when nothing was loaded,
+  so no card is a bare number, and their remove button is `✕` like every other card's
+  (a `−` read as "collapse").
 - **Quick rolls** are capped at `MAX_QUICK_ROLLS` (6). The cap is a layout constraint,
   not a preference: the strip shares the block with the controls and the die, so an
   unbounded chip list ratchets the block — and the pinned strip holding it — ever
@@ -178,7 +244,7 @@ shows the spec chip, the panel grows ~50px, and the strip answered with a scroll
 (The chip no longer grows the panel at all: it sits in `_chip_slot`, a `QStackedWidget`
 that shows a dashed empty outline, `#specSlot`, with a muted `CHIP_SLOT_HINT` in it,
 until something is loaded, and is as tall as the chip either way. `contentChanged` still
-fires for the readout under the die, and for the action lane, which *does* grow.)
+fires for the readout beside the die, and for the action lane, which *does* grow.)
 - **The panel says when it changed size** (`contentChanged`, above). Without it the
   splitter kept handing the panel its old share *plus* the chip.
 - **The history is the elastic part**, and its two heights are deliberately different
@@ -458,7 +524,7 @@ the Initiative readout to load it into the roller's chip, **double-click** to th
 it; click a line of a power card's dice footer to roll it outright. The same rule as
 everywhere applies — *the widget never computes the number*.
 
-One click loading rather than rolling is what makes the sliders and the DC box
+One click loading rather than rolling is what makes the modifier and the DC box
 usable: you name the trait, then set the situational extras, then throw. A
 double-click necessarily fires the single click first, and that is left alone rather
 than deferred by the double-click interval — rolling loads the same spec anyway, so
@@ -487,9 +553,10 @@ had their look. Three things fall out of it:
   it, as the caption for slider values that stayed set — but the sliders are now spent
   by the roll (below), so a chip left standing would be naming numbers that are gone.
 
-**And the slider is spent by the roll.** Bonus/Penalty is **one two-way slider**
-(−30..+30, centred, `MODIFIER_LIMIT`; a snug, arrowless `SignedSpinBox`, `+3` / `-3`,
-at the right edge of the row with the slider taking the slack) — it used to be two sliders, a Bonus and a Penalty. It is a circumstance of
+**And the modifier is spent by the roll.** It is **one signed box** (−30..+30,
+`MODIFIER_LIMIT`; a snug, arrowless `SignedSpinBox`, `+3` / `-3`, between its
+circumstance steps) — it used to be two sliders, a Bonus and a Penalty, then one
+two-way slider. It is a circumstance of
 *one* check — cover against this attack, Extra Effort's "+2 on a single check" — yet a
 value left in it used to ride along on every roll after it, unnoticed.
 `_spend_extras` zeroes it (and drops the action lines the roll used, below) beside each
@@ -519,7 +586,7 @@ is loaded, but on a *clear* only while the readout is not holding a result — a
 clearing is precisely what `_settle_spec` does one line after the roll wrote one there.
 
 The chip is **one line, always**: its caption is an `ElidingLabel` (the whole caption,
-and the spec's hint, in the tooltip; the readout under the die names the trait in
+and the spec's hint, in the tooltip; the chip's tooltip names the trait in
 full) and its vertical policy is `Maximum`. It used to word-wrap, and a wrapped label
 asks for its second line only through height-for-width, which nothing above the Roll
 box passes on — so a long trait in a narrow strip got one line's height for two and was
@@ -535,7 +602,7 @@ drawn squashed, and a tall compact window stretched it the other way.
 - Two things a spec deliberately does *not* know, because this character's sheet
   cannot see them: an attack's **DC** (the target's Defense — `dc` stays `None` and
   the roller's DC box supplies it) and a save's **modifier** (the target's
-  resistance — `modifier` is 0 and the Bonus/Penalty slider supplies it).
+  resistance — `modifier` is 0 and the modifier box supplies it).
 - `power_rolls` replaced the card footer's prose-only `roll_lines`, which built
   strings like `"8 vs. Defense"` and threw the numbers away. It reads them from
   `powers_terms.effect_roll_numbers` (`check_actor`/`dc`/`attack`, factored out of
@@ -649,8 +716,8 @@ drawn squashed, and a tall compact window stretched it the other way.
 
 ## Asking the table to roll (matters when touching the roller or the session log)
 
-The roller's **Request** row — a trait combo, a bare DC spin box, an "Ask" button —
-puts a roll in *everyone's* history for somebody else to make. The chain, run
+The roller's **Ask to Roll** form — a trait combo, a bare DC spin box, an "Ask"
+button — puts a roll in *everyone's* history for somebody else to make. The chain, run
 backwards: the save chip exists because an attack landed, and there was no way to
 ask for a check nobody had provoked.
 
@@ -667,20 +734,24 @@ ask for a check nobody had provoked.
   character, so there is nothing honest to localize on anyone else's sheet). Labels
   are full names rather than `pin_label`'s chip abbreviations: these are read in a
   combo and in a sentence, where `AWE` is a riddle.
+- **It is a popup, not a row** (`RollerRequestsMixin._build_request_form`, a
+  `Qt.Popup` `QFrame` child of the panel, built once so it remembers the last trait).
+  It used to be a row of the roller, always on screen: three greyed controls on the
+  busiest part of the panel for a verb used a few times a session. The Actions popup's
+  **Ask** tile (`ACTION_REQUEST`, the panel's own like Reroll, in `combat.menu`'s Dice
+  section) opens it with `open_request(at)` — on the next turn, once the Actions popup
+  has closed, since two popups open at once fight over which one a click closes.
+  `request_reason()` greys the tile (`NO_REQUEST_TRAITS`) when the host gave no traits.
+  Ask emits and hides the form.
 - **The panel is handed the answer, not the data** — `set_roll_choices(groups)`
-  beside `set_localizer`, and the row **hides itself** (emitting `contentChanged`,
-  which is not optional — see "The Dice block's height") when a host supplies none.
+  beside `set_localizer`.
   It emits `rollRequested` and neither sends nor rolls: where a request goes is the
   question `post_note` already answers, so `DiceSection.request_roll` is that method
   written twice — session first, private history off the air. The GM window answers
   for itself, because it owns its history and the view's fallback stands down there.
-- **The DC box is a plain spin box where 0 means no DC.** The DC row above it (the
-  "DC" box and its number, a rule, then Routine, in one `FlowContainer` that wraps
-  them onto two lines only when the roller is too narrow, the rule dropping out
-  then) needs a checkbox because the panel has to tell "no DC" from "DC 0" for a
-  roll it *grades*; nobody asks for a roll against DC 0. It is also **arrowless**:
-  the theme reserves ~50px for the arrows the platform style draws, which took 148px
-  of a 210px cell and clipped the trait name to "Trai".
+- **The DC box is a plain spin box where 0 means no DC**, shown as `—`
+  (`setSpecialValueText`) — the same rule as the roller's own DC box now. It is also
+  **arrowless**: the theme reserves ~50px for the arrows the platform style draws.
 - **The button is on every card, including the asker's**, and this is the one place
   the `chain_widgets(localize=False)` rule is deliberately reversed — you *are* a
   target of your own request. Hence `request_widgets`, a sibling rather than a reuse:
@@ -731,8 +802,8 @@ of NPCs — often fewer. Two answers, and they are independent.
 
 ## The Actions button
 
-Under the action lane — right under the Bonus/Penalty slider while the lane is empty,
-under its last line otherwise — one centred **Actions** button (the old Action row of
+On the toolbar, after the DC box and Take 10 — **above** the action lane, so it never
+moves when a pick puts a line there — the **Actions ▾** button (the old Action row of
 push buttons — Reroll, Impress, Area — is gone). It opens the **Actions popup**
 (`ui/action_grid.py`, see [the UI utilities notes](ui-utilities.md)): titled sections of
 square icon tiles, built from `actions.json`'s `combat` block by
@@ -755,18 +826,21 @@ available moves (a roll comes back, the GM forms an NPC group).
   opens the same window the group card's menu does. **Team attack** is the call to roll
   (`ui/team_call.py`), greyed off the air or with nobody on the Scene; the NPC-group
   window is on the group's ☰ menu only.
-- **Reroll is the panel's own**: picking it calls `reroll()` and is never reported.
+- **Reroll and Ask are the panel's own**: picking Reroll calls `reroll()`, Ask opens
+  the Ask to Roll form; neither is reported.
   Every other pick goes out on `actionRequested(key)`, which is what the hosts' Impress
   and Area handlers always listened to. `can_reroll` replaces the old button's enabled
   state as the thing a test reads.
 - A ruleset with no `combat.menu` falls back to one section of the host's own
-  `(key, caption, tooltip)` triples (`IMPRESS_ACTION`, `AREA_ACTION`) plus Reroll.
+  `(key, caption, tooltip)` triples (`IMPRESS_ACTION`, `AREA_ACTION`) plus Reroll,
+  and Ask when it is offered.
 - Building the popup is wrapped: a bad menu (a mod's data) is logged
   (`log_exception`) and costs the popup, never the panel.
 - The button is in `_input_widgets`, so it is disabled while the die tumbles (the old
   Impress button was not; Reroll was).
 - The run-mm-companion driver shoots it: `driver.py actions-popup` /
-  `actions-popup-gm` (each also writes `<target>-window.png`).
+  `actions-popup-gm` (each also writes `<target>-window.png`), and `request-form` for
+  the Ask to Roll form.
 
 See [the actions notes](actions.md), which also cover the two `RollSpec` additions the
 action brought (`KIND_BEST_OF` and `dc_from_total`).
@@ -801,17 +875,18 @@ action brought (`KIND_BEST_OF` and `dc_from_total`).
 
 ### The action lane
 
-Under the slider, `ui/roller/action_lane.py`: an `ActionLane` of `ActionLine`s, one per
+Under the toolbar, `ui/roller/action_lane.py`: an `ActionLane` of `ActionLine`s, one per
 action riding on the next roll — its name (in the line's `tone`), a `✕`, then a slider
 and spin over `0..X_max` (*configurable*) or a fixed caption. The panel's way in is
 `start_action_line(key, name, limit=…, fixed=…, needs_attack=…)`; re-picking an action
 replaces its line.
 
-- **It takes no room when empty**: the lane hides, and the Actions button under it
-  moves up into its row. It used to hold one line's height open (a hidden placeholder
-  line with `retainSizeWhenHidden`) so the first action never resized the roller, but
-  the blank row read as a gap; the user chose the button there instead (2026-11-09), so
-  **every line grows the roller a row** (`contentChanged` covers it). A fixed line is as
+- **It takes no room when empty**: the lane hides. It used to hold one line's height
+  open (a hidden placeholder line with `retainSizeWhenHidden`) so the first action never
+  resized the roller, but the blank row read as a gap, so **every line grows the roller a
+  row** (`contentChanged` covers it). The Actions button rode under the last line for a
+  while (2026-11-09) and moved away from the pointer with each pick; it is on the toolbar
+  above the lane now (2026-11-10). A fixed line is as
   tall as a spin box (measured off one, then discarded), so every kind of line is the
   same height.
 - **The limit is the host's**: `limit(spec) -> (maximum, reason)`, the loaded attack in.
@@ -972,10 +1047,3 @@ the **server** rolls it (`RollRequest.reroll`, protocol v12) and stamps `reroll`
 record itself — a client's label is not evidence, and every seat should see which dice
 were lucky. `reroll_label` adds "(reroll)" wherever a roll is named. It spends nothing —
 no Hero Point, no Luck rank — which is the player's to mark.
-
-## The Request row sits on the grid
-
-The trait combo is in the sliders' column and the DC box with its "Ask" in the spin
-boxes' column, cell for cell. It used to span both columns as one free-running line,
-which lined up with nothing above it. The DC box shows `—` for 0 (`setSpecialValueText`):
-0 means "no DC" here, and a bare `0` read as a DC of nothing.

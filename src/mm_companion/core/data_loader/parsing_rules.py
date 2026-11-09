@@ -804,6 +804,15 @@ def _parse_system(raw: dict) -> SystemRules:
         critical_miss_resistance_bonus=int(
             sys.get("criticalMissResistanceBonus", defaults.critical_miss_resistance_bonus)
         ),
+        circumstance_modifiers=tuple(
+            sorted(
+                {
+                    abs(int(step))
+                    for step in sys.get("circumstanceModifiers", defaults.circumstance_modifiers)
+                    if int(step)
+                }
+            )
+        ),
         trait_keys=trait_keys,
         paired_caps=paired_caps,
         unscoped_scope_values=tuple(

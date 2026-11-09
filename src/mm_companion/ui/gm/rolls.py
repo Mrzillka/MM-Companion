@@ -408,7 +408,7 @@ class GMRollsMixin:
             self._roller.roll_spec(spec, minion=minion)
 
     def _request_roll(self, spec: object) -> None:
-        """Ask the table to roll something — the Request row's handler.
+        """Ask the table to roll something — the Ask to Roll form's handler.
 
         The twin of :meth:`~mm_companion.ui.sections.dice.DiceSection.request_roll`,
         and it has to be written out here for the reason

@@ -1,5 +1,5 @@
-"""Quick rolls: saved rolls in a strip under the die, one click to reuse, named, dragged to
-reorder, and kept in the settings.
+"""Quick rolls: saved rolls as a row of pills under the die, one click to reuse, named,
+dragged to reorder, and kept in the settings.
 """
 
 from __future__ import annotations
@@ -7,17 +7,20 @@ from __future__ import annotations
 from PySide6.QtCore import QMimeData, QPoint, Qt, Signal
 from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
     QHBoxLayout,
     QInputDialog,
-    QLabel,
     QMenu,
     QPushButton,
+    QSizePolicy,
+    QToolButton,
     QWidget,
 )
 
 from mm_companion.core import storage
 from mm_companion.core.rules import RollSpec
+from mm_companion.ui import theme
 from mm_companion.ui.flow_layout import FlowContainer
 from mm_companion.ui.roll_history import (
     MAX_QUICK_ROLLS,
@@ -49,27 +52,74 @@ def _quick_label(params: dict) -> str:
     return params.get("name") or _params_label(params)
 
 
-class _DragGrip(QLabel):
-    """A small drag handle that starts a reorder drag carrying its chip's index.
+class _QuickRollButton(QToolButton):
+    """A pill's caption: a click rolls it, a drag moves the pill along the row.
 
-    Sits at the left of a quick-roll chip so the drag gesture never collides with
-    the chip's own roll/remove buttons.
+    The pill used to carry a ``⠿`` grip for the drag, a third control on something
+    that is mostly one word. A drag only starts once the pointer has moved past the
+    platform's drag distance, so a click is still a click.
+
+    A tool button rather than a push button: a push button asks for the platform's
+    default width, which made every pill a slab, and the theme's padding on it clipped
+    any width worked out by hand.
     """
 
-    def __init__(self, index: int) -> None:
-        super().__init__("⠿")
+    def __init__(self, text: str, index: int) -> None:
+        super().__init__()
         self._index = index
-        self.setCursor(Qt.CursorShape.OpenHandCursor)
-        self.setToolTip("Drag to reorder")
+        self._press: QPoint | None = None
+        self.setText(text)
+        self.setAutoRaise(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt override
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._press = event.position().toPoint()
+        super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt override
-        if not (event.buttons() & Qt.MouseButton.LeftButton):
+        moved = self._press is not None and (
+            (event.position().toPoint() - self._press).manhattanLength()
+            >= QApplication.startDragDistance()
+        )
+        if moved and event.buttons() & Qt.MouseButton.LeftButton:
+            self._press = None
+            # Let go of the press first, so the release the drag swallows is no click.
+            self.setDown(False)
+            drag = QDrag(self)
+            mime = QMimeData()
+            mime.setData(_DRAG_MIME, str(self._index).encode("ascii"))
+            drag.setMimeData(mime)
+            drag.exec(Qt.DropAction.MoveAction)
             return
-        drag = QDrag(self)
-        mime = QMimeData()
-        mime.setData(_DRAG_MIME, str(self._index).encode("ascii"))
-        drag.setMimeData(mime)
-        drag.exec(Qt.DropAction.MoveAction)
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt override
+        self._press = None
+        super().mouseReleaseEvent(event)
+
+
+class _QuickChip(QFrame):
+    """One quick roll as a pill, whose ``×`` shows only while the pointer is over it.
+
+    The ``×`` keeps its room while hidden, so the row never re-wraps under the
+    pointer; right-click ▸ Remove does the same for anyone not using a mouse there.
+    """
+
+    def __init__(self, remove: QPushButton) -> None:
+        super().__init__()
+        self._remove = remove
+        policy = remove.sizePolicy()
+        policy.setRetainSizeWhenHidden(True)
+        remove.setSizePolicy(policy)
+
+    def enterEvent(self, event) -> None:  # noqa: N802 - Qt override
+        self._remove.show()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802 - Qt override
+        self._remove.hide()
+        super().leaveEvent(event)
 
 
 class QuickRollStrip(FlowContainer):
@@ -296,13 +346,33 @@ class RollerQuickRollsMixin:
                 widget.deleteLater()
         for index, entry in enumerate(self._quick_rolls):
             self._quick_flow.addWidget(self._make_quick_chip(entry, index))
+        # Nothing at all while empty: the empty history says how to fill it.
+        self._quick_part.setVisible(bool(self._quick_rolls))
+        # ...and in the compact shape the result moves under the die only while there
+        # are pills beside it.
+        self.sync_die_arrangement()
         self.updateGeometry()
         self.quickRollsChanged.emit()
         self.contentChanged.emit()
 
     def _make_quick_chip(self, entry: dict, index: int) -> QWidget:
-        chip = QFrame()
-        chip.setFrameShape(QFrame.Shape.StyledPanel)
+        remove_button = QPushButton("×")
+        remove_button.setFlat(True)
+        remove_button.setFixedWidth(int(theme.metric("column.chip-button")))
+        remove_button.setToolTip("Remove this quick roll")
+        remove_button.clicked.connect(lambda _=False, e=entry: self._remove_quick_roll(e))
+
+        chip = _QuickChip(remove_button)
+        chip.setObjectName("quickChip")
+        chip.setStyleSheet(
+            "#quickChip {"
+            f" border: {int(theme.metric('border.width'))}px solid"
+            f" {theme.wash('accent.dice', 0.45)};"
+            f" border-radius: {int(theme.metric('radius.chip'))}px;"
+            f" background: {theme.wash('accent.dice', 0.08)};"
+            "}"
+        )
+        chip.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         # Right-click is where a chip is named. Set on the frame alone: a child button
         # leaves a context-menu event unhandled, so it propagates up to here.
         chip.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -310,23 +380,18 @@ class RollerQuickRollsMixin:
             lambda pos, c=chip, e=entry: self._show_chip_menu(c, pos, e)
         )
         layout = QHBoxLayout(chip)
-        layout.setContentsMargins(4, 2, 4, 2)
-        layout.setSpacing(2)
+        small = int(theme.metric("space.xs"))
+        layout.setContentsMargins(int(theme.metric("space.sm")), small, small, small)
+        layout.setSpacing(small)
 
-        layout.addWidget(_DragGrip(index))
-
-        roll_button = QPushButton(_quick_label(entry))
-        roll_button.setFlat(True)
-        roll_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        roll_button.setToolTip(f"Load and roll — {_params_label(entry)}")
+        roll_button = _QuickRollButton(_quick_label(entry), index)
+        roll_button.setToolTip(
+            f"Roll it — {_params_label(entry)}. Drag to reorder; right-click to rename."
+        )
         roll_button.clicked.connect(lambda _=False, e=entry: self._apply_quick_roll(e))
         layout.addWidget(roll_button)
-
-        remove_button = QPushButton("×")
-        remove_button.setFixedWidth(20)
-        remove_button.setToolTip("Remove this quick roll")
-        remove_button.clicked.connect(lambda _=False, e=entry: self._remove_quick_roll(e))
         layout.addWidget(remove_button)
+        remove_button.hide()
         return chip
 
     def _show_chip_menu(self, chip: QWidget, pos: QPoint, entry: dict) -> None:

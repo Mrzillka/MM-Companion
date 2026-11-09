@@ -758,6 +758,33 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
 Newest first. Each entry: date, phase, what was done, what's next, gotchas, and the
 commit hash.
 
+- **2026-11-10 — Roller UI/UX rework (the user asked, after a review of the roller).**
+  All of it on this branch, the user's call. No group boxes (the view pads by
+  `space.sm`; histories are `view.titled_box`). **Modifier**: one snug signed box with
+  the circumstance steps either side, from data (`system.circumstanceModifiers`
+  `[2, 5]`, PDF p17, pushed in by `set_modifier_steps`); the −30..+30 slider is gone.
+  **Toolbar**: DC (one box, `—` = none; `dc()`/`set_dc()`), **Take 10** (a button,
+  `take_ten`, that makes the check now), **Actions ▾** — above the lane, so it no longer
+  moves. **Ask to Roll**: the Request row is a popup form off a new **Ask** tile in the
+  Dice section (`request` in `actions.json`, `request.svg`, `ACTION_REQUEST`, the
+  panel's own). **Die**: 120px (`die.size`, face 28pt) with the result beside it;
+  compact stacks them; the readout no longer repeats the loaded trait. **Quick rolls**:
+  pills (tool-button caption that drags, × on hover), hidden while empty. **History**:
+  `✕` not `−`, unnamed rolls titled `d20`/`Take 10`, an empty state. The bottom strip's
+  clipped die is fixed by the slimmer panel (one row of four). Driver: `request-form`;
+  the stale `_bonus_spin`/`_dc_check` uses fixed. **Gotchas:** (1) beside the die the
+  readout's word-wrap minimum let a row "fit" the 360px strip, so the panel's
+  `row_minimum_width` counts the die part at its preferred width; (2) a palette role
+  (`text.muted`) is invalid in rich text — use `text.muted.rich`; (3) the CRLF gotcha
+  from phase 1 bit again — `Path.write_text` writes CRLF here; write bytes. (4) The
+  user then found a long result (the unjudged-attack warning) cut off with the bottom of
+  the die under the Compact preference; three fixes, in the notes: Compact stacks only
+  beside pills, the view rows only at the panel's stacked preferred width, and a
+  readout change invalidates up to the panel before the view re-divides. (5) After the
+  session moved to the desktop app, `python` on PATH is Inkscape's: use
+  `.venv/Scripts/python.exe`. Notes: dice-and-rolling.md "The panel's layout".
+  Commit: (this one).
+
 - **2026-11-10 — Roller and popup fixes (the user asked).** Committed together with the
   "Roller polish" entry below, which had been left uncommitted. (1) **The die did not
   roll** — since phase 5: `clicked` hands its `checked` flag to a slot that takes an

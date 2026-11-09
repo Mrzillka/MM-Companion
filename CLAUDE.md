@@ -40,7 +40,7 @@ the hit and lands the save (see [the actions notes](docs/notes/actions.md#aimed-
 A group can make a **team attack** (members combine their attacks on one target), a
 **team check** or a **group check**. The roller's **Actions** button opens a grid of the
 **combat maneuvers and actions** (All-Out Attack, Aim, Grab, Feint, Block, …): a maneuver
-rides on the next attack from a lane under the Bonus/Penalty slider, what outlasts the
+rides on the next attack from a lane under the roller's toolbar, what outlasts the
 roll lands as a red or green **temporary condition** with a dot beside each stat it
 moves, and the actions taken against someone are judged by the GM's app as an aimed
 attack is (see [the actions notes](docs/notes/actions.md#combat-maneuvers)).

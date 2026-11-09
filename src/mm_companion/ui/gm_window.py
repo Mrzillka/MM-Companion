@@ -641,10 +641,11 @@ class GMWindow(
         # else's and comes back on the shared feed. Before that there is no
         # session to record it in, so it is shown as a card and nothing more.
         self._roller.localRoll.connect(self._show_offline_roll)
-        # The Request row, on the same terms a player's block gives it: the traits
-        # come from the ruleset (a request is answered on someone else's sheet, so
-        # they are character-free) and this window decides where the ask goes.
+        # Ask to Roll, on the same terms a player's block gives it: the traits come
+        # from the ruleset (a request is answered on someone else's sheet, so they are
+        # character-free) and this window decides where the ask goes.
         self._roller.set_roll_choices(requested_roll_choices(self._data))
+        self._roller.set_modifier_steps(self._data.system.circumstance_modifiers)
         self._roller.rollRequested.connect(self._request_roll)
         # The Actions popup: the GM impresses, spreads an attack over an area, or has
         # a group act, for anybody — an NPC of theirs or a player — from the same

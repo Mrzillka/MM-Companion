@@ -56,6 +56,40 @@ class RollerShapeMixin:
                 self._box.setAlignment(part, Qt.AlignmentFlag(0))
             self._box.insertStretch(self._box.indexOf(self._quick_part))
 
+    def row_minimum_width(self) -> int:
+        """What a row of the three parts needs, the die part counted at its **preferred**
+        width.
+
+        The readout sits beside the die and word-wraps, so its own minimum is a word or
+        two — and taken at that, a row "fitted" the narrow pinned strip, with the result
+        squeezed into a sliver beside the die and every number on a line of its own.
+        Its preferred width is a template result (:class:`ReadoutLabel`), which is the
+        least a row is worth having at. A column still narrows as far as it likes.
+        """
+        parts = [part for part in self.reflow_parts() if not part.isHidden()]
+        if not parts:
+            return 0
+        total = sum(
+            part.sizeHint().width() if part is self._die_part else part.minimumSizeHint().width()
+            for part in parts
+        )
+        return total + self.REFLOW_SPACING * (len(parts) - 1)
+
+    def column_natural_width(self) -> int:
+        """How wide the panel would *like* to be stacked — the width worth giving it
+        beside a history (see ``DiceRollerView.row_minimum_width``).
+
+        Stacked, the parts are one above the other, so it is the widest part's preferred
+        width; in the compact shape the quick rolls and the die share a row, so that
+        row's. Independent of the axis currently in use, like
+        :meth:`row_natural_width`.
+        """
+        if self._compact:
+            parts = [self._settings_part, self._pair]
+        else:
+            parts = [part for part in self.reflow_parts() if not part.isHidden()]
+        return max((part.sizeHint().width() for part in parts), default=0)
+
     def sync_reflow(self) -> bool:
         """Re-run the width-driven reflow — unless a chosen shape is in force.
 
@@ -101,8 +135,9 @@ class RollerShapeMixin:
         The third arrangement, beside the reflow's row and column: the settings
         across the top with the quick rolls and the die side by side under them, so
         the roller is as short as it can be while still showing every control. The
-        quick rolls take the slack because their chips wrap; the die keeps its fixed
-        square, at ``die.size.compact`` rather than its full size.
+        quick rolls take the slack because their pills wrap; the die keeps its fixed
+        square, at ``die.size.compact`` rather than its full size, with its result
+        under it rather than beside it (:meth:`_arrange_die`).
 
         Only the layout changes — like :meth:`apply_reflow`, nothing is rebuilt, so
         a roll in flight, a loaded spec and the quick-roll strip all survive the
@@ -135,7 +170,6 @@ class RollerShapeMixin:
             self._pair_box.addWidget(self._quick_part, stretch=1)
             self._pair_box.addWidget(self._die_part, stretch=0)
             self._pair_box.setAlignment(self._quick_part, Qt.AlignmentFlag.AlignTop)
-            self._pair_box.setAlignment(self._die_part, Qt.AlignmentFlag.AlignTop)
             self._pair.setVisible(True)
             self._box.setDirection(QBoxLayout.Direction.TopToBottom)
             for index in reversed(range(self._box.count())):
@@ -160,5 +194,27 @@ class RollerShapeMixin:
                 self.force_reflow(False)
             else:
                 self.sync_reflow()
+        self.sync_die_arrangement()
         self.updateGeometry()
         self.contentChanged.emit()
+
+    def sync_die_arrangement(self) -> None:
+        """The result beside the die, or under it — under it only in the compact shape
+        while there are quick rolls beside the die part.
+
+        It used to stack in the compact shape regardless, so with no quick rolls the die
+        part sat alone in the middle of the row with its result squeezed to the die's
+        width underneath, and a long result (the unjudged-attack warning) ran off the
+        bottom. Called again whenever the strip gains its first pill or loses its last.
+        """
+        stacked = self._compact and not self._quick_part.isHidden()
+        self._arrange_die(stacked=stacked)
+        if self._pair_box.indexOf(self._die_part) >= 0:
+            # Stacked, the part keeps its own width beside the pills, centred; alone in
+            # the row, it takes the row so the result has the width to wrap in.
+            self._pair_box.setStretchFactor(self._die_part, 0 if stacked else 1)
+            self._pair_box.setAlignment(
+                self._die_part,
+                Qt.AlignmentFlag.AlignTop
+                | (Qt.AlignmentFlag.AlignHCenter if stacked else Qt.AlignmentFlag(0)),
+            )

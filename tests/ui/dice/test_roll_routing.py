@@ -181,9 +181,11 @@ def test_a_load_request_shows_the_spec_without_throwing_the_die(qapp: QApplicati
     sheet.abilities.loadRequested.emit(RollSpec(label="Strength", modifier=4))
 
     assert panel.current_spec().label == "Strength"
-    # The chip is there and the readout names what it will throw, but nothing has
-    # been thrown: the die is still showing its resting face.
-    assert "Rolling Strength" in panel._readout.text()
+    # The chip names what it will throw (the readout beside the die only says to
+    # click it: three mentions of the trait was one too many), but nothing has been
+    # thrown: the die is still showing its resting face.
+    assert "Strength" in panel._spec_label.text()
+    assert dice_roller.IDLE_PROMPT in panel._readout.text()
     assert panel._face.text() == "?"
 
 
@@ -443,7 +445,6 @@ def test_a_net_negative_modifier_becomes_a_penalty(qapp: QApplication) -> None:
 def test_a_specs_own_dc_wins_and_shows_itself_in_the_box(qapp: QApplication) -> None:
     sheet = _sheet()
     panel = sheet.dice.panel
-    panel._dc_check.setChecked(True)
     panel._dc_spin.setValue(15)
 
     panel.load_spec(RollSpec(label="Toughness vs. 18", dc=18))
@@ -460,7 +461,6 @@ def test_a_trait_check_uses_the_dc_box_because_it_has_none_of_its_own(
     panel.load_spec(RollSpec(label="Athletics", modifier=9))
     assert panel._roll_parameters()[2] is None
 
-    panel._dc_check.setChecked(True)
     panel._dc_spin.setValue(15)
     assert panel._roll_parameters()[2] == 15
 
@@ -502,7 +502,7 @@ def test_a_rolled_chip_goes_once_the_die_has_settled(qapp: QApplication) -> None
 
     assert panel.current_spec() is None
     assert not panel._spec_chip.isVisibleTo(panel)
-    assert not panel._dc_check.isChecked()  # the DC it brought went with it
+    assert panel.dc() is None  # the DC it brought went with it
     assert panel._roll_parameters()[:2] == (0, 0)
     # ...and the number it produced is still on screen; the clear must not eat it.
     assert "Athletics" in panel._readout.text()
@@ -556,7 +556,6 @@ def test_a_hit_offers_the_save_it_forced(qapp: QApplication) -> None:
 
     attack = sheet.powers._rolls(char.powers[0])[0]
     panel.load_spec(attack)
-    panel._dc_check.setChecked(True)
     panel._dc_spin.setValue(12)  # the target's Defense
     panel._start_roll()
 
@@ -571,7 +570,7 @@ def test_a_hit_offers_the_save_it_forced(qapp: QApplication) -> None:
     assert rolled.last["dc"] == 18
     # And the chip goes with the roll it was made for, taking its DC back off.
     assert panel.current_spec() is None
-    assert not panel._dc_check.isChecked()
+    assert panel.dc() is None
 
 
 def test_a_failed_save_says_what_it_did_to_the_target(qapp: QApplication) -> None:
@@ -632,7 +631,6 @@ def _attack_with_die(sheet: CharacterSheet, die: int, *, dc: int = 12):
     """Roll the sheet's first power's attack on a given die, and return its card."""
     panel = sheet.dice.panel
     panel.load_spec(sheet.powers._rolls(sheet.character.powers[0])[0])
-    panel._dc_check.setChecked(True)
     panel._dc_spin.setValue(dc)
     dice_roller.roll_d20 = lambda *a, **k: die
     panel._start_roll()

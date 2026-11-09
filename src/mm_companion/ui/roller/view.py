@@ -7,13 +7,14 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import (
-    QGroupBox,
+    QLabel,
     QSplitter,
     QVBoxLayout,
     QWidget,
 )
 
 from mm_companion.core import storage
+from mm_companion.ui import theme
 from mm_companion.ui.dice_roller import (
     DiceRollerPanel,
 )
@@ -24,6 +25,24 @@ from mm_companion.ui.roll_history import (
 )
 from mm_companion.ui.roller.history import LocalRollHistory
 from mm_companion.ui.session_bridge import SessionBridge, live_session
+from mm_companion.ui.widgets import tinted_style
+
+
+def titled_box(title: str) -> tuple[QWidget, QVBoxLayout]:
+    """A history's holder: a small muted heading over the list, and no frame.
+
+    It used to be a group box, the third frame nested inside the block's own (after
+    the "Roll" and "Quick rolls" boxes). The list's scroll area already draws an edge
+    round the cards, so a heading is all the history needs.
+    """
+    box = QWidget()
+    layout = QVBoxLayout(box)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(int(theme.metric("space.xs")))
+    heading = QLabel(title)
+    heading.setStyleSheet(tinted_style("text.muted", bold=True))
+    layout.addWidget(heading)
+    return box, layout
 
 
 class DiceRollerView(ReflowBox, QWidget):
@@ -115,7 +134,10 @@ class DiceRollerView(ReflowBox, QWidget):
         self._settle.timeout.connect(self._redivide)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        # A little air inside the block's frame: the roll controls used to get it from
+        # a "Roll" group box, which is gone (see :func:`titled_box`).
+        pad = int(theme.metric("space.sm"))
+        layout.setContentsMargins(pad, pad, pad, pad)
         layout.addWidget(self._splitter)
 
         self.init_reflow()
@@ -223,6 +245,19 @@ class DiceRollerView(ReflowBox, QWidget):
         """
         return self.panel.shape_locked and not self._lent
 
+    def row_minimum_width(self) -> int:
+        """What putting the history **beside** the roller needs: the roller at the width
+        it would like stacked, and the history at its minimum.
+
+        The base class sums the two minimums. The panel's has become small — its toolbar
+        wraps and its result word-wraps beside the die — so taken at that, a 370px strip
+        "fitted" a row, and the roller was squeezed to a third of it with the die cut in
+        half. A side-by-side arrangement is only worth having when the roller keeps its
+        own shape in it.
+        """
+        history = self._history_part.minimumSizeHint().width()
+        return self.panel.column_natural_width() + self.REFLOW_SPACING + history
+
     def sync_reflow(self) -> bool:
         """Re-run the width-driven reflow, unless the parts are out on loan.
 
@@ -298,8 +333,7 @@ class DiceRollerView(ReflowBox, QWidget):
         if self._given_history is not None:
             # One box, always shown: the host's history is already the right one for
             # whatever state the session is in, so there is nothing to swap between.
-            box = QGroupBox("Rolls")
-            box_layout = QVBoxLayout(box)
+            box, box_layout = titled_box("Rolls")
             box_layout.addWidget(self._given_history)
             self._given_history.saveToggled.connect(self.panel.toggle_quick_roll)
             self._given_history.rollFollowUp.connect(self.panel.roll_spec)
@@ -312,8 +346,7 @@ class DiceRollerView(ReflowBox, QWidget):
             outer.addWidget(box)
             return holder
 
-        self._local_box = QGroupBox("History")
-        local_layout = QVBoxLayout(self._local_box)
+        self._local_box, local_layout = titled_box("History")
         self._local_history = LocalRollHistory()
         self._local_history.saveToggled.connect(self.panel.toggle_quick_roll)
         # A chain button on a card puts the next roll back into the panel it came
@@ -322,8 +355,7 @@ class DiceRollerView(ReflowBox, QWidget):
         local_layout.addWidget(self._local_history)
         outer.addWidget(self._local_box)
 
-        self._session_box = QGroupBox("Session rolls")
-        session_layout = QVBoxLayout(self._session_box)
+        self._session_box, session_layout = titled_box("Session rolls")
         self._session_history = RollHistoryPanel()
         self._session_history.saveToggled.connect(self.panel.toggle_quick_roll)
         self._session_history.rollFollowUp.connect(self.panel.roll_spec)

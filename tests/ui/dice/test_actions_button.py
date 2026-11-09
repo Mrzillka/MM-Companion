@@ -5,7 +5,15 @@ from __future__ import annotations
 import pytest
 
 from mm_companion.core.character import Character
-from mm_companion.ui.action_menu import ACTION_REROLL, NOT_BUILT, NOTHING_TO_REROLL, combat_menu
+from mm_companion.ui.action_menu import (
+    ACTION_REQUEST,
+    ACTION_REROLL,
+    NO_REQUEST_TRAITS,
+    NOT_BUILT,
+    NOTHING_TO_REROLL,
+    combat_menu,
+)
+from mm_companion.ui.dice_roller import ACTIONS_LABEL
 from mm_companion.ui.roller.view import DiceRollerView
 from mm_companion.ui.sections.dice import DiceSection
 
@@ -13,17 +21,42 @@ from mm_companion.ui.sections.dice import DiceSection
 def test_the_actions_button_sits_where_the_action_row_was(qapp) -> None:
     view = DiceRollerView()  # held: the panel's widgets die with it
     panel = view.panel
-    assert panel._actions_button.text() == "Actions"
+    assert panel._actions_button.text() == ACTIONS_LABEL
     assert not hasattr(panel, "_reroll_button")
 
 
-def test_without_a_host_menu_the_popup_offers_reroll_alone(qapp) -> None:
+def test_without_a_host_menu_the_popup_offers_the_panels_own_two(qapp) -> None:
     view = DiceRollerView()  # held: the panel's widgets die with it
     panel = view.panel
     popup = panel.open_actions()
-    assert [t.key for t in popup.tiles] == [ACTION_REROLL]
+    assert [t.key for t in popup.tiles] == [ACTION_REROLL, ACTION_REQUEST]
     assert not popup.tile(ACTION_REROLL).isEnabled()
     assert NOTHING_TO_REROLL in popup.tile(ACTION_REROLL).toolTip()
+    # No traits to ask for until a host hands some over.
+    assert not popup.tile(ACTION_REQUEST).isEnabled()
+    assert NO_REQUEST_TRAITS in popup.tile(ACTION_REQUEST).toolTip()
+
+
+def test_the_ask_tile_opens_the_form_and_the_form_asks(qapp, data) -> None:
+    # The Request row used to sit on the roller itself, three greyed controls for a
+    # verb used a few times a session. It is a small form off the Actions popup now.
+    section = DiceSection(data, Character.new_default(data))
+    panel = section.panel
+    popup = panel.open_actions()
+    tile = popup.tile(ACTION_REQUEST)
+    assert tile.isEnabled()
+    tile.click()
+    qapp.processEvents()  # it opens once the Actions popup has closed
+    assert panel._request_form.isVisible()
+
+    asked: list = []
+    panel.rollRequested.connect(asked.append)
+    panel._request_combo.setCurrentIndex(panel._request_combo.findText("  Toughness"))
+    panel._request_dc.setValue(18)
+    panel._request_button.click()
+    (spec,) = asked
+    assert (spec.label, spec.dc) == ("Toughness", 18)
+    assert not panel._request_form.isVisible()
 
 
 def test_reroll_lights_once_a_roll_is_back_and_is_the_panels_own(

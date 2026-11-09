@@ -780,17 +780,15 @@ def build(target: str):
             # so the shot shows both star states: the first roll's card is lit (it *is*
             # a quick roll), the second's is muted (it is not, and there is room).
             panel = win._sheet.dice.panel
-            panel._bonus_spin.setValue(5)
-            panel._penalty_spin.setValue(1)
-            panel._dc_check.setChecked(True)
+            panel._modifier_spin.setValue(4)
             panel._dc_spin.setValue(15)
             panel._finish_roll()
             panel._add_quick_roll({"bonus": 5, "penalty": 1, "dc": 15}, name="Perception")
             panel._add_quick_roll({"bonus": 2, "penalty": 0, "dc": 10})
             for bonus in (3, 7, 11):
                 panel._add_quick_roll({"bonus": bonus, "penalty": 0, "dc": None})
-            panel._dc_check.setChecked(False)
-            panel._bonus_spin.setValue(4)
+            panel.set_dc(None)
+            panel._modifier_spin.setValue(4)
             panel._finish_roll()
     elif target in ("actions-popup", "actions-popup-gm"):
         # The roller's Actions popup (combat maneuvers, phase 3+). The window behind
@@ -810,9 +808,21 @@ def build(target: str):
         _pump(_app())
         _shoot(host, Path("_driver_shots") / f"{target}-window.png")
         win = panel.open_actions()
+    elif target == "request-form":
+        # The Ask to Roll form the Actions popup's Ask tile opens, a trait picked.
+        from mm_companion.ui.main_window import MainWindow
+
+        host = MainWindow(locked=False)
+        panel = host._sheet.dice.panel
+        host.resize(1400, 900)
+        host.show()
+        _pump(_app())
+        panel._request_combo.setCurrentIndex(panel._request_combo.findText("  Toughness"))
+        panel._request_dc.setValue(18)
+        win = panel.open_request()
     elif target == "roller-lane":
-        # The roller after phase 4: one Bonus/Penalty slider, an attack loaded off the
-        # Attack tile's picker, and a line on the action lane under the slider.
+        # The roller: a modifier set, an attack loaded off the Attack tile's picker, and
+        # a line on the action lane under the toolbar.
         from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
         from mm_companion.core.rules import attack_choices
         from mm_companion.ui.main_window import MainWindow
@@ -894,7 +904,6 @@ def build(target: str):
         # Load the attack first: the *spec* is what carries the save it forces, so
         # without this the card comes out with no follow-up chip to click.
         panel.load_spec(attack)
-        panel._dc_check.setChecked(True)
         panel._dc_spin.setValue(12)  # the target's Defense
         dice_module.roll_d20 = lambda *a, **k: 14  # a hit, deterministically
         panel._finish_roll()
@@ -905,7 +914,7 @@ def build(target: str):
 
         chip = next(b for b in card.findChildren(QPushButton) if b.text().startswith("🎲"))
         chip.click()
-        panel._bonus_spin.setValue(4)  # the target's Toughness
+        panel._modifier_spin.setValue(4)  # the target's Toughness
         dice_module.roll_d20 = lambda *a, **k: 6  # and it fails
         panel._finish_roll()
         return win
@@ -937,10 +946,9 @@ def build(target: str):
         panel._add_quick_roll({"bonus": 5, "penalty": 1, "dc": 15}, name="Perception")
         panel._add_quick_roll({"bonus": 8, "penalty": 0, "dc": None}, name="Toughness")
         panel._add_quick_roll({"bonus": 2, "penalty": 0, "dc": 10})
-        panel._dc_check.setChecked(True)
         panel._dc_spin.setValue(15)
         panel._finish_roll()
-        panel._dc_check.setChecked(False)
+        panel.set_dc(None)
         panel._finish_roll()
 
         win._compact.enter()
@@ -957,9 +965,7 @@ def build(target: str):
         sheet.canvas.set_pin_edge("bottom")
         if target == "dice-bottom-demo":
             panel = sheet.dice.panel
-            panel._bonus_spin.setValue(5)
-            panel._penalty_spin.setValue(1)
-            panel._dc_check.setChecked(True)
+            panel._modifier_spin.setValue(4)
             panel._dc_spin.setValue(15)
             panel._finish_roll()
             panel._add_quick_roll({"bonus": 5, "penalty": 1, "dc": 15}, name="Perception")
@@ -1814,6 +1820,7 @@ def main(argv: list[str] | None = None) -> int:
             "dice-demo",
             "actions-popup",
             "actions-popup-gm",
+            "request-form",
             "roller-lane",
             "roll-demo",
             "roll-demo-table",

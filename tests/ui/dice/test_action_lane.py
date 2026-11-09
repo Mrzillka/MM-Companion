@@ -93,20 +93,19 @@ def _by_modifier(spec: RollSpec | None) -> tuple[int, str]:
     return min(5, spec.modifier), "" if spec.modifier > 0 else "No attack bonus to trade."
 
 
-# -- the one slider --------------------------------------------------------------------
+# -- the one modifier box -------------------------------------------------------------
 
 
-def test_one_signed_slider_runs_both_ways_from_zero(qapp) -> None:
+def test_one_signed_box_runs_both_ways_from_zero(qapp) -> None:
     view = DiceRollerView()  # held: the panel's widgets die with it
     panel = view.panel
-    assert panel._modifier_slider.minimum() == -MODIFIER_LIMIT
-    assert panel._modifier_slider.maximum() == MODIFIER_LIMIT
+    assert panel._modifier_spin.minimum() == -MODIFIER_LIMIT
+    assert panel._modifier_spin.maximum() == MODIFIER_LIMIT
     assert MODIFIER_LIMIT == 30  # wide enough for any circumstance (2026-11-09)
-    assert panel._modifier_slider.value() == 0
+    assert panel._modifier_spin.value() == 0
     panel._modifier_spin.setValue(3)
     assert panel._modifier_spin.text() == "+3"
-    assert panel._modifier_slider.value() == 3
-    panel._modifier_slider.setValue(-4)
+    panel._modifier_spin.setValue(-4)
     assert panel._modifier_spin.text() == "-4"
     assert panel.adjustment() == -4
     # A penalty travels as the pair the wire and the history cards speak.
@@ -138,9 +137,10 @@ def test_an_old_quick_roll_with_both_numbers_loads_as_its_net(qapp) -> None:
 # -- the lane --------------------------------------------------------------------------
 
 
-def test_an_empty_lane_takes_no_room_and_the_actions_button_moves_up(qapp) -> None:
-    # The lane used to hold a blank line open; the Actions button sits in its row now
-    # (the user's call, 2026-11-09), and moves down under each line that comes on.
+def test_an_empty_lane_takes_no_room_and_the_actions_button_stays_put(qapp) -> None:
+    # The lane used to hold a blank line open, and the Actions button then rode under
+    # its last line, moving away from the pointer as a pick added one. It sits on the
+    # toolbar above the lane now, so a line coming on or going never moves it.
     view = DiceRollerView()
     view.resize(400, 900)
     view.show()
@@ -148,19 +148,20 @@ def test_an_empty_lane_takes_no_room_and_the_actions_button_moves_up(qapp) -> No
     panel = view.panel
     button = panel._actions_button
 
-    def just_under_the_slider() -> bool:
-        slider = panel._modifier_slider.geometry().bottom()
-        return button.geometry().top() > slider and panel._lane.isHidden()
+    def where() -> int:
+        return button.mapTo(panel, button.rect().topLeft()).y()
 
-    assert just_under_the_slider()
+    resting = where()
+    assert panel._lane.isHidden()
     panel.start_action_line("charge", "Charge", fixed="-2 attack")
     qapp.processEvents()
     assert panel._lane.isVisible()
-    assert button.geometry().top() > panel._lane.geometry().bottom()
+    assert where() == resting
+    assert panel._lane.geometry().top() > panel._toolbar.geometry().bottom()
     panel.action_lines()[0].removed.emit("charge")
     qapp.processEvents()
     assert panel.action_lines() == []
-    assert just_under_the_slider()
+    assert panel._lane.isHidden() and where() == resting
 
 
 def test_a_configurable_line_starts_at_its_maximum(qapp) -> None:
@@ -263,7 +264,7 @@ def test_a_reroll_leaves_the_current_lines_alone(qapp, instant_die) -> None:
 def test_an_attack_rolled_with_no_dc_and_no_target_is_warned_about(qapp, instant_die) -> None:
     view = DiceRollerView()
     panel = view.panel
-    panel._dc_check.setChecked(False)
+    panel.set_dc(None)
     panel.roll_spec(_attack())
     assert "No DC and no target" in panel._readout.text()
     assert NO_DC_WARNING.startswith("⚠")
@@ -272,10 +273,10 @@ def test_an_attack_rolled_with_no_dc_and_no_target_is_warned_about(qapp, instant
 def test_no_warning_with_a_dc_or_for_a_plain_check(qapp, instant_die) -> None:
     view = DiceRollerView()
     panel = view.panel
-    panel._dc_check.setChecked(True)
+    panel.set_dc(15)
     panel.roll_spec(_attack())
     assert "No DC" not in panel._readout.text()
-    panel._dc_check.setChecked(False)
+    panel.set_dc(None)
     panel.roll_spec(RollSpec(label="Athletics", modifier=4))
     assert "No DC" not in panel._readout.text()
 
@@ -284,7 +285,7 @@ def test_no_warning_for_an_aimed_attack(qapp, instant_die) -> None:
     from dataclasses import replace
 
     view = DiceRollerView()
-    view.panel._dc_check.setChecked(False)
+    view.panel.set_dc(None)
     view.panel.roll_spec(replace(_attack(), targets=("Thug",), action_id="a1"))
     assert "No DC" not in view.panel._readout.text()
 

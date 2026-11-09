@@ -52,9 +52,9 @@ PDF** print it as real, selectable text, and let you pick which blocks go on the
 page.
 
 **Rolling.** Click an ability, resistance or skill to load it into the roller, or
-double-click to roll it at once; a power's 🎲 rolls its attack. Bonus and penalty
-sliders cover the situational extras for a single roll, a DC box grades the
-result in degrees of success, and rolls you make often can be starred into
+double-click to roll it at once; a power's 🎲 rolls its attack. A modifier box with
+±2 and ±5 steps covers the situational extras for a single roll, a DC box grades
+the result in degrees of success, **Take 10** makes a routine check, and rolls you make often can be starred into
 **quick rolls**. An attack that hits offers the save it forces right on its card in
 the history, so the target can roll it from there.
 

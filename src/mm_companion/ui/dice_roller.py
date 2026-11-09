@@ -1,16 +1,17 @@
 """The dice roller for Mutants & Masterminds checks.
 
-Set a bonus and a penalty (each a labeled slider linked to a spin box) and,
-optionally, a Difficulty Class, then click the big D20 to play a short roll
-animation and read the result. When a DC is set the result also shows the degree
-of success/failure. Past rolls stack up in a history panel (each card can be
-removed or saved); a saved roll can be named, dragged to reorder, and lives in a
-persistent "quick rolls" strip pinned to the bottom for one-click reuse.
+Set a modifier (a signed box with the common circumstance steps either side of it)
+and, optionally, a Difficulty Class, then click the D20 to play a short roll
+animation and read the result beside it — or press **Take 10** for a routine check.
+When a DC is set the result also shows the degree of success/failure. Past rolls
+stack up in a history panel (each card can be removed or saved); a saved roll can be
+named, dragged to reorder, and lives in a persistent row of "quick roll" pills for
+one-click reuse.
 
 Three widgets, smallest first:
 
 * :class:`DiceRollerPanel` (here) — the roll controls alone (settings, die + readout,
-  quick rolls). Its shape, its Request row and its quick rolls are mixins in
+  quick rolls). Its shape, its Ask to Roll form and its quick rolls are mixins in
   :mod:`mm_companion.ui.roller`; the rolling itself stays in this module.
 * :class:`~mm_companion.ui.roller.history.LocalRollHistory` — the private list of
   what *this* app rolled, each card removable and saveable.
@@ -54,12 +55,10 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
     QGridLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QSizePolicy,
-    QSlider,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -73,17 +72,19 @@ from mm_companion.core.session.model import KIND_ROLL
 from mm_companion.ui import theme
 from mm_companion.ui.action_grid import ActionGridPopup, GridItem, GridSection
 from mm_companion.ui.action_menu import (
+    ACTION_REQUEST,
     ACTION_REROLL,
     NOTHING_TO_REROLL,
     action_tooltip,
     choose_from_menu,
 )
-from mm_companion.ui.flow_layout import FlowContainer, FlowLayout, FlowRule
+from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.reflow import ReflowBox
 from mm_companion.ui.roll_history import (
     HIDDEN_MARK,
     degree_label,
     escape_rich_text,
+    fit_button,
     reroll_label,
 )
 from mm_companion.ui.roller.action_lane import (
@@ -98,9 +99,9 @@ from mm_companion.ui.roller.requests import RollerRequestsMixin
 from mm_companion.ui.roller.shape import RollerShapeMixin
 from mm_companion.ui.session_bridge import SessionBridge, live_session
 from mm_companion.ui.svg_assets import die_resource, svg_pixmap
-from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import (
     ElidingLabel,
+    discard_widget,
     help_markup,
     make_signed_spin_box,
     make_spin_box,
@@ -131,9 +132,16 @@ IDLE_PROMPT = "Click the die to roll."
 #: Written in the chip's empty slot.
 CHIP_SLOT_HINT = "Click a trait on a sheet to roll it"
 
-#: How far the one Bonus/Penalty slider runs either way from 0.
+#: How far the one modifier box runs either way from 0.
 MODIFIER_LIMIT = 30
-MODIFIER_LABEL = "Bonus/Penalty"
+MODIFIER_LABEL = "Modifier"
+MODIFIER_HINT = (
+    "A bonus or penalty on this one roll: cover, a good tool, a distraction. The next "
+    "roll uses it up."
+)
+
+#: The Actions button's caption: the arrow says it opens something.
+ACTIONS_LABEL = "Actions ▾"
 
 #: Written under an attack rolled with no DC and at no one: nothing judged the hit.
 NO_DC_WARNING = (
@@ -141,16 +149,16 @@ NO_DC_WARNING = (
     "DC box, or aim the attack at a creature."
 )
 
-#: The roller's Difficulty Class box: ticked, the roll is judged against the number.
+#: The roller's Difficulty Class box: with a number in it, the roll is judged against it.
 DC_LABEL = "DC"
-DC_HINT = "Difficulty Class: tick it to judge the roll against this number."
+DC_HINT = "Difficulty Class: the roll is judged against it. Empty (—) for none."
 
-#: The roller's take-10 box (PDF p17): a routine check, rolled as a 10.
-ROUTINE_LABEL = "Routine (take 10)"
+#: The roller's take-10 button (PDF p17): a routine check, made as a 10.
+ROUTINE_LABEL = "Take 10"
 ROUTINE_HINT = (
-    "**Routine check (take 10):** the die counts as a 10, so there is no natural 1 or 20. For a "
-    "check made without pressure, and for attacks or interactions against a minion.\n\nUnticks "
-    "itself after one roll."
+    "**Routine check (take 10):** make the check now with the die counted as a 10, so there "
+    "is no natural 1 or 20. For a check made without pressure.\n\nTakes whatever is loaded, "
+    "with the modifier and the DC set."
 )
 
 
@@ -329,7 +337,7 @@ class DiceRollerPanel(
     #: panel now needs.
     contentChanged = Signal()
 
-    #: The Request row's button was pressed — ask the table to roll this
+    #: The Ask to Roll form's button was pressed — ask the table to roll this
     #: :class:`~mm_companion.core.rules.RollSpec`. The panel neither sends it nor
     #: rolls it: where a request goes is the same question its host already answers
     #: for a note (the session, or the private history), and the panel has no
@@ -387,9 +395,9 @@ class DiceRollerPanel(
         self._showing_result = False
         # Last chance to adjust a spec before it is loaded — see :meth:`set_localizer`.
         self._localizer: Callable[[RollSpec], RollSpec] | None = None
-        # The traits the Request row offers, pushed in by the host (the panel reads
+        # The traits the Ask to Roll form offers, pushed in by the host (the panel reads
         # no game data) — see :meth:`set_roll_choices`. Empty until it is, which is
-        # why the row starts hidden.
+        # why the Ask tile starts greyed.
         self._request_specs: list[RollSpec] = []
         # Builds the Actions popup's sections, pushed in by the host — see
         # :meth:`set_action_menu`. Without one the popup offers Reroll alone.
@@ -415,6 +423,11 @@ class DiceRollerPanel(
         # What the roll in flight loads once it settles (its spec's ``then``: a
         # slammer's own save), or ``None``. Never set for a reroll.
         self._then: RollSpec | None = None
+        # Set by Take 10 for the one roll it starts (see :meth:`take_ten`).
+        self._routine_next = False
+        # The circumstance steps either side of the modifier box, pushed in by the
+        # host (see :meth:`set_modifier_steps`); none until it does.
+        self._step_buttons: list[QPushButton] = []
         self._quick_rolls: list[dict] = self._load_quick_rolls()
         # Whether the panel is in its fixed compact shape (see :meth:`_apply_shape`),
         # in which case the width-driven reflow stands down — and the two separate
@@ -435,6 +448,7 @@ class DiceRollerPanel(
         self._settings_part = self._build_roll_settings()
         self._die_part = self._build_die()
         self._quick_part = self._build_quick_rolls()
+        self._request_form = self._build_request_form()
         # Holds the quick rolls beside the die in compact mode, and nothing at all
         # the rest of the time. Built once so the two parts have a stable place to
         # move to and back from.
@@ -462,100 +476,139 @@ class DiceRollerPanel(
 
     # -- construction --------------------------------------------------------
 
-    def _build_roll_settings(self) -> QGroupBox:
-        group = QGroupBox("Roll")
-        grid = QGridLayout(group)
-        # The sliders are the only thing here worth widening, so give their column
-        # all the slack. Without this the grid shares spare width equally between the
-        # labels, the sliders and the spin boxes, which leaves each slider a few
-        # pixels above its 15px minimum — a groove too short to aim at, let alone drag.
+    def _build_roll_settings(self) -> QWidget:
+        """The controls above the die: what is loaded, the modifier, one toolbar, the lane.
+
+        No group box round them: the block's own frame already says where the roller
+        is, and a "Roll" frame, a "Quick rolls" one and a "History" one inside it were
+        three boxes nested in a fourth.
+
+        From the top: the chip slot (what the sheet loaded), the modifier with the
+        circumstance steps either side of it, one toolbar — the DC, **Take 10** and the
+        **Actions** button — and the action lane. The lane grows *under* the toolbar,
+        so the Actions button stays where it is when a pick puts a line on the lane;
+        it used to sit under the lane's last line and moved away from the pointer.
+        """
+        part = QWidget()
+        grid = QGridLayout(part)
+        grid.setContentsMargins(0, 0, 0, 0)
+        # The modifier's row is the only one with a label column; everything else
+        # spans both, and the steps take the slack.
         grid.setColumnStretch(1, 1)
 
         self._spec_chip = self._build_spec_chip()
-        grid.addWidget(self._build_chip_slot(), 0, 0, 1, 3)
+        grid.addWidget(self._build_chip_slot(), 0, 0, 1, 2)
 
-        # One two-way slider, centred on 0: a bonus to the right, a penalty to the
-        # left. It used to be two, which spent a row of the panel saying one number.
-        self._modifier_slider, self._modifier_spin = self._make_modifier()
-        self._modifier_label = QLabel(MODIFIER_LABEL)
+        # One signed box, centred between its penalty steps and its bonus steps:
+        # −5 −2 [+0] +2 +5. It used to be a −30..+30 slider, which is no way to hit +2.
+        self._modifier_spin = make_signed_spin_box(MODIFIER_LIMIT, snug=True)
+        self._modifier_spin.setToolTip(MODIFIER_HINT)
         self._modifier_spin.valueChanged.connect(self._mark_extras)
-
-        # The slider and its box share the two right-hand columns, so the slider takes
-        # all the slack and the snug box sits at the right edge, as on the lane's lines.
-        modifier = QHBoxLayout()
-        modifier.addWidget(self._modifier_slider, stretch=1)
-        modifier.addWidget(self._modifier_spin)
+        self._modifier_label = QLabel(MODIFIER_LABEL)
+        self._modifier_label.setToolTip(MODIFIER_HINT)
+        self._modifier_row = QHBoxLayout()
+        self._modifier_row.setContentsMargins(0, 0, 0, 0)
+        self._modifier_row.setSpacing(int(theme.metric("space.xs")))
+        self._modifier_row.addWidget(self._modifier_spin)
+        self._modifier_row.addStretch(1)
         grid.addWidget(self._modifier_label, 1, 0)
-        grid.addLayout(modifier, 1, 1, 1, 2)
+        grid.addLayout(self._modifier_row, 1, 1)
 
-        # The action lane: one line per action riding on the next roll, and the
-        # Actions button under its last line — in the lane's row while it is empty, so
-        # that row is never a blank gap (the user's call; it used to be held open).
+        grid.addWidget(self._build_toolbar(), 2, 0, 1, 2)
+
+        # The action lane: one line per action riding on the next roll.
         self._lane = ActionLane()
         self._lane.changed.connect(self._on_lane_changed)
-        grid.addWidget(self._lane, 2, 0, 1, 3)
-        self._build_action_row(grid, 3)
-
-        # The DC box and Routine share a row, side by side while the roller is wide
-        # enough and wrapping (DC above Routine) when it is not: the roller is narrow in
-        # compact mode and in the strip, and a fixed row would hold it open.
-        self._dc_check = QCheckBox(DC_LABEL)
-        self._dc_check.setToolTip(DC_HINT)
-        self._dc_spin = make_spin_box(0, 60, value=15, buttons=False, snug=True)
-        self._dc_spin.setEnabled(False)
-        self._dc_check.toggled.connect(self._dc_spin.setEnabled)
-        dc_pair = QWidget()
-        pair = QHBoxLayout(dc_pair)
-        pair.setContentsMargins(0, 0, 0, 0)
-        pair.addWidget(self._dc_check)
-        pair.addWidget(self._dc_spin)
-
-        # Take 10 (PDF p17): for a check made under no pressure, and for any attack or
-        # interaction against a minion (p25). One roll's worth — it unticks once the
-        # roll is made, so it is never left on for the next one against a villain.
-        self._routine_check = QCheckBox(ROUTINE_LABEL)
-        self._routine_check.setToolTip(help_markup(ROUTINE_HINT))
-
-        self._dc_row = FlowContainer()
-        flow = FlowLayout(self._dc_row, spacing=max(grid.horizontalSpacing(), 0) * 3)
-        flow.setContentsMargins(0, 0, 0, 0)
-        flow.addWidget(dc_pair)
-        # A rule between the two, shown only while they share a line. Drawn in the
-        # group frame's colour: a sunken QFrame line vanishes on a dark preset.
-        self._dc_separator = FlowRule(int(theme.metric("border.width")), dc_pair)
-        self._dc_separator.setStyleSheet(f"background: {theme.color('border.group')};")
-        flow.add_separator(self._dc_separator)
-        flow.addWidget(self._routine_check)
-        grid.addWidget(self._dc_row, 4, 0, 1, 3)
+        grid.addWidget(self._lane, 3, 0, 1, 2)
 
         self._hidden_check = QCheckBox("Hidden roll")
         self._hidden_check.setToolTip(
             "Roll without anyone else seeing it. A hidden roll is never sent to the players."
         )
         self._hidden_check.setVisible(self._hidden_option)
-        row = 5
         if self._hidden_option:
-            grid.addWidget(self._hidden_check, row, 0, 1, 3)
-            row += 1
+            grid.addWidget(self._hidden_check, 4, 0, 1, 2)
+        return part
 
-        self._build_request_row(grid, row)
-        return group
+    def _build_toolbar(self) -> QWidget:
+        """The DC box, Take 10 and the Actions button, in one row that wraps when narrow.
 
-    def _build_action_row(self, grid: QGridLayout, row: int) -> None:
-        """The **Actions** button, centred across the grid under the action lane.
+        The DC is **one** box where empty (``—``) means no DC — it used to be a
+        checkbox beside a box that sat greyed at 15 while unticked, two controls for
+        one number. Nobody grades a roll against DC 0, so 0 is free to mean "none".
 
-        It opens the Actions popup (:meth:`open_actions`): the combat maneuvers, the
-        other actions, the actions taken against other characters (Impress, Area) and
-        Reroll, as a grid of tiles. It replaced a row of push buttons that could only
-        ever grow sideways.
+        Take 10 is a **button** that makes the check now, rather than a checkbox that
+        changed what the next click of the die did and had to be remembered.
+
+        A flow rather than a row, because the roller is narrow in compact mode and in
+        the strip, and a fixed row would hold it open.
         """
+        self._dc_label = QLabel(DC_LABEL)
+        self._dc_label.setToolTip(DC_HINT)
+        self._dc_spin = make_spin_box(0, 60, value=0, buttons=False, snug=True)
+        self._dc_spin.setSpecialValueText("—")
+        self._dc_spin.setToolTip(DC_HINT)
+        dc_pair = QWidget()
+        pair = QHBoxLayout(dc_pair)
+        pair.setContentsMargins(0, 0, 0, 0)
+        pair.setSpacing(int(theme.metric("space.sm")))
+        pair.addWidget(self._dc_label)
+        pair.addWidget(self._dc_spin)
 
-        self._actions_button = QPushButton("Actions")
+        self._routine_button = QPushButton(ROUTINE_LABEL)
+        self._routine_button.setToolTip(help_markup(ROUTINE_HINT))
+        self._routine_button.clicked.connect(lambda _=False: self.take_ten())
+
+        self._actions_button = QPushButton(ACTIONS_LABEL)
         self._actions_button.setToolTip(
             "Combat maneuvers and actions: attack maneuvers, Aid, Grab, Impress, Reroll…"
         )
         self._actions_button.clicked.connect(self.open_actions)
-        grid.addWidget(self._actions_button, row, 0, 1, 3, Qt.AlignmentFlag.AlignHCenter)
+
+        self._toolbar = FlowContainer()
+        flow = FlowLayout(self._toolbar, spacing=int(theme.metric("space.md")))
+        flow.setContentsMargins(0, 0, 0, 0)
+        for widget in (dc_pair, self._routine_button, self._actions_button):
+            flow.addWidget(widget)
+        return self._toolbar
+
+    def set_modifier_steps(self, steps: Sequence[int]) -> None:
+        """Put *steps* either side of the modifier box, as penalties and as bonuses.
+
+        ``(2, 5)`` — the common circumstance modifiers (PDF p17), which the host reads
+        from the game data — gives ``−5 −2 [+0] +2 +5``. A step **adds** to the box, so
+        +2 twice is +4. The panel reads no game data, so until a host calls this there
+        are no steps, only the box.
+        """
+        for button in self._step_buttons:
+            self._modifier_row.removeWidget(button)
+            discard_widget(button)
+        self._step_buttons = []
+        sizes = sorted({abs(int(step)) for step in steps if int(step)})
+        for index, size in enumerate(reversed(sizes)):
+            self._modifier_row.insertWidget(index, self._step_button(-size))
+        after = self._modifier_row.indexOf(self._modifier_spin) + 1
+        for index, size in enumerate(sizes):
+            self._modifier_row.insertWidget(after + index, self._step_button(size))
+        self.updateGeometry()
+        self.contentChanged.emit()
+
+    def _step_button(self, step: int) -> QPushButton:
+        caption = f"{step:+d}".replace("-", "−")
+        button = fit_button(caption)
+        button.setToolTip(f"{caption} to the modifier")
+        button.setEnabled(not self._rolling)
+        button.clicked.connect(lambda _=False, amount=step: self.add_bonus(amount))
+        self._step_buttons.append(button)
+        return button
+
+    def dc(self) -> int | None:
+        """The DC box's number, or ``None`` when it is empty."""
+        return self._dc_spin.value() or None
+
+    def set_dc(self, dc: int | None) -> None:
+        """Put *dc* in the DC box, or empty it (``None``)."""
+        self._dc_spin.setValue(dc or 0)
 
     def set_action_menu(
         self, build: Callable[[Mapping[str, str | None]], Sequence[GridSection]] | None
@@ -573,7 +626,10 @@ class DiceRollerPanel(
 
     def own_actions(self) -> dict[str, str | None]:
         """The actions the panel runs itself, and whether each can run right now."""
-        return {ACTION_REROLL: None if self._last_roll is not None else NOTHING_TO_REROLL}
+        return {
+            ACTION_REROLL: None if self._last_roll is not None else NOTHING_TO_REROLL,
+            ACTION_REQUEST: self.request_reason(),
+        }
 
     @property
     def can_reroll(self) -> bool:
@@ -585,14 +641,22 @@ class DiceRollerPanel(
         if self._menu_builder is not None:
             return list(self._menu_builder(own))
         reason = own[ACTION_REROLL]
-        tile = GridItem(
+        reroll = GridItem(
             ACTION_REROLL,
             "Reroll",
             ACTION_REROLL,
             action_tooltip("Reroll", "Throw your last roll again.", reason),
             enabled=reason is None,
         )
-        return [GridSection("Dice", (tile,))]
+        reason = own[ACTION_REQUEST]
+        request = GridItem(
+            ACTION_REQUEST,
+            "Ask",
+            ACTION_REQUEST,
+            action_tooltip("Ask to Roll", "Ask the table to roll a trait.", reason),
+            enabled=reason is None,
+        )
+        return [GridSection("Dice", (reroll, request))]
 
     def open_actions(self) -> ActionGridPopup | None:
         """Open the Actions popup under its button, and return it.
@@ -620,6 +684,11 @@ class DiceRollerPanel(
     def _on_action_picked(self, key: str) -> None:
         if key == ACTION_REROLL:
             self.reroll()
+        elif key == ACTION_REQUEST:
+            # Over the tile, as a submenu would open — but only once the Actions popup
+            # has closed: two popups open at once fight over which one a click closes.
+            at = self.menu_point()
+            QTimer.singleShot(0, lambda: self.open_request(at))
         else:
             self.actionRequested.emit(key)
 
@@ -703,21 +772,6 @@ class DiceRollerPanel(
         self._chip_slot.addWidget(self._spec_chip)
         self._chip_slot.setCurrentWidget(self._chip_empty)
         return self._chip_slot
-
-    def _make_modifier(self) -> tuple[QSlider, QWidget]:
-        """The Bonus/Penalty slider, −30..+30 and centred, linked two-way to a signed
-        spin box (``+3`` / ``-3``) with no arrows, as wide as "-30" and no wider."""
-        slider = QSlider(Qt.Orientation.Horizontal)
-        slider.setRange(-MODIFIER_LIMIT, MODIFIER_LIMIT)
-        slider.setValue(0)
-        # A tick at the centre, so 0 is findable by eye on a groove that runs both ways.
-        slider.setTickPosition(QSlider.TickPosition.TicksBelow)
-        slider.setTickInterval(MODIFIER_LIMIT)
-        guard_wheel(slider)
-        spin = make_signed_spin_box(MODIFIER_LIMIT, snug=True)
-        slider.valueChanged.connect(spin.setValue)
-        spin.valueChanged.connect(slider.setValue)
-        return slider, spin
 
     def _mark_extras(self) -> None:
         """Tint the Bonus/Penalty row while it holds anything: green above 0, red below.
@@ -881,17 +935,21 @@ class DiceRollerPanel(
         self.contentChanged.emit()
 
     def _build_die(self) -> QWidget:
-        """The die and the number it rolled — one part, since the two belong together.
+        """The die and the number it rolled, side by side — one part, since the two
+        belong together.
 
-        The readout used to be a sibling of the die in the panel's column; it lives
-        inside now so the reflow moves the two as a unit.
+        The result sits **beside** the die, not under it: under it, a 200px die and
+        three lines of readout were the tallest thing in the strip, where height is the
+        scarce thing. Compact mode stacks them again (:meth:`_arrange_die`), since there
+        the part sits beside the quick rolls and is narrow.
         """
         part = QWidget()
-        column = QVBoxLayout(part)
-        column.setContentsMargins(0, 0, 0, 0)
+        self._die_box = QBoxLayout(QBoxLayout.Direction.LeftToRight, part)
+        self._die_box.setContentsMargins(0, 0, 0, 0)
+        self._die_box.setSpacing(int(theme.metric("space.md")))
 
-        container = QWidget()
-        grid = QGridLayout(container)
+        self._die_holder = QWidget()
+        grid = QGridLayout(self._die_holder)
         grid.setContentsMargins(0, 0, 0, 0)
 
         self._die_button = QPushButton()
@@ -911,22 +969,30 @@ class DiceRollerPanel(
 
         grid.addWidget(self._die_button, 0, 0)
         grid.addWidget(self._face, 0, 0, alignment=Qt.AlignmentFlag.AlignCenter)
-        column.addWidget(container, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        self._readout = ReadoutLabel(IDLE_PROMPT)
-        self._readout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._readout = ReadoutLabel()
         self._readout.setWordWrap(True)
         self._readout.setTextFormat(Qt.TextFormat.RichText)
-        # Side margins because this is the widest thing in the panel and the only
-        # one not inside a group box: the die above it is a fixed square with room
-        # to spare, while a named roll ("Close Attack (Enhanced Strength)") is as
-        # long as the power it came from and wraps at whatever width the panel has.
-        # Without them it wraps flush against the block's own border, which reads as
-        # text that has overflowed rather than text that has wrapped.
-        pad = int(theme.metric("space.lg"))
-        self._readout.setContentsMargins(pad, 0, pad, 0)
-        column.addWidget(self._readout)
+        # A little air on the right, so a long name wraps short of the block's border
+        # rather than flush against it, which reads as text that has overflowed.
+        self._readout.setContentsMargins(0, 0, int(theme.metric("space.sm")), 0)
+        self._die_box.addWidget(self._die_holder)
+        self._die_box.addWidget(self._readout, stretch=1)
+        self._arrange_die(stacked=False)
+        self._prompt_readout(replace_result=True)
         return part
+
+    def _arrange_die(self, *, stacked: bool) -> None:
+        """The readout beside the die (the usual), or under it (compact mode)."""
+        self._die_box.setDirection(
+            QBoxLayout.Direction.TopToBottom if stacked else QBoxLayout.Direction.LeftToRight
+        )
+        if stacked:
+            self._die_box.setAlignment(self._die_holder, Qt.AlignmentFlag.AlignHCenter)
+            self._readout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        else:
+            self._die_box.setAlignment(self._die_holder, Qt.AlignmentFlag.AlignVCenter)
+            self._readout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
     def _set_die_size(self, size_token: str, face_token: str) -> None:
         """Draw the die at the size *size_token* names, with *face_token*'s numeral.
@@ -980,27 +1046,34 @@ class DiceRollerPanel(
             f"#dieButton:hover {{ {border} background: {theme.wash('accent.dice', 0.20)}; }}"
         )
 
-    def _build_quick_rolls(self) -> QGroupBox:
-        group = QGroupBox("Quick rolls")
-        layout = QVBoxLayout(group)
+    def _build_quick_rolls(self) -> QWidget:
+        """The quick rolls: one wrapping row of pills, and nothing at all while empty.
+
+        It used to be a framed "Quick rolls" box, a thin empty frame until the first ☆;
+        the empty history now says how to fill it instead.
+        """
+        part = QWidget()
+        layout = QVBoxLayout(part)
+        layout.setContentsMargins(0, 0, 0, 0)
         self._quick_container = QuickRollStrip()
-        self._quick_flow = FlowLayout(self._quick_container)
+        self._quick_flow = FlowLayout(self._quick_container, spacing=int(theme.metric("space.sm")))
+        self._quick_flow.setContentsMargins(0, 0, 0, 0)
         self._quick_container.reordered.connect(self._reorder_quick_roll)
         layout.addWidget(self._quick_container)
-        return group
+        part.hide()
+        return part
 
     # -- rolling -------------------------------------------------------------
 
     def _input_widgets(self) -> list[QWidget]:
         return [
             self._spec_chip,
-            self._modifier_slider,
             self._modifier_spin,
+            *self._step_buttons,
             self._lane,
-            self._dc_check,
             self._dc_spin,
             self._hidden_check,
-            self._routine_check,
+            self._routine_button,
             self._request_combo,
             self._request_dc,
             self._request_button,
@@ -1042,8 +1115,8 @@ class DiceRollerPanel(
         click on a stat line asks for, and it is why this is not the method a roll
         goes through — see :meth:`roll_spec`, which drops what it loaded again.
 
-        A spec that names its own DC (a power's save) ticks the DC box and fills it
-        in, so the number it will roll against is visible rather than implied; a spec
+        A spec that names its own DC (a power's save) fills in the DC box, so the
+        number it will roll against is visible rather than implied; a spec
         without one leaves the box exactly as the player left it.
 
         Clearing the chip takes that DC off again (it used to stay, grading later
@@ -1062,11 +1135,9 @@ class DiceRollerPanel(
         self._spec = spec
         self._spec_minion = spec is not None and minion
         if spec is not None and spec.dc is not None:
-            self._dc_check.setChecked(True)
-            self._dc_spin.setValue(spec.dc)
+            self.set_dc(spec.dc)
         elif had_own_dc:
-            self._dc_check.setChecked(False)
-            self._dc_spin.setValue(0)
+            self.set_dc(None)
         self._chip_slot.setCurrentWidget(self._spec_chip if spec is not None else self._chip_empty)
         if spec is not None:
             caption = spec_caption(spec)
@@ -1087,7 +1158,7 @@ class DiceRollerPanel(
         self.contentChanged.emit()
 
     def _prompt_readout(self, *, replace_result: bool) -> None:
-        """Say what the die will throw, under it, where the result appears.
+        """Say the die is waiting, beside it, where the result appears.
 
         *replace_result* is what keeps this from eating a number: loading a trait
         replaces a result the player has already read (they have just said what they
@@ -1098,10 +1169,11 @@ class DiceRollerPanel(
         if self._showing_result and not replace_result:
             return
         self._showing_result = False
-        if self._spec is None:
-            self._readout.setText(IDLE_PROMPT)
-            return
-        self._readout.setText(f"Rolling {escape_rich_text(self._spec.label)} — click the die.")
+        # The same words whatever is loaded: the chip above already names it, and the
+        # ring on the die says the die is armed. Repeating the name here made three.
+        # The rich-text token: a palette role means nothing inside HTML.
+        muted = theme.color("text.muted.rich")
+        self._readout.setText(f"<span style='color:{muted}'>{IDLE_PROMPT}</span>")
 
     def add_bonus(self, amount: int) -> None:
         """Add *amount* to the Bonus/Penalty slider, clamped to the range it offers.
@@ -1161,7 +1233,7 @@ class DiceRollerPanel(
         """Whether the roll in flight is a routine check — the last roll's, on a reroll."""
         if self._rerolling and self._last_roll is not None:
             return bool(self._last_roll.get("routine"))
-        return self._routine_check.isChecked()
+        return self._routine_next
 
     def _as_minion(self) -> bool:
         """Whether the roll in flight is a minion's — the last roll's, on a reroll."""
@@ -1178,8 +1250,23 @@ class DiceRollerPanel(
         return spec is not None and spec.roll_twice
 
     def _spend_routine(self) -> None:
-        """A routine check is one roll's worth: untick it once that roll is made."""
-        self._routine_check.setChecked(False)
+        """A routine check is one roll's worth: forget it once that roll is made."""
+        self._routine_next = False
+
+    def take_ten(self) -> bool:
+        """Make the check now as a routine one (take 10, PDF p17): the die counts as 10.
+
+        Whatever is loaded, with the modifier and the DC as set — the same roll a click
+        of the die makes, made as a 10. ``False`` if a die is already tumbling or the
+        roll was called off.
+        """
+        if self._rolling:
+            return False
+        self._routine_next = True
+        if not self._start_roll():
+            self._routine_next = False
+            return False
+        return True
 
     def _settle_spec(self) -> None:
         """Drop a spec that was only loaded to be rolled, now that it has been.
@@ -1218,7 +1305,7 @@ class DiceRollerPanel(
             return (last["bonus"], last["penalty"], last["dc"], last["hidden"])
         value = self._modifier_spin.value()
         bonus, penalty = max(value, 0), max(-value, 0)
-        dc = self._dc_spin.value() if self._dc_check.isChecked() else None
+        dc = self.dc()
         spec = self._made_of()
         if spec is not None:
             net = spec.modifier + bonus - penalty
@@ -1305,7 +1392,7 @@ class DiceRollerPanel(
                 "hidden": hidden,
                 "label": self._roll_label(),
                 "spec": self._made_of(),
-                "routine": self._routine_check.isChecked(),
+                "routine": self._routine_next,
                 "minion": self._spec_minion,
                 "lines": lines,
                 "twice": bool(flight is not None and flight.roll_twice),
@@ -1536,10 +1623,14 @@ class DiceRollerPanel(
         self._rolled_lines = ()
         self._then = None
         self._flight = None
+        # Take 10 was for the roll that never came back; a later click of the die is a
+        # die roll, and with no box ticked any more nothing would say otherwise.
+        self._routine_next = False
         self._disconnect_session()
         self.awaitingOwnRoll.emit(False)
         self._face.setText("?")
         self._readout.setText(f"<span style='color:{theme.color('tint.worse')}'>{message}</span>")
+        self._readout_changed()
         self._showing_result = True  # not a number, but not the prompt either
         # The chip stays (see :meth:`_settle_spec`); only its transience goes, so the
         # trait is still loaded and the die can simply be clicked again.
@@ -1561,9 +1652,7 @@ class DiceRollerPanel(
         self._die_button.setEnabled(True)
         for widget in self._input_widgets():
             widget.setEnabled(True)
-        # The DC spin follows its checkbox, not the blanket re-enable above.
-        self._dc_spin.setEnabled(self._dc_check.isChecked())
-        # And the Ask button follows whether a trait is chosen, for the same reason.
+        # The Ask button follows whether a trait is chosen, for the same reason.
         self._sync_request_button()
 
     def _unjudged_attack(self, dc: int | None) -> bool:
@@ -1599,3 +1688,21 @@ class DiceRollerPanel(
             other_die=other_die,
         )
         self._readout.setText(html)
+        self._readout_changed()
+
+    def _readout_changed(self) -> None:
+        """The readout's text changed, and with it, perhaps, how many lines it wraps to:
+        whatever holds the panel has to share its height out again, or a long result
+        (the unjudged-attack warning) is cut off at the bottom of the panel.
+
+        The layouts between the readout and the panel are invalidated **now**, not left
+        to Qt: it passes the change up one level per turn of the event loop, so the view
+        re-divided against the panel's old height-for-width and kept it.
+        """
+        widget: QWidget | None = self._readout
+        while widget is not None and widget is not self:
+            widget = widget.parentWidget()
+            if widget is not None and widget.layout() is not None:
+                widget.layout().invalidate()
+        self.updateGeometry()
+        self.contentChanged.emit()

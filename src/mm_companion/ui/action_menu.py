@@ -8,8 +8,9 @@ as *offered*: an action id mapped to ``None`` (it runs) or to the reason it cann
 right now (no NPC group to act with). An action the host does not mention at all is not
 built yet, and its tile is shown disabled with :data:`NOT_BUILT`.
 
-**Reroll** is the roller's own: the roller hands the host's builder its own entry in
-*offered* (``DiceRollerPanel.open_actions``), lit or greyed from its own last roll.
+**Reroll** and **Ask to Roll** are the roller's own: the roller hands the host's builder
+their entries in *offered* (``DiceRollerPanel.own_actions``) — Reroll lit or greyed from its
+own last roll, Ask from whether the host gave it any traits to ask for.
 """
 
 from __future__ import annotations
@@ -26,6 +27,12 @@ from mm_companion.ui.widgets import help_markup
 
 #: The action the roller runs itself (it throws its own last roll again).
 ACTION_REROLL = "reroll"
+
+#: The action that asks the table to roll a trait (the roller's own small form).
+ACTION_REQUEST = "request"
+
+#: Why Ask to Roll is greyed out: the host gave the roller no traits to ask for.
+NO_REQUEST_TRAITS = "There are no traits to ask for here."
 
 #: Why a tile for an action this version cannot run yet is greyed out.
 NOT_BUILT = "Not available yet."
@@ -126,6 +133,17 @@ def combat_menu(
                 enabled=reroll is None,
             )
         )
+        if ACTION_REQUEST in offered:
+            request = offered[ACTION_REQUEST]
+            items.append(
+                GridItem(
+                    ACTION_REQUEST,
+                    "Ask",
+                    ACTION_REQUEST,
+                    action_tooltip("Ask to Roll", "Ask the table to roll a trait.", request),
+                    enabled=request is None,
+                )
+            )
         return [GridSection("Actions", tuple(items))]
     sections: list[GridSection] = []
     for section in combat.menu:

@@ -117,7 +117,7 @@
       {"id": "maneuvers", "title": "Attack Maneuvers", "items": ["accurate_attack", "all_out_attack", "defensive_attack", "power_attack", "finishing_attack", "surprise_attack"]},
       {"id": "actions", "title": "Actions", "items": ["aid", "aim", "attack", "block", "catch", "charge", "defend", "disarm", "drop_prone", "escape", "feint", "grab", "impress", "recover", "smash", "stand", "trick", "trip"]},
       {"id": "area_group", "title": "Area & Group", "items": ["area", "team_attack", "team_check", "group_check"]},
-      {"id": "dice", "title": "Dice", "items": ["reroll"]}
+      {"id": "dice", "title": "Dice", "items": ["reroll", "request"]}
     ],
     "limits": {"maxShift": 5, "floor": 0, "doubleCap": true},
     "actions": [
@@ -149,7 +149,8 @@
       {"id": "team_attack", "name": "Team Attack", "caption": "Team attack", "icon": "team_attack", "tooltip": "Call a team attack on one target: anyone at the table joins with their next attack, maneuvers and all, and you resolve it. A group's own menu still rolls a squad at once.", "kind": "builtin", "gmOnly": true},
       {"id": "team_check", "name": "Team Check", "caption": "Team check", "icon": "team_check", "tooltip": "The members of a group help their leader with a check.", "kind": "builtin", "gmOnly": true},
       {"id": "group_check", "name": "Group Check", "caption": "Group check", "icon": "group_check", "tooltip": "Everyone in a group makes the same check; the group succeeds if half of them do.", "kind": "builtin", "gmOnly": true},
-      {"id": "reroll", "name": "Reroll", "icon": "reroll", "tooltip": "Reroll your last roll with the same bonus, penalty and DC. A result of 1–10 gets +10, so it lands on 11–20.", "kind": "builtin"}
+      {"id": "reroll", "name": "Reroll", "icon": "reroll", "tooltip": "Reroll your last roll with the same bonus, penalty and DC. A result of 1–10 gets +10, so it lands on 11–20.", "kind": "builtin"},
+      {"id": "request", "name": "Ask to Roll", "caption": "Ask", "icon": "request", "tooltip": "Ask the table to roll a trait: it lands in everyone's history with a button that rolls it on their own sheet.", "kind": "builtin"}
     ]
   }
 }

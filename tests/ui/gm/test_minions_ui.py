@@ -511,16 +511,14 @@ def test_a_critical_on_a_minion_from_the_history_needs_no_roll(
 # -- the roller --------------------------------------------------------------------
 
 
-def test_take_ten_rolls_a_ten_once(qapp) -> None:
+def test_take_ten_rolls_a_ten_once(qapp, instant_die) -> None:
     panel = DiceRollerPanel()
     seen: list[dict] = []
     panel.localRoll.connect(seen.append)
-    panel._routine_check.setChecked(True)
-    panel._start_roll()
-    panel._finish_roll()
+    assert panel.take_ten()
     (roll,) = seen
     assert roll["die"] == 10 and roll["routine"]
-    assert not panel._routine_check.isChecked()  # one roll's worth
+    assert not panel._routine_next  # one roll's worth
     assert "routine 10" in roll_headline({"die": 10, "routine": True})
     assert not panel.reroll()  # nothing was rolled, so there is no luck to have
 

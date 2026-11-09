@@ -98,10 +98,10 @@
     "canvas.hint.height": 120,
     "platform.features.height": 160,
 
-    "_die.padding": "The flat button's chrome around the drawing, so the button is die.size + this on each axis. It is what keeps the die from sitting flush against the readout under it.",
-    "die.size": 160,
+    "_die.padding": "The flat button's chrome around the drawing, so the button is die.size + this on each axis. It is what keeps the die from sitting flush against the readout beside it, and where the ring goes while a trait is loaded.",
+    "die.size": 120,
     "die.size.compact": 96,
-    "die.padding": 20,
+    "die.padding": 16,
 
     "_compact.width": "The size the window opens at in compact mode, before the user resizes it. The minimums are deliberately far below the roller's own content: past them the die and the history simply scroll, which is what lets the mini window be shoved into a corner of a shared screen.",
     "compact.width": 380,
@@ -208,7 +208,7 @@
     "size.version": 8.0,
     "size.cost-total": 12.0,
     "size.quick-npc-level": 12.0,
-    "size.dice-face": 40.0,
+    "size.dice-face": 28.0,
     "size.dice-face.compact": 24.0,
     "size.roll-readout": 16.0,
     "size.loading": 12.0,

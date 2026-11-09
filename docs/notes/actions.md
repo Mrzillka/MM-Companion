@@ -701,7 +701,7 @@ at the table answers with their own roller, maneuvers and all, and the GM resolv
 
 Two more of a group's ☰ menu items (PDF p18), one window (`ui/group_check.py`,
 `GroupCheckWindow`, `MODE_TEAM` / `MODE_GROUP`). The check is any trait the roller's
-Request row offers (`rules.requested_roll_choices`), rolled at each member's own number
+Ask to Roll form offers (`rules.requested_roll_choices`), rolled at each member's own number
 (`localize_spec`; an untrained skill is marked ⚠ but still rolls), with one adjustment on
 every roll. A member who is down starts unticked. Nothing lands — the outcome is posted
 to the history as a line.

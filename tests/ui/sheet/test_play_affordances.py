@@ -109,28 +109,20 @@ def test_initiative_is_dressed_as_a_roll_on_the_simple_sheet(qapp, data) -> None
     assert not sheet.simple_sheet.view("system_info").level.property("rollChip")
 
 
-# -- the roller's Request row sits on the grid -------------------------------------------
+# -- the roller's Ask to Roll form is off the panel ---------------------------------------
 
 
-def test_the_request_row_lines_up_with_the_sliders_and_spin_boxes(qapp, data) -> None:
+def test_the_ask_form_is_a_popup_and_not_a_row_of_the_roller(qapp, data) -> None:
+    # The Request row used to sit on the roller's grid, three greyed controls for a verb
+    # used a few times a session. It is a popup off the Actions popup's Ask tile now.
     section = DiceSection(data, Character.new_default(data))
     panel = section.panel
     grid = panel._settings_part.layout()
     assert isinstance(grid, QGridLayout)
-
-    def cell(widget) -> tuple[int, int]:
-        row, column, _rows, columns = grid.getItemPosition(grid.indexOf(widget))
-        return column, columns
-
-    # The slider and its box share the two right-hand columns, so the trait starts
-    # under the slider and the difficulty and its button end where the box ends.
-    modifier = next(
-        index
-        for index in range(grid.count())
-        if grid.itemAt(index).layout() is not None
-        and grid.itemAt(index).layout().indexOf(panel._modifier_spin) >= 0
-    )
-    _row, column, _rows, columns = grid.getItemPosition(modifier)
-    assert (column, columns) == (1, 2)
-    assert cell(panel._request_combo) == (1, 1)
-    assert cell(panel._request_part) == (2, 1)
+    for widget in (panel._request_combo, panel._request_dc, panel._request_button):
+        assert grid.indexOf(widget) < 0
+        assert widget.window() is panel._request_form
+    assert panel.request_reason() is None  # the sheet hands it the ruleset's traits
+    # And the circumstance steps beside the modifier come from the ruleset too.
+    steps = sorted(b.text() for b in panel._step_buttons)
+    assert steps == sorted(["−5", "−2", "+2", "+5"])

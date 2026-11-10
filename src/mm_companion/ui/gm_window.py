@@ -646,6 +646,7 @@ class GMWindow(
         # character-free) and this window decides where the ask goes.
         self._roller.set_roll_choices(requested_roll_choices(self._data))
         self._roller.set_modifier_steps(self._data.system.circumstance_modifiers)
+        self._roller.set_dc_start(self._data.system.dc_start)
         self._roller.rollRequested.connect(self._request_roll)
         # The Actions popup: the GM impresses, spreads an attack over an area, or has
         # a group act, for anybody — an NPC of theirs or a player — from the same

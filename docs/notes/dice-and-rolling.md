@@ -30,8 +30,8 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   after the block was built, so `CharacterSheet.sync_session()` fans a duck-typed
   `sync_session` out to the blocks and `attach_player_session` calls it at both ends of
   a session.
-- **The panel's layout** (reworked 2026-11-10, the user's call after a UI/UX review):
-  from the top, the chip slot; **Modifier** — one snug signed box with the
+- **The panel's layout** (reworked 2026-11-10, the user's call after a UI/UX review;
+  the controls were reworked again by "The two-row pass" below): from the top, the chip slot; **Modifier** — one snug signed box with the
   circumstance steps either side (`−5 −2 [+0] +2 +5`); one **toolbar** — the DC box,
   **Take 10**, **Actions ▾** — in a `FlowContainer` that wraps when narrow; the action
   lane; then the die with its result **beside** it; then the quick-roll pills; then the
@@ -298,6 +298,49 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   - **A card's ☆ and ✕ are one text line tall** (`fit_to_text_line`, padding 0), so
     heading_row's top alignment puts their glyph level with the first line; at a
     button's own height they sat a few pixels off, up or down by platform.
+- **The two-row pass** (2026-11-11, the user's layout; tests in
+  `tests/ui/dice/test_roll_controls.py`). It supersedes the "one toolbar" above:
+  ```
+  Modifier  [−5][−1] [ +0 ] [+1][+5]   Actions ▾
+  DC        [−5][−1] [ —  ] [+1][+5]   Take 10
+  All-Out Attack  +3 attack, −3 Def…  [−][3][+] ✕
+  ```
+  - **One grid, `ui/roller/controls.py`'s `RollControls`**, so the DC box sits under the
+    modifier box, every step under its twin, and the two buttons share a right edge. The
+    panel owns the widgets and their signals; `RollControls` only places them
+    (`_place`, which re-adds every widget to its cell — nothing is reparented).
+  - **Narrow, the buttons drop to a row of their own** under the DC row (Take 10 left,
+    Actions right). It is a `ReflowBox` with a `@no_reentry` sync and reports the narrow
+    shape as its minimum; its `sizeHint` is the wide shape, a preference, so the view
+    offers the width. `set_steps` and `set_slider` re-run the sync themselves: what the
+    wide shape needs moves then, and no resize comes to say so (the steps arrive after
+    the block has its width — the first build sat narrow in the strip for that reason).
+  - **The right-hand strip has about 300px for it at a 1400px window**, and the wide
+    shape plus the 24px dead-band only just fits. So: the steps' minimum is their
+    caption plus `space.xs` a side (the platform's tool-button hint was 34px), the
+    buttons' is their caption plus the style's real chrome (`_caption_width`, measured
+    off a long caption so the 80px push-button floor is not counted — caption-plus-air
+    clipped "Actions" in compact mode), no extra gap before the buttons (boxed beside
+    flat tells them apart), and a `space.xs` label gap. A bigger font tips it into the
+    three-row shape, which is the design, not a bug.
+  - **The lane is under both rows**, so neither button nor the DC moves when a pick puts
+    a line on it (the Actions-button bug's reasoning, applied to Take 10).
+  - **The DC has the modifier's steps** (`circumstanceModifiers`), always — even with the
+    slider chosen: DCs are exact numbers the GM announces, and a slider is no way to hit
+    17. **Up from "not set" lands on `system.dcStart`** (10, Average, PDF p17), not 1;
+    down past the bottom is "not set" again (the box's 0). Its box is centred now, the
+    modifier box's twin: the left alignment of the UX pass was for a box between two
+    buttons its own size, which it no longer is.
+  - **The DC capsule covers the whole DC row**, label to last step. It belongs to
+    `RollControls` (`capsule`, `place_capsule`, which watches the row's widgets), and the
+    grid keeps `space.xs` of margin right and below so it is never clipped.
+  - **The slider setting covers the action lines too.** With steps a configurable line is
+    one line — name, the trade muted and elided (whole on hover), `[−] [3] [+]`, `✕` —
+    the `+` greyed at the cap with the cap's reason on hover, which is what the slider's
+    reach used to show. With the slider it is the old two-line look, the trade under it
+    (`ActionLine.set_input`, `ActionLane.set_input`). The `✕` is at the end of every line
+    now. In slider mode the modifier's slider takes the penalty steps' columns and its
+    box the rest, so the box still starts where the DC box does.
 - **Deferral is a window, not a flag, and that was a bug first.** The shared history
   holds one's *own* roll back so the card lands as the die settles rather than the
   instant the server answers. Only the roller's `sessionRollRevealed` lets a held roll

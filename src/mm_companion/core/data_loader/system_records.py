@@ -396,6 +396,8 @@ class SystemRules:
     #: The common circumstance modifiers (PDF p17), smallest first: the roller's step
     #: buttons offer each one as a bonus and as a penalty.
     circumstance_modifiers: tuple[int, ...] = (1, 5)
+    #: Where the roller's first DC step lands from "not set".
+    dc_start: int = 10
     trait_keys: TraitKeys = field(default_factory=TraitKeys)
     paired_caps: tuple[PairedCap, ...] = ()
     unscoped_scope_values: tuple[str, ...] = ("All checks",)

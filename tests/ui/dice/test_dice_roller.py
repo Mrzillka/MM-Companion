@@ -1252,20 +1252,23 @@ def test_the_die_stays_put_whatever_the_readout_says(qapp) -> None:
         panel.close()
 
 
-def test_the_dc_take_10_and_actions_share_a_row(qapp: QApplication) -> None:
-    # One justified row now, not a wrapping flow: it is no wider than the modifier's.
+def test_actions_ends_the_modifier_row_and_take_10_the_dc_row(qapp: QApplication) -> None:
+    # The user's layout (2026-11-11): what changes the roll on one row, what it is
+    # rolled against on the next.
     view = DiceRollerView()
     view.show()
     panel = view.panel
+    panel.set_modifier_steps((1, 5))
 
     _settled(qapp, view, 360, 800)  # the right-hand pinned strip's shape
+    assert panel._controls.wide
 
     def middle(widget) -> int:
         return widget.mapTo(panel, widget.rect().center()).y()
 
-    dc = middle(panel._dc_spin)
+    modifier, dc = middle(panel._modifier_spin), middle(panel._dc_spin)
+    assert abs(modifier - middle(panel._actions_button)) < panel._actions_button.height()
     assert abs(dc - middle(panel._routine_button)) < panel._routine_button.height()
-    assert abs(dc - middle(panel._actions_button)) < panel._actions_button.height()
     assert abs(dc - middle(panel._dc_label)) < panel._dc_spin.height()
 
 
@@ -1390,10 +1393,9 @@ def test_the_circumstance_steps_sit_either_side_of_the_modifier_box(
     order = sorted([*panel._step_buttons, panel._modifier_spin], key=left)
     assert [w.text() for w in order] == ["−5", "−2", panel._modifier_spin.text(), "+2", "+5"]
     spin = panel._modifier_spin
-    # Justified: the steps and the box share the row out to its right edge.
+    # Justified: the steps and the box share the row out to the Actions button.
     last = max(panel._step_buttons, key=left)
-    right_edge = last.mapTo(panel._settings_part, last.rect().topRight()).x()
-    assert panel._settings_part.width() - right_edge <= 2
+    assert left(panel._actions_button) - (left(last) + last.width()) <= 3 * 6
 
     # A step adds to the box, so +2 twice is +4, and a penalty takes it back down.
     by_caption = {b.text(): b for b in panel._step_buttons}

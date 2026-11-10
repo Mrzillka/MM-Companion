@@ -48,7 +48,7 @@ import math
 import random
 from collections.abc import Callable, Mapping, Sequence
 
-from PySide6.QtCore import QElapsedTimer, QEvent, QPoint, QRect, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QElapsedTimer, QEvent, QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -117,6 +117,7 @@ from mm_companion.ui.roller.action_lane import (
     LineLimit,
     LineShift,
 )
+from mm_companion.ui.roller.controls import RollControls
 from mm_companion.ui.roller.flourish import DieBurst, pulse_halo, shake
 from mm_companion.ui.roller.quick_rolls import QuickRollStrip, RollerQuickRollsMixin
 from mm_companion.ui.roller.requests import RollerRequestsMixin
@@ -194,6 +195,11 @@ DC_LABEL = "DC"
 #: than "—" (a dash in a small box read as a label, not as somewhere a number goes), and
 #: muted because "none" in the text colour read as a value — or a bug (2026-11-10).
 DC_NONE = "not set"
+#: The highest DC the box takes.
+DC_LIMIT = 60
+#: Where a bonus step takes a DC that is not set, until the host says otherwise
+#: (``system.dcStart``).
+DC_START = 10
 DC_HINT = "Difficulty Class: the roll is judged against it. 0 or empty for none."
 
 #: The roller's keyboard shortcuts, live anywhere in the window that shows the roller.
@@ -227,6 +233,29 @@ QWIDGETSIZE_MAX = 16777215
 def _capsule_inset() -> int:
     """How far the Modifier and DC labels sit in from their column's edge."""
     return 2 * int(theme.metric("space.xs"))
+
+
+def _label_gap() -> int:
+    """The air after the Modifier and DC labels, on top of the grid's own spacing: the
+    grid is spaced as tightly as its steps are, and a label butted up to its first step
+    read as one. Small, because the right-hand strip has no pixel to spare."""
+    return int(theme.metric("space.xs"))
+
+
+def _caption_width(button: QPushButton) -> int:
+    """How wide *button* has to be to show its caption: the caption and the chrome the
+    style puts round it, without the platform's minimum push-button width (80px under
+    the common style, whatever the caption). The chrome is measured off a caption long
+    enough to be past that minimum, so a theme's padding is counted too."""
+    long = button.text() * 6
+    probe = QPushButton(long)
+    probe.setFont(button.font())
+    try:
+        metrics = probe.fontMetrics()
+        chrome = probe.sizeHint().width() - metrics.horizontalAdvance(long)
+        return metrics.horizontalAdvance(button.text()) + max(0, chrome)
+    finally:
+        probe.deleteLater()
 
 
 def _stretch_across(widget: QWidget) -> None:
@@ -536,6 +565,10 @@ class DiceRollerPanel(
         # The circumstance steps either side of the modifier box, pushed in by the
         # host (see :meth:`set_modifier_steps`); none until it does.
         self._step_buttons: list[QToolButton] = []
+        # The same steps either side of the DC box, and where a bonus step takes a DC
+        # that is not set (see :meth:`set_dc_start`).
+        self._dc_step_buttons: list[QToolButton] = []
+        self._dc_start = DC_START
         # The colour token the die glows in after a roll lands (see
         # :meth:`_glow_outcome`), and the timer that lets it settle back.
         self._outcome: str | None = None
@@ -624,43 +657,34 @@ class DiceRollerPanel(
     # -- construction --------------------------------------------------------
 
     def _build_roll_settings(self) -> QWidget:
-        """The controls above the die: what is loaded, the modifier, one toolbar, the lane.
+        """The controls above the die: what is loaded, the two rows of controls, the lane.
 
         No group box round them: the block's own frame already says where the roller
         is, and a "Roll" frame, a "Quick rolls" one and a "History" one inside it were
         three boxes nested in a fourth.
 
-        From the top: the chip slot (what the sheet loaded), the modifier with the
-        circumstance steps either side of it, one toolbar — the DC, **Take 10** and the
-        **Actions** button — and the action lane. The lane grows *under* the toolbar,
-        so the Actions button stays where it is when a pick puts a line on the lane;
-        it used to sit under the lane's last line and moved away from the pointer.
-
-        **Justified, on one label column.** "Modifier" and "DC" share the grid's first
-        column, so the two rows start their controls at the same x, and each row's
-        controls share out the whole width rather than huddling at the left edge with
-        a slab of nothing beside them (the user's call, 2026-11-10).
+        From the top: the chip slot (what the sheet loaded), then
+        :class:`~mm_companion.ui.roller.controls.RollControls` — the modifier with its
+        steps and **Actions**, the DC with its steps and **Take 10** — and the action
+        lane *under both rows*, so neither button nor the DC moves when a pick puts a
+        line on the lane (the user's layout, 2026-11-11). Each row's controls share out
+        the whole width rather than huddling at the left edge.
         """
         part = QWidget()
         grid = QGridLayout(part)
-        # Room under the last row for the DC capsule, which stands a little proud of its
-        # box: with the lane empty the toolbar is the last row, and the capsule's foot was
-        # cut off by the edge of this widget (2026-11-10).
-        grid.setContentsMargins(0, 0, 0, int(theme.metric("space.xs")))
+        grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(int(theme.metric("space.md")))
         grid.setVerticalSpacing(int(theme.metric("space.sm")))
         # Kept, because in a row the quick rolls move in under these controls
         # (:meth:`~mm_companion.ui.roller.shape.RollerShapeMixin.apply_reflow`).
         self._settings_grid = grid
-        # The labels' column is as wide as the wider label; the controls take the rest.
         grid.setColumnStretch(1, 1)
 
         self._spec_chip = self._build_spec_chip()
         grid.addWidget(self._build_chip_slot(), 0, 0, 1, 2)
 
-        # One signed box between its penalty steps and its bonus steps: −5 −2 [+0] +2 +5,
-        # all sharing the row's width. It used to be a −30..+30 slider, which is no way
-        # to hit +2.
+        # The modifier: one signed box between its penalty steps and its bonus steps,
+        # −5 −1 [+0] +1 +5. It used to be a −30..+30 slider, which is no way to hit +2.
         self._modifier_spin = make_signed_spin_box(MODIFIER_LIMIT, snug=True)
         # "+0" at rest, not "0": signed like every value it can hold, so it reads as the
         # modifier the steps either side of it move, not as a sixth button.
@@ -674,14 +698,9 @@ class DiceRollerPanel(
         self._modifier_label.setToolTip(MODIFIER_HINT)
         # Both labels sit a little in from the column's edge: the DC capsule is drawn
         # from that edge (it cannot reach past the panel's), and its text needs air.
-        self._modifier_label.setContentsMargins(_capsule_inset(), 0, 0, 0)
-        self._modifier_row = QHBoxLayout()
-        self._modifier_row.setContentsMargins(0, 0, 0, 0)
-        self._modifier_row.setSpacing(int(theme.metric("space.xs")))
-        # Twice a step's share: the field is the row's one box, the steps flat beside it.
-        self._modifier_row.addWidget(self._modifier_spin, stretch=2)
-        # The other way to set it (Settings ▸ General): a slider before the box, in place
-        # of the step buttons. Built either way, so the setting can switch it live.
+        self._modifier_label.setContentsMargins(_capsule_inset(), 0, _label_gap(), 0)
+        # The other way to set it (Settings ▸ General): a slider in place of the penalty
+        # steps. Built either way, so the setting can switch it live.
         self._modifier_slider = QSlider(Qt.Orientation.Horizontal)
         self._modifier_slider.setRange(MODIFIER_SLIDER_MIN, MODIFIER_SLIDER_MAX)
         self._modifier_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
@@ -692,18 +711,60 @@ class DiceRollerPanel(
         _stretch_across(self._modifier_slider)
         self._modifier_slider.valueChanged.connect(self._slider_moved)
         self._modifier_spin.valueChanged.connect(self._sync_modifier_slider)
-        self._modifier_row.insertWidget(0, self._modifier_slider, stretch=3)
-        grid.addWidget(self._modifier_label, 1, 0)
-        grid.addLayout(self._modifier_row, 1, 1)
-        self._apply_modifier_input()
 
-        self._build_toolbar(grid, 2)
+        # The DC is **one** box where empty ("not set") means no DC — it used to be a
+        # checkbox beside a box that sat greyed at 15 while unticked, two controls for
+        # one number. Nobody grades a roll against DC 0, so 0 is free to mean "none".
+        self._dc_label = QLabel(DC_LABEL)
+        self._dc_label.setToolTip(DC_HINT)
+        self._dc_label.setContentsMargins(_capsule_inset(), 0, _label_gap(), 0)
+        self._dc_spin = make_spin_box(0, DC_LIMIT, value=0, buttons=False, snug=True)
+        self._dc_spin.setSpecialValueText(DC_NONE)
+        self._dc_spin.setToolTip(DC_HINT)
+        # Centred like the modifier's box above it, which it lines up under.
+        self._dc_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        _stretch_across(self._dc_spin)
+        self._dc_spin.valueChanged.connect(self._mark_dc)
+        self._dc_spin.valueChanged.connect(self._inputs_edited)
+
+        # Take 10 is a **button** that makes the check now, rather than a checkbox that
+        # changed what the next click of the die did and had to be remembered.
+        self._routine_button = QPushButton(ROUTINE_LABEL)
+        self._routine_button.setToolTip(help_markup(f"{ROUTINE_HINT} ({TAKE_TEN_SHORTCUT})"))
+        self._routine_button.clicked.connect(lambda _=False: self.take_ten())
+
+        self._actions_button = QPushButton(ACTIONS_LABEL)
+        self._actions_button.setToolTip(
+            "Combat maneuvers and actions: attack maneuvers, Aid, Grab, Impress, Reroll…"
+        )
+        self._actions_button.clicked.connect(self.open_actions)
+
+        # The two buttons may narrow to their captions: the platform's push-button
+        # minimum is wider than either needs, and it is what pushed the pair off the
+        # rows in the right-hand strip.
+        for button in (self._routine_button, self._actions_button):
+            button.setMinimumWidth(_caption_width(button))
+
+        self._controls = RollControls(
+            modifier_label=self._modifier_label,
+            modifier_box=self._modifier_spin,
+            modifier_slider=self._modifier_slider,
+            actions=self._actions_button,
+            dc_label=self._dc_label,
+            dc_box=self._dc_spin,
+            take_ten=self._routine_button,
+        )
+        # The capsule a set DC is drawn as (see :meth:`_mark_dc`).
+        self._dc_pair = self._controls.capsule
+        grid.addWidget(self._controls, 1, 0, 1, 2)
 
         # The action lane: one line per action riding on the next roll.
         self._lane = ActionLane()
         self._lane.changed.connect(self._on_lane_changed)
         self._lane.edited.connect(self._refresh_preview)
-        grid.addWidget(self._lane, 3, 0, 1, 2)
+        grid.addWidget(self._lane, 2, 0, 1, 2)
+        self._apply_modifier_input()
+        self._mark_dc()
 
         self._hidden_check = QCheckBox("Hidden roll")
         self._hidden_check.setToolTip(
@@ -721,8 +782,8 @@ class DiceRollerPanel(
         return self._modifier_input
 
     def set_modifier_input(self, style: str) -> None:
-        """Set the modifier with step buttons either side of the box, or a slider
-        before it (``storage.MODIFIER_INPUTS``)."""
+        """Set the modifier and the action lines with step buttons, or with sliders
+        (``storage.MODIFIER_INPUTS``). The DC keeps its steps either way."""
         if style not in storage.MODIFIER_INPUTS:
             style = storage.MODIFIER_INPUT_BUTTONS
         if style == self._modifier_input:
@@ -738,10 +799,13 @@ class DiceRollerPanel(
 
     def _apply_modifier_input(self) -> None:
         slider = self._modifier_input == storage.MODIFIER_INPUT_SLIDER
-        # Both are in the row (parented) before either is shown.
-        self._modifier_slider.setVisible(slider)
+        # All of them are in the grid (parented) before any is shown.
+        self._controls.set_slider(slider)
         for button in self._step_buttons:
             button.setVisible(not slider)
+        for button in self._dc_step_buttons:
+            button.setVisible(True)
+        self._lane.set_input(self._modifier_input)
         self._sync_modifier_slider()
 
     def _slider_moved(self, value: int) -> None:
@@ -757,121 +821,74 @@ class DiceRollerPanel(
             self._modifier_slider.setValue(value)
             self._modifier_slider.blockSignals(False)
 
-    def _build_toolbar(self, grid: QGridLayout, row: int) -> None:
-        """The DC box, Take 10 and the Actions button: the "DC" label in the labels'
-        column, the three controls sharing the rest of *row* across.
-
-        The DC is **one** box where empty (``none``) means no DC — it used to be a
-        checkbox beside a box that sat greyed at 15 while unticked, two controls for
-        one number. Nobody grades a roll against DC 0, so 0 is free to mean "none".
-
-        Take 10 is a **button** that makes the check now, rather than a checkbox that
-        changed what the next click of the die did and had to be remembered.
-
-        It was a wrapping flow at its natural widths, which left the row ragged against
-        the modifier's above it. One row is no wider than the modifier's, so there is
-        nothing a wrap would save.
-        """
-        parent = grid.parentWidget()
-        # The capsule a set DC is drawn as: a frame *behind* the label and the box, not
-        # round them in a layout, since the two sit in different columns of the grid.
-        # Created first so it stacks under them; :meth:`_place_dc_capsule` keeps it on
-        # their united rectangle. Its border is there transparent while no DC is set,
-        # so the capsule costs no pixels to appear.
-        self._dc_pair = QFrame(parent)
-        self._dc_pair.setObjectName("dcPair")
-        self._dc_pair.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-
-        self._dc_label = QLabel(DC_LABEL)
-        self._dc_label.setToolTip(DC_HINT)
-        self._dc_label.setContentsMargins(_capsule_inset(), 0, 0, 0)
-        self._dc_spin = make_spin_box(0, 60, value=0, buttons=False, snug=True)
-        self._dc_spin.setSpecialValueText(DC_NONE)
-        self._dc_spin.setToolTip(DC_HINT)
-        # Left, as every other field in the app is, and the widest thing on the row:
-        # centred between two buttons of its own size, a muted "not set" read as a
-        # third, greyed-out button.
-        self._dc_spin.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        _stretch_across(self._dc_spin)
-        self._dc_spin.valueChanged.connect(self._mark_dc)
-        self._dc_spin.valueChanged.connect(self._inputs_edited)
-
-        self._routine_button = QPushButton(ROUTINE_LABEL)
-        self._routine_button.setToolTip(help_markup(f"{ROUTINE_HINT} ({TAKE_TEN_SHORTCUT})"))
-        self._routine_button.clicked.connect(lambda _=False: self.take_ten())
-
-        self._actions_button = QPushButton(ACTIONS_LABEL)
-        self._actions_button.setToolTip(
-            "Combat maneuvers and actions: attack maneuvers, Aid, Grab, Impress, Reroll…"
-        )
-        self._actions_button.clicked.connect(self.open_actions)
-
-        self._toolbar = QWidget()
-        across = QHBoxLayout(self._toolbar)
-        across.setContentsMargins(0, 0, 0, 0)
-        across.setSpacing(int(theme.metric("space.xs")))
-        across.addWidget(self._dc_spin, stretch=2)
-        for widget in (self._routine_button, self._actions_button):
-            across.addWidget(widget, stretch=1)
-        grid.addWidget(self._dc_label, row, 0)
-        grid.addWidget(self._toolbar, row, 1)
-        for widget in (self._dc_label, self._dc_spin, self._toolbar):
-            widget.installEventFilter(self)
-        self._mark_dc()
-
     def _place_dc_capsule(self) -> None:
-        """Lay the DC capsule over the label and the box, a little proud of both."""
-        pair = getattr(self, "_dc_pair", None)
-        if pair is None:
-            return
-        parent = pair.parentWidget()
-        label = self._dc_label.geometry()
-        box = QRect(self._dc_spin.mapTo(parent, QPoint(0, 0)), self._dc_spin.size())
-        pad = int(theme.metric("space.xs"))
-        pair.setGeometry(label.united(box).adjusted(0, -pad, pad, pad))
-        pair.lower()
+        """Lay the DC capsule over the DC row, a little proud of it."""
+        controls = getattr(self, "_controls", None)
+        if controls is not None:
+            controls.place_capsule()
 
     def set_modifier_steps(self, steps: Sequence[int]) -> None:
-        """Put *steps* either side of the modifier box, as penalties and as bonuses.
+        """Put *steps* either side of the modifier box and the DC box, as penalties and
+        as bonuses.
 
-        ``(2, 5)`` — the common circumstance modifiers (PDF p17), which the host reads
-        from the game data — gives ``−5 −2 [+0] +2 +5``. A step **adds** to the box, so
-        +2 twice is +4. The panel reads no game data, so until a host calls this there
-        are no steps, only the box. The steps and the box share the row's width.
+        ``(1, 5)`` — the host reads them from the game data — gives ``−5 −1 [+0] +1 +5``
+        on both rows. A step **adds** to its box, so +1 twice is +2. The panel reads no
+        game data, so until a host calls this there are no steps, only the boxes.
         """
-        for button in self._step_buttons:
-            self._modifier_row.removeWidget(button)
-            discard_widget(button)
+        old = [*self._step_buttons, *self._dc_step_buttons]
         self._step_buttons = []
+        self._dc_step_buttons = []
         sizes = sorted({abs(int(step)) for step in steps if int(step)})
-        for index, size in enumerate(reversed(sizes)):
-            self._modifier_row.insertWidget(index, self._step_button(-size), stretch=1)
-        after = self._modifier_row.indexOf(self._modifier_spin) + 1
-        for index, size in enumerate(sizes):
-            self._modifier_row.insertWidget(after + index, self._step_button(size), stretch=1)
-        # Parented by the row now, so they may be shown or hidden for the setting.
+        signed = [-size for size in reversed(sizes)] + sizes
+        modifier = [self._step_button(step, self.add_bonus, "to the modifier") for step in signed]
+        dc = [self._step_button(step, self._step_dc, "to the DC") for step in signed]
+        self._step_buttons = modifier
+        self._dc_step_buttons = dc
+        self._controls.set_steps(modifier, dc)
+        for button in old:
+            discard_widget(button)
+        # Parented by the grid now, so they may be shown or hidden for the setting.
         self._apply_modifier_input()
         self.updateGeometry()
         self.contentChanged.emit()
 
-    def _step_button(self, step: int) -> QToolButton:
-        """One circumstance step: **flat**, lit under the pointer. Boxed like the
-        buttons below, five boxes in a row left the one field among them reading as
-        just another button."""
+    def set_dc_start(self, dc: int) -> None:
+        """Where a bonus step takes a DC that is not set (the host reads it from the
+        game data); 10 until it does."""
+        self._dc_start = max(1, int(dc))
+
+    def _step_dc(self, amount: int) -> None:
+        """One DC step. Up from "not set" lands on the starting DC rather than on 1,
+        and down past the bottom is "not set" again (the box's 0)."""
+        value = self._dc_spin.value()
+        if not value:
+            if amount > 0:
+                self._dc_spin.setValue(self._dc_start)
+            return
+        self._dc_spin.setValue(value + amount)
+
+    def _step_button(self, step: int, apply: Callable[[int], None], what: str) -> QToolButton:
+        """One step: **flat**, lit under the pointer. Boxed like the buttons beside them,
+        five boxes in a row left the one field among them reading as just another
+        button."""
         caption = f"{step:+d}".replace("-", "−")
         button = QToolButton()
         button.setText(caption)
         # Flat under Classic too, which draws a tool button natively.
         button.setAutoRaise(True)
         button.setCursor(Qt.CursorShape.PointingHandCursor)
-        # As narrow as its caption at the least, as wide as the row shares out, and as
-        # tall as the field beside it, so its hover fills the row.
-        button.setMinimumWidth(button.sizeHint().width())
+        # As narrow as its caption and a little air at the least — not the platform's
+        # tool-button hint, which is what pushed the Actions button off the modifier row
+        # in the 360px strip — as wide as the row shares out, and as tall as the field
+        # beside it, so its hover fills the row.
+        air = 2 * int(theme.metric("space.xs"))
+        button.setMinimumWidth(button.fontMetrics().horizontalAdvance(caption) + air)
         button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        button.setToolTip(f"{caption} to the modifier")
+        button.setToolTip(f"{caption} {what}")
         button.setEnabled(not self._rolling)
-        button.clicked.connect(lambda _=False, amount=step: self.add_bonus(amount))
-        self._step_buttons.append(button)
+        # Hidden until the grid parents it (a parentless widget is a window).
+        button.hide()
+        button.clicked.connect(lambda _=False, amount=step: apply(amount))
         return button
 
     def dc(self) -> int | None:
@@ -1181,12 +1198,12 @@ class DiceRollerPanel(
     ) -> ActionLine | None:
         """Put an action on the lane for the next roll; ``None`` if it was called off.
 
-        *limit* makes it configurable (a slider over ``0..limit(spec)[0]``, starting at
+        *limit* makes it configurable (a value over ``0..limit(spec)[0]``, starting at
         the maximum); otherwise it shows *fixed*. A line that *needs_attack* with no
         attack loaded first opens the attack picker, and the attack picked is loaded
         onto the chip; dismissing the picker calls the action off. *fits* says why a
         fixed line cannot ride on the attack loaded (greyed with the reason). *describe*
-        says in words what a configurable line's value trades, under its slider.
+        says in words what a configurable line's value trades, beside its steps.
         """
         if needs_attack and self.loaded_attack() is None:
             spec = self.choose_attack()
@@ -1446,14 +1463,7 @@ class DiceRollerPanel(
         return "accent.dice"
 
     def eventFilter(self, watched, event) -> bool:  # noqa: ANN001, N802 - Qt override
-        """The die's hover (a faint halo says it can be clicked), and the DC capsule
-        following its label and box about."""
-        if event.type() in (QEvent.Type.Move, QEvent.Type.Resize) and watched in (
-            getattr(self, "_dc_label", None),
-            getattr(self, "_dc_spin", None),
-            getattr(self, "_toolbar", None),
-        ):
-            self._place_dc_capsule()
+        """The die's hover: a faint halo says it can be clicked."""
         if watched is getattr(self, "_die_button", None) and event.type() in (
             QEvent.Type.Enter,
             QEvent.Type.Leave,
@@ -1507,6 +1517,7 @@ class DiceRollerPanel(
             self._modifier_spin,
             self._modifier_slider,
             *self._step_buttons,
+            *self._dc_step_buttons,
             self._lane,
             self._dc_spin,
             self._hidden_check,

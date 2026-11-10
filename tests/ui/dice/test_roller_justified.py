@@ -124,12 +124,15 @@ def test_the_controls_share_one_label_column_and_the_whole_width(qapp: QApplicat
     _settled(qapp, view, 380, 800)
     part = panel._settings_part
     first_step = min(panel._step_buttons, key=lambda b: _left(b, part))
-    last_step = max(panel._step_buttons, key=lambda b: _left(b, part))
-    # The two rows start their controls at the same x...
-    assert _left(first_step, part) == _left(panel._dc_spin, part)
-    # ...and both reach the right edge rather than stopping short.
-    assert part.width() - _right(last_step, part) <= 2
-    assert part.width() - _right(panel._actions_button, part) <= 2
+    first_dc_step = min(panel._dc_step_buttons, key=lambda b: _left(b, part))
+    # The two rows start their controls at the same x, and the boxes line up...
+    assert _left(first_step, part) == _left(first_dc_step, part)
+    assert _left(panel._modifier_spin, part) == _left(panel._dc_spin, part)
+    assert panel._modifier_spin.width() == panel._dc_spin.width()
+    # ...and the buttons share the right edge rather than stopping short.
+    pad = 4  # the capsule's room
+    assert part.width() - _right(panel._actions_button, part) <= pad + 2
+    assert _right(panel._actions_button, part) == _right(panel._routine_button, part)
 
 
 def test_the_dc_capsule_stays_inside_the_panel(qapp: QApplication) -> None:

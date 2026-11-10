@@ -116,9 +116,10 @@ def test_the_modifier_and_dc_read_as_fields(qapp) -> None:
     # The steps are flat; the box is the row's one field, wider than any step.
     assert all(step.autoRaise() for step in panel._step_buttons)
     assert all(panel._modifier_spin.width() > step.width() for step in panel._step_buttons)
-    # The DC sits left like every other field, and takes the most room on its row.
-    assert panel._dc_spin.alignment() & Qt.AlignmentFlag.AlignLeft
-    assert panel._dc_spin.width() >= panel._routine_button.width()
+    # The DC box is the modifier box's twin, under it, between steps of its own.
+    assert panel._dc_spin.alignment() & Qt.AlignmentFlag.AlignHCenter
+    assert panel._dc_spin.width() == panel._modifier_spin.width()
+    assert [b.text() for b in panel._dc_step_buttons] == ["−5", "−1", "+1", "+5"]
 
 
 # -- pills ------------------------------------------------------------------------------

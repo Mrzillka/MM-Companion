@@ -157,7 +157,7 @@ def test_an_empty_lane_takes_no_room_and_the_actions_button_stays_put(qapp) -> N
     qapp.processEvents()
     assert panel._lane.isVisible()
     assert where() == resting
-    assert panel._lane.geometry().top() > panel._toolbar.geometry().bottom()
+    assert panel._lane.geometry().top() > panel._controls.geometry().bottom()
     panel.action_lines()[0].removed.emit("charge")
     qapp.processEvents()
     assert panel.action_lines() == []

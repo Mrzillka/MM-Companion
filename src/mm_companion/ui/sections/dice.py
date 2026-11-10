@@ -143,6 +143,7 @@ class DiceSection(QGroupBox):
         self.view.panel.set_roll_choices(requested_roll_choices(self._data))
         # The circumstance steps beside the modifier box come from the ruleset too.
         self.view.panel.set_modifier_steps(self._data.system.circumstance_modifiers)
+        self.view.panel.set_dc_start(self._data.system.dc_start)
         self.view.panel.rollRequested.connect(self.request_roll)
         # A recovery check is settled when its result is in, on either path a roll
         # comes back by: the session's record, or the die this panel threw itself.

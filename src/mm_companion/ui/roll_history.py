@@ -42,14 +42,16 @@ from PySide6.QtWidgets import (
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.rules import (
     KIND_IMPRESS,
+    OWN_ATTACK_HINT,
+    OWN_ATTACK_HINT_OTHER,
     RollSpec,
     aimed_attack,
     follow_ups_for_result,
     is_team_call,
     outcome_is_failure,
+    own_attack_save,
     resistance_outcome,
     spec_parts,
-    unlocalized,
 )
 from mm_companion.core.session.model import KIND_MOD, KIND_NOTE, KIND_REQUEST, KIND_ROLL
 from mm_companion.ui import theme
@@ -442,7 +444,7 @@ def chain_widgets(
     die: int,
     degree: int | None,
     on_follow_up: Callable[[RollSpec], None],
-    localize: bool = True,
+    own: bool = False,
     total: int | None = None,
     on_plain: Callable[[RollSpec], None] | None = None,
     added_success: bool = True,
@@ -472,14 +474,13 @@ def chain_widgets(
     impression) takes as its DC. ``added_success`` is false for a minion's roll (the
     record's ``minion``), whose natural 20 raises no follow-up's DC.
 
-    ``localize`` is what decides whether the follow-up arrives with the reader's own
-    resistance filled in (:func:`~mm_companion.core.rules.localize_spec`, applied
-    downstream by the Dice block). It is off on **one's own** card: you are not the
-    target of your own attack, so quietly filling in your own Toughness there would
-    be a confident wrong number. It is carried by dropping the spec's trait key
-    rather than by a flag the whole chain would have to thread, and the label says
-    the bonus is missing (:func:`~mm_companion.core.rules.unlocalized`): a bare
-    "Toughness vs. 18" rolling +0 read as the app forgetting your Toughness.
+    The follow-up arrives with the reader's own resistance filled in
+    (:func:`~mm_companion.core.rules.localize_spec`, applied downstream by the Dice
+    block) — on **one's own** card too. ``own`` marks that case
+    (:func:`~mm_companion.core.rules.own_attack_save`): the roller is resisting their
+    own attack, and the result carries a ⚠ saying so (:func:`own_attack_mark`). It
+    used to roll a bare d20 there instead, which read as the app forgetting the
+    roller's Toughness.
     """
 
     resolved = spec if isinstance(spec, RollSpec) else RollSpec.from_dict(spec)
@@ -490,8 +491,8 @@ def chain_widgets(
     for follow_up in follow_ups_for_result(
         resolved, die, degree, load_game_data(), total, added_success=added_success
     ):
-        if not localize:
-            follow_up = unlocalized(follow_up)
+        if own:
+            follow_up = own_attack_save(follow_up)
         widgets.append(
             roll_button(
                 follow_up,
@@ -532,11 +533,9 @@ def request_widgets(
     waiting for somebody to make it. Wrapping it as its own follow-up to reuse
     that function would mean a spec whose label nothing ever reads.
 
-    It also never drops the spec's :attr:`~RollSpec.trait_key` the way
-    ``chain_widgets(localize=False)`` does on one's own card. That rule is about
-    *saves* — you are not the target of your own attack — and it does not hold
-    here: someone who asks the table to roll Perception is asking themselves too,
-    and their own sheet is the one screen that can fill the number in for certain.
+    Nor does it mark the roll as :func:`chain_widgets` marks a save on one's own card
+    (:attr:`~RollSpec.own_attack`): someone who asks the table to roll Perception is
+    asking themselves too, and that is nothing to warn about.
     """
 
     resolved = spec if isinstance(spec, RollSpec) else RollSpec.from_dict(spec)
@@ -566,6 +565,26 @@ def request_widgets(
             )
         )
     return buttons
+
+
+#: The small sign beside a roll whose roller resisted their own attack.
+OWN_ATTACK_MARK = "⚠"
+
+
+def own_attack_mark(spec: object, *, own: bool = True) -> QLabel | None:
+    """The ⚠ a card puts by its ☆ when its roll resisted its roller's own attack.
+
+    ``None`` for any other roll. *own* says whether the reader made the roll: the
+    hover says "you" only to them. Its words are on hover, not on the card, since
+    the roll is otherwise an ordinary save.
+    """
+    resolved = spec if isinstance(spec, RollSpec) else RollSpec.from_dict(spec)
+    if resolved is None or not resolved.own_attack:
+        return None
+    mark = QLabel(OWN_ATTACK_MARK)
+    mark.setStyleSheet(tinted_style("tint.warning", bold=True))
+    mark.setToolTip(OWN_ATTACK_HINT if own else OWN_ATTACK_HINT_OTHER)
+    return mark
 
 
 def reroll_label(label: str, reroll: bool) -> str:
@@ -1234,13 +1253,17 @@ class SessionRollCard(HistoryCard):
             degree=None if degree is None else int(degree),
             total=die + int(roll.get("bonus", 0)) - int(roll.get("penalty", 0)),
             on_follow_up=self.rollFollowUp.emit,
-            localize=not own,
+            own=own,
             on_plain=self.rollPlain.emit,
             added_success=_counts_twenty(roll),
         ):
             info.addWidget(widget)
 
         layout.addLayout(info, stretch=1)
+
+        mark = own_attack_mark(roll.get("spec"), own=own)
+        if mark is not None:
+            self._add_button(mark)
 
         # Only for a roll of one's own: saving someone else's modifiers into your
         # quick rolls would be saving their character's numbers.

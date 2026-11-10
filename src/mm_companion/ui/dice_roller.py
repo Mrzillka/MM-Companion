@@ -47,6 +47,7 @@ from __future__ import annotations
 import math
 import random
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 
 from PySide6.QtCore import QElapsedTimer, QEvent, QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
@@ -79,7 +80,12 @@ from PySide6.QtWidgets import (
 from mm_companion.core import storage
 from mm_companion.core.diagnostics import log_exception
 from mm_companion.core.dice import ROUTINE_DIE, CheckResult, reroll_d20, resolve_check, roll_d20
-from mm_companion.core.rules import AttackChoice, RollSpec, targetable_attack
+from mm_companion.core.rules import (
+    OWN_ATTACK_HINT,
+    AttackChoice,
+    RollSpec,
+    targetable_attack,
+)
 from mm_companion.core.session.model import KIND_ROLL
 from mm_companion.ui import theme
 from mm_companion.ui.action_grid import ActionGridPopup, GridItem, GridSection
@@ -188,6 +194,9 @@ NO_DC_WARNING = (
     "No DC and no target: the hit was not judged. Put the target's Defense in the "
     "DC box, or aim the attack at a creature."
 )
+#: The same spot under a save rolled off one's own attack card, with
+#: :data:`~mm_companion.core.rules.OWN_ATTACK_HINT` on hover.
+OWN_ATTACK_SHORT = "⚠ Own attack"
 
 #: The roller's Difficulty Class box: with a number in it, the roll is judged against it.
 DC_LABEL = "DC"
@@ -1330,8 +1339,8 @@ class DiceRollerPanel(
         self._reroll_button.clicked.connect(lambda _=False: self.reroll())
         self._reroll_button.hide()
 
-        # An attack nothing will judge: a short flag under the result, the whole
-        # sentence on hover.
+        # A short flag under the result, the whole sentence on hover: an attack
+        # nothing will judge, or a save resisting one's own attack (_result_flag).
         self._warning = QLabel(NO_DC_SHORT)
         self._warning.setStyleSheet(tinted_style("tint.worse", bold=True))
         self._warning.setToolTip(help_markup(NO_DC_WARNING))
@@ -1573,8 +1582,13 @@ class DiceRollerPanel(
         """
         # *localize* false puts back a spec this panel already held, which has been
         # through the localizer once (twice would add this sheet's number again).
-        if spec is not None and localize and self._localizer is not None:
-            spec = self._localizer(spec)
+        if spec is not None and localize:
+            if self._localizer is not None:
+                spec = self._localizer(spec)
+            elif spec.own_attack:
+                # No sheet here (the GM's roller): no one's numbers go in, so it is
+                # nobody resisting their own attack.
+                spec = replace(spec, own_attack=False)
         # An explicit load is always a deliberate one, whatever a roll in flight had
         # in mind: it cancels the transience :meth:`roll_spec` asked for, so a spec
         # arriving over the bus mid-tumble is not swept away when the die settles.
@@ -1632,7 +1646,7 @@ class DiceRollerPanel(
         before = self._readout.text()
         self._readout.setText(html)
         self._readout.setToolTip(breakdown)
-        self._show_warning(False)
+        self._show_warning(None)
         self._sync_reroll_button()
         if was_result or before != html:
             # It may wrap to a different number of lines: whatever holds the panel
@@ -2239,7 +2253,7 @@ class DiceRollerPanel(
         )
         self._readout.setText(html)
         self._readout.setToolTip(roll_breakdown(record) if record is not None else "")
-        self._show_warning(self._unjudged_attack(dc))
+        self._show_warning(self._result_flag(dc))
         self._shown_natural = natural
         self._sync_reroll_button()
         self._readout_changed()
@@ -2248,11 +2262,32 @@ class DiceRollerPanel(
         )
         self._celebrate(natural)
 
-    def _show_warning(self, show: bool) -> None:
-        """The short "no DC" flag under the result, or not."""
-        if self._warning.isHidden() == (not show):
-            return
-        self._warning.setVisible(show)
+    def _result_flag(self, dc: int | None) -> tuple[str, str, str] | None:
+        """The flag under the result just shown, as ``(text, hover, tint)``, or ``None``.
+
+        An attack nothing will judge, or a save rolled off one's own attack card
+        (:attr:`~mm_companion.core.rules.RollSpec.own_attack`). Never both: a save is
+        no attack.
+        """
+        if self._unjudged_attack(dc):
+            return (NO_DC_SHORT, NO_DC_WARNING, "tint.worse")
+        spec = self._rolled_spec()
+        if spec is not None and spec.own_attack:
+            return (OWN_ATTACK_SHORT, OWN_ATTACK_HINT, "tint.warning")
+        return None
+
+    def _show_warning(self, flag: tuple[str, str, str] | None) -> None:
+        """The short flag under the result (:meth:`_result_flag`), or none."""
+        if flag is None:
+            if self._warning.isHidden():
+                return
+            self._warning.hide()
+        else:
+            text, hover, tint = flag
+            self._warning.setText(text)
+            self._warning.setToolTip(help_markup(hover))
+            self._warning.setStyleSheet(tinted_style(tint, bold=True))
+            self._warning.show()
         self._readout_changed()
 
     def warning_text(self) -> str:

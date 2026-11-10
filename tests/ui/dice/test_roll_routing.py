@@ -16,6 +16,8 @@ from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import Power, PowerEffectInstance
 from mm_companion.core.rules import (
+    OWN_ATTACK_HINT,
+    OWN_ATTACK_HINT_OTHER,
     PIN_ABILITY,
     PIN_INITIATIVE,
     PIN_POWER,
@@ -29,6 +31,7 @@ from mm_companion.core.rules import (
 from mm_companion.core.session.model import new_session
 from mm_companion.ui import dice_roller
 from mm_companion.ui.character_sheet import CharacterSheet
+from mm_companion.ui.roll_history import OWN_ATTACK_MARK
 from mm_companion.ui.sections.powers import _RollLine
 from mm_companion.ui.sections.skills import COL_TOTAL as SKILL_TOTAL
 from mm_companion.ui.sections.stat_table import COL_NAME, COL_TOTAL, ROLL_ROLE
@@ -546,6 +549,12 @@ def _chain_buttons(card) -> list[QPushButton]:
     return [b for b in card.findChildren(QPushButton) if b.text().startswith("🎲")]
 
 
+def _own_attack_hover(card) -> str | None:
+    """The hover on a card's ⚠ for resisting one's own attack, or ``None`` without one."""
+    marks = [m for m in card.findChildren(QLabel) if m.text() == OWN_ATTACK_MARK]
+    return marks[0].toolTip() if marks else None
+
+
 def test_a_hit_offers_the_save_it_forced(qapp: QApplication) -> None:
     data = load_game_data()
     char = _hero(data)
@@ -561,13 +570,20 @@ def test_a_hit_offers_the_save_it_forced(qapp: QApplication) -> None:
 
     chain = _chain_buttons(history.cards()[0])
     assert len(chain) == 1
-    assert chain[0].text() == "🎲 Toughness vs. 18 (no bonus added)"
+    assert chain[0].text() == "🎲 Toughness vs. 18"
 
     # Pressing it rolls the save against its own DC.
     rolled = _Rolled(panel)
     chain[0].click()
-    assert rolled.last["label"] == "Toughness vs. 18 (no bonus added)"
+    assert rolled.last["label"] == "Toughness vs. 18"
     assert rolled.last["dc"] == 18
+    # With this sheet's own Toughness (Stamina 5), and marked as one's own attack: on
+    # the result beside the die, and on the save's card by its star.
+    assert rolled.last["bonus"] == 5
+    assert panel.warning_text() == dice_roller.OWN_ATTACK_SHORT
+    assert _own_attack_hover(history.cards()[0]) == OWN_ATTACK_HINT
+    # The attack's own card carries no mark: it resisted nothing.
+    assert _own_attack_hover(history.cards()[1]) is None
     # And the chip goes with the roll it was made for, taking its DC back off.
     assert panel.current_spec() is None
     assert panel.dc() is None
@@ -649,7 +665,7 @@ def test_a_natural_20_raises_the_dc_of_the_save_it_forces(qapp: QApplication) ->
     chain = _chain_buttons(_attack_with_die(sheet, 20))
 
     # 18 + the system's critical_effect_bonus, and the chip says why.
-    assert chain[0].text() == "🎲 Toughness vs. 18 — critical hit, DC 23 (no bonus added)"
+    assert chain[0].text() == "🎲 Toughness vs. 18 — critical hit, DC 23"
     rolled = _Rolled(sheet.dice.panel)
     chain[0].click()
     assert rolled.last["dc"] == 23
@@ -661,10 +677,12 @@ def test_a_natural_1_that_still_hits_helps_the_target_resist(qapp: QApplication)
     sheet = _blasting_sheet()
     chain = _chain_buttons(_attack_with_die(sheet, 1, dc=3))
 
-    assert chain[0].text() == "🎲 Toughness vs. 18 — natural 1, +5 to resist (no bonus added)"
+    assert chain[0].text() == "🎲 Toughness vs. 18 — natural 1, +5 to resist"
     rolled = _Rolled(sheet.dice.panel)
     chain[0].click()
-    assert rolled.last["bonus"] == 5  # the target's help, not a cut to the DC
+    # The target's help, not a cut to the DC — on top of this sheet's own Toughness 5,
+    # since it is one's own card.
+    assert rolled.last["bonus"] == 5 + 5
     assert rolled.last["dc"] == 18  # the DC is untouched
 
 
@@ -724,13 +742,14 @@ def test_another_players_card_offers_the_save_with_their_own_toughness(
     assert rolled.last["dc"] == 18
 
 
-def test_your_own_card_does_not_fill_in_your_own_toughness(qapp: QApplication) -> None:
-    """You are not the target of your own attack.
+def test_your_own_card_fills_in_your_own_toughness_and_says_so(
+    qapp: QApplication,
+) -> None:
+    """Resisting your own attack: your own number, and a ⚠ whose hover says why.
 
-    The button is still there — a GM running both sides needs it — but quietly using
-    the attacker's Toughness for the defender would be a confident wrong number.
+    It used to roll a bare d20 here, which read as the app forgetting your Toughness.
     """
-    sheet = _sheet()
+    sheet = _sheet()  # Stamina 5, so Toughness 5
     save = RollSpec(label="Toughness vs. 18", dc=18, trait_key="TOUGHNESS", rolled_by_target=True)
     mine = {
         "seq": 1,
@@ -748,14 +767,32 @@ def test_your_own_card_does_not_fill_in_your_own_toughness(qapp: QApplication) -
     history.release_roll(mine)
 
     button = _chain_buttons(history.cards()[0])[0]
-    # And it says so, rather than reading like a Toughness roll that forgot the number.
-    assert button.text() == "🎲 Toughness vs. 18 (no bonus added)"
-    assert "Modifier" in button.toolTip()
+    assert button.text() == "🎲 Toughness vs. 18"
 
     rolled = _Rolled(sheet.dice.panel)
     button.click()
-    assert rolled.last["bonus"] == 0
-    assert rolled.last["label"] == "Toughness vs. 18 (no bonus added)"
+    assert rolled.last["bonus"] == 5
+    spec = rolled.last["spec"]
+    assert spec.own_attack
+
+    # The save comes back from the table as one's own roll: the ⚠ says "you".
+    resisted = {
+        "seq": 2,
+        "player_id": "me",
+        "player_name": "Me",
+        "die": 10,
+        "bonus": 5,
+        "dc": 18,
+        "degree": -1,
+        "label": spec.label,
+        "spec": spec.to_dict(),
+    }
+    history.release_roll(resisted)
+    assert _own_attack_hover(history.cards()[0]) == OWN_ATTACK_HINT
+    # Someone else reading the same roll is told it was not them.
+    history._own_id = "someone-else"
+    history.add_roll(dict(resisted, seq=3))
+    assert _own_attack_hover(history.cards()[0]) == OWN_ATTACK_HINT_OTHER
 
 
 # -- pinning a row to a GM card ----------------------------------------------

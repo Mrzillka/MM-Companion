@@ -32,6 +32,7 @@ from mm_companion.ui.roll_history import (
     heading_row,
     latest_time,
     mark_natural,
+    own_attack_mark,
     quick_roll_key,
     remove_button,
     reroll_label,
@@ -155,10 +156,9 @@ class RollCard(QFrame):
             degree=None if result is None else result.degree,
             total=die + bonus - penalty,
             on_follow_up=self.rollFollowUp.emit,
-            # Every card in the private history is one's own, and off the air the
-            # roller is usually running both sides — so never assume the sheet in
-            # front of us is the target's.
-            localize=False,
+            # Every card in the private history is one's own: a save off it is rolled
+            # with this sheet's numbers, and marked as resisting one's own attack.
+            own=True,
             # A minion's 20 adds nothing, and nor does a lucky re-roll's: its die is
             # lifted, never a natural 20 (nor a routine 10, which is never 20).
             added_success=not minion and not reroll,
@@ -166,6 +166,10 @@ class RollCard(QFrame):
             info.addWidget(widget)
 
         layout.addLayout(info, stretch=1)
+
+        mark = own_attack_mark(spec)
+        if mark is not None:
+            buttons.addWidget(mark, alignment=Qt.AlignmentFlag.AlignTop)
 
         self.star = QuickRollStar()
         self.star.clicked.connect(lambda: self.saveToggled.emit(dict(self._params)))

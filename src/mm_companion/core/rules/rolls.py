@@ -350,6 +350,11 @@ class RollSpec:
     #: way, so a spec whose parts fell behind still adds up. Left out of equality, as
     #: :attr:`marks` is: it describes the number, it does not change the roll.
     parts: tuple[tuple[str, int], ...] = field(default=(), compare=False)
+    #: On a save: offered on its **attacker's** own card and rolled with that sheet's
+    #: numbers (:func:`own_attack_save`) — someone resisting their own attack, a GM
+    #: running both sides or a player testing a character. Every card the roll lands
+    #: on shows a ⚠ for it, so it is on the wire.
+    own_attack: bool = False
 
     def follow_ups(self) -> tuple[RollSpec, ...]:
         """Every roll this one provokes: :attr:`follow_up`, then :attr:`also`."""
@@ -411,6 +416,8 @@ class RollSpec:
             raw["pick"] = self.pick
         if self.critical_hit:
             raw["critical_hit"] = True
+        if self.own_attack:
+            raw["own_attack"] = True
         if self.parts:
             raw["parts"] = [[name, amount] for name, amount in self.parts]
         if self.follow_up is not None:
@@ -466,6 +473,7 @@ class RollSpec:
             recovers_parameter=str(raw.get("recovers_parameter", "")),
             pick=str(raw.get("pick", "")),
             critical_hit=raw.get("critical_hit") is True,
+            own_attack=raw.get("own_attack") is True,
             parts=_parts_from_wire(raw.get("parts")),
             also=(
                 tuple(s for s in (cls.from_dict(a) for a in also) if s is not None)
@@ -1087,33 +1095,39 @@ def _best_own_roll(
     return pick(rolls, key=lambda r: r.modifier)
 
 
-#: What a save's label gains when it is offered somewhere it will not be filled in.
-UNFILLED_NOTE = "no bonus added"
-#: Its tooltip: why the number is bare, and how to roll it for the defender anyway.
-UNFILLED_HINT = (
-    "This is the target's save, so no one's bonus is in it here. Rolling it for the "
-    "defender? Put their bonus in the Modifier box first."
+#: The hover on the ⚠ a save rolled off its own attacker's card carries.
+OWN_ATTACK_HINT = "You resisted your own attack"
+#: The same, on a card someone else reads: it was not the reader who did it.
+OWN_ATTACK_HINT_OTHER = "Resisted their own attack"
+#: What the save's button says on hover before it is clicked.
+OWN_ATTACK_BUTTON_HINT = (
+    "Your own attack: this rolls with this sheet's numbers, as if you were its target."
 )
 
 
-def unlocalized(spec: RollSpec) -> RollSpec:
-    """*spec* as offered on one's **own** card: no trait to fill in, and saying so.
+def own_attack_save(spec: RollSpec) -> RollSpec:
+    """*spec* as offered on its **attacker's** own card: filled in, and marked.
 
-    The save an attack forces is the target's to roll, so it is never filled in from
-    the attacker's sheet (see :func:`localize_spec`). Dropping the trait key alone
-    left a button reading "Toughness vs. 18" that rolled a bare d20, which looked
-    like the app forgetting the roller's Toughness. The label says the bonus is
-    missing, so the result and its history card say it too, and the hint says how
-    to add the defender's.
+    The save an attack forces is the target's, but on one's own card the only sheet
+    to hand is the attacker's, and testing a character against itself or running
+    both sides is exactly when that button is clicked. It used to roll a bare d20,
+    which read as the app forgetting the roller's Toughness. Now it fills in this
+    sheet's number like any other card (:func:`localize_spec`), and
+    :attr:`~RollSpec.own_attack` marks the roll so its result says whose it was.
 
-    A spec with no trait key comes back unchanged: it was never going to be filled
-    in, and its modifier is already the whole number.
+    A spec with no trait key comes back unchanged: nothing of this sheet's goes into
+    it, so there is nothing to mark.
     """
 
     if not spec.trait_key:
         return spec
-    hint = f"{spec.hint}\n\n{UNFILLED_HINT}" if spec.hint else UNFILLED_HINT
-    return replace(spec, trait_key="", label=f"{spec.label} ({UNFILLED_NOTE})", hint=hint)
+    hint = f"{spec.hint}\n\n{OWN_ATTACK_BUTTON_HINT}" if spec.hint else OWN_ATTACK_BUTTON_HINT
+    return replace(spec, own_attack=True, hint=hint)
+
+
+def _unmarked(spec: RollSpec) -> RollSpec:
+    """*spec* without :attr:`~RollSpec.own_attack`, for a roll no sheet filled in."""
+    return replace(spec, own_attack=False) if spec.own_attack else spec
 
 
 def localize_spec(spec: RollSpec, char: Character | None, game_data: GameData) -> RollSpec:
@@ -1139,14 +1153,15 @@ def localize_spec(spec: RollSpec, char: Character | None, game_data: GameData) -
 
     A spec naming no trait, or arriving somewhere with no character (the GM
     window's roller), comes back unchanged — the Bonus slider is then the answer,
-    as before.
+    as before. Unchanged but for :attr:`~RollSpec.own_attack`: no sheet's number
+    went in, so the roll is nobody's own attack resisted.
     """
 
     if char is None or not spec.trait_key:
-        return spec
+        return _unmarked(spec)
     own = _own_trait_roll(spec, char, game_data)
     if own is None:
-        return spec
+        return _unmarked(spec)
     # A Toughness save against Damage: the target's Impervious or Hardened decides what
     # the roll is for before it is made (the DC Penetrating leaves, a second die).
     spec = localized_damage_save(spec, char, game_data)

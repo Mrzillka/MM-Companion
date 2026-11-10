@@ -152,7 +152,8 @@ from typing import ClassVar
 #: (Aim), the record's ``other_die`` is the one dropped, and a spec's ``critical_hit``
 #: makes every hit of it a critical (Finishing Attack). And a spec's ``parts`` — what
 #: its modifier is made of, ``[[name, amount], …]`` — so every seat's history can show
-#: how a roll's number was reached on hover.
+#: how a roll's number was reached on hover. And a spec's ``own_attack``: a save its
+#: attacker rolled off their own card, which every seat's card marks with a ⚠.
 PROTOCOL_VERSION = 20
 
 #: Hard cap on one encoded message, including its trailing newline. A character
@@ -1080,6 +1081,8 @@ def sanitize_spec(raw: object, _depth: int = 0) -> dict | None:
         spec["follow_up_always"] = True
     if raw.get("critical_hit") is True:
         spec["critical_hit"] = True
+    if raw.get("own_attack") is True:
+        spec["own_attack"] = True
     targets = raw.get("targets")
     if isinstance(targets, list):
         names = [t[:MAX_SPEC_TEXT] for t in targets[:MAX_SPEC_TARGETS] if isinstance(t, str) and t]

@@ -925,17 +925,21 @@ drawn squashed, and a tall compact window stretched it the other way.
   `system.critical_miss_resistance_bonus` on their check (a bonus to them, not a cut
   to the DC — same arithmetic, honest description). The reason is written into the
   follow-up's label, so a DC box reading 23 where the card said 18 explains itself.
-- **Auto-fill.** A save spec carries `trait_key`, so clicking the chip on someone
-  else's card rolls with *your own* resistance already in (`localize_spec`, installed
-  on the panel via `set_localizer` — one seam, so the bus path and the chip path both
-  get it; GM Mode's roller has no sheet and installs none). Off on your **own** card:
-  you are not the target of your own attack, and `chain_widgets(localize=False)` drops
-  the trait key rather than presenting a confident wrong number. **It says so**
-  (`unlocalized`): the label gains "(no bonus added)" and the hint says to put the
-  defender's bonus in Modifier first. A bare "Toughness vs. 18" that rolled a d20 +0
-  was reported as the app forgetting the roller's Toughness. The click rolls at once,
-  so the flag has to be on the button, not in the roller; the label then carries it
-  onto the result and the card.
+- **Auto-fill.** A save spec carries `trait_key`, so clicking the chip on a card rolls
+  with *your own* resistance already in (`localize_spec`, installed on the panel via
+  `set_localizer` — one seam, so the bus path and the chip path both get it; GM Mode's
+  roller has no sheet and installs none). **On your own card too** (the user's call,
+  2026-11-11): `chain_widgets(own=True)` hands the save through `own_attack_save`, which
+  keeps the trait key and sets `RollSpec.own_attack`. The roll is filled in with this
+  sheet's numbers, and the result carries a ⚠ whose hover reads "You resisted your own
+  attack" — under the die (`OWN_ATTACK_SHORT`, sharing the "⚠ No DC" spot through
+  `_result_flag`) and by the card's ☆ (`own_attack_mark`; "Resisted their own attack"
+  on someone else's screen). The flag is on the wire (v20, unreleased). It used to drop
+  the trait key on one's own card instead, on the grounds that you are not the target
+  of your own attack — but then the button rolled a bare d20, which read as the app
+  forgetting the roller's Toughness; and testing a character, or running both sides, is
+  exactly when that button gets clicked. A roller with no sheet (the GM's) clears the
+  flag, since nobody's numbers went in.
   `localize_spec` reads the key **together with `kind`**, so it answers an ability, a
   resistance, a skill or initiative — a bare key is ambiguous, a mod may call an
   ability and a skill the same thing, and an *empty* kind still means a resistance
@@ -1008,8 +1012,8 @@ ask for a check nobody had provoked.
 - **The DC box is a plain spin box where 0 means no DC**, shown as `—`
   (`setSpecialValueText`) — the same rule as the roller's own DC box now. It is also
   **arrowless**: the theme reserves ~50px for the arrows the platform style draws.
-- **The button is on every card, including the asker's**, and this is the one place
-  the `chain_widgets(localize=False)` rule is deliberately reversed — you *are* a
+- **The button is on every card, including the asker's**, filled in from the asker's
+  sheet like anyone's — and, unlike a save on one's own card, with no ⚠: you *are* a
   target of your own request. Hence `request_widgets`, a sibling rather than a reuse:
   `chain_widgets` asks a rolled spec what it *provoked* and needs a `follow_up` and a
   passing degree, while a request **is** the roll, sitting in the log waiting.

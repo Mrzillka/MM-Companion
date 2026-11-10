@@ -159,8 +159,11 @@ class ActionGridPopup(QFrame):
         self.tiles: list[GridTile] = []
         #: Set while :attr:`picked` is being handled: the centre of the tile picked.
         self._follow_up: QPoint | None = None
-        #: The button it opened under (:meth:`show_under`), whose click closes it.
-        self._anchor: QWidget | None = None
+        #: Where the button it opened under is on screen (:meth:`show_under`), whose
+        #: click closes it. The rectangle, not the button: the popup is the button's
+        #: child, and holding the button back made a reference cycle that crashed Qt
+        #: when it was collected (``docs/notes/testing.md``).
+        self._anchor_rect: QRect | None = None
         live = [s for s in sections if s.items]
         self._columns = max((len(s.items) for s in live), default=1)
         #: The muted "why it is all greyed" lines under section titles.
@@ -341,10 +344,10 @@ class ActionGridPopup(QFrame):
         above when it did not fit below, run off the top, and be pulled down to the
         screen's top edge, nowhere near the button.
         """
-        self._anchor = anchor
         screen = anchor.screen() or self.screen()
         available = screen.availableGeometry()
         here = QRect(anchor.mapToGlobal(QPoint(0, 0)), anchor.size())
+        self._anchor_rect = here
         below = available.bottom() - here.bottom()
         above = here.top() - available.top()
         self.fit_to(available)
@@ -371,9 +374,8 @@ class ActionGridPopup(QFrame):
         user's report, 2026-11-10). Everywhere else the replay stays: a click on the die
         while the popup is up should still roll it.
         """
-        anchor = self._anchor
-        if anchor is not None and not self.rect().contains(event.position().toPoint()):
-            here = QRect(anchor.mapToGlobal(QPoint(0, 0)), anchor.size())
+        here = self._anchor_rect
+        if here is not None and not self.rect().contains(event.position().toPoint()):
             if here.contains(event.globalPosition().toPoint()):
                 self.setAttribute(Qt.WidgetAttribute.WA_NoMouseReplay)
         super().mousePressEvent(event)

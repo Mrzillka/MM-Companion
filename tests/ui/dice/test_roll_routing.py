@@ -561,12 +561,12 @@ def test_a_hit_offers_the_save_it_forced(qapp: QApplication) -> None:
 
     chain = _chain_buttons(history.cards()[0])
     assert len(chain) == 1
-    assert chain[0].text() == "🎲 Toughness vs. 18"
+    assert chain[0].text() == "🎲 Toughness vs. 18 (no bonus added)"
 
     # Pressing it rolls the save against its own DC.
     rolled = _Rolled(panel)
     chain[0].click()
-    assert rolled.last["label"] == "Toughness vs. 18"
+    assert rolled.last["label"] == "Toughness vs. 18 (no bonus added)"
     assert rolled.last["dc"] == 18
     # And the chip goes with the roll it was made for, taking its DC back off.
     assert panel.current_spec() is None
@@ -649,7 +649,7 @@ def test_a_natural_20_raises_the_dc_of_the_save_it_forces(qapp: QApplication) ->
     chain = _chain_buttons(_attack_with_die(sheet, 20))
 
     # 18 + the system's critical_effect_bonus, and the chip says why.
-    assert chain[0].text() == "🎲 Toughness vs. 18 — critical hit, DC 23"
+    assert chain[0].text() == "🎲 Toughness vs. 18 — critical hit, DC 23 (no bonus added)"
     rolled = _Rolled(sheet.dice.panel)
     chain[0].click()
     assert rolled.last["dc"] == 23
@@ -661,7 +661,7 @@ def test_a_natural_1_that_still_hits_helps_the_target_resist(qapp: QApplication)
     sheet = _blasting_sheet()
     chain = _chain_buttons(_attack_with_die(sheet, 1, dc=3))
 
-    assert chain[0].text() == "🎲 Toughness vs. 18 — natural 1, +5 to resist"
+    assert chain[0].text() == "🎲 Toughness vs. 18 — natural 1, +5 to resist (no bonus added)"
     rolled = _Rolled(sheet.dice.panel)
     chain[0].click()
     assert rolled.last["bonus"] == 5  # the target's help, not a cut to the DC
@@ -747,9 +747,15 @@ def test_your_own_card_does_not_fill_in_your_own_toughness(qapp: QApplication) -
     # One's own roll is held until the die settles, then released — the real path.
     history.release_roll(mine)
 
+    button = _chain_buttons(history.cards()[0])[0]
+    # And it says so, rather than reading like a Toughness roll that forgot the number.
+    assert button.text() == "🎲 Toughness vs. 18 (no bonus added)"
+    assert "Modifier" in button.toolTip()
+
     rolled = _Rolled(sheet.dice.panel)
-    _chain_buttons(history.cards()[0])[0].click()
+    button.click()
     assert rolled.last["bonus"] == 0
+    assert rolled.last["label"] == "Toughness vs. 18 (no bonus added)"
 
 
 # -- pinning a row to a GM card ----------------------------------------------

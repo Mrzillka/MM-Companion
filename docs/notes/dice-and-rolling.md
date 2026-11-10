@@ -930,7 +930,12 @@ drawn squashed, and a tall compact window stretched it the other way.
   on the panel via `set_localizer` — one seam, so the bus path and the chip path both
   get it; GM Mode's roller has no sheet and installs none). Off on your **own** card:
   you are not the target of your own attack, and `chain_widgets(localize=False)` drops
-  the trait key rather than presenting a confident wrong number.
+  the trait key rather than presenting a confident wrong number. **It says so**
+  (`unlocalized`): the label gains "(no bonus added)" and the hint says to put the
+  defender's bonus in Modifier first. A bare "Toughness vs. 18" that rolled a d20 +0
+  was reported as the app forgetting the roller's Toughness. The click rolls at once,
+  so the flag has to be on the button, not in the roller; the label then carries it
+  onto the result and the card.
   `localize_spec` reads the key **together with `kind`**, so it answers an ability, a
   resistance, a skill or initiative — a bare key is ambiguous, a mod may call an
   ability and a skill the same thing, and an *empty* kind still means a resistance

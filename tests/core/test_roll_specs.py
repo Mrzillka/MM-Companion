@@ -34,6 +34,7 @@ from mm_companion.core.rules import (
     resistance_roll,
     skill_roll,
     skill_row_label,
+    unlocalized,
 )
 
 
@@ -392,3 +393,31 @@ def test_a_trait_key_with_no_kind_still_means_a_resistance(hero, data) -> None:
     """
     legacy = RollSpec(label="Toughness vs. 18", dc=18, trait_key="TOUGHNESS")
     assert localize_spec(legacy, hero, data).modifier == 5
+
+
+def test_a_save_offered_to_its_attacker_says_its_bonus_is_missing(hero, data) -> None:
+    """One's own card does not fill in the save, and must not look as if it did.
+
+    A bare "Toughness vs. 18" that rolled a d20 +0 read as the app forgetting the
+    roller's Toughness.
+    """
+    save = RollSpec(label="Toughness vs. 18", dc=18, trait_key="TOUGHNESS", modifier=5)
+    flagged = unlocalized(save)
+    assert flagged.label == "Toughness vs. 18 (no bonus added)"
+    assert "Modifier" in flagged.hint
+    assert flagged.trait_key == ""
+    # Nothing the attack put there is lost: the natural-1 bonus, the DC.
+    assert (flagged.modifier, flagged.dc) == (5, 18)
+    # And nothing fills it in later, on whatever sheet the roller is beside.
+    assert localize_spec(flagged, hero, data) is flagged
+
+
+def test_a_hint_the_save_already_had_is_kept(hero, data) -> None:
+    save = RollSpec(label="Will vs. 15", dc=15, trait_key="WILL", hint="Resist the fear.")
+    assert unlocalized(save).hint.startswith("Resist the fear.\n\n")
+
+
+def test_a_spec_with_no_trait_to_fill_is_left_alone() -> None:
+    """Its modifier is already the whole number, so there is nothing missing to flag."""
+    spec = RollSpec(label="Strength", modifier=4)
+    assert unlocalized(spec) is spec

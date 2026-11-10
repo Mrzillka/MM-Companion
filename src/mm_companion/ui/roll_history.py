@@ -49,6 +49,7 @@ from mm_companion.core.rules import (
     outcome_is_failure,
     resistance_outcome,
     spec_parts,
+    unlocalized,
 )
 from mm_companion.core.session.model import KIND_MOD, KIND_NOTE, KIND_REQUEST, KIND_ROLL
 from mm_companion.ui import theme
@@ -476,7 +477,9 @@ def chain_widgets(
     downstream by the Dice block). It is off on **one's own** card: you are not the
     target of your own attack, so quietly filling in your own Toughness there would
     be a confident wrong number. It is carried by dropping the spec's trait key
-    rather than by a flag the whole chain would have to thread.
+    rather than by a flag the whole chain would have to thread, and the label says
+    the bonus is missing (:func:`~mm_companion.core.rules.unlocalized`): a bare
+    "Toughness vs. 18" rolling +0 read as the app forgetting your Toughness.
     """
 
     resolved = spec if isinstance(spec, RollSpec) else RollSpec.from_dict(spec)
@@ -488,7 +491,7 @@ def chain_widgets(
         resolved, die, degree, load_game_data(), total, added_success=added_success
     ):
         if not localize:
-            follow_up = replace(follow_up, trait_key="")
+            follow_up = unlocalized(follow_up)
         widgets.append(
             roll_button(
                 follow_up,

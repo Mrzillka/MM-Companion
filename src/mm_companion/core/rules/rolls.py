@@ -1087,6 +1087,35 @@ def _best_own_roll(
     return pick(rolls, key=lambda r: r.modifier)
 
 
+#: What a save's label gains when it is offered somewhere it will not be filled in.
+UNFILLED_NOTE = "no bonus added"
+#: Its tooltip: why the number is bare, and how to roll it for the defender anyway.
+UNFILLED_HINT = (
+    "This is the target's save, so no one's bonus is in it here. Rolling it for the "
+    "defender? Put their bonus in the Modifier box first."
+)
+
+
+def unlocalized(spec: RollSpec) -> RollSpec:
+    """*spec* as offered on one's **own** card: no trait to fill in, and saying so.
+
+    The save an attack forces is the target's to roll, so it is never filled in from
+    the attacker's sheet (see :func:`localize_spec`). Dropping the trait key alone
+    left a button reading "Toughness vs. 18" that rolled a bare d20, which looked
+    like the app forgetting the roller's Toughness. The label says the bonus is
+    missing, so the result and its history card say it too, and the hint says how
+    to add the defender's.
+
+    A spec with no trait key comes back unchanged: it was never going to be filled
+    in, and its modifier is already the whole number.
+    """
+
+    if not spec.trait_key:
+        return spec
+    hint = f"{spec.hint}\n\n{UNFILLED_HINT}" if spec.hint else UNFILLED_HINT
+    return replace(spec, trait_key="", label=f"{spec.label} ({UNFILLED_NOTE})", hint=hint)
+
+
 def localize_spec(spec: RollSpec, char: Character | None, game_data: GameData) -> RollSpec:
     """Fill in what *this* sheet knows about a spec that came from someone else.
 

@@ -86,9 +86,9 @@ def test_a_pill_is_only_a_little_wider_than_its_caption(qapp: QApplication) -> N
         (14, 1, False, False, False, "tint.better"),
         (6, -2, False, False, False, "tint.worse"),
         (20, 3, True, False, False, "dice.critical"),
-        (1, -1, True, False, False, "tint.worse"),
+        (1, -1, True, False, False, "dice.fumble"),
         (20, None, False, False, False, "dice.critical"),
-        (1, None, False, False, False, "tint.worse"),
+        (1, None, False, False, False, "dice.fumble"),
         (12, None, False, False, False, None),
         (20, None, False, False, True, None),  # a lucky re-roll's lifted die
         (10, None, False, True, False, None),  # take 10
@@ -137,9 +137,11 @@ def test_a_graded_total_wears_its_outcome() -> None:
 def test_degrees_and_naturals_hold_together() -> None:
     nowrap = "<span style='white-space:nowrap'>"
     assert degree_html(-2, False, 6) == f"{nowrap}Failure (2 degrees)</span>"
-    assert degree_html(4, True, 20) == (
-        f"{nowrap}Success (4 degrees)</span> {nowrap}— Nat 20!</span>"
+    # The natural 20 is in its own colour and bold: it is the news.
+    gold = (
+        f"<span style='white-space:nowrap;color:{theme.color('dice.critical')};font-weight:bold'>"
     )
+    assert degree_html(4, True, 20) == f"{nowrap}Success (4 degrees)</span> {gold}— Nat 20!</span>"
     assert degree_html(None, False, 6) == ""
 
 

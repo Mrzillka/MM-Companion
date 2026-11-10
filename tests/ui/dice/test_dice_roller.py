@@ -1273,7 +1273,7 @@ def test_the_dc_box_is_one_box_and_empty_means_no_dc(qapp: QApplication) -> None
     # It was a checkbox beside a box that sat greyed at 15: two controls, one number.
     view = DiceRollerView()
     panel = view.panel
-    assert panel.dc() is None and panel._dc_spin.text() == "none"
+    assert panel.dc() is None and panel._dc_spin.text() == dice_roller.DC_NONE
     panel.set_dc(18)
     assert panel.dc() == 18 and panel._roll_parameters()[2] == 18
     panel.set_dc(None)
@@ -1309,7 +1309,7 @@ def test_a_long_result_is_never_cut_off(
     _settled(qapp, view, width, 620)
 
     die = view.panel._die_part
-    assert dice_roller.NO_DC_WARNING.split(":")[0] in view.panel._readout.text()
+    assert view.panel.warning_text() == dice_roller.NO_DC_SHORT
     assert die.height() >= die.heightForWidth(die.width())
     bottom = die.mapTo(view.panel, die.rect().bottomLeft()).y()
     assert bottom <= view.panel.height()
@@ -1411,7 +1411,7 @@ def test_the_hosts_hand_the_roller_the_rulesets_steps(qapp: QApplication) -> Non
     from mm_companion.core.data_loader import load_game_data
 
     steps = load_game_data().system.circumstance_modifiers
-    assert steps == (2, 5)  # PDF p17: +/-2 minor, +/-5 major
+    assert steps == (1, 5)  # +/-1 and p17's +/-5 major (the user's call: 1, not 2)
 
 
 def test_loading_a_trait_does_not_change_the_roll_box_height(qapp: QApplication) -> None:

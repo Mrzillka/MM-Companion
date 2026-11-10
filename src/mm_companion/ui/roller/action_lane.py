@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -68,6 +68,13 @@ LineDescribe = Callable[[int], str]
 #: Why a line that needs an attack is greyed out while none is loaded.
 NEEDS_ATTACK = "Load an attack first: pick one off the Actions popup or a power card."
 
+#: How long a configurable line left at 0 stays on the lane, greyed, before it goes. At
+#: 0 it trades nothing, so it rides on no roll and leaves no condition; the wait is there
+#: so a slider dragged through 0 on its way somewhere else is not snatched away.
+ZERO_GRACE_MS = 3000
+#: What a line at 0 says under its slider while it waits to go.
+ZERO_NOTE = "At 0 it does nothing, and goes in a moment."
+
 
 class ActionLine(QWidget):
     """One action riding on the next roll (see the module docstring)."""
@@ -106,6 +113,12 @@ class ActionLine(QWidget):
         self.bound_spec: RollSpec | None = None
         # Greyed for want of an attack (see :meth:`bind`): nothing to work a limit for.
         self._unloaded = False
+        # Why the limit is short of the usual, when it is (the slider's tooltip).
+        self._cap_reason = ""
+        # A configurable line set to 0 goes once this runs out (see :data:`ZERO_GRACE_MS`).
+        self._zero_timer = QTimer(self)
+        self._zero_timer.setSingleShot(True)
+        self._zero_timer.timeout.connect(self._drop_if_zero)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -139,6 +152,7 @@ class ActionLine(QWidget):
             self._slider.valueChanged.connect(self._spin.setValue)
             self._spin.valueChanged.connect(self._slider.setValue)
             self._spin.valueChanged.connect(lambda _v: self.valueChanged.emit(self.key))
+            self._spin.valueChanged.connect(lambda _v: self._sync_idle())
             row.addWidget(self._slider, stretch=1)
             row.addWidget(self._spin)
             if describe is not None:
@@ -169,9 +183,35 @@ class ActionLine(QWidget):
     def _sync_trade(self) -> None:
         if self._trade is None or self._describe is None or self._spin is None:
             return
-        text = self._describe(self._spin.value())
+        text = ZERO_NOTE if self.idle else self._describe(self._spin.value())
         self._trade.setText(text)
         self._trade.setToolTip(text)
+
+    @property
+    def idle(self) -> bool:
+        """Whether the line is set to 0 with room to be more: it trades nothing, so it
+        rides on no roll, and it is greyed and on its way off the lane."""
+        return self._spin is not None and self._spin.value() == 0 and self._spin.maximum() > 0
+
+    def _sync_idle(self) -> None:
+        """Grey the line and start it on its way out at 0; light it again above."""
+        if self._spin is None:
+            return
+        if self.idle and self._available:
+            if not self._zero_timer.isActive():
+                self._zero_timer.start(ZERO_GRACE_MS)
+        else:
+            self._zero_timer.stop()
+        self._paint_name()
+        self._sync_trade()
+
+    def _drop_if_zero(self) -> None:
+        if self.idle:
+            self.removed.emit(self.key)
+
+    def _paint_name(self) -> None:
+        lit = self._available and not self.idle
+        self._name.setStyleSheet(tinted_style(self._tone, bold=True) if lit else muted_style())
 
     def trade(self) -> str:
         """The caption under the slider — what the value trades — or ``""``."""
@@ -183,8 +223,19 @@ class ActionLine(QWidget):
 
     @property
     def available(self) -> bool:
-        """Whether the line applies to the roll as things stand (not greyed out)."""
+        """Whether the line can apply to the roll as things stand (not greyed out for a
+        reason: no attack, no room)."""
         return self._available
+
+    @property
+    def applies(self) -> bool:
+        """Whether the line rides on the next roll: available, and not set to 0."""
+        return self._available and not self.idle
+
+    @property
+    def cap_reason(self) -> str:
+        """Why the slider stops short of the usual maximum, or ``""``."""
+        return self._cap_reason
 
     @property
     def reason(self) -> str:
@@ -242,7 +293,20 @@ class ActionLine(QWidget):
             self._slider.setRange(0, maximum)
             self._spin.setRange(0, maximum)
             self._spin.setValue(value)
+        self._cap_reason = reason if maximum > 0 else ""
         self._set_available(maximum > 0, "" if maximum > 0 else reason)
+        self._sync_cap_tooltip()
+        self._sync_idle()
+
+    def _sync_cap_tooltip(self) -> None:
+        """The slider's and the box's tooltip: its range, and why when it is short."""
+        if self._spin is None:
+            return
+        tip = f"0 to {self._spin.maximum()}"
+        if self._cap_reason:
+            tip = f"Up to {self._spin.maximum()} here: {self._cap_reason}"
+        for widget in (self._slider, self._spin):
+            widget.setToolTip(tip)
 
     def _set_available(self, available: bool, reason: str) -> None:
         self._available = available
@@ -250,7 +314,10 @@ class ActionLine(QWidget):
         for widget in (self._name, self._slider, self._spin, self._caption, self._trade):
             if widget is not None:
                 widget.setEnabled(available)
-        self._name.setStyleSheet(tinted_style(self._tone, bold=True) if available else "")
+        if not available:
+            self._zero_timer.stop()
+        self._name.setStyleSheet("")
+        self._paint_name()
         tip = self._base_tooltip
         if reason:
             tip = f"{tip}\n\n{reason}" if tip else reason
@@ -330,6 +397,11 @@ class ActionLane(QWidget):
                 line.bind(spec)
         finally:
             self._settling = False
+        self._relimit_others("")
+
+    def relimit(self) -> None:
+        """Work every line's limit out again: what it reads has moved (the actor's
+        Defense, after Growth or a condition). Values are pulled down, never up."""
         self._relimit_others("")
 
     def _relimit_others(self, key: str) -> None:

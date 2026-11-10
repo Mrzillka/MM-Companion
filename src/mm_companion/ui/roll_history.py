@@ -188,6 +188,90 @@ HISTORY_SIZE_HINT = QSize(MIN_HISTORY_WIDTH, MIN_HISTORY_HEIGHT)
 MAX_QUICK_ROLLS = 6
 
 
+#: The two natural faces worth celebrating, as :func:`natural_kind` names them.
+NATURAL_TWENTY = "twenty"
+NATURAL_ONE = "one"
+#: The colour token each wears — the die's halo, its burst, a card's edge and badge.
+NATURAL_TOKENS = {NATURAL_TWENTY: "dice.critical", NATURAL_ONE: "dice.fumble"}
+#: The badge a card's number line carries for one, when its grade does not say it.
+NATURAL_BADGES = {NATURAL_TWENTY: "★ Nat 20", NATURAL_ONE: "✖ Nat 1"}
+
+
+def natural_kind(
+    die: int,
+    degree: int | None,
+    critical: bool,
+    *,
+    routine: bool = False,
+    lifted: bool = False,
+) -> str | None:
+    """Whether a roll came up a natural 20 or 1: :data:`NATURAL_TWENTY`,
+    :data:`NATURAL_ONE`, or ``None``.
+
+    A graded roll says so itself (``critical`` is worked out from the face that came
+    up, so a minion's 20 that adds nothing is not one). An ungraded one goes by its
+    die — unless it was a routine 10 or a lucky re-roll, whose die may have been
+    lifted onto 20 and is not to be celebrated as a natural one.
+    """
+    if routine:
+        return None
+    if critical:
+        return NATURAL_TWENTY if die == 20 else NATURAL_ONE
+    if degree is not None or lifted:
+        return None
+    if die == 20:
+        return NATURAL_TWENTY
+    if die == 1:
+        return NATURAL_ONE
+    return None
+
+
+def roll_natural(roll: dict) -> str | None:
+    """:func:`natural_kind` for a history record."""
+    if roll.get("kind", KIND_ROLL) != KIND_ROLL:
+        return None
+    degree = roll.get("degree")
+    return natural_kind(
+        int(roll.get("die", 0) or 0),
+        None if degree is None else int(degree),
+        bool(roll.get("critical")),
+        routine=bool(roll.get("routine")),
+        lifted=bool(roll.get("reroll")),
+    )
+
+
+def mark_natural(card: QFrame, roll: dict) -> str | None:
+    """Edge a history card in gold for a natural 20, crimson for a natural 1, with a
+    faint wash of the same behind it; returns which it was (``None``: neither).
+
+    The number line carries the badge (:func:`roll_headline`); this is what makes the
+    card stand out of a column of them at a glance.
+    """
+    kind = roll_natural(roll)
+    if kind is None:
+        return None
+    token = NATURAL_TOKENS[kind]
+    card.setObjectName("naturalCard")
+    card.setProperty("natural", kind)
+    card.setStyleSheet(
+        "#naturalCard {"
+        f" border: {int(theme.metric('border.width.emphasis'))}px solid {theme.color(token)};"
+        f" border-radius: {int(theme.metric('radius.card'))}px;"
+        f" background: {theme.wash(token, 0.10)};"
+        "}"
+    )
+    return kind
+
+
+def natural_badge_html(kind: str) -> str:
+    """A natural 20 or 1 as a bold badge in its colour, for a number line."""
+    colour = theme.color(NATURAL_TOKENS[kind])
+    return (
+        f"<span style='white-space:nowrap;color:{colour};font-weight:bold'>"
+        f"{escape_rich_text(NATURAL_BADGES[kind])}</span>"
+    )
+
+
 def degree_label(degree: int | None, critical: bool, die: int) -> str:
     """Human-readable degree of success from the graded numbers themselves.
 
@@ -220,8 +304,15 @@ def degree_html(degree: int | None, critical: bool, die: int) -> str:
         return ""
     phrases = text.split(" — ")
     phrases[1:] = [f"— {phrase}" for phrase in phrases[1:]]
+    # The natural 20 or 1 in its own colour and bold, not the grade's: it is the news.
+    natural = ""
+    if critical and len(phrases) > 1:
+        token = NATURAL_TOKENS[NATURAL_TWENTY if die == 20 else NATURAL_ONE]
+        natural = f";color:{theme.color(token)};font-weight:bold"
     return " ".join(
-        f"<span style='white-space:nowrap'>{escape_rich_text(phrase)}</span>" for phrase in phrases
+        f"<span style='white-space:nowrap{natural if index else ''}'>"
+        f"{escape_rich_text(phrase)}</span>"
+        for index, phrase in enumerate(phrases)
     )
 
 
@@ -572,6 +663,9 @@ def roll_headline(roll: dict) -> str:
         colour = theme.color("tint.better" if int(degree) > 0 else "tint.worse")
         words = degree_html(int(degree), bool(roll.get("critical")), die)
         headline += f" · <span style='color:{colour}'>{words}</span>"
+    elif (natural := roll_natural(roll)) is not None:
+        # Ungraded, nothing else says it: the badge does.
+        headline += f" · {natural_badge_html(natural)}"
     return headline
 
 
@@ -671,6 +765,9 @@ def toast_accent(entry: dict) -> str | None:
         return theme.color("accent.dice")
     if kind != KIND_ROLL:
         return None
+    natural = roll_natural(entry)
+    if natural is not None:
+        return theme.color(NATURAL_TOKENS[natural])
     degree = entry.get("degree")
     if degree is None:
         return theme.color("accent.dice")
@@ -1046,6 +1143,7 @@ class SessionRollCard(HistoryCard):
         info = QVBoxLayout()
         tighten_card(layout, info)
 
+        mark_natural(self, roll)
         self._buttons = heading_row(info, _rich(roll_heading(roll)))
         headline = _rich(roll_headline(roll))
         headline.setToolTip(roll_breakdown(roll))

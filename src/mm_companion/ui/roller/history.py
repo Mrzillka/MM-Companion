@@ -31,6 +31,7 @@ from mm_companion.ui.roll_history import (
     escape_rich_text,
     heading_row,
     latest_time,
+    mark_natural,
     quick_roll_key,
     remove_button,
     reroll_label,
@@ -128,6 +129,7 @@ class RollCard(QFrame):
         record["reroll"] = reroll
         record["other_die"] = other_die
         record["spec"] = spec.to_dict() if isinstance(spec, RollSpec) else spec
+        mark_natural(self, record)
         headline = roll_headline(record)
         # What was rolled leads, the way the shared history's card names the player. A
         # roll with nothing loaded has no name: its line says it was a d20 and what it

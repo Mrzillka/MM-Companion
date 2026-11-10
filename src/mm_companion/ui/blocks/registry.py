@@ -434,12 +434,20 @@ _BASE_BLOCKS = [
         DiceSection,
         9,
         0,
-        # A roll is not a character edit and must never mark the sheet dirty, and
-        # the roller reads nothing off the build — so it publishes and subscribes
-        # nothing. It is, however, the block that *answers* a roll request, and the
-        # one that owns a history for a note to be written in.
+        # A roll is not a character edit and must never mark the sheet dirty, so it
+        # publishes nothing. It reads one thing off the build: the action lane's
+        # maneuver caps follow the character's Defense and attack (Growth, a
+        # condition), so their sliders are re-limited whenever those may have moved.
+        # It is also the block that *answers* a roll request, and the one that owns a
+        # history for a note to be written in.
         {},
-        {},
+        {
+            BUILD_CHANGED: "refresh_limits",
+            FACTS_CHANGED: "refresh_limits",
+            ENHANCEMENTS_CHANGED: "refresh_limits",
+            DERIVED_CHANGED: "refresh_limits",
+            CONDITION_CHANGED: "refresh_limits",
+        },
         # A recovery check it saw made: the Conditions block sheds the condition. A
         # power it rolled whose flaws charge for using it: the Conditions block takes it.
         # And what an attack maneuver it rolled leaves on the roller: the same block.

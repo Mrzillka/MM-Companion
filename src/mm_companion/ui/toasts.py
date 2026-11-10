@@ -64,6 +64,17 @@ from mm_companion.ui import theme
 SUPPRESSED = False
 
 
+def app_focused() -> bool:
+    """Whether one of this app's windows has the focus right now.
+
+    A roll notification is for when the app is behind something else: with it in
+    front, the history is on screen anyway and a popup over it is noise (the user's
+    call, 2026-11-10). The notifications never take the focus themselves, so they do
+    not count. Tests stand in for it, since the offscreen platform says what it likes.
+    """
+    return QGuiApplication.applicationState() == Qt.ApplicationState.ApplicationActive
+
+
 class ToastCard(QFrame):
     """A dismissible message card that fades itself out after a dwell.
 
@@ -490,7 +501,13 @@ class RollToaster(QObject):
                 for widget in widgets:
                     widget.deleteLater()
                 return None
+            # Seen even when it is not shown below, or the app losing the focus a
+            # moment later would let a second history announce it after all.
             self._seen.append(key)
+        if app_focused():
+            for widget in widgets:
+                widget.deleteLater()
+            return None
 
         card = ToastCard(window=True, dwell_ms=self.DWELL_MS, fade_ms=self.FADE_MS)
         for widget in widgets:
@@ -586,6 +603,12 @@ def announce(
     """Pop an entry up, building its widgets only if it will actually be shown."""
     if SUPPRESSED or not storage.roll_notifications():
         return
-    if key is not None and key in roll_toaster()._seen:
+    toaster = roll_toaster()
+    if key is not None and key in toaster._seen:
         return
-    roll_toaster().notify(build(), key=key, accent=accent, source=source)
+    if app_focused():
+        # Nothing built; marked seen, as :meth:`RollToaster.notify` would.
+        if key is not None:
+            toaster._seen.append(key)
+        return
+    toaster.notify(build(), key=key, accent=accent, source=source)

@@ -159,6 +159,8 @@ class ActionGridPopup(QFrame):
         self.tiles: list[GridTile] = []
         #: Set while :attr:`picked` is being handled: the centre of the tile picked.
         self._follow_up: QPoint | None = None
+        #: The button it opened under (:meth:`show_under`), whose click closes it.
+        self._anchor: QWidget | None = None
         live = [s for s in sections if s.items]
         self._columns = max((len(s.items) for s in live), default=1)
         #: The muted "why it is all greyed" lines under section titles.
@@ -339,6 +341,7 @@ class ActionGridPopup(QFrame):
         above when it did not fit below, run off the top, and be pulled down to the
         screen's top edge, nowhere near the button.
         """
+        self._anchor = anchor
         screen = anchor.screen() or self.screen()
         available = screen.availableGeometry()
         here = QRect(anchor.mapToGlobal(QPoint(0, 0)), anchor.size())
@@ -356,6 +359,24 @@ class ActionGridPopup(QFrame):
         first = next((t for t in self.tiles if t.isEnabled()), None)
         if first is not None:
             first.setFocus(Qt.FocusReason.PopupFocusReason)
+
+    # -- the mouse -------------------------------------------------------------
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt override
+        """A press outside closes the popup (Qt's own popup handling) — and a press on the
+        button it opened under is **not** passed on to that button.
+
+        Qt replays the press that closed a popup to whatever is under it, so clicking
+        Actions to put the popup away closed it and then opened it again at once (the
+        user's report, 2026-11-10). Everywhere else the replay stays: a click on the die
+        while the popup is up should still roll it.
+        """
+        anchor = self._anchor
+        if anchor is not None and not self.rect().contains(event.position().toPoint()):
+            here = QRect(anchor.mapToGlobal(QPoint(0, 0)), anchor.size())
+            if here.contains(event.globalPosition().toPoint()):
+                self.setAttribute(Qt.WidgetAttribute.WA_NoMouseReplay)
+        super().mousePressEvent(event)
 
     # -- keyboard ------------------------------------------------------------
 

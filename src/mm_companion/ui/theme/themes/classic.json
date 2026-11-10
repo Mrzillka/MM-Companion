@@ -49,6 +49,8 @@
     "splash.text": "#ffffff",
     "dice.face": "#ffffff",
     "dice.critical": "#d9a521",
+    "_dice.fumble": "A natural 1: the die's halo, its numeral, the burst round it and the edge of its history card. Deeper than tint.worse, which an ordinary failure already wears, so a fumble reads as more than a miss.",
+    "dice.fumble": "#c0262f",
 
     "_paper.background": "A printed or exported sheet (File > Print, Export as PDF) is drawn in its own palette whatever the theme, since a dark preset on paper is a page of ink. These are that palette. Literal #rrggbb only: paper has no window palette for a palette() value to read.",
     "paper.background": "#ffffff",
@@ -174,6 +176,8 @@
     "column.settings.nav": 160,
     "column.settings.label": 230,
     "column.settings.value": 220,
+    "_column.quick-roll-max": "The widest a quick-roll pill grows before its caption is cut short with an ellipsis (the whole name is on hover). Without it a pill saved off a long attack label widened the whole roller.",
+    "column.quick-roll-max": 200,
     "column.chip-button": 24,
     "column.roll-button": 28,
     "column.hero-point": 26,

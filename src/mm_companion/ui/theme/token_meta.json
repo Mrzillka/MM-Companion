@@ -130,7 +130,8 @@
     "splash.background": {"label": "Background", "hint": "The startup splash screen."},
     "splash.text": {"label": "Text", "hint": "On the splash screen."},
     "dice.face": {"label": "Die face", "hint": "The rolled number in the dice roller."},
-    "dice.critical": {"label": "Natural 20", "hint": "The glow round the die when it lands on a natural 20. A #rrggbb: the glow is a wash of it.", "washed": true},
+    "dice.critical": {"label": "Natural 20", "hint": "A natural 20: the glow and burst round the die, its numeral, and the edge and badge of its history card. A #rrggbb: the glow is a wash of it.", "washed": true},
+    "dice.fumble": {"label": "Natural 1", "hint": "A natural 1: the glow and burst round the die, its numeral, and the edge and badge of its history card. A #rrggbb: the glow is a wash of it.", "washed": true},
     "paper.background": {"label": "Paper", "hint": "The page of a printed or exported sheet, whatever the theme. A #rrggbb."},
     "paper.ink": {"label": "Ink", "hint": "Text on a printed sheet. A #rrggbb."},
     "paper.muted": {"label": "Muted ink", "hint": "Secondary text on a printed sheet, and its page footer. A #rrggbb."},
@@ -250,6 +251,7 @@
     },
     "column.skill.spin": {"label": "Skill rank spin box"},
     "column.skill.mod": {"label": "Skill modifier"},
+    "column.quick-roll-max": {"label": "Quick-roll pill (widest)", "hint": "Past this a pill's caption is cut short; the whole name is on hover."},
     "column.advantage.name-max": {
         "label": "Advantage name (cap)",
         "hint": "Widest the Advantage column grows before a long name wraps."

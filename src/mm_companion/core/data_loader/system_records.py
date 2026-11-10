@@ -395,7 +395,7 @@ class SystemRules:
     critical_miss_resistance_bonus: int = 5
     #: The common circumstance modifiers (PDF p17), smallest first: the roller's step
     #: buttons offer each one as a bonus and as a penalty.
-    circumstance_modifiers: tuple[int, ...] = (2, 5)
+    circumstance_modifiers: tuple[int, ...] = (1, 5)
     trait_keys: TraitKeys = field(default_factory=TraitKeys)
     paired_caps: tuple[PairedCap, ...] = ()
     unscoped_scope_values: tuple[str, ...] = ("All checks",)

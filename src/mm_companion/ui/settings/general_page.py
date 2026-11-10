@@ -1,6 +1,6 @@
 """The General settings page: preferences that are not about the look or the GM.
 
-Five settings. Whether a roll landing in the history also pops up in a corner of
+Six settings. Whether a roll landing in the history also pops up in a corner of
 the screen, and which corner (see :mod:`mm_companion.ui.toasts`). Whether a saved
 character opens in the simple sheet (the play view,
 see :mod:`mm_companion.ui.simple`). Whether the launcher looks for a newer release
@@ -14,6 +14,8 @@ out to be worth choosing outright:
 the compact one, which was only ever a way to fit the mini window, and the extended
 one, which was only ever what GM Mode happened to be built as. So both are offered
 everywhere rather than each staying where it came from.
+And whether the roller's Modifier row
+is set with step buttons either side of its box or with a slider beside it.
 
 Its change applies to every window already open rather than asking for a
 relaunch: the page walks the open top-level windows for anything answering
@@ -78,6 +80,18 @@ NOTE_TEXT = (
     "window's pinned strip."
 )
 
+MODIFIER_NOTE = (
+    "How the roller's Modifier row is set for one roll: step buttons either side of the "
+    "box (−5 −1 +1 +5), or a slider beside it running −10 to +20. The box takes any "
+    "number typed into it either way."
+)
+
+#: The modifier row's two ways, as the combo offers them.
+MODIFIER_INPUTS: tuple[tuple[str, str], ...] = (
+    ("Step buttons", storage.MODIFIER_INPUT_BUTTONS),
+    ("Slider", storage.MODIFIER_INPUT_SLIDER),
+)
+
 #: The three shapes, in the order they are offered: the label, the layout id, and
 #: the line under it. Adding a fourth is an entry here and one in
 #: :data:`~mm_companion.core.storage.DICE_LAYOUTS`.
@@ -118,6 +132,7 @@ class GeneralPage(SettingsPage):
         column.addWidget(self._build_action_setup())
         column.addWidget(self._build_heading())
         column.addWidget(self._build_dice_layout())
+        column.addWidget(self._build_modifier_input())
         column.addStretch()
         column.addWidget(self._build_status())
 
@@ -228,6 +243,20 @@ class GeneralPage(SettingsPage):
         self._buttons.buttonToggled.connect(lambda *_: self._set_status(""))
         return panel
 
+    def _build_modifier_input(self) -> QWidget:
+        """The roller's modifier row: step buttons (the default) or a slider."""
+        panel = QWidget()
+        row = QHBoxLayout(panel)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(QLabel("Modifier:"))
+        self._modifier_input = QComboBox()
+        for label, style in MODIFIER_INPUTS:
+            self._modifier_input.addItem(label, style)
+        self._modifier_input.currentIndexChanged.connect(lambda *_: self._set_status(""))
+        row.addWidget(with_help(self._modifier_input, MODIFIER_NOTE))
+        row.addStretch()
+        return panel
+
     def _build_status(self) -> QWidget:
         self._status = QLabel()
         self._status.setWordWrap(True)
@@ -243,6 +272,7 @@ class GeneralPage(SettingsPage):
             or self._actions_myself.isChecked() != self._saved_actions_myself
             or self._notifications.isChecked() != self._saved_notifications
             or self._corner.currentData() != self._saved_corner
+            or self._modifier_input.currentData() != self._saved_modifier_input
         )
 
     def save(self) -> None:
@@ -261,6 +291,8 @@ class GeneralPage(SettingsPage):
         self._saved_actions_myself = self._actions_myself.isChecked()
         storage.set_dice_layout(self._chosen())
         self._saved = self._chosen()
+        storage.set_modifier_input(self._modifier_input.currentData())
+        self._saved_modifier_input = self._modifier_input.currentData()
         for window in _open_windows():
             window.sync_dice_layout()
         self._set_status("Saved.")
@@ -290,6 +322,10 @@ class GeneralPage(SettingsPage):
         self._actions_myself.setChecked(self._saved_actions_myself)
         self._saved = storage.dice_layout()
         self._choices[self._saved].setChecked(True)
+        self._saved_modifier_input = storage.modifier_input()
+        self._modifier_input.setCurrentIndex(
+            max(0, self._modifier_input.findData(self._saved_modifier_input))
+        )
         self._set_status("")
 
     def _set_status(self, text: str) -> None:

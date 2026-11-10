@@ -5,7 +5,7 @@ dragged to reorder, and kept in the settings.
 from __future__ import annotations
 
 from PySide6.QtCore import QMimeData, QPoint, QSize, Qt, Signal
-from PySide6.QtGui import QDrag
+from PySide6.QtGui import QDrag, QFontMetrics
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -19,7 +19,8 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.core import storage
-from mm_companion.core.rules import RollSpec
+from mm_companion.core.diagnostics import log_exception
+from mm_companion.core.rules import RollSpec, same_attack
 from mm_companion.ui import theme
 from mm_companion.ui.flow_layout import FlowContainer
 from mm_companion.ui.roll_history import (
@@ -28,9 +29,17 @@ from mm_companion.ui.roll_history import (
 )
 
 # The quick-roll list is stored under this settings key as a list of plain dicts
-# ``{"bonus": int, "penalty": int, "dc": int | None, "name"?: str}`` so no Qt
-# types leak into the JSON settings layer.
+# ``{"bonus": int, "penalty": int, "name"?: str}`` so no Qt types leak into the JSON
+# settings layer. A roll saved off an attack made with action lines on it (All-Out
+# Attack +5) also carries its **recipe** — ``"spec"`` (the attack as loaded, a
+# ``RollSpec.to_dict``), ``"lines"`` (``[[key, value], …]``) and ``"circumstance"`` (the
+# modifier box) — so a click re-arms the same lines and they leave their conditions
+# again (the user's call, 2026-11-10: the pill used to keep the +15 and drop the
+# All-Out Attack's Defense penalty).
 QUICK_ROLLS_KEY = "quick_rolls"
+
+#: How many recipes a panel remembers for the rolls it made, for a star to save.
+RECIPE_MEMORY = 64
 
 
 # The MIME type carrying a chip's index while it is dragged to reorder.
@@ -56,9 +65,34 @@ def quick_label(params: dict) -> str:
 
     Both halves, always. A chip used to show its name *or* its numbers, so a named one
     hid its modifier and an unnamed one was a bare "+2" that said nothing of what it
-    rolled.
+    rolled. A chip with a recipe is named for the attack as rolled ("Blast: Attack +11
+    vs. Defense (All-Out Attack +3)"), which already says its number.
     """
+    if params.get("spec") and params.get("name"):
+        return str(params["name"])
     return f"{params.get('name') or PLAIN_CHIP} {_params_label(params)}"
+
+
+def clean_recipe(entry: dict) -> dict:
+    """The recipe fields of a stored or saved entry, checked; ``{}`` when it has none."""
+    spec = entry.get("spec")
+    lines = entry.get("lines")
+    if not isinstance(spec, dict) or not isinstance(lines, list) or not lines:
+        return {}
+    clean_lines = []
+    for line in lines:
+        if not isinstance(line, (list, tuple)) or len(line) != 2:
+            return {}
+        key, value = line
+        try:
+            clean_lines.append([str(key), None if value is None else int(value)])
+        except (TypeError, ValueError):
+            return {}
+    try:
+        circumstance = int(entry.get("circumstance", 0) or 0)
+    except (TypeError, ValueError):
+        circumstance = 0
+    return {"spec": spec, "lines": clean_lines, "circumstance": circumstance}
 
 
 class _QuickRollButton(QToolButton):
@@ -77,25 +111,50 @@ class _QuickRollButton(QToolButton):
         super().__init__()
         self._index = index
         self._press: QPoint | None = None
+        # The whole caption; what is drawn may be cut short (see :meth:`_elide`).
+        self._full = text
         self.setText(text)
         self.setAutoRaise(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
+    def full_text(self) -> str:
+        """The whole caption, however much of it is drawn."""
+        return self._full
+
+    def _chrome(self) -> int:
+        return 2 * (int(theme.metric("space.sm")) + int(theme.metric("focus.width")))
+
     def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
-        """The caption's width and a little air — not the platform's tool-button padding.
+        """The caption's width and a little air — not the platform's tool-button padding
+        — and never past ``column.quick-roll-max``.
 
         The style asked for ~30px more than the text, which with the room kept for the
         ``×`` made a two-character pill three times its caption. The theme draws a tool
         button's box as just its focus ring, so the text needs that ring's width either
-        side and nothing more.
+        side and nothing more. A long caption (a pill saved off an attack with three
+        maneuvers named in it) is capped and elided: at its full width it widened the
+        whole roller.
         """
-        hint = super().sizeHint()
-        chrome = int(theme.metric("space.sm")) + int(theme.metric("focus.width"))
-        snug = self.fontMetrics().horizontalAdvance(self.text()) + 2 * chrome
-        return QSize(min(hint.width(), snug), hint.height())
+        height = super().sizeHint().height()
+        snug = self.fontMetrics().horizontalAdvance(self._full) + self._chrome()
+        return QSize(min(snug, int(theme.metric("column.quick-roll-max"))), height)
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
-        return self.sizeHint()
+        """An ellipsis and its air: the strip may squeeze a long pill that far, and never
+        widens the roller for it."""
+        least = self.fontMetrics().horizontalAdvance("…") + self._chrome()
+        return QSize(min(self.sizeHint().width(), least), super().sizeHint().height())
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        self._elide()
+
+    def _elide(self) -> None:
+        room = max(0, self.width() - self._chrome())
+        metrics = QFontMetrics(self.font())
+        shown = metrics.elidedText(self._full, Qt.TextElideMode.ElideRight, room)
+        if shown != self.text():
+            self.setText(shown)
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt override
         if event.button() == Qt.MouseButton.LeftButton:
@@ -226,6 +285,7 @@ class RollerQuickRollsMixin:
             clean = {"bonus": max(net, 0), "penalty": max(-net, 0)}
             if name:
                 clean["name"] = name
+            clean.update(clean_recipe(entry))
             key = quick_roll_key(clean)
             if key in seen:
                 continue
@@ -279,6 +339,8 @@ class RollerQuickRollsMixin:
         chosen = str(name if name is not None else params.get("name", "")).strip()
         if chosen:
             entry["name"] = chosen
+        # A roll this panel made with action lines on it is saved with them.
+        entry.update(clean_recipe(params) or self._recipe_for(params))
         if self._find_quick_roll(entry) is not None or self.quick_rolls_full():
             return
         self._quick_rolls.append(entry)
@@ -350,6 +412,81 @@ class RollerQuickRollsMixin:
         self._persist_quick_rolls()
         self._rebuild_quick_strip()
 
+    def remember_recipe(self, params: dict, spec: RollSpec, lines, circumstance: int) -> None:
+        """Note how the roll *params* names was made — the attack *spec* as loaded, the
+        action *lines* on it and the modifier box — so a star saving that roll saves a
+        pill that re-arms them (see :data:`QUICK_ROLLS_KEY`)."""
+        recipes = self._recipes
+        key = quick_roll_key(params)
+        recipes.pop(key, None)
+        recipes[key] = {
+            "spec": spec.to_dict(),
+            "lines": [[str(k), v] for k, v in lines],
+            "circumstance": int(circumstance),
+        }
+        while len(recipes) > RECIPE_MEMORY:
+            recipes.pop(next(iter(recipes)))
+
+    def _recipe_for(self, params: dict) -> dict:
+        """The recipe remembered for the roll *params* names, or ``{}``.
+
+        The session may have cut a long label short on the way (``MAX_LABEL_CHARS``),
+        so a name that is the start of a remembered one, with the same numbers, counts.
+        """
+        recipes = self._recipes
+        name, bonus, penalty = quick_roll_key(params)
+        found = recipes.get((name, bonus, penalty))
+        if found is None and name:
+            found = next(
+                (
+                    recipe
+                    for (known, b, p), recipe in reversed(recipes.items())
+                    if (b, p) == (bonus, penalty) and known.startswith(name)
+                ),
+                None,
+            )
+        return dict(found) if found else {}
+
+    def _apply_recipe(self, entry: dict) -> bool:
+        """Load a pill's recipe — its attack, its modifier box and its action lines —
+        in place of whatever the lane held. ``False`` when it has none to load.
+
+        The attack is taken fresh off the character's list when it is still there under
+        the same name (:func:`~mm_companion.core.rules.same_attack`), so a pill follows
+        the sheet; otherwise it rolls as it was saved. The lines are re-armed by the
+        host (:meth:`set_line_rearm`), each set back to its value as far as its cap now
+        allows.
+        """
+        recipe = clean_recipe(entry)
+        if not recipe:
+            return False
+        try:
+            spec = RollSpec.from_dict(recipe["spec"])
+        except Exception:  # noqa: BLE001 - a hand-edited settings file costs the recipe
+            log_exception("Reading a quick roll's saved attack")
+            spec = None
+        if spec is None:
+            return False
+        fresh = next((c.spec for c in self.attack_choices() if same_attack(c.spec, spec)), None)
+        for line in list(self.action_lines()):
+            self.remove_action_line(line.key)
+        self._modifier_spin.setValue(recipe["circumstance"])
+        # Already this sheet's number (or the actor's), so not localised a second time.
+        self.load_spec(fresh or spec, localize=False)
+        if self._line_rearm is not None:
+            for key, value in recipe["lines"]:
+                try:
+                    self._line_rearm(key, value)
+                except Exception:  # noqa: BLE001 - one bad line must not cost the roll
+                    log_exception("Re-arming a quick roll's action line")
+        return True
+
+    def set_line_rearm(self, rearm) -> None:
+        """Have *rearm* put an action line back on the lane at a value —
+        ``rearm(key, value)`` — for a pill that re-arms its lines. The panel reads no
+        game data, so the host (its combat runner) knows what each key starts."""
+        self._line_rearm = rearm
+
     def _apply_quick_roll(self, entry: dict) -> None:
         """Load a saved quick roll into the inputs and roll it immediately.
 
@@ -363,6 +500,13 @@ class RollerQuickRollsMixin:
         (:func:`~mm_companion.ui.roll_history.roll_parameters`): the difficulty in
         front of the player now beats one saved weeks ago.
         """
+        if self._rolling:
+            return
+        if self._apply_recipe(entry):
+            # Rolled once and let go, as a named pill is: the lines are spent by the roll.
+            self._transient = True
+            self._start_roll()
+            return
         self._modifier_spin.setValue(int(entry["bonus"]) - int(entry["penalty"]))
         name = str(entry.get("name", "")).strip()
         self.load_spec(RollSpec(label=name) if name else None)
@@ -427,9 +571,12 @@ class RollerQuickRollsMixin:
         layout.setContentsMargins(side, small, side, small)
         layout.setSpacing(small)
 
-        roll_button = _QuickRollButton(quick_label(entry), index)
+        caption = quick_label(entry)
+        roll_button = _QuickRollButton(caption, index)
+        again = " Its action lines go back on the lane." if entry.get("spec") else ""
         roll_button.setToolTip(
-            "Click to roll it. Drag to reorder; right-click to rename or remove."
+            f"{caption}\n\nClick to roll it.{again} Drag to reorder; right-click to rename "
+            "or remove."
         )
         roll_button.clicked.connect(lambda _=False, e=entry: self._apply_quick_roll(e))
         # The caption takes whatever width the justified row gives the pill, centred.

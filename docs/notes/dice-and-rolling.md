@@ -40,7 +40,8 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
     the block's own. The view pads its contents by `space.sm` instead (the Roll box used
     to supply that), and a history is `view.titled_box` — a muted bold heading over the
     list, whose scroll area already draws an edge round the cards.
-  - **The steps are data**: `system.circumstanceModifiers` (`[2, 5]`, PDF p17's minor and
+  - **The steps are data**: `system.circumstanceModifiers` (`[1, 5]` since the play-test
+    pass below; it was `[2, 5]`, PDF p17's minor and
     major), parsed to `SystemRules.circumstance_modifiers` and pushed in by the host with
     `set_modifier_steps` beside `set_roll_choices` — the panel reads no game data. A step
     **adds** (`add_bonus`), so +2 twice is +4. They replaced a −30..+30 slider, which is
@@ -108,7 +109,8 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   - **Keyboard**: `Ctrl+R` rolls (as a click of the die would), `Ctrl+Shift+R`
     rerolls, `Ctrl+T` takes 10 — `WindowShortcut`s on the panel, so they work with the
     pointer on the sheet and go away with the Dice block.
-  - **The DC box says "none"** (`DC_NONE`) rather than "—", and a set DC is drawn as a
+  - **The DC box says "none"** (`DC_NONE`; "not set", muted, since the play-test pass)
+    rather than "—", and a set DC is drawn as a
     tinted **capsule** round the label and box (`#dcPair`, `_mark_dc`). Tinting the
     text alone was tried and read as a disabled field; the capsule is the frame's, not
     the spin box's (theme rule 4), and its border is there transparent at rest so it
@@ -195,6 +197,63 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
     (`section_note`, `GridSection.note`): "This character has no attack to make." over
     the maneuvers, Surprise Attack being greyed for a reason of its own. A section with
     a note keeps a row to itself.
+- **The play-test pass** (2026-11-10, the user's list after a session; tests in
+  `tests/ui/dice/test_roller_feedback.py`):
+  - **±1 and ±5 steps** (`circumstanceModifiers: [1, 5]`): 1 is the unit that adds up
+    to anything a click at a time.
+  - **Or a slider** (Settings ▸ General ▸ Modifier, `storage.modifier_input()`, buttons by
+    default): `MODIFIER_SLIDER_MIN..MAX` = −10..+20, lopsided on the user's word. Both
+    inputs are always built and the setting shows one (`_apply_modifier_input`), so a
+    Save switches it live through `sync_dice_layout` → `sync_modifier_input`. The box
+    keeps ±30; a number past the slider's reach parks it at its end.
+  - **An unset DC reads "not set", muted** (`DC_NONE`, `_mark_dc`): "none" in the text
+    colour read as a value, or a bug. `color` only on the spin box (theme rule 4).
+  - **The DC capsule's foot was clipped**: it stands `space.xs` proud of its box and,
+    with the lane empty, the toolbar is the settings grid's last row. The grid has that
+    much bottom margin now.
+  - **The Actions button closes its popup.** Qt replays the press that closes a popup to
+    the widget under it, so the click closed the popup and opened it again.
+    `ActionGridPopup.mousePressEvent` sets `WA_NoMouseReplay` for a press on its anchor
+    only; elsewhere (the die) the press still lands.
+  - **A pill never widens the roller**: `_QuickRollButton` hints at most
+    `column.quick-roll-max`, its minimum is an ellipsis, and it elides to its width
+    (whole caption in the tooltip, `full_text()`).
+  - **A pill saved off a maneuvered attack re-arms its lines** (the user's pick over
+    "save the plain attack"). `_start_roll` remembers a **recipe** for every roll with
+    lines on it — the loaded spec, the `(key, value)` lines, the modifier box — keyed by
+    the roll's quick-roll key (`remember_recipe`, the last `RECIPE_MEMORY`). A star that
+    saves that roll stores the recipe on the entry (`spec`, `lines`, `circumstance`); a
+    label the server cut short (`MAX_LABEL_CHARS`) still finds it by prefix. A click
+    (`_apply_recipe`) clears the lane, loads the attack (fresh off `attack_choices` when
+    `same_attack` finds it, else as saved), and asks the host to put each line back:
+    `set_line_rearm`, which `CombatRunner.rearm` answers (a maneuver at its value, as far
+    as its cap allows; a self action's line; never a team line). Then it rolls, so the
+    conditions land again. Quick rolls are global settings, so a recipe pill on another
+    character rolls the saved attack against that character's Defense.
+  - **A maneuver line at 0 rides on nothing** (`ActionLine.idle`, `applies`): greyed, its
+    trade line says so (`ZERO_NOTE`), `active_lines` leaves it out (so no All-Out −0
+    condition), and it leaves the lane after `ZERO_GRACE_MS` unless raised again. A line
+    greyed for want of room (maximum 0) is not idle and stays, as before.
+  - **The caps follow the character.** The Dice block subscribes to `build-`, `facts-`,
+    `enhancements-`, `derived-` and `condition-changed` → `refresh_limits` →
+    `relimit_lines` (still publishing nothing). `_start_roll` re-limits too, which covers
+    the GM's roller, whose NPCs are not on a bus. The user's case: Growth moved Defense
+    and All-Out's maximum stayed put.
+  - **The slider says why its range is short**: `maneuver_limit` now gives a `reason`
+    whenever a cap other than `maxShift` binds ("Your Defense is +3, and it cannot go
+    below +0."), shown on the slider and box (`cap_reason`).
+  - **The no-DC warning is a flag**: `NO_DC_SHORT` ("⚠ No DC") in its own label under
+    the result, `NO_DC_WARNING` its tooltip (`warning_text()`).
+  - **Natural 20s and 1s** (`roll_history.natural_kind` / `roll_natural`: a graded roll
+    trusts `critical`, an ungraded one its die unless routine or a lucky re-roll):
+    `dice.critical` / the new `dice.fumble` token for the halo; a burst over the die
+    (`ui/roller/flourish.py`'s `DieBurst`: rays and sparks, or a breaking ring of
+    shards), the halo pulsing (20) or the die shaking (1); a 20's numeral in gold; a
+    "★ NATURAL 20 ★" banner in the readout. A history card gets a gold or crimson edge and
+    wash (`mark_natural`), its number line a "★ Nat 20" badge when ungraded (graded, the
+    "— Nat 20!" phrase is bold in that colour), and a toast's edge the same colour.
+    Crimson & Gold's `dice.critical` was inherited from Classic and nearly matched its
+    own `accent.dice`, the armed halo: it is a brighter yellow there now.
 - **Deferral is a window, not a flag, and that was a bug first.** The shared history
   holds one's *own* roll back so the card lands as the die settles rather than the
   instant the server answers. Only the roller's `sessionRollRevealed` lets a held roll
@@ -879,7 +938,11 @@ of NPCs — often fewer. Two answers, and they are independent.
   histories build their number line from the one function — `LocalRollHistory`'s
   `RollCard` converts its roll with `roller.history.local_record` first — so the private
   and the shared card cannot drift apart again.
-- **Every new entry pops up in a corner of the screen** (`ui/toasts.py`,
+- **Every new entry pops up in a corner of the screen** — but only while the app is
+  behind something else (`toasts.app_focused()`; the user's call, 2026-11-10: with the
+  app in front the history is on screen anyway). An entry skipped that way is still
+  marked seen, so a second history cannot announce it once the focus goes. Tests stand
+  in for `app_focused` (the `live_toasts` fixture). (`ui/toasts.py`,
   `RollToaster`): a frameless, always-on-top window that never takes focus, stacking
   away from the corner the user chose, fading after `DWELL_MS`, and held — the whole
   stack, as Telegram Desktop does it — while the pointer is over any of them. Clicking
@@ -972,8 +1035,9 @@ action brought (`KIND_BEST_OF` and `dc_from_total`).
   has someone to aim at — a target menu whose first line is `SKIP_TARGET`. A target
   goes the aimed-attack road (`aim_attack`: declared to the GM, rolled at once).
   Skipping, or nobody to aim at, **loads** the attack onto the chip: the DC box is the
-  Defense. An unaimed attack rolled with no DC is written up with `NO_DC_WARNING` in the
-  readout (`_unjudged_attack`) — on any attack, a card's 🎲 included — and still rolls.
+  Defense. An unaimed attack rolled with no DC is flagged `NO_DC_SHORT` under the result,
+  `NO_DC_WARNING` on hover (`_unjudged_attack`) — on any attack, a card's 🎲 included —
+  and still rolls.
 - **The Area tile** (`DiceSection.start_area_tile`): `core.rules.area_choices` (the
   cards' area lines, whose `trait_key` is the area key) — the only one opens at once,
   several are offered on a menu — then `start_area`, as the card's area line does.

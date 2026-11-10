@@ -497,6 +497,8 @@ class DiceRollerView(ReflowBox, QWidget):
     def sync_dice_layout(self) -> None:
         """Re-read the layout preference — the Settings page just changed it."""
         self.set_layout(storage.dice_layout())
+        # The General page also says how the modifier is set (step buttons or a slider).
+        self.panel.sync_modifier_input()
 
     def set_layout(self, layout: str) -> None:
         """Take a chosen shape: this view's axis, and the panel's own arrangement.

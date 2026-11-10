@@ -706,6 +706,11 @@ class DiceSection(QGroupBox):
             self.view.panel.roll_spec(attack)
         notify_window(self.window(), "Area attack sent to the GM.", theme.color("tint.better"))
 
+    def refresh_limits(self) -> None:
+        """The character changed: the lane's maneuver sliders work their caps out again
+        (a Growth that moved Defense moves All-Out Attack's maximum)."""
+        self.view.panel.relimit_lines()
+
     def sync_session(self) -> None:
         """Re-check whether there is a session, and show the matching history.
 

@@ -107,3 +107,40 @@ def test_a_lifted_twenty_is_not_a_natural_twenty() -> None:
 
     natural = resolve_check(5, 15, roll=20)
     assert natural.critical and natural.degree == 4
+
+
+def test_unseeded_dice_come_from_the_operating_system() -> None:
+    # A table saw two players roll the same number four times running (2026-11-10).
+    # The dice are the OS's own entropy now, with no shared generator state to lean on.
+    from mm_companion.core import dice
+
+    assert isinstance(dice._SYSTEM_DICE, random.SystemRandom)
+
+
+def test_two_seats_rolling_at_once_get_independent_fair_dice() -> None:
+    # Two threads rolling side by side, as two players' requests do on the server: the
+    # pairs should match about one time in twenty and every face should turn up about
+    # equally often. The bounds are wide (many standard deviations), so this never
+    # flakes on an honest die but fails at once on a shared or stuck one.
+    import threading
+
+    rolls = 20_000
+    first: list[int] = []
+    second: list[int] = []
+    gate = threading.Barrier(2)
+
+    def seat(out: list[int]) -> None:
+        gate.wait()
+        out.extend(roll_d20() for _ in range(rolls))
+
+    threads = [threading.Thread(target=seat, args=(out,)) for out in (first, second)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    same = sum(a == b for a, b in zip(first, second, strict=True))
+    assert 0.035 < same / rolls < 0.065  # 1 in 20 is 0.05
+    counts = [first.count(face) + second.count(face) for face in range(1, 21)]
+    expected = 2 * rolls / 20
+    assert all(abs(count - expected) < 0.1 * expected for count in counts)

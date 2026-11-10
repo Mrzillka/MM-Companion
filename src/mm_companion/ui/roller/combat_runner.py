@@ -114,6 +114,7 @@ class CombatRunner:
         self.team_call: RollSpec | None = None
         panel.set_attack_choices(self.attack_choices)
         panel.set_line_shift(self.shift)
+        panel.set_line_rearm(self.rearm)
         panel.linesRolled.connect(self.land_lasting)
 
     # -- who acts ------------------------------------------------------------
@@ -222,6 +223,35 @@ class CombatRunner:
         if actor is None:
             return ""
         return actor.name or library.display_name(actor.character)
+
+    def rearm(self, key: str, value: int | None) -> bool:
+        """Put the line *key* back on the lane at *value* — a quick roll saved off an
+        attack made with it is clicked. Whether it went on.
+
+        A maneuver starts as its tile starts it and is set back to *value* as far as its
+        cap now allows; a self action's line (``action/option``) is started for that
+        option without asking. A team attack's line is not: the call it answered is long
+        gone.
+        """
+        if key == TEAM_LINE or self.actor is None:
+            return False
+        if maneuver_action(self._data, key) is not None:
+            line = self.start_maneuver(key)
+            if line is not None and value is not None:
+                line.set_value(int(value))
+            return line is not None
+        action_id, option_id = split_line_key(key)
+        action = self_action(self._data, action_id)
+        if action is None:
+            return False
+        option = next((o for o in action.options if o.id == option_id), None)
+        if option_id and option is None:
+            return False
+        effect = action.effect_for(option_id)
+        if not effect.line:
+            return False
+        title = option.name if option is not None else action.name
+        return self._start_self_line(action, option_id, title, effect) is not None
 
     # -- a team attack's call to roll ------------------------------------------
 

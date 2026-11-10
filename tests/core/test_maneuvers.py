@@ -253,3 +253,25 @@ def test_an_aimed_copy_is_the_same_attack(data) -> None:
     assert same_attack(attack, aimed)
     assert not same_attack(attack, replace(attack, modifier=attack.modifier + 1))
     assert same_attack(None, None) and not same_attack(attack, None)
+
+
+def test_a_cap_under_five_says_which_limit_binds(data) -> None:
+    # The slider's tooltip explains a range that is not the usual 0..5.
+    hero = _hero(data, attack=6, defense=3)
+    limit = maneuver_limit(data, ALL_OUT, _attack(hero, data), hero)
+    assert limit.maximum == 3
+    assert "Defense is +3" in limit.reason and "below +0" in limit.reason
+
+    hero = _hero(data, attack=3, defense=9)
+    limit = maneuver_limit(data, ACCURATE, _attack(hero, data), hero)
+    assert limit.maximum == 3 and "double" in limit.reason
+
+    hero = _hero(data, attack=4, defense=9)
+    limit = maneuver_limit(data, ALL_OUT, _attack(hero, data), hero, {ACCURATE: 2})
+    assert limit.maximum == 2 and "other maneuvers move it +2" in limit.reason
+
+
+def test_the_full_five_needs_no_reason(data) -> None:
+    hero = _hero(data, attack=8, defense=8, rank=10)
+    limit = maneuver_limit(data, ALL_OUT, _attack(hero, data), hero)
+    assert limit.maximum == 5 and limit.reason == ""

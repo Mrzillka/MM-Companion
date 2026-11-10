@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import dataclasses
 
+import pytest
+
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import (
     Effect,
@@ -15,6 +17,7 @@ from mm_companion.core.data_loader import (
     ResistanceOutcome,
     SystemRules,
 )
+from mm_companion.core.data_loader.parsing_content import _parse_resistance_outcomes
 from mm_companion.core.rules import (
     apply_condition,
     apply_damage_step,
@@ -266,3 +269,125 @@ def test_a_rung_promises_only_what_will_still_be_standing(data) -> None:
     summary = damage_step_summary(char, rung, data)
     assert "Dead" in summary
     assert "Staggered" not in summary
+
+
+# -- any failure carries Incapacitated to Dying, and Dying to Dead ----------------
+#
+# PDF p118 / p199: "If an Incapacitated character fails a Damage resistance check,
+# their condition becomes Dying. If a Dying character fails a Damage resistance check
+# by any degree, they are Dead." Only the three-degree rung used to say so, so a one- or
+# two-degree failure left an Incapacitated target merely Hit, and never killed a Dying
+# one. The ladder now states it once (``failureEscalates``) and every failure inherits it.
+
+
+@pytest.mark.parametrize("degree", [1, 2, 3])
+def test_any_failure_carries_an_incapacitated_target_to_dying(data: GameData, degree) -> None:
+    char = Character.new_default(data)
+    apply_condition(char, "incapacitated", data)
+
+    applied = apply_damage_step(char, _step(data, degree), data)
+
+    assert "dying" in applied
+    held = set(_ids(char))
+    assert {"dying", "hit"} <= held
+    assert "dead" not in held
+    # The rung's own lesser conditions do not linger on top of it.
+    assert "dazed" not in held and "staggered" not in held
+
+
+@pytest.mark.parametrize("degree", [1, 2, 3])
+def test_any_failure_kills_a_dying_target(data: GameData, degree) -> None:
+    char = Character.new_default(data)
+    apply_condition(char, "dying", data)
+
+    applied = apply_damage_step(char, _step(data, degree), data)
+
+    assert "dead" in applied
+    held = set(_ids(char))
+    assert "dead" in held
+    assert not held & {"dying", "incapacitated", "staggered", "dazed"}
+
+
+@pytest.mark.parametrize("degree", [1, 2, 3])
+def test_a_dead_target_stays_dead(data: GameData, degree) -> None:
+    char = Character.new_default(data)
+    apply_condition(char, "dead", data)
+    apply_damage_step(char, _step(data, degree), data)
+    settled = set(_ids(char))
+
+    apply_damage_step(char, _step(data, degree), data)
+
+    assert "dead" in settled
+    assert not settled & {"dying", "incapacitated", "staggered"}
+    assert set(_ids(char)) == settled
+
+
+@pytest.mark.parametrize("start", ["incapacitated", "dying"])
+def test_a_made_save_on_a_downed_target_only_adds_a_hit(data: GameData, start) -> None:
+    char = Character.new_default(data)
+    apply_condition(char, start, data)
+    before = set(_ids(char))
+
+    assert apply_damage_step(char, _step(data, 0), data) == ("hit",)
+    assert set(_ids(char)) == before | {"hit"}
+
+
+@pytest.mark.parametrize("degree", [1, 2])
+def test_a_shallow_failure_on_a_standing_target_does_not_reach_dying(
+    data: GameData, degree
+) -> None:
+    """The inherited escalations fire only for a target already that far down."""
+    char = Character.new_default(data)
+
+    applied = apply_damage_step(char, _step(data, degree), data)
+
+    assert not set(applied) & {"incapacitated", "dying", "dead"}
+
+
+def test_the_tooltip_promises_the_dying(data: GameData) -> None:
+    char = Character.new_default(data)
+    apply_condition(char, "incapacitated", data)
+
+    summary = damage_step_summary(char, _step(data, 1), data)
+
+    assert "Dying" in summary
+    assert summary.endswith("escalated")
+
+
+def test_only_failure_rungs_inherit_the_ladder_escalations(data: GameData) -> None:
+    """The success rung is a made save; it must never walk a target down."""
+    effect = next(e for e in data.effects if e.id == data.system.damage_effect)
+
+    assert effect.resistance_success is not None
+    assert effect.resistance_success.escalates == ()
+    for rung in effect.resistance_outcomes:
+        assert ("incapacitated", "dying") in rung.escalates
+        assert ("dying", "dead") in rung.escalates
+    # And the first rung keeps its own escalation ahead of the inherited ones.
+    assert effect.resistance_outcomes[0].escalates[0] == ("dazed", "stunned")
+
+
+def test_other_ladders_inherit_nothing(data: GameData) -> None:
+    """Affliction's and the impressions' ladders share the resolver, not the rule."""
+    rungs = [
+        rung
+        for effect in data.effects
+        if effect.id != data.system.damage_effect
+        for rung in effect.resistance_outcomes
+    ]
+    rungs += [rung for impression in data.impress.impressions for rung in impression.outcomes]
+
+    assert rungs
+    for rung in rungs:
+        assert ("dying", "dead") not in rung.escalates
+
+
+def test_a_rungs_own_escalation_wins_over_the_ladders() -> None:
+    ladder = _parse_resistance_outcomes(
+        {
+            "failureEscalates": {"dazed": "dead", "dying": "dead"},
+            "degrees": [{"conditions": ["dazed"], "escalates": {"dazed": "stunned"}}],
+        }
+    )
+
+    assert ladder[0].escalates == (("dazed", "stunned"), ("dying", "dead"))

@@ -170,15 +170,21 @@ def capped_escalation(
 def _capped(rung: _Rung, game_data: GameData) -> _Rung:
     """*rung* (or a damage step) with its escalation cut at the ceiling.
 
-    Its note goes with what was cut: on Damage's last rung it is "further failed checks
-    escalate to Dying, then Dead", which is exactly what no longer happens.
+    Its note goes with what was cut when the cut was about a condition the rung itself
+    names: on Damage's last rung it is "further failed checks escalate to Dying, then
+    Dead", which is exactly what no longer happens. A rung that only inherited the cut
+    pairs (the ladder's ``failureEscalates``) keeps its note — the first rung's "Stunned
+    instead of Dazed" still holds for a minion.
     """
 
     escalates = getattr(rung, "escalates", ())
     capped = capped_escalation(escalates, game_data.system.minions.ceiling)
     if capped == escalates:
         return rung
-    return replace(rung, escalates=capped, note="")
+    cut = {before for before, _ in escalates} - {before for before, _ in capped}
+    if cut & set(getattr(rung, "conditions", ())):
+        return replace(rung, escalates=capped, note="")
+    return replace(rung, escalates=capped)
 
 
 def minion_rung(

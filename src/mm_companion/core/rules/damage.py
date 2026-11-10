@@ -17,8 +17,11 @@ rather than spelling anything out:
 **Escalation.** "Stunned instead of Dazed if already Dazed" was prose in a ``note``;
 it is now a rung's ``escalates`` map, and it *chains* — a rung naming both
 ``incapacitated -> dying`` and ``dying -> dead`` walks a target one rung further down
-with each failure, which is exactly what the book's "further failed checks escalate to
-Dying, then Dead" means.
+with each failure. An escalation for a condition the rung does *not* name fires too
+when the target already carries it, landing on top of the rung: that is the book's
+"if a Dying character fails a Damage resistance check by any degree, they are Dead",
+which the ladder states once (``failureEscalates``) and every failure rung inherits —
+so a one-degree failure kills a Dying target, while a made save still only adds a Hit.
 
 **Order.** A rung's ids are printed in the book's order, which is not always the order
 they can be *applied* in. Rung 2 reads ``hit, stunned, staggered``: applying Stunned
@@ -223,11 +226,22 @@ def resolve_condition_ids(
 
     ladder = dict(escalates)
     catalog = game_data.condition_catalog()
-    resolved = tuple(_escalate(character, cid, ladder, catalog) for cid in conditions)
+    resolved = [_escalate(character, cid, ladder, catalog) for cid in conditions]
+    # An escalation for a condition the rung does not name still fires when the target
+    # is already there — the failure lands it on top of the rung. This is how one or
+    # two degrees of failure still carry an Incapacitated target to Dying (the ladder's
+    # ``failureEscalates``), while a rung naming the condition replaces it as before.
+    for before, _ in escalates:
+        if before in conditions or not _at_least(character, before, catalog):
+            continue
+        landed = _escalate(character, before, ladder, catalog)
+        if landed not in resolved:
+            resolved.append(landed)
     # A condition that supersedes something a sibling brings must be applied *after*
     # that sibling, or there is nothing there yet for it to replace. Stable, so
     # everything the graph has no opinion about keeps the book's printed order.
-    return tuple(sorted(resolved, key=lambda cid: _supersedes_a_sibling(cid, resolved, game_data)))
+    siblings = tuple(resolved)
+    return tuple(sorted(siblings, key=lambda cid: _supersedes_a_sibling(cid, siblings, game_data)))
 
 
 def resolve_damage_step(

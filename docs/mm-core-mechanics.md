@@ -307,7 +307,8 @@ Outcome (graded, mapped to escalating **conditions** rather than raw "hit points
 | 1 degree of success (or lower success without the above) | **Hit** condition (cumulative -1 penalty to further Damage resistance checks) |
 | 1 degree of failure | Hit + **Dazed** (or **Stunned** if already Dazed) |
 | 2 degrees of failure | Hit + **Stunned** + **Staggered** |
-| 3+ degrees of failure | Hit + Staggered + **Incapacitated** (escalates to **Dying** → **Dead** on further failed checks) |
+| 3+ degrees of failure | Hit + Staggered + **Incapacitated** |
+| Any failure while already Incapacitated / Dying | **Dying** / **Dead** — by any degree, on top of that degree's rung (PDF p118, p199) |
 
 M&M uses this **condition ladder** instead of a hit-point pool: characters accumulate
 conditions (Hit, Dazed, Stunned, Staggered, Incapacitated, Dying, Dead) that progressively

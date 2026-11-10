@@ -361,7 +361,10 @@ class ResistanceOutcome:
     #: the data form of "Stunned instead of Dazed if already Dazed". Chained by
     #: :func:`mm_companion.core.rules.resolve_damage_step`, so a rung that names both
     #: ``incapacitated -> dying`` and ``dying -> dead`` walks a target down the ladder
-    #: one failure at a time. Pairs rather than a mapping so the record stays hashable.
+    #: one failure at a time. A pair for a condition the rung does not name lands on top
+    #: of the rung when the target already carries it; the ladder's ``failureEscalates``
+    #: are folded in here at load time. Pairs rather than a mapping so the record stays
+    #: hashable.
     escalates: tuple[tuple[str, str], ...] = ()
     #: The parameter each named condition is applied with, as ``(condition id,
     #: template)`` pairs — Frightened needs an object of fear. ``{source}`` in a

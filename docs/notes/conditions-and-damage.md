@@ -73,6 +73,20 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   open sheet, so the two copies of the character cannot disagree about an escalation.
   Note `dead` supersedes `staggered` for this: it is the terminal rung, and without
   it the third click left a corpse Staggered.
+  **Any failure carries Incapacitated to Dying, and Dying to Dead** (PDF p118, p199:
+  "by any degree"). Those two pairs used to sit on the three-degree rung only, so a
+  one- or two-degree failure left an Incapacitated target merely Hit and never killed a
+  Dying one. Copying the map onto the shallow rungs would not have worked: a pair only
+  fired for an id the rung *names*, and those rungs do not name `incapacitated`. So the
+  ladder states them once, `resistanceOutcomes.failureEscalates`, the loader appends
+  them to every failure rung's `escalates` (`_parse_resistance_outcomes`; the rung's own
+  pair wins a shared source, and the success rung inherits nothing, so a made save on
+  a downed target is still only a Hit), and `resolve_condition_ids` gained one rule: a
+  pair whose source the rung does not name fires when the target is already `_at_least`
+  that source, landing its chained result *on top of* the rung. Folding at load time
+  means no new wire key: a rung on a spec already carries its pairs. The minion cap cuts
+  them from every rung, and keeps a rung's note unless the cut was about a condition
+  the rung itself names (rung 1's "Stunned instead of Dazed" stays).
 - **A target's Toughness can refuse the ladder** (`core/rules/defenses.py`). Impervious
   leaves a Damage rank no greater than its own untouched, two degrees of success against
   Hardened, Impervious or Impenetrable leave not even the Hit, and Penetrating cuts back

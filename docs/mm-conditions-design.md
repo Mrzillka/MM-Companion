@@ -290,7 +290,11 @@ That resolver now exists: `core/rules/damage.py` reads the *rungs* off the Damag
 hand-picked condition goes through, so bundling, supersession and Hit's stacking are unchanged.
 Two things it needed from the data rather than from Python. A rung's **`escalates`** map is the
 book's "Stunned instead of Dazed if already Dazed" — previously prose in a `note` — and it chains,
-which is what `further failed checks escalate to Dying, then Dead` means. And **`dead` supersedes
+which is what `further failed checks escalate to Dying, then Dead` means. The book's "if a Dying
+character fails a Damage resistance check *by any degree*, they are Dead" (PDF p118, p199) holds
+on every failure rung, not only the deepest, so the ladder states it once as **`failureEscalates`**
+and the loader folds it into each failure rung (never the success rung); an escalation whose source
+a rung does not name lands *on top of* the rung when the target already carries it. And **`dead` supersedes
 `staggered`**: Dead is the terminal rung and, like Incapacitated, replaces it. Without that the
 escalation from Incapacitated to Dead left a corpse Staggered, since the rung still names it.
 

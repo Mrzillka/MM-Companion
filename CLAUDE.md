@@ -216,6 +216,11 @@ notes file that owns it.
   asking: it renders pages as images at ~2k tokens each. The book informs what a
   mechanic does and is never transcribed into `data/` or `docs/` (see Licensing
   boundary).
+- **A rules question that `docs/` does not settle goes to the `mm-rules` agent**
+  (`.claude/agents/mm-rules.md`). It checks the book and online sources, cites
+  pages, separates RAW from interpretation and house rule, tells editions apart,
+  and reports where the app's data disagrees with the book. Ask it before building
+  a mechanic on a rule you have not verified.
 
 ## Licensing boundary (matters when adding game data)
 

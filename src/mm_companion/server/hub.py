@@ -55,7 +55,7 @@ from mm_companion.core.session.protocol import (
     SessionStatusRequest,
 )
 from mm_companion.core.session.relay import RelayTransport, relay_url
-from mm_companion.core.session.server import SessionServer
+from mm_companion.core.session.server import HOST_STATE_UNREACHABLE, SessionServer
 
 log = logging.getLogger("mm_companion.server.hub")
 
@@ -171,6 +171,10 @@ class SessionHub:
         self._threads: list[threading.Thread] = []
         self._control_listener = None
         self._wake = threading.Event()
+        # Sessions on disk that could not be put on the relay at boot — the relay
+        # was not up yet, typically. The janitor keeps trying them; see
+        # :meth:`_repair`.
+        self._unhosted: set[str] = set()
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -186,9 +190,14 @@ class SessionHub:
         for summary in store.list_sessions(self.workspace):
             try:
                 self._host(store.load_session(summary.id, self.workspace))
-            except (store.SessionStoreError, OSError) as exc:
+            except store.SessionStoreError as exc:
                 # One unreadable session must not stop the other tables playing.
                 log.warning("could not host session %s: %s", summary.id, exc)
+            except OSError as exc:
+                # Almost always the relay not listening yet (both units start at
+                # boot). The session is fine; the janitor will try it again.
+                log.warning("could not host session %s yet (%s); will retry", summary.id, exc)
+                self._unhosted.add(summary.id)
         self._spawn(self._control_loop, "hub-control")
         self._spawn(self._janitor_loop, "hub-janitor")
         log.info("hub up: %d session(s), control channel %r", len(self._entries), self.control_id)
@@ -465,12 +474,57 @@ class SessionHub:
                 since = entry.empty_since
                 if entry.loaded and since is not None and since <= cutoff:
                     self._unload(entry)
+            try:
+                self._repair(entries)
+            except Exception as exc:  # noqa: BLE001 - the janitor must not die
+                log.warning("repair failed: %s", exc)
             if time.monotonic() >= next_sweep:
                 next_sweep = time.monotonic() + SWEEP_INTERVAL
                 try:
                     self.sweep()
                 except Exception as exc:  # noqa: BLE001 - the janitor must not die
                     log.warning("sweep failed: %s", exc)
+
+    def _repair(self, entries: list[_Entry]) -> None:
+        """Put every session that has fallen off the relay back on it.
+
+        A hub has nobody to press **Reconnect**, so it must never stop trying.
+        Two ways a session ends up unjoinable while the hub is running:
+
+        - **Its retry ladder ran out.** A relay restart (the certificate renewal
+          does one) drops every session's registration, and each climbs
+          :meth:`SessionServer._relisten_loop` for ``RECONNECT_WINDOW``. A relay
+          down for longer than that leaves the session parked at
+          ``unreachable`` — which, in the GM's app, waits for a button. Here it is
+          started over on the next pass, so the hub retries for as long as it runs.
+        - **It never got on at all**, because the relay was not up when the hub
+          booted. Those are hosted again from disk.
+        """
+        for entry in entries:
+            server = entry.server
+            if server.running and server.host_state == HOST_STATE_UNREACHABLE:
+                log.info("session %s is off the relay; trying again", entry.state.id)
+                server.reconnect()
+        for session_id in sorted(self._unhosted):
+            if not self._running:
+                return
+            try:
+                entry = self._host(store.load_session(session_id, self.workspace))
+            except store.SessionStoreError as exc:
+                log.warning("could not host session %s: %s", session_id, exc)
+                self._unhosted.discard(session_id)  # unreadable: retrying will not help
+                continue
+            except OSError:
+                continue  # still no relay; next pass
+            self._unhosted.discard(session_id)
+            if not self._running:
+                # ``stop`` ran while we were dialling and has already shut the
+                # sessions it knew about; this one it could not have seen.
+                with self._lock:
+                    self._entries.pop(session_id, None)
+                entry.server.stop()
+                return
+            log.info("session %s is hosted", session_id)
 
     # -- the control channel -----------------------------------------------
 

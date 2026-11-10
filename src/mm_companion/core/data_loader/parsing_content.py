@@ -4,6 +4,8 @@ typed records.
 
 from __future__ import annotations
 
+import dataclasses
+
 from ..components import APPLY_BONUS, TONE_HINDRANCE, Integration, TraitBoost
 from .game_data import (
     ActionModifier,
@@ -550,14 +552,35 @@ def _parse_resistance_outcomes(raw: object) -> tuple[ResistanceOutcome, ...]:
     Accepts the ladder either as a bare list of rungs or wrapped in an object with a
     ``degrees`` list, so a mod can hang its own documentation — and its ``success``
     rung — off the same block.
+
+    The wrapped form may also carry ``failureEscalates``: escalations every *failure*
+    rung inherits, for a rule that holds whatever the degree ("a Dying character who
+    fails by any degree is Dead"). They are folded into each rung's own
+    :attr:`~.ResistanceOutcome.escalates` here — after the rung's own pairs, which win
+    on a shared source — so every reader of a rung (the resolver, a spec on the wire,
+    the minion cap) sees one list. The ``success`` rung never inherits them.
     """
 
+    inherited: tuple[tuple[str, str], ...] = ()
     if isinstance(raw, dict):
+        shared = raw.get("failureEscalates", {})
+        if isinstance(shared, dict):
+            inherited = tuple((str(k), str(v)) for k, v in shared.items())
         raw = raw.get("degrees", ())
     if not isinstance(raw, list):
         return ()
     rungs = (_parse_outcome_rung(entry) for entry in raw)
-    return tuple(rung for rung in rungs if rung is not None)
+    return tuple(_inherit(rung, inherited) for rung in rungs if rung is not None)
+
+
+def _inherit(rung: ResistanceOutcome, inherited: tuple[tuple[str, str], ...]) -> ResistanceOutcome:
+    """*rung* with the ladder's ``failureEscalates`` appended to its own escalations."""
+
+    own = {before for before, _ in rung.escalates}
+    extra = tuple(pair for pair in inherited if pair[0] not in own)
+    if not extra:
+        return rung
+    return dataclasses.replace(rung, escalates=rung.escalates + extra)
 
 
 def _parse_resistance_success(raw: object) -> ResistanceOutcome | None:

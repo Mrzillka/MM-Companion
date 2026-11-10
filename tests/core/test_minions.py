@@ -18,6 +18,8 @@ from mm_companion.core.rules import (
     RollSpec,
     SpecLadder,
     answer_rung,
+    apply_condition,
+    apply_damage_step,
     capped_escalation,
     critical_answer,
     critical_rung,
@@ -140,6 +142,20 @@ def test_the_damage_buttons_stop_a_minion_at_the_ceiling(data) -> None:
     worst = damage_steps(data)[-1]
     assert minion_step(worst, data).escalates == ()
     assert minion_step(worst, data, MinionRules(stop_at_incapacitated=False)) is worst
+
+
+def test_a_downed_minion_is_not_walked_to_dying_by_a_shallow_failure(data) -> None:
+    """Every failure rung inherits incapacitated -> dying; the ceiling cuts it on all of
+    them, not only the last, and the first rung's own Dazed -> Stunned survives."""
+    for step in damage_steps(data)[1:]:
+        mook = Character.new_default(data)
+        mook.minion = True
+        apply_condition(mook, "incapacitated", data)
+        applied = apply_damage_step(mook, minion_step(step, data), data)
+        assert not set(applied) & {"dying", "dead"}
+    first = minion_step(damage_steps(data)[1], data)
+    assert first.escalates == (("dazed", "stunned"),)
+    assert first.note  # "Stunned instead of Dazed" still holds for a minion
 
 
 def test_answering_a_save_as_a_minion_lands_the_worst(data) -> None:

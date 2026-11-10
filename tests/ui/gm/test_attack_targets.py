@@ -374,7 +374,7 @@ def test_the_card_names_the_die_and_the_save(window: GMWindow, data, monkeypatch
     monkeypatch.setattr(action_run, "resolve_group", _staged([-1], []))
     aimed, spec = _declare(window, data, thug)
     window._attack.take_roll(_roll(spec, 14, 6))
-    assert "d20 14 +6" in aimed.card.text()  # a total of 20, not a natural 20
+    assert "14 + 6 = <b>20</b>" in aimed.card.text()  # a total of 20, not a natural 20
     window._attack.accept("a1")
     assert "vs DC" in aimed.card.status()  # the save that was rolled, not only its rung
 

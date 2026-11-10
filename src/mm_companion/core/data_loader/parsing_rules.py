@@ -813,6 +813,7 @@ def _parse_system(raw: dict) -> SystemRules:
                 }
             )
         ),
+        dc_start=int(sys.get("dcStart", defaults.dc_start)),
         trait_keys=trait_keys,
         paired_caps=paired_caps,
         unscoped_scope_values=tuple(

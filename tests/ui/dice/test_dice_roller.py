@@ -257,7 +257,7 @@ def test_a_saved_roll_keeps_the_name_it_was_rolled_under(qapp: QApplication) -> 
     # The name came with the roll — no dialog, and no DC.
     assert view.panel._quick_rolls == [{"bonus": 9, "penalty": 0, "name": "Athletics"}]
     labels = {b.text() for b in view.panel._quick_container.findChildren(QAbstractButton)}
-    assert "Athletics" in labels
+    assert "Athletics +9" in labels
 
 
 def test_a_quick_roll_leaves_the_dc_box_alone(qapp: QApplication) -> None:
@@ -324,7 +324,7 @@ def test_named_quick_roll_shows_its_name(qapp: QApplication) -> None:
 
     assert view.panel._quick_rolls == [{"bonus": 1, "penalty": 0, "name": "Perception"}]
     labels = {b.text() for b in view.panel._quick_container.findChildren(QAbstractButton)}
-    assert "Perception" in labels
+    assert "Perception +1" in labels
 
 
 def test_reordering_moves_and_persists(qapp: QApplication) -> None:
@@ -452,7 +452,7 @@ def test_renaming_a_chip_persists_and_recaptions_it(
 
     assert storage.load_settings()["quick_rolls"] == [dict(entry, name="Perception")]
     labels = {b.text() for b in view.panel._quick_container.findChildren(QAbstractButton)}
-    assert "Perception" in labels
+    assert "Perception +1" in labels
 
     # And an empty answer puts the numbers back.
     monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("  ", True)))
@@ -1252,32 +1252,31 @@ def test_the_die_stays_put_whatever_the_readout_says(qapp) -> None:
         panel.close()
 
 
-def test_the_dc_take_10_and_actions_share_a_row_and_wrap_when_narrow(
-    qapp: QApplication,
-) -> None:
+def test_actions_ends_the_modifier_row_and_take_10_the_dc_row(qapp: QApplication) -> None:
+    # The user's layout (2026-11-11): what changes the roll on one row, what it is
+    # rolled against on the next.
     view = DiceRollerView()
     view.show()
     panel = view.panel
+    panel.set_modifier_steps((1, 5))
 
     _settled(qapp, view, 360, 800)  # the right-hand pinned strip's shape
+    assert panel._controls.wide
 
     def middle(widget) -> int:
         return widget.mapTo(panel, widget.rect().center()).y()
 
-    dc = middle(panel._dc_spin)
+    modifier, dc = middle(panel._modifier_spin), middle(panel._dc_spin)
+    assert abs(modifier - middle(panel._actions_button)) < panel._actions_button.height()
     assert abs(dc - middle(panel._routine_button)) < panel._routine_button.height()
-    assert abs(dc - middle(panel._actions_button)) < panel._actions_button.height()
-
-    row = panel._toolbar
-    one_line = row.heightForWidth(row.width())
-    assert row.heightForWidth(panel._routine_button.sizeHint().width() + 10) > one_line
+    assert abs(dc - middle(panel._dc_label)) < panel._dc_spin.height()
 
 
 def test_the_dc_box_is_one_box_and_empty_means_no_dc(qapp: QApplication) -> None:
     # It was a checkbox beside a box that sat greyed at 15: two controls, one number.
     view = DiceRollerView()
     panel = view.panel
-    assert panel.dc() is None and panel._dc_spin.text() == "—"
+    assert panel.dc() is None and panel._dc_spin.text() == dice_roller.DC_NONE
     panel.set_dc(18)
     assert panel.dc() == 18 and panel._roll_parameters()[2] == 18
     panel.set_dc(None)
@@ -1313,7 +1312,7 @@ def test_a_long_result_is_never_cut_off(
     _settled(qapp, view, width, 620)
 
     die = view.panel._die_part
-    assert dice_roller.NO_DC_WARNING.split(":")[0] in view.panel._readout.text()
+    assert view.panel.warning_text() == dice_roller.NO_DC_SHORT
     assert die.height() >= die.heightForWidth(die.width())
     bottom = die.mapTo(view.panel, die.rect().bottomLeft()).y()
     assert bottom <= view.panel.height()
@@ -1394,10 +1393,9 @@ def test_the_circumstance_steps_sit_either_side_of_the_modifier_box(
     order = sorted([*panel._step_buttons, panel._modifier_spin], key=left)
     assert [w.text() for w in order] == ["−5", "−2", panel._modifier_spin.text(), "+2", "+5"]
     spin = panel._modifier_spin
-    # Snug: the slack goes to the stretch after the last step, not into the box.
+    # Justified: the steps and the box share the row out to the Actions button.
     last = max(panel._step_buttons, key=left)
-    right_edge = last.mapTo(panel, last.rect().topRight()).x()
-    assert panel._settings_part.width() - right_edge > spin.sizeHint().width()
+    assert left(panel._actions_button) - (left(last) + last.width()) <= 3 * 6
 
     # A step adds to the box, so +2 twice is +4, and a penalty takes it back down.
     by_caption = {b.text(): b for b in panel._step_buttons}
@@ -1415,7 +1413,7 @@ def test_the_hosts_hand_the_roller_the_rulesets_steps(qapp: QApplication) -> Non
     from mm_companion.core.data_loader import load_game_data
 
     steps = load_game_data().system.circumstance_modifiers
-    assert steps == (2, 5)  # PDF p17: +/-2 minor, +/-5 major
+    assert steps == (1, 5)  # +/-1 and p17's +/-5 major (the user's call: 1, not 2)
 
 
 def test_loading_a_trait_does_not_change_the_roll_box_height(qapp: QApplication) -> None:

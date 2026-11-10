@@ -40,7 +40,7 @@ from ..data_loader.game_data import (
     CombatAction,
 )
 from .derived import defense_class_in_play
-from .rolls import RollSpec
+from .rolls import RollSpec, add_part
 
 __all__ = [
     "ManeuverLimit",
@@ -50,6 +50,7 @@ __all__ = [
     "maneuver_action",
     "maneuver_caption",
     "maneuver_limit",
+    "maneuver_trade",
     "maneuver_values",
     "shift_maneuvers",
 ]
@@ -61,13 +62,25 @@ _NOUNS = {
     MANEUVER_DEFENSE: "Defense",
 }
 
+#: ...and how each is named in the short caption beside a maneuver's slider.
+_SHORT_NOUNS = {
+    MANEUVER_ATTACK_CHECK: "attack",
+    MANEUVER_EFFECT_RANK: "effect",
+    MANEUVER_DEFENSE: "Defense",
+}
+
 #: Picks as the lane hands them over: ``(action id, X)``; a fixed line's X is ``None``.
 Pick = tuple[str, "int | None"]
 
 
 @dataclass(frozen=True)
 class ManeuverLimit:
-    """How far one maneuver may go on an attack: ``0..maximum``, and why not when 0."""
+    """How far one maneuver may go on an attack: ``0..maximum``.
+
+    :attr:`reason` says why the maximum is short of the usual ``limits.maxShift`` —
+    why not at all when it is 0, and which cap binds when it is lower ("your Defense
+    is +3: it cannot go below +0"). ``""`` when nothing holds it under the usual.
+    """
 
     maximum: int
     reason: str = ""
@@ -160,6 +173,8 @@ def maneuver_limit(
     values = maneuver_values(spec, character, game_data)
     shifts = _shifts(((k, v) for k, v in (others or {}).items() if k != action_id), game_data)
     room = limits.max_shift
+    # Why the room is what it is, once a cap other than maxShift binds.
+    why = ""
     for target, penalised in ((action.penalty, True), (action.bonus, False)):
         if not target:
             continue
@@ -167,20 +182,31 @@ def maneuver_limit(
         value = values.get(target)
         if value is None:
             return ManeuverLimit(0, f"This attack has no {noun} to trade.")
-        shifted = value + shifts.get(target, 0)
+        moved = shifts.get(target, 0)
+        shifted = value + moved
         if penalised:
             # The penalised value may not go below the floor.
             if value <= limits.floor:
                 return ManeuverLimit(0, f"Your {noun} is {value:+d}: there is nothing to trade.")
-            room = min(room, shifted - limits.floor)
+            cap = shifted - limits.floor
+            rule = f"it cannot go below {limits.floor:+d}"
         elif limits.double_cap:
             # The bonused value may not more than double, so a 0 cannot be raised.
             if value <= 0:
                 return ManeuverLimit(0, f"Your {noun} is {value:+d}: it cannot be doubled.")
-            room = min(room, 2 * value - shifted)
+            cap = 2 * value - shifted
+            rule = "a maneuver can at most double it"
+        else:
+            continue
+        if cap < room:
+            room = cap
+            why = f"Your {noun} is {value:+d}"
+            if moved:
+                why += f", the other maneuvers move it {moved:+d}"
+            why += f", and {rule}."
     if room <= 0:
         return ManeuverLimit(0, "The other maneuvers on this attack already use the room.")
-    return ManeuverLimit(room)
+    return ManeuverLimit(room, why)
 
 
 def maneuver_caption(game_data: GameData, picks: Iterable[Pick]) -> str:
@@ -192,6 +218,25 @@ def maneuver_caption(game_data: GameData, picks: Iterable[Pick]) -> str:
         action = maneuver_action(game_data, action_id)
         if action is not None and amount and amount > 0:
             parts.append(f"{action.name} +{amount}")
+    return ", ".join(parts)
+
+
+def maneuver_trade(game_data: GameData, action_id: str, amount: int) -> str:
+    """What *amount* of the maneuver *action_id* trades, for the caption beside its
+    slider: ``"+3 attack, −3 Defense"`` (``""`` for anything but a maneuver).
+
+    A bare number beside the slider said how far it was set and nothing of what that
+    moved; the tooltip had the rule, but the trade is what a player weighs each turn.
+    """
+
+    action = maneuver_action(game_data, action_id)
+    if action is None:
+        return ""
+    parts = []
+    if action.bonus:
+        parts.append(f"+{amount} {_SHORT_NOUNS.get(action.bonus, action.bonus)}")
+    if action.penalty:
+        parts.append(f"−{amount} {_SHORT_NOUNS.get(action.penalty, action.penalty)}")
     return ", ".join(parts)
 
 
@@ -263,7 +308,15 @@ def shift_maneuvers(spec: RollSpec, picks: Iterable[Pick], game_data: GameData) 
     if effect:
         follow_up = None if follow_up is None else _shift_save(follow_up, effect)
         also = tuple(_shift_save(s, effect) for s in also)
-    return replace(spec, label=label, modifier=modifier, follow_up=follow_up, also=also)
+    shifted = spec
+    if attack:
+        # One breakdown line per maneuver, so the hover says which traded what.
+        for action_id, amount in picks:
+            part = _shifts([(action_id, amount)], game_data).get(MANEUVER_ATTACK_CHECK, 0)
+            action = maneuver_action(game_data, action_id)
+            if part and action is not None:
+                shifted = add_part(shifted, action.name, part)
+    return replace(shifted, label=label, modifier=modifier, follow_up=follow_up, also=also)
 
 
 def lasting_conditions(picks: Iterable[Pick], game_data: GameData) -> list[tuple[str, int]]:

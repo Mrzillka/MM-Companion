@@ -20,8 +20,10 @@ from mm_companion.ui.toasts import ToastCard, ToastStack, notify_window, roll_to
 
 
 @pytest.fixture
-def live_toasts():
-    """Let notifications through for this test (the suite suppresses them)."""
+def live_toasts(monkeypatch):
+    """Let notifications through for this test (the suite suppresses them), as they are
+    when the app is behind another window."""
+    monkeypatch.setattr(toasts, "app_focused", lambda: False)
     toasts.SUPPRESSED = False
     yield roll_toaster()
     roll_toaster().clear()

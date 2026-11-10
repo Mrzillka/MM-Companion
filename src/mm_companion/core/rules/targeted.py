@@ -70,6 +70,7 @@ from .rolls import (
     LADDER_DAMAGE,
     RollSpec,
     ability_roll,
+    add_part,
     best_of_key,
     resistance_roll,
     skill_roll,
@@ -230,7 +231,8 @@ def targeted_check_spec(
         label += f" vs. DC {dc}"
     elif rules.vs_defense:
         label += " vs. Defense"
-    return replace(spec, label=label, modifier=modifier, dc=dc, hint=action.tooltip)
+    spec = add_part(spec, title, effect.attack_modifier)
+    return replace(spec, label=label, dc=dc, hint=action.tooltip)
 
 
 def targeted_opposed_spec(

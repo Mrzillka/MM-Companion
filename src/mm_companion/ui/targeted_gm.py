@@ -70,7 +70,7 @@ from mm_companion.core.rules import (
 from mm_companion.core.session.model import KIND_ROLL
 from mm_companion.ui import theme
 from mm_companion.ui.action_run import ActionRun, group_line, total_of
-from mm_companion.ui.attack_gm import ACCEPT_CAPTION, DECLINE_CAPTION, roll_text
+from mm_companion.ui.attack_gm import ACCEPT_CAPTION, DECLINE_CAPTION, roll_text_html
 from mm_companion.ui.attack_targets import (
     KIND_TARGETED,
     TargetedDeclaration,
@@ -530,8 +530,7 @@ class TargetedController(QObject):
             whom = f"<b>{html.escape(decl.ally_name)}</b> against {whom}"
         text = f"<b>{html.escape(act.source.name)}</b>: {html.escape(name)} → {whom}"
         if act.roll is not None:
-            total, _space, breakdown = roll_text(act.roll).partition(" ")
-            text += f" — rolled <b>{total}</b> {html.escape(breakdown)}"
+            text += f" — rolled {roll_text_html(act.roll)}"
         act.card.set_text(text)
         if act.accepted:
             return

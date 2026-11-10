@@ -576,6 +576,9 @@ class ConditionEffect:
     condition_ids: frozenset[str] = frozenset()
     tooltip: str = ""
     trait_lost: bool = False
+    #: The contributing conditions' names, in the order they were gathered — what a
+    #: roll's breakdown calls the line this overlay adds (see ``rolls.spec_parts``).
+    labels: tuple[str, ...] = ()
 
     @property
     def active(self) -> bool:
@@ -680,6 +683,7 @@ def condition_scope_penalty(
     op = ""
     ids: set[str] = set()
     parts: list[str] = []
+    names: list[str] = []
     for applied in character.conditions:
         cond = catalog.get(applied.condition_id)
         if cond is None:
@@ -695,6 +699,7 @@ def condition_scope_penalty(
             if contribution.op:
                 op = contribution.op
             ids.add(cond.id)
+            names.append(cond.name)
             parts.append(contribution.label)
     return ConditionEffect(
         delta=total,
@@ -702,6 +707,7 @@ def condition_scope_penalty(
         condition_ids=frozenset(ids),
         tooltip="; ".join(parts),
         trait_lost=any(catalog[i].trait_lost for i in ids if i in catalog),
+        labels=tuple(dict.fromkeys(names)),
     )
 
 
@@ -817,6 +823,7 @@ def resistance_condition_effect(
         condition_ids=frozenset(ids),
         tooltip="; ".join(parts),
         trait_lost=any(catalog[i].trait_lost for i in ids if i in catalog),
+        labels=tuple(catalog[i].name for i in sorted(ids) if i in catalog),
     )
 
 

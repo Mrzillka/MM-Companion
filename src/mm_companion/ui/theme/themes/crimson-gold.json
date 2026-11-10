@@ -51,7 +51,10 @@
 
     "splash.background": "#17100f",
     "splash.text": "#f0e3d8",
-    "dice.face": "#f5e6cf"
+    "dice.face": "#f5e6cf",
+    "_dice.critical": "Brighter and yellower than accent.dice (#e8a33a), the halo a loaded trait already wears: inherited from Classic, the two golds were all but the same, so a natural 20 looked like an armed die.",
+    "dice.critical": "#ffd84a",
+    "dice.fumble": "#e0283a"
   },
 
   "_metrics": "Slate Dark's softer corners and roomier padding — the artwork is round and heavily outlined, and square edges beside it read as a mismatch.",

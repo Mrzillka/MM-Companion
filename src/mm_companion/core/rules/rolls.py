@@ -31,6 +31,7 @@ from dataclasses import dataclass, field, replace
 from ..character import Character
 from ..data_loader import Effect, GameData, ResistanceOutcome
 from ..powers import Power, PowerEffectInstance
+from .appliers import CATEGORY_ABILITY, CATEGORY_RESISTANCE, skill_for_row
 from .area import area_dodge_bonus
 from .conditions import (
     condition_attack_check_mod,
@@ -40,10 +41,15 @@ from .conditions import (
 )
 from .defenses import localized_damage_save, penetrating_ranks
 from .derived import (
+    _resistance_base_trait,
+    _trait_bonus,
     effective_ability,
     initiative_ability,
+    initiative_advantage_bonus,
     initiative_modifier,
+    resistance_base,
     resistance_total,
+    skill_bonus,
     skill_modifiers,
     skill_total,
 )
@@ -337,6 +343,18 @@ class RollSpec:
     #: slammer's save against their own Slam Attack (p202). **Local only**, for
     #: :attr:`roll_twice`'s reason; it is already filled in for this sheet.
     then: RollSpec | None = field(default=None, compare=False)
+    #: What :attr:`modifier` is made of, as ``(name, amount)`` pairs — "Agility" 3,
+    #: "Acrobatics ranks" 4, "Impaired" −2, "All-Out Attack" +3 — for the roll's hover
+    #: breakdown. On the wire, so every seat's history can say how a number was reached.
+    #: Empty when nobody said; :func:`spec_parts` reconciles it with the modifier either
+    #: way, so a spec whose parts fell behind still adds up. Left out of equality, as
+    #: :attr:`marks` is: it describes the number, it does not change the roll.
+    parts: tuple[tuple[str, int], ...] = field(default=(), compare=False)
+    #: On a save: offered on its **attacker's** own card and rolled with that sheet's
+    #: numbers (:func:`own_attack_save`) — someone resisting their own attack, a GM
+    #: running both sides or a player testing a character. Every card the roll lands
+    #: on shows a ⚠ for it, so it is on the wire.
+    own_attack: bool = False
 
     def follow_ups(self) -> tuple[RollSpec, ...]:
         """Every roll this one provokes: :attr:`follow_up`, then :attr:`also`."""
@@ -398,6 +416,10 @@ class RollSpec:
             raw["pick"] = self.pick
         if self.critical_hit:
             raw["critical_hit"] = True
+        if self.own_attack:
+            raw["own_attack"] = True
+        if self.parts:
+            raw["parts"] = [[name, amount] for name, amount in self.parts]
         if self.follow_up is not None:
             raw["follow_up"] = self.follow_up.to_dict()
         if self.also:
@@ -451,12 +473,92 @@ class RollSpec:
             recovers_parameter=str(raw.get("recovers_parameter", "")),
             pick=str(raw.get("pick", "")),
             critical_hit=raw.get("critical_hit") is True,
+            own_attack=raw.get("own_attack") is True,
+            parts=_parts_from_wire(raw.get("parts")),
             also=(
                 tuple(s for s in (cls.from_dict(a) for a in also) if s is not None)
                 if isinstance(also, list)
                 else ()
             ),
         )
+
+
+# -- what a modifier is made of ------------------------------------------------
+
+#: The breakdown line for whatever of a modifier its named parts do not account for.
+OTHER_PART = "Other"
+
+
+def _parts_from_wire(raw: object) -> tuple[tuple[str, int], ...]:
+    """:attr:`RollSpec.parts` off the wire: ``[[name, amount], …]``, junk dropped."""
+
+    if not isinstance(raw, list):
+        return ()
+    parts: list[tuple[str, int]] = []
+    for entry in raw:
+        if not isinstance(entry, (list, tuple)) or len(entry) != 2:
+            continue
+        name, amount = entry
+        if isinstance(name, str) and name and isinstance(amount, int):
+            if not isinstance(amount, bool):
+                parts.append((name, amount))
+    return tuple(parts)
+
+
+def spec_parts(spec: RollSpec) -> tuple[tuple[str, int], ...]:
+    """What *spec*'s modifier is made of, always adding up to it.
+
+    Its own :attr:`~RollSpec.parts` when it has them, with an :data:`OTHER_PART` line for
+    any difference (a halving condition, a spec adjusted by code that named nothing);
+    without any, one line named for the spec itself. Zero lines are dropped, except
+    that a spec with nothing at all says nothing.
+    """
+
+    parts = [(name, amount) for name, amount in spec.parts if amount]
+    if not spec.parts and spec.modifier:
+        parts = [(spec.label, spec.modifier)]
+    rest = spec.modifier - sum(amount for _name, amount in parts)
+    if rest:
+        parts.append((OTHER_PART, rest))
+    return tuple(parts)
+
+
+def add_part(spec: RollSpec, name: str, amount: int, **changes: object) -> RollSpec:
+    """*spec* with *amount* added to its modifier, named *name* in its breakdown.
+
+    The one way code that shifts a roll (a maneuver, a team join) keeps the hover
+    breakdown honest. *changes* are any other fields to replace at the same time.
+    """
+
+    if not amount:
+        return replace(spec, **changes)
+    return replace(
+        spec,
+        modifier=spec.modifier + amount,
+        parts=(*spec_parts(spec), (name, amount)),
+        **changes,
+    )
+
+
+def _bonus_part(bonus: object) -> list[tuple[str, int]]:
+    """A :class:`~.appliers.TraitBonus` as a breakdown line, named for its sources."""
+
+    amount = getattr(bonus, "amount", 0) if bonus is not None else 0
+    if not amount:
+        return []
+    sources = tuple(getattr(bonus, "sources", ()) or ())
+    return [(", ".join(sources) if sources else "Bonuses", amount)]
+
+
+def _condition_part(effect, value: int) -> list[tuple[str, int]]:  # noqa: ANN001
+    """What a condition overlay does to *value*, as a breakdown line named for it."""
+
+    if not effect.active:
+        return []
+    shift = effect.apply(value) - value
+    if not shift:
+        return []
+    return [(", ".join(effect.labels) if effect.labels else "Conditions", shift)]
 
 
 # -- trait rolls -------------------------------------------------------------
@@ -469,11 +571,17 @@ def ability_roll(char: Character, game_data: GameData, key: str) -> RollSpec:
     name = ability.name if ability else key
     value = effective_ability(char, game_data, key)
     effect = condition_scope_penalty(char, game_data, {key, name})
+    parts = [
+        (name, char.abilities.get(key, 0)),
+        *_bonus_part(_trait_bonus(char, game_data, CATEGORY_ABILITY, key)),
+        *_condition_part(effect, value),
+    ]
     return RollSpec(
         label=name,
         modifier=effect.apply(value) if effect.active else value,
         kind=KIND_ABILITY,
         hint=effect.tooltip,
+        parts=tuple(parts),
     )
 
 
@@ -489,7 +597,31 @@ def resistance_roll(char: Character, game_data: GameData, key: str) -> RollSpec:
         modifier=effect.apply(value) if effect.active else value,
         kind=KIND_RESISTANCE,
         hint=effect.tooltip,
+        parts=(*resistance_parts(char, game_data, key), *_condition_part(effect, value)),
     )
+
+
+def _trait_name(game_data: GameData, category: str, key: str) -> str:
+    """A trait's display name, for a breakdown line (its key when it has none)."""
+
+    pool = game_data.abilities if category == CATEGORY_ABILITY else game_data.resistances
+    found = next((t for t in pool if t.key == key), None)
+    return found.name if found is not None else key
+
+
+def resistance_parts(char: Character, game_data: GameData, key: str) -> tuple[tuple[str, int], ...]:
+    """What a resistance's total is made of: its base trait, ranks bought, boosts."""
+
+    name = _trait_name(game_data, CATEGORY_RESISTANCE, key)
+    category, base_key = _resistance_base_trait(game_data, key)
+    parts: list[tuple[str, int]] = []
+    if category:
+        parts.append(
+            (_trait_name(game_data, category, base_key), resistance_base(char, game_data, key))
+        )
+    parts.append((f"{name} ranks", char.resistances.get(key, 0)))
+    parts += _bonus_part(_trait_bonus(char, game_data, CATEGORY_RESISTANCE, key))
+    return tuple(parts)
 
 
 def skill_row_label(row_id: str) -> str:
@@ -518,7 +650,25 @@ def skill_roll(char: Character, game_data: GameData, row_id: str, *, label: str 
         modifier=effect.apply(total) if effect.active else total,
         kind=KIND_SKILL,
         hint=effect.tooltip,
+        parts=(*skill_parts(char, game_data, row_id), *_condition_part(effect, total)),
     )
+
+
+def skill_parts(char: Character, game_data: GameData, row_id: str) -> tuple[tuple[str, int], ...]:
+    """What a skill row's total is made of: its ability, its ranks, outside bonuses."""
+
+    skill = skill_for_row(game_data, row_id)
+    parts: list[tuple[str, int]] = []
+    if skill is not None and skill.ability:
+        parts.append(
+            (
+                _trait_name(game_data, CATEGORY_ABILITY, skill.ability),
+                effective_ability(char, game_data, skill.ability),
+            )
+        )
+    parts.append((f"{skill_row_label(row_id)} ranks", char.skill_ranks.get(row_id, 0)))
+    parts += _bonus_part(skill_bonus(char, game_data, row_id))
+    return tuple(parts)
 
 
 def initiative_roll(char: Character, game_data: GameData) -> RollSpec:
@@ -526,11 +676,20 @@ def initiative_roll(char: Character, game_data: GameData) -> RollSpec:
 
     penalty = condition_check_penalty(char, game_data)
     ability = initiative_ability(char, game_data)
+    parts = [
+        (
+            _trait_name(game_data, CATEGORY_ABILITY, ability),
+            effective_ability(char, game_data, ability),
+        ),
+        ("Advantages", initiative_advantage_bonus(char, game_data)),
+        ("Conditions", penalty),
+    ]
     return RollSpec(
         label="Initiative",
         modifier=initiative_modifier(char, game_data) + penalty,
         kind=KIND_INITIATIVE,
         hint=f"Initiative ({ability})",
+        parts=tuple(parts),
     )
 
 
@@ -725,9 +884,10 @@ def follow_up_for_result(
     elif die == 1:
         bonus = game_data.system.critical_miss_resistance_bonus
         if bonus:
-            return replace(
+            return add_part(
                 follow_up,
-                modifier=follow_up.modifier + bonus,
+                "Attacker's natural 1",
+                bonus,
                 label=f"{follow_up.label} — natural 1, +{bonus} to resist",
             )
     return follow_up
@@ -935,6 +1095,41 @@ def _best_own_roll(
     return pick(rolls, key=lambda r: r.modifier)
 
 
+#: The hover on the ⚠ a save rolled off its own attacker's card carries.
+OWN_ATTACK_HINT = "You resisted your own attack"
+#: The same, on a card someone else reads: it was not the reader who did it.
+OWN_ATTACK_HINT_OTHER = "Resisted their own attack"
+#: What the save's button says on hover before it is clicked.
+OWN_ATTACK_BUTTON_HINT = (
+    "Your own attack: this rolls with this sheet's numbers, as if you were its target."
+)
+
+
+def own_attack_save(spec: RollSpec) -> RollSpec:
+    """*spec* as offered on its **attacker's** own card: filled in, and marked.
+
+    The save an attack forces is the target's, but on one's own card the only sheet
+    to hand is the attacker's, and testing a character against itself or running
+    both sides is exactly when that button is clicked. It used to roll a bare d20,
+    which read as the app forgetting the roller's Toughness. Now it fills in this
+    sheet's number like any other card (:func:`localize_spec`), and
+    :attr:`~RollSpec.own_attack` marks the roll so its result says whose it was.
+
+    A spec with no trait key comes back unchanged: nothing of this sheet's goes into
+    it, so there is nothing to mark.
+    """
+
+    if not spec.trait_key:
+        return spec
+    hint = f"{spec.hint}\n\n{OWN_ATTACK_BUTTON_HINT}" if spec.hint else OWN_ATTACK_BUTTON_HINT
+    return replace(spec, own_attack=True, hint=hint)
+
+
+def _unmarked(spec: RollSpec) -> RollSpec:
+    """*spec* without :attr:`~RollSpec.own_attack`, for a roll no sheet filled in."""
+    return replace(spec, own_attack=False) if spec.own_attack else spec
+
+
 def localize_spec(spec: RollSpec, char: Character | None, game_data: GameData) -> RollSpec:
     """Fill in what *this* sheet knows about a spec that came from someone else.
 
@@ -958,28 +1153,38 @@ def localize_spec(spec: RollSpec, char: Character | None, game_data: GameData) -
 
     A spec naming no trait, or arriving somewhere with no character (the GM
     window's roller), comes back unchanged — the Bonus slider is then the answer,
-    as before.
+    as before. Unchanged but for :attr:`~RollSpec.own_attack`: no sheet's number
+    went in, so the roll is nobody's own attack resisted.
     """
 
     if char is None or not spec.trait_key:
-        return spec
+        return _unmarked(spec)
     own = _own_trait_roll(spec, char, game_data)
     if own is None:
-        return spec
+        return _unmarked(spec)
     # A Toughness save against Damage: the target's Impervious or Hardened decides what
     # the roll is for before it is made (the DC Penetrating leaves, a second die).
     spec = localized_damage_save(spec, char, game_data)
+    # The breakdown: whatever the spec already carried, then this sheet's own trait.
+    parts = (*spec_parts(spec), *spec_parts(own))
     if spec.kind in (KIND_BEST_OF, KIND_WORST_OF) or is_choice_key(spec.trait_key):
         # Which candidate won is worth saying: "Resist Demoralized (Will)".
         return replace(
-            spec, modifier=spec.modifier + own.modifier, label=f"{spec.label} ({own.label})"
+            spec,
+            modifier=spec.modifier + own.modifier,
+            label=f"{spec.label} ({own.label})",
+            parts=parts,
         )
     if spec.kind == KIND_AREA_DODGE:
         # Dodging an area takes whatever helps against areas (Evasion's +5) on top.
         bonus = area_dodge_bonus(char, game_data)
         label = f"{spec.label} (+{bonus} Evasion)" if bonus else spec.label
-        return replace(spec, modifier=spec.modifier + own.modifier + bonus, label=label)
-    return replace(spec, modifier=spec.modifier + own.modifier)
+        if bonus:
+            parts = (*parts, ("Evasion", bonus))
+        return replace(
+            spec, modifier=spec.modifier + own.modifier + bonus, label=label, parts=parts
+        )
+    return replace(spec, modifier=spec.modifier + own.modifier, parts=parts)
 
 
 def trait_roll_for(spec: RollSpec, char: Character, game_data: GameData) -> RollSpec | None:
@@ -1217,15 +1422,19 @@ def _effect_roll_parts(
         against = _check_against(check_row.value)
         hint = "" if dc is not None else f"The target's {against} goes in the DC box."
         actor = numbers.check_actor
+        check_parts = list(numbers.check_parts)
         marks: tuple[str, ...] = ()
         if numbers.attack_check:
             shift, because = _attack_condition(char, game_data)
             actor += shift
+            if shift:
+                check_parts.append(("Conditions", shift))
             hint = " ".join(part for part in (hint, because) if part)
             marks = (game_data.system.trait_keys.attack_check,)
         check = RollSpec(
             label=named(_check_label(check_row.value, actor, effect, game_data)),
             modifier=actor,
+            parts=tuple(check_parts),
             dc=dc,
             kind=KIND_POWER_CHECK,
             hint=hint,
@@ -1315,9 +1524,14 @@ def _linked_check(
         dict.fromkeys(c for part in members if part.check is not None for c in part.check.costs)
     )
     spends = tuple(i for part in members if part.check is not None for i in part.check.spends)
+    first = members[0].check if members and members[0].check is not None else None
+    base = [p for p in (first.parts if first is not None else ()) if p[0] != "Conditions"]
+    if sum(amount for _name, amount in base) != attack.bonus:
+        base = [("Attack", attack.bonus)]
     return RollSpec(
         label=f"{names}: {label}" if names else label,
         modifier=bonus,
+        parts=(*base, *((("Conditions", shift),) if shift else ())),
         kind=KIND_POWER_CHECK,
         hint=hint,
         follow_up=provoked[0] if provoked else None,

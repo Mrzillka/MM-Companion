@@ -28,6 +28,7 @@ from mm_companion.core.rules import (
     initiative_roll,
     localize_spec,
     outcome_is_failure,
+    own_attack_save,
     power_roll_lines,
     power_rolls,
     resistance_outcome,
@@ -35,6 +36,7 @@ from mm_companion.core.rules import (
     skill_roll,
     skill_row_label,
 )
+from mm_companion.core.session.protocol import sanitize_spec
 
 
 @pytest.fixture
@@ -392,3 +394,47 @@ def test_a_trait_key_with_no_kind_still_means_a_resistance(hero, data) -> None:
     """
     legacy = RollSpec(label="Toughness vs. 18", dc=18, trait_key="TOUGHNESS")
     assert localize_spec(legacy, hero, data).modifier == 5
+
+
+def test_a_save_off_ones_own_attack_is_filled_in_and_marked(hero, data) -> None:
+    """One's own card rolls the save with this sheet's numbers, and says whose it was.
+
+    It used to roll a bare d20, which read as the app forgetting the roller's Toughness.
+    """
+    save = RollSpec(label="Toughness vs. 18", dc=18, trait_key="TOUGHNESS")
+    offered = own_attack_save(save)
+    assert offered.own_attack and offered.label == "Toughness vs. 18"
+    rolled = localize_spec(offered, hero, data)
+    assert rolled.modifier == 5  # Stamina 5: this sheet's own Toughness
+    assert rolled.own_attack
+
+
+def test_the_mark_travels_with_the_spec() -> None:
+    """Every seat's card shows the ⚠, so the flag survives the wire."""
+    offered = own_attack_save(RollSpec(label="Will vs. 15", dc=15, trait_key="WILL"))
+    assert RollSpec.from_dict(offered.to_dict()).own_attack
+    assert "own_attack" not in RollSpec(label="Will vs. 15").to_dict()
+
+
+def test_the_session_server_keeps_the_mark() -> None:
+    """The server strips spec keys it does not know, and every seat's ⚠ needs this one."""
+    offered = own_attack_save(RollSpec(label="Will vs. 15", dc=15, trait_key="WILL"))
+    assert RollSpec.from_dict(sanitize_spec(offered.to_dict())).own_attack
+
+
+def test_no_sheet_to_fill_it_in_means_no_mark(data) -> None:
+    """The GM's roller has no character: nobody's numbers went in, so nobody's own
+    attack was resisted."""
+    offered = own_attack_save(RollSpec(label="Toughness vs. 18", dc=18, trait_key="TOUGHNESS"))
+    assert not localize_spec(offered, None, data).own_attack
+
+
+def test_a_hint_the_save_already_had_is_kept() -> None:
+    save = RollSpec(label="Will vs. 15", dc=15, trait_key="WILL", hint="Resist the fear.")
+    assert own_attack_save(save).hint.startswith("Resist the fear.\n\n")
+
+
+def test_a_spec_with_no_trait_to_fill_is_left_alone() -> None:
+    """Nothing of this sheet's goes into it, so there is nothing to mark."""
+    spec = RollSpec(label="Strength", modifier=4)
+    assert own_attack_save(spec) is spec

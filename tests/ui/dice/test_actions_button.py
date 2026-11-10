@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from PySide6.QtCore import Qt
 
 from mm_companion.core.character import Character
 from mm_companion.ui.action_menu import (
@@ -22,7 +23,9 @@ def test_the_actions_button_sits_where_the_action_row_was(qapp) -> None:
     view = DiceRollerView()  # held: the panel's widgets die with it
     panel = view.panel
     assert panel._actions_button.text() == ACTIONS_LABEL
-    assert not hasattr(panel, "_reroll_button")
+    # The action row is gone; Reroll is back only as the button under a result, and
+    # hidden until there is one (see test_roller_justified).
+    assert panel._reroll_button.isHidden()
 
 
 def test_without_a_host_menu_the_popup_offers_the_panels_own_two(qapp) -> None:
@@ -84,6 +87,46 @@ def test_opening_it_again_closes_the_first(qapp) -> None:
     first = panel.open_actions()
     second = panel.open_actions()
     assert not first.isVisible() and second.isVisible()
+
+
+def test_a_click_on_the_button_does_not_reach_it_through_the_popup(qapp) -> None:
+    # Qt replays the press that closes a popup to whatever is under it: on the Actions
+    # button that reopened the popup at once. The popup now swallows that one press.
+    from PySide6.QtCore import QPoint, QPointF
+    from PySide6.QtGui import QMouseEvent
+
+    view = DiceRollerView()
+    view.show()
+    panel = view.panel
+    popup = panel.open_actions()
+    button = panel._actions_button
+    on_button = QPointF(button.mapToGlobal(button.rect().center()))
+    local = QPointF(popup.mapFromGlobal(on_button.toPoint()))
+    press = QMouseEvent(
+        QMouseEvent.Type.MouseButtonPress,
+        local,
+        on_button,
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    popup.mousePressEvent(press)
+    assert popup.testAttribute(Qt.WidgetAttribute.WA_NoMouseReplay)
+    assert not popup.isVisible()
+
+    # Elsewhere the press is replayed as before (a click on the die still rolls it).
+    other = panel.open_actions()
+    far = QPointF(other.mapToGlobal(QPoint(-50, -50)))
+    press = QMouseEvent(
+        QMouseEvent.Type.MouseButtonPress,
+        QPointF(-50, -50),
+        far,
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    other.mousePressEvent(press)
+    assert not other.testAttribute(Qt.WidgetAttribute.WA_NoMouseReplay)
 
 
 def test_a_menu_that_raises_costs_the_popup_not_the_panel(qapp, monkeypatch) -> None:

@@ -19,7 +19,7 @@ from dataclasses import replace
 
 from ..data_loader import GameData
 from .maneuvers import _relabel_check, has_attack_check
-from .rolls import RollSpec
+from .rolls import RollSpec, add_part
 from .team_attack import TeamOption
 
 __all__ = [
@@ -84,10 +84,11 @@ def team_join_spec(spec: RollSpec, call: RollSpec, attacker: str, game_data: Gam
         modifier += adjust
         label = _relabel_check(label, spec.modifier, modifier)
     label = f"{label} (team attack {adjust:+d})" if adjust else f"{label} (team attack)"
+    if modifier != spec.modifier:
+        spec = add_part(spec, "Team attack", modifier - spec.modifier)
     return replace(
         spec,
         label=label,
-        modifier=modifier,
         action_id=call.action_id,
         title=call.title,
         targets=(attacker,),

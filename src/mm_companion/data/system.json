@@ -7,8 +7,10 @@
     "_criticals": "A natural 20 on an attack is a critical hit: the effect it lands gains criticalEffectBonus to its resistance DC. A natural 1 that still hits is a graze, and the target resists at criticalMissResistanceBonus.",
     "criticalEffectBonus": 5,
     "criticalMissResistanceBonus": 5,
-    "_circumstanceModifiers": "Circumstance modifiers (PDF p17): the common ones are +/-2 for a minor bonus or penalty and +/-5 for a major one. The roller offers each as a step either way.",
-    "circumstanceModifiers": [2, 5],
+    "_circumstanceModifiers": "The steps the roller offers either side of its modifier box. PDF p17 names +/-2 (minor) and +/-5 (major) as the common circumstance modifiers; the roller offers +/-1 rather than 2 (the user's call, 2026-11-10), since 1 is the unit that adds up to any other bonus a click at a time and 2 is two clicks.",
+    "circumstanceModifiers": [1, 5],
+    "_dcStart": "Where the roller's DC steps take a DC that is not set: the first bonus step lands here (Average difficulty, PDF p17) rather than on 1. The same circumstanceModifiers steps then move it.",
+    "dcStart": 10,
     "_minions": "Minions (PDF p25). impressBonus is what a routine Impress check against minions gains (PDF p201). ceiling is the condition a minion's failed saves stop at: no escalation carries one past it. Which minion rules apply is the GM's choice per session, not data.",
     "minions": {
       "impressBonus": 5,

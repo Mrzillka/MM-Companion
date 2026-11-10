@@ -519,7 +519,7 @@ def test_take_ten_rolls_a_ten_once(qapp, instant_die) -> None:
     (roll,) = seen
     assert roll["die"] == 10 and roll["routine"]
     assert not panel._routine_next  # one roll's worth
-    assert "routine 10" in roll_headline({"die": 10, "routine": True})
+    assert "take 10" in roll_headline({"die": 10, "routine": True})
     assert not panel.reroll()  # nothing was rolled, so there is no luck to have
 
 

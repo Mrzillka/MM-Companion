@@ -125,4 +125,4 @@ def test_the_ask_form_is_a_popup_and_not_a_row_of_the_roller(qapp, data) -> None
     assert panel.request_reason() is None  # the sheet hands it the ruleset's traits
     # And the circumstance steps beside the modifier come from the ruleset too.
     steps = sorted(b.text() for b in panel._step_buttons)
-    assert steps == sorted(["−5", "−2", "+2", "+5"])
+    assert steps == sorted(["−5", "−1", "+1", "+5"])

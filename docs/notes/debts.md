@@ -173,6 +173,25 @@ the targeted actions' own). Each of these was seen and left on purpose.
 - **No dot on the System block.** Nothing temporary moves Initiative or Speed yet; add
   a `StatMark` there when something does.
 
+## Every source of a reroll should spend what it costs
+
+The roller's **Reroll** (the Actions popup's Dice section, `Ctrl+Shift+R`) throws the
+last roll again with the lucky die (`core.dice.reroll_d20`: 1–10 counts 10 more) and
+spends nothing. A reroll at the table always has a source, and each source has a price
+the app already tracks somewhere else: a **Hero Point** (the dots on Power Level &
+System), the **Luck** advantage's per-adventure uses, **Determination** and the other
+`usesPerAdventurePerRank` advantages' pips, and the powers that grant one. Today the
+player clicks Reroll and then spends the point or the pip by hand, which is two places
+to remember and one to forget.
+
+The user's call (2026-11-10, the roller polish review): do **not** make Reroll mean
+"spend a Hero Point" — that is only one of the sources. The work is to wire them all:
+Reroll asks which source pays (offering only the ones with something left), spends it,
+and says so in the history the way spending a hero point already writes a note. The
+sources belong in game data (which advantage or power grants a reroll, and what it
+costs), not in Python. A faster "reroll with a Hero Point" link beside a fresh result
+was proposed and set aside until this exists.
+
 ## PySide6 is capped below 6.12, and 6.11.3 is excluded
 
 `pyproject.toml` pins `PySide6>=6.6,<6.12,!=6.11.3`, so CI and the release builds get

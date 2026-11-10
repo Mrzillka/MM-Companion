@@ -4,6 +4,8 @@ each removable and saveable as a quick roll.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
@@ -28,11 +30,17 @@ from mm_companion.ui.roll_history import (
     chain_widgets,
     escape_rich_text,
     heading_row,
+    latest_time,
+    mark_natural,
+    own_attack_mark,
     quick_roll_key,
     remove_button,
     reroll_label,
+    reveal_hover_buttons,
+    roll_breakdown,
     roll_headline,
     size_history_scroll,
+    stamp_card,
     tighten_card,
 )
 from mm_companion.ui.widgets import (
@@ -43,11 +51,6 @@ from mm_companion.ui.widgets import (
 LOCAL_EMPTY_TEXT = (
     "No rolls yet. Click the die, or a trait on the sheet. ☆ on a roll keeps it as a quick " "roll."
 )
-
-#: The name a roll made with nothing loaded goes under, so no card is a bare number.
-PLAIN_ROLL = "d20"
-#: ...and a routine check made with nothing loaded.
-PLAIN_ROUTINE = "Take 10"
 
 
 def local_record(
@@ -107,6 +110,7 @@ class RollCard(QFrame):
         reroll: bool = False,
         routine: bool = False,
         minion: bool = False,
+        other_die: int = 0,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -121,20 +125,27 @@ class RollCard(QFrame):
         tighten_card(layout, info)
 
         # The same number line the shared history's card prints — degree and all, on
-        # one line (see roll_headline).
-        headline = roll_headline(local_record(die, bonus, penalty, dc, result, routine=routine))
-        # What was rolled leads, the way the shared history's card names the player —
-        # a private history of bare numbers is unreadable a few rolls later. A roll with
-        # nothing loaded is still named, plainly, so every card starts the same way.
-        shown = reroll_label(label or (PLAIN_ROUTINE if routine else PLAIN_ROLL), reroll)
-        headline = (
-            f"<span style='color:{theme.color('accent.dice')}'>"
-            f"{escape_rich_text(shown)}</span><br>"
-            f"{headline}"
-        )
+        # one line (see roll_headline) — and the same breakdown on hover.
+        record = local_record(die, bonus, penalty, dc, result, routine=routine, label=label)
+        record["reroll"] = reroll
+        record["other_die"] = other_die
+        record["spec"] = spec.to_dict() if isinstance(spec, RollSpec) else spec
+        mark_natural(self, record)
+        headline = roll_headline(record)
+        # What was rolled leads, the way the shared history's card names the player. A
+        # roll with nothing loaded has no name: its line says it was a d20 and what it
+        # came to, and a "d20" over it in the accent colour read as a link.
+        shown = reroll_label(label, reroll)
+        if shown:
+            headline = (
+                f"<span style='color:{theme.color('accent.dice')}'>"
+                f"{escape_rich_text(shown)}</span><br>"
+                f"{headline}"
+            )
         title = QLabel(headline)
         title.setTextFormat(Qt.TextFormat.RichText)
         title.setWordWrap(True)
+        title.setToolTip(roll_breakdown(record))
         # The star and the ✕ sit beside the first line, as on the shared history's
         # card (see heading_row), so the chain's buttons below get the card's width.
         buttons = heading_row(info, title)
@@ -145,10 +156,9 @@ class RollCard(QFrame):
             degree=None if result is None else result.degree,
             total=die + bonus - penalty,
             on_follow_up=self.rollFollowUp.emit,
-            # Every card in the private history is one's own, and off the air the
-            # roller is usually running both sides — so never assume the sheet in
-            # front of us is the target's.
-            localize=False,
+            # Every card in the private history is one's own: a save off it is rolled
+            # with this sheet's numbers, and marked as resisting one's own attack.
+            own=True,
             # A minion's 20 adds nothing, and nor does a lucky re-roll's: its die is
             # lifted, never a natural 20 (nor a routine 10, which is never 20).
             added_success=not minion and not reroll,
@@ -156,6 +166,10 @@ class RollCard(QFrame):
             info.addWidget(widget)
 
         layout.addLayout(info, stretch=1)
+
+        mark = own_attack_mark(spec)
+        if mark is not None:
+            buttons.addWidget(mark, alignment=Qt.AlignmentFlag.AlignTop)
 
         self.star = QuickRollStar()
         self.star.clicked.connect(lambda: self.saveToggled.emit(dict(self._params)))
@@ -168,6 +182,14 @@ class RollCard(QFrame):
     def parameters(self) -> dict:
         """The quick-roll parameters this card would save."""
         return dict(self._params)
+
+    def enterEvent(self, event) -> None:  # noqa: N802 - Qt override
+        reveal_hover_buttons(self, True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802 - Qt override
+        reveal_hover_buttons(self, False)
+        super().leaveEvent(event)
 
     def set_save_state(self, saved_keys: set, room: bool) -> None:
         """Light this card's star if its roll is among *saved_keys*."""
@@ -261,15 +283,13 @@ class LocalRollHistory(QWidget):
             reroll=bool(roll.get("reroll")),
             routine=bool(roll.get("routine")),
             minion=bool(roll.get("minion")),
+            other_die=int(roll.get("other_die") or 0),
         )
         card.set_save_state(self._saved_keys, self._quick_room)
         card.saveToggled.connect(self.saveToggled)
         card.rollFollowUp.connect(self.rollFollowUp)
         card.removeRequested.connect(lambda c=card: self._remove_card(c))
-        # Newest on top: insert above every existing card (the stretch is last).
-        self._layout.insertWidget(0, card)
-        self._trim()
-        self._sync_empty()
+        self._place(card)
         record = local_record(
             int(roll["die"]),
             int(roll["bonus"]),
@@ -289,9 +309,7 @@ class LocalRollHistory(QWidget):
         shows, which is the point of it living in the lower module.
         """
         card = NoteCard({"text": text}, show_author=False)
-        self._layout.insertWidget(0, card)
-        self._trim()
-        self._sync_empty()
+        self._place(card)
         announce_entry({"kind": KIND_NOTE, "player_name": "You", "text": text}, self)
 
     def add_request(self, spec: object) -> None:
@@ -315,9 +333,7 @@ class LocalRollHistory(QWidget):
         )
         card.rollRequested.connect(self.rollFollowUp)
         card.removeRequested.connect(lambda _seq, c=card: self._remove_card(c))
-        self._layout.insertWidget(0, card)
-        self._trim()
-        self._sync_empty()
+        self._place(card)
         announce_entry(
             {
                 "kind": KIND_REQUEST,
@@ -326,6 +342,15 @@ class LocalRollHistory(QWidget):
             },
             self,
         )
+
+    def _place(self, card: QWidget) -> None:
+        """Put *card* at the top (newest first), stamped with the time it was made."""
+        newest = next((t for t in map(latest_time, self._entries()) if t is not None), None)
+        stamp_card(card, datetime.now().astimezone(), newest)
+        # Newest on top: insert above every existing card (the stretch is last).
+        self._layout.insertWidget(0, card)
+        self._trim()
+        self._sync_empty()
 
     def cards(self) -> list[RollCard]:
         """The roll cards on screen, newest first (notes carry no parameters)."""

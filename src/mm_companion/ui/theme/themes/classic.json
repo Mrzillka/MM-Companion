@@ -48,6 +48,9 @@
     "splash.background": "#2b2b3a",
     "splash.text": "#ffffff",
     "dice.face": "#ffffff",
+    "dice.critical": "#d9a521",
+    "_dice.fumble": "A natural 1: the die's halo, its numeral, the burst round it and the edge of its history card. Deeper than tint.worse, which an ordinary failure already wears, so a fumble reads as more than a miss.",
+    "dice.fumble": "#c0262f",
 
     "_paper.background": "A printed or exported sheet (File > Print, Export as PDF) is drawn in its own palette whatever the theme, since a dark preset on paper is a page of ink. These are that palette. Literal #rrggbb only: paper has no window palette for a palette() value to read.",
     "paper.background": "#ffffff",
@@ -98,10 +101,12 @@
     "canvas.hint.height": 120,
     "platform.features.height": 160,
 
-    "_die.padding": "The flat button's chrome around the drawing, so the button is die.size + this on each axis. It is what keeps the die from sitting flush against the readout beside it, and where the ring goes while a trait is loaded.",
+    "_die.padding": "The flat button's chrome around the drawing, so the button is die.size + this on each axis. It is what keeps the die from sitting flush against the readout beside it, and where the halo glows.",
     "die.size": 120,
     "die.size.compact": 96,
     "die.padding": 16,
+    "_die.halo": "How far the glow round the die's outline spreads, in pixels: how a roll went, that a trait is loaded, or the pointer over it. It is drawn in the die.padding chrome and beyond, so it never moves anything.",
+    "die.halo": 30,
 
     "_compact.width": "The size the window opens at in compact mode, before the user resizes it. The minimums are deliberately far below the roller's own content: past them the die and the history simply scroll, which is what lets the mini window be shoved into a corner of a shared screen.",
     "compact.width": 380,
@@ -171,6 +176,8 @@
     "column.settings.nav": 160,
     "column.settings.label": 230,
     "column.settings.value": 220,
+    "_column.quick-roll-max": "The widest a quick-roll pill grows before its caption is cut short with an ellipsis (the whole name is on hover). Without it a pill saved off a long attack label widened the whole roller.",
+    "column.quick-roll-max": 200,
     "column.chip-button": 24,
     "column.roll-button": 28,
     "column.hero-point": 26,

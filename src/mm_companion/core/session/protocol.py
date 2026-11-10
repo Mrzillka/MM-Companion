@@ -150,7 +150,10 @@ from typing import ClassVar
 #: land on a player at no size at all and "Clear temporary" would do nothing.
 #: (Still v20, unreleased:) ``RollRequest.twice`` rolls two dice and keeps the higher
 #: (Aim), the record's ``other_die`` is the one dropped, and a spec's ``critical_hit``
-#: makes every hit of it a critical (Finishing Attack).
+#: makes every hit of it a critical (Finishing Attack). And a spec's ``parts`` — what
+#: its modifier is made of, ``[[name, amount], …]`` — so every seat's history can show
+#: how a roll's number was reached on hover. And a spec's ``own_attack``: a save its
+#: attacker rolled off their own card, which every seat's card marks with a ⚠.
 PROTOCOL_VERSION = 20
 
 #: Hard cap on one encoded message, including its trailing newline. A character
@@ -1034,6 +1037,8 @@ _SPEC_TEXT_KEYS = (
 _SPEC_INT_KEYS = ("modifier", "dc", "dc_if_resisted")
 #: How many names a spec's ``targets`` may carry — a scene's worth.
 MAX_SPEC_TARGETS = 24
+#: How many lines a spec's ``parts`` (its modifier's breakdown) may carry.
+MAX_SPEC_PARTS = 16
 #: How many condition ids, escalations or parameters one ladder rung may carry.
 MAX_RUNG_ITEMS = 12
 #: The largest effect rank a ladder may carry — far past any Power Level, and only there
@@ -1076,11 +1081,16 @@ def sanitize_spec(raw: object, _depth: int = 0) -> dict | None:
         spec["follow_up_always"] = True
     if raw.get("critical_hit") is True:
         spec["critical_hit"] = True
+    if raw.get("own_attack") is True:
+        spec["own_attack"] = True
     targets = raw.get("targets")
     if isinstance(targets, list):
         names = [t[:MAX_SPEC_TEXT] for t in targets[:MAX_SPEC_TARGETS] if isinstance(t, str) and t]
         if names:
             spec["targets"] = names
+    parts = _sanitize_parts(raw.get("parts"))
+    if parts:
+        spec["parts"] = parts
     outcomes = raw.get("outcomes")
     if isinstance(outcomes, list):
         rungs = [o[:MAX_SPEC_TEXT] for o in outcomes[:MAX_SPEC_OUTCOMES] if isinstance(o, str)]
@@ -1099,6 +1109,21 @@ def sanitize_spec(raw: object, _depth: int = 0) -> dict | None:
         if kept:
             spec["also"] = kept
     return spec
+
+
+def _sanitize_parts(raw: object) -> list[list]:
+    """A spec's modifier breakdown: ``[name, amount]`` pairs, text and count capped."""
+    if not isinstance(raw, list):
+        return []
+    kept: list[list] = []
+    for pair in raw[:MAX_SPEC_PARTS]:
+        if not isinstance(pair, list) or len(pair) != 2:
+            continue
+        name, amount = pair
+        if isinstance(name, str) and name and isinstance(amount, int):
+            if not isinstance(amount, bool):
+                kept.append([name[:MAX_SPEC_TEXT], amount])
+    return kept
 
 
 def _text_list(raw: object) -> list[str]:

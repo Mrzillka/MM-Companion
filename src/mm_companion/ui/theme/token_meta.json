@@ -130,6 +130,8 @@
     "splash.background": {"label": "Background", "hint": "The startup splash screen."},
     "splash.text": {"label": "Text", "hint": "On the splash screen."},
     "dice.face": {"label": "Die face", "hint": "The rolled number in the dice roller."},
+    "dice.critical": {"label": "Natural 20", "hint": "A natural 20: the glow and burst round the die, its numeral, and the edge and badge of its history card. A #rrggbb: the glow is a wash of it.", "washed": true},
+    "dice.fumble": {"label": "Natural 1", "hint": "A natural 1: the glow and burst round the die, its numeral, and the edge and badge of its history card. A #rrggbb: the glow is a wash of it.", "washed": true},
     "paper.background": {"label": "Paper", "hint": "The page of a printed or exported sheet, whatever the theme. A #rrggbb."},
     "paper.ink": {"label": "Ink", "hint": "Text on a printed sheet. A #rrggbb."},
     "paper.muted": {"label": "Muted ink", "hint": "Secondary text on a printed sheet, and its page footer. A #rrggbb."},
@@ -203,6 +205,10 @@
       "label": "Die padding",
       "hint": "Room around the drawing inside its button, in pixels."
     },
+    "die.halo": {
+      "label": "Die halo",
+      "hint": "How far the glow round the die spreads, in pixels."
+    },
     "compact.width": {"label": "Window width", "hint": "What the mini roller opens at, in pixels."},
     "toast.width": {"label": "Notification width", "hint": "A roll or session notice card, in pixels."},
     "loading.width": {"label": "Loading bar width", "hint": "The bar shown while a sheet or the GM window builds, in pixels."},
@@ -245,6 +251,7 @@
     },
     "column.skill.spin": {"label": "Skill rank spin box"},
     "column.skill.mod": {"label": "Skill modifier"},
+    "column.quick-roll-max": {"label": "Quick-roll pill (widest)", "hint": "Past this a pill's caption is cut short; the whole name is on hover."},
     "column.advantage.name-max": {
         "label": "Advantage name (cap)",
         "hint": "Widest the Advantage column grows before a long name wraps."

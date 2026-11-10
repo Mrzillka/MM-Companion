@@ -761,7 +761,8 @@ The shape:
   that ships it. Still v20 (unreleased): `RollRequest.twice` rolls two dice and keeps the
   higher (Aim), with the dropped die on the record as `other_die` (0 for any other roll),
   and a spec's `critical_hit` (a Finishing Attack: every hit a critical) is whitelisted
-  by `sanitize_spec`.
+  by `sanitize_spec`, as is its `parts` — what its modifier is made of, the roll's hover
+  breakdown (`_sanitize_parts`, at most `MAX_SPEC_PARTS` pairs).
 - **A join code is version 2, and a public-server session's is 24 characters.**
   Version 1 spelled the relay URL out byte by byte and came to 130 characters for
   a session on the hub. `discovery.encode_join_code` now packs every field as

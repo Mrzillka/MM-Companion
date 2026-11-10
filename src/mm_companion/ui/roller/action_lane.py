@@ -1,9 +1,16 @@
 """The roller's action lane: one line per action picked off the Actions popup.
 
-It sits under the Bonus/Penalty slider. Each :class:`ActionLine` is an action that
-rides on the next roll: its name, a ``✕`` to cancel it, then either a slider and spin
-box over ``0..X_max`` (a configurable action, All-Out Attack +1..+5) or a fixed caption
-(``"roll twice"``). The roll spends the lines it used, as it spends the slider.
+It sits under the roller's Modifier and DC rows. Each :class:`ActionLine` is an action
+that rides on the next roll: its name, then either a value over ``0..X_max`` (a
+configurable action, All-Out Attack +1..+5) or a fixed caption (``"roll twice"``), then
+a ``✕`` to cancel it. The roll spends the lines it used, as it spends the modifier.
+
+**A configurable line is set the way the modifier is** (Settings ▸ General ▸ Modifier):
+with steps it is **one line** — name, what it trades (muted, elided), ``[−] [3] [+]``,
+``✕`` — and with the slider it is the slider and box with the trade under them. The
+steps were the user's call (2026-11-11): a line per maneuver instead of two, and a
+maneuver's range is at most a handful of clicks. The ``+`` greys at the cap and its
+tooltip says why the cap is where it is, which is what the slider's reach showed.
 
 **The lane takes no room while it is empty**: it hides, and the roller's Actions
 button, under it, moves up into its row. It used to hold one line's height open so the
@@ -19,14 +26,16 @@ room to double it, so a limit may read the other lines' values (the host's calla
 asks the panel). Whenever a line's value moves, or a line comes or goes, the lane works
 the others' limits out again (:meth:`ActionLine.relimit`): their ranges follow, and a
 value past its new maximum is pulled down to it — never pushed up, which is what keeps
-two lines from chasing each other.
+two lines from chasing each other. A pull-down can tighten another line as well as
+loosen it (Accurate pulled down takes the attack bonus Power Attack was spending), so the
+passes repeat until one moves no value; values only fall, so that ends.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -34,14 +43,22 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSlider,
     QSpinBox,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
+from mm_companion.core import storage
 from mm_companion.core.rules import RollSpec, same_attack
 from mm_companion.ui import theme
 from mm_companion.ui.wheel_guard import guard_wheel
-from mm_companion.ui.widgets import ElidingLabel, discard_widget, make_spin_box, tinted_style
+from mm_companion.ui.widgets import (
+    ElidingLabel,
+    discard_widget,
+    make_spin_box,
+    muted_style,
+    tinted_style,
+)
 
 #: ``limit(spec) -> (maximum, reason)``: how far a configurable line may go for the
 #: attack *spec* (``None`` when no attack is loaded), and why not when that is 0.
@@ -55,8 +72,19 @@ LineShift = Callable[[RollSpec, Sequence[tuple[str, "int | None"]]], RollSpec]
 #: when it can) — Aim on an attack that makes no attack check.
 LineFit = Callable[[RollSpec | None], str]
 
+#: ``describe(value) -> caption``: what a configurable line's value trades, in words —
+#: "+3 attack, −3 Defense" — shown under its slider (``""`` for nothing).
+LineDescribe = Callable[[int], str]
+
 #: Why a line that needs an attack is greyed out while none is loaded.
 NEEDS_ATTACK = "Load an attack first: pick one off the Actions popup or a power card."
+
+#: How long a configurable line left at 0 stays on the lane, greyed, before it goes. At
+#: 0 it trades nothing, so it rides on no roll and leaves no condition; the wait is there
+#: so a slider dragged through 0 on its way somewhere else is not snatched away.
+ZERO_GRACE_MS = 3000
+#: What a line at 0 says under its slider while it waits to go.
+ZERO_NOTE = "At 0 it does nothing, and goes in a moment."
 
 
 class ActionLine(QWidget):
@@ -78,10 +106,12 @@ class ActionLine(QWidget):
         tooltip: str = "",
         tone: str = "tint.better",
         fits: LineFit | None = None,
+        describe: LineDescribe | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.key = key
+        self._describe = describe
         self._fits = fits
         self.name = name
         self.needs_attack = needs_attack
@@ -94,10 +124,22 @@ class ActionLine(QWidget):
         self.bound_spec: RollSpec | None = None
         # Greyed for want of an attack (see :meth:`bind`): nothing to work a limit for.
         self._unloaded = False
+        # Why the limit is short of the usual, when it is (the slider's tooltip).
+        self._cap_reason = ""
+        # A configurable line set to 0 goes once this runs out (see :data:`ZERO_GRACE_MS`).
+        self._zero_timer = QTimer(self)
+        self._zero_timer.setSingleShot(True)
+        self._zero_timer.timeout.connect(self._drop_if_zero)
 
-        row = QHBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self._outer = outer
+        row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(int(theme.metric("space.xs")))
+        outer.addLayout(row)
+        self._row = row
 
         self._name = ElidingLabel(name)
         self._name.setStyleSheet(tinted_style(tone, bold=True))
@@ -108,21 +150,50 @@ class ActionLine(QWidget):
         self._close.setFixedWidth(int(theme.metric("column.chip-button")))
         self._close.setToolTip(f"Cancel {name}" if name else "")
         self._close.clicked.connect(lambda: self.removed.emit(self.key))
-        row.addWidget(self._close, alignment=Qt.AlignmentFlag.AlignVCenter)
 
         self._slider: QSlider | None = None
         self._spin: QSpinBox | None = None
+        self._minus: QToolButton | None = None
+        self._plus: QToolButton | None = None
         self._caption: QLabel | None = None
+        #: What a configurable line's value trades — see *describe*. Beside the steps on
+        #: their one line, or under the slider.
+        self._trade: ElidingLabel | None = None
+        # How a configurable line is set (``storage.MODIFIER_INPUTS``); see set_input.
+        self._input = storage.MODIFIER_INPUT_BUTTONS
         if limit is not None:
             self._slider = QSlider(Qt.Orientation.Horizontal)
             self._slider.setRange(0, 0)
             guard_wheel(self._slider)
             self._spin = make_spin_box(0, 0, buttons=False, snug=True)
+            self._spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._minus = self._step("−", -1)
+            self._plus = self._step("+", 1)
             self._slider.valueChanged.connect(self._spin.setValue)
             self._spin.valueChanged.connect(self._slider.setValue)
             self._spin.valueChanged.connect(lambda _v: self.valueChanged.emit(self.key))
+            self._spin.valueChanged.connect(lambda _v: self._sync_idle())
+            self._spin.valueChanged.connect(lambda _v: self._sync_steps())
+            if describe is not None:
+                # Elided, so it never widens the roller; the whole of it is the tooltip.
+                self._trade = ElidingLabel("")
+                self._trade.setAlignment(
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                )
+                self._trade.setStyleSheet(muted_style())
+                self._spin.valueChanged.connect(self._sync_trade)
+                self._sync_trade()
+            # The trade between the name and the steps (it moves under the slider in
+            # slider mode, see set_input); the slider hidden until that mode asks.
+            if self._trade is not None:
+                row.addWidget(self._trade, stretch=1)
+            else:
+                row.addStretch(1)
             row.addWidget(self._slider, stretch=1)
-            row.addWidget(self._spin)
+            self._slider.hide()
+            for widget in (self._minus, self._spin, self._plus):
+                row.addWidget(widget)
+            self._sync_steps()
         else:
             self._caption = QLabel(fixed)
             self._caption.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -134,10 +205,94 @@ class ActionLine(QWidget):
             self._caption.setMinimumHeight(probe.sizeHint().height())
             discard_widget(probe)
             row.addWidget(self._caption, stretch=1)
+        row.addWidget(self._close, alignment=Qt.AlignmentFlag.AlignVCenter)
         self._base_tooltip = tooltip
         self.setToolTip(tooltip)
 
+    def _step(self, caption: str, amount: int) -> QToolButton:
+        """One of a configurable line's two steps: flat, like the modifier's."""
+        button = QToolButton()
+        button.setText(caption)
+        button.setAutoRaise(True)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setMinimumWidth(button.sizeHint().width())
+        button.clicked.connect(lambda _=False: self._nudge(amount))
+        return button
+
+    def _nudge(self, amount: int) -> None:
+        if self._spin is not None:
+            self._spin.setValue(self._spin.value() + amount)
+
+    def set_input(self, style: str) -> None:
+        """Set a configurable line with steps (one line) or a slider (the trade under
+        it), as ``storage.MODIFIER_INPUTS`` names them. A fixed line has neither."""
+        if self._spin is None or style == self._input:
+            return
+        self._input = style
+        slider = style == storage.MODIFIER_INPUT_SLIDER
+        # Everything here is parented already, so it may be shown and hidden freely.
+        if self._trade is not None:
+            if slider:
+                self._row.removeWidget(self._trade)
+                self._outer.addWidget(self._trade)
+            else:
+                self._outer.removeWidget(self._trade)
+                self._row.insertWidget(1, self._trade, stretch=1)
+        self._slider.setVisible(slider)
+        self._minus.setVisible(not slider)
+        self._plus.setVisible(not slider)
+
+    @property
+    def input_style(self) -> str:
+        """How the line is set right now (``storage.MODIFIER_INPUTS``)."""
+        return self._input
+
+    def _sync_steps(self) -> None:
+        """Grey a step that has nowhere to go: − at 0, + at the cap."""
+        if self._spin is None:
+            return
+        value = self._spin.value()
+        self._minus.setEnabled(self._available and value > self._spin.minimum())
+        self._plus.setEnabled(self._available and value < self._spin.maximum())
+
     # -- state ----------------------------------------------------------------
+
+    def _sync_trade(self) -> None:
+        if self._trade is None or self._describe is None or self._spin is None:
+            return
+        text = ZERO_NOTE if self.idle else self._describe(self._spin.value())
+        self._trade.setText(text)
+        self._trade.setToolTip(text)
+
+    @property
+    def idle(self) -> bool:
+        """Whether the line is set to 0 with room to be more: it trades nothing, so it
+        rides on no roll, and it is greyed and on its way off the lane."""
+        return self._spin is not None and self._spin.value() == 0 and self._spin.maximum() > 0
+
+    def _sync_idle(self) -> None:
+        """Grey the line and start it on its way out at 0; light it again above."""
+        if self._spin is None:
+            return
+        if self.idle and self._available:
+            if not self._zero_timer.isActive():
+                self._zero_timer.start(ZERO_GRACE_MS)
+        else:
+            self._zero_timer.stop()
+        self._paint_name()
+        self._sync_trade()
+
+    def _drop_if_zero(self) -> None:
+        if self.idle:
+            self.removed.emit(self.key)
+
+    def _paint_name(self) -> None:
+        lit = self._available and not self.idle
+        self._name.setStyleSheet(tinted_style(self._tone, bold=True) if lit else muted_style())
+
+    def trade(self) -> str:
+        """What the value trades, in words, or ``""``."""
+        return self._trade.text() if self._trade is not None else ""
 
     @property
     def configurable(self) -> bool:
@@ -145,8 +300,19 @@ class ActionLine(QWidget):
 
     @property
     def available(self) -> bool:
-        """Whether the line applies to the roll as things stand (not greyed out)."""
+        """Whether the line can apply to the roll as things stand (not greyed out for a
+        reason: no attack, no room)."""
         return self._available
+
+    @property
+    def applies(self) -> bool:
+        """Whether the line rides on the next roll: available, and not set to 0."""
+        return self._available and not self.idle
+
+    @property
+    def cap_reason(self) -> str:
+        """Why the slider stops short of the usual maximum, or ``""``."""
+        return self._cap_reason
 
     @property
     def reason(self) -> str:
@@ -199,20 +365,41 @@ class ActionLine(QWidget):
     def _relimit(self, *, reset: bool) -> None:
         maximum, reason = self._limit(self.bound_spec)
         maximum = max(0, int(maximum))
+        self._cap_reason = reason if maximum > 0 else ""
+        # Available before the value moves: the move tells the lane, and the other
+        # lines read only the lines that apply — a fresh line still greyed would be
+        # left out of their limits.
+        self._set_available(maximum > 0, "" if maximum > 0 else reason)
         if reset or self._spin.maximum() != maximum:
             value = maximum if reset else min(self._spin.value(), maximum)
             self._slider.setRange(0, maximum)
             self._spin.setRange(0, maximum)
             self._spin.setValue(value)
-        self._set_available(maximum > 0, "" if maximum > 0 else reason)
+            self._sync_steps()
+        self._sync_cap_tooltip()
+        self._sync_idle()
+
+    def _sync_cap_tooltip(self) -> None:
+        """The slider's and the box's tooltip: its range, and why when it is short."""
+        if self._spin is None:
+            return
+        tip = f"0 to {self._spin.maximum()}"
+        if self._cap_reason:
+            tip = f"Up to {self._spin.maximum()} here: {self._cap_reason}"
+        for widget in (self._slider, self._spin, self._minus, self._plus):
+            widget.setToolTip(tip)
 
     def _set_available(self, available: bool, reason: str) -> None:
         self._available = available
         self._reason = reason
-        for widget in (self._name, self._slider, self._spin, self._caption):
+        for widget in (self._name, self._slider, self._spin, self._caption, self._trade):
             if widget is not None:
                 widget.setEnabled(available)
-        self._name.setStyleSheet(tinted_style(self._tone, bold=True) if available else "")
+        self._sync_steps()
+        if not available:
+            self._zero_timer.stop()
+        self._name.setStyleSheet("")
+        self._paint_name()
         tip = self._base_tooltip
         if reason:
             tip = f"{tip}\n\n{reason}" if tip else reason
@@ -220,14 +407,19 @@ class ActionLine(QWidget):
 
 
 class ActionLane(QWidget):
-    """The column of :class:`ActionLine`\\ s under the slider, hidden while empty."""
+    """The column of :class:`ActionLine`\\ s under the roller's rows, hidden while empty."""
 
     #: A line came or went, so the panel's height may have moved.
     changed = Signal()
+    #: A line's value moved — by hand, or pulled down by a limit. What the next roll
+    #: comes to has changed with it (the roller's preview), though no height has.
+    edited = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._lines: list[ActionLine] = []
+        # How configurable lines are set; each line added takes it (see set_input).
+        self._input = storage.MODIFIER_INPUT_BUTTONS
         # Set while the lane re-limits or re-binds its lines, so the values those
         # passes move do not each set off another pass.
         self._settling = False
@@ -242,6 +434,12 @@ class ActionLane(QWidget):
         Only reached once the lane is in the roller, so it is never shown parentless."""
         if self.parentWidget() is not None:
             self.setVisible(bool(self._lines))
+
+    def set_input(self, style: str) -> None:
+        """Set every configurable line with steps or a slider, as the modifier is."""
+        self._input = style
+        for line in self._lines:
+            line.set_input(style)
 
     def lines(self) -> list[ActionLine]:
         return list(self._lines)
@@ -261,8 +459,10 @@ class ActionLane(QWidget):
         else:
             self._lines.append(line)
             self._column.addWidget(line)
+        line.set_input(self._input)
         line.removed.connect(self.remove)
         line.valueChanged.connect(self._relimit_others)
+        line.valueChanged.connect(lambda _key: self.edited.emit())
         self._show_lines()
         self._relimit_others(line.key)
         self.changed.emit()
@@ -294,6 +494,11 @@ class ActionLane(QWidget):
             self._settling = False
         self._relimit_others("")
 
+    def relimit(self) -> None:
+        """Work every line's limit out again: what it reads has moved (the actor's
+        Defense, after Growth or a condition). Values are pulled down, never up."""
+        self._relimit_others("")
+
     def _relimit_others(self, key: str) -> None:
         """The line *key* moved (or came, or went): work the others' limits out again."""
         if self._settling:
@@ -303,10 +508,15 @@ class ActionLane(QWidget):
             for line in self._lines:
                 if line.key != key:
                     line.relimit()
-            # A pass only ever pulls values down, which only loosens the others'
-            # limits; a second one widens the ranges the first left narrower than
-            # they need be, and moves no value.
-            for line in self._lines:
-                line.relimit()
+            # Pulling one value down can tighten another line, not only loosen it:
+            # Accurate pulled down takes the attack bonus Power Attack was spending.
+            # So pass again until a pass moves no value. Values only fall, so it ends,
+            # and the last pass leaves every range matching its cap.
+            while True:
+                before = [line.value() for line in self._lines]
+                for line in self._lines:
+                    line.relimit()
+                if [line.value() for line in self._lines] == before:
+                    break
         finally:
             self._settling = False

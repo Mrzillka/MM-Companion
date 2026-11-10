@@ -23,8 +23,10 @@ about, and grading is plain arithmetic over the roll dict.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from datetime import datetime
 
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
@@ -40,12 +42,16 @@ from PySide6.QtWidgets import (
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.rules import (
     KIND_IMPRESS,
+    OWN_ATTACK_HINT,
+    OWN_ATTACK_HINT_OTHER,
     RollSpec,
     aimed_attack,
     follow_ups_for_result,
     is_team_call,
     outcome_is_failure,
+    own_attack_save,
     resistance_outcome,
+    spec_parts,
 )
 from mm_companion.core.session.model import KIND_MOD, KIND_NOTE, KIND_REQUEST, KIND_ROLL
 from mm_companion.ui import theme
@@ -186,6 +192,90 @@ HISTORY_SIZE_HINT = QSize(MIN_HISTORY_WIDTH, MIN_HISTORY_HEIGHT)
 MAX_QUICK_ROLLS = 6
 
 
+#: The two natural faces worth celebrating, as :func:`natural_kind` names them.
+NATURAL_TWENTY = "twenty"
+NATURAL_ONE = "one"
+#: The colour token each wears — the die's halo, its burst, a card's edge and badge.
+NATURAL_TOKENS = {NATURAL_TWENTY: "dice.critical", NATURAL_ONE: "dice.fumble"}
+#: The badge a card's number line carries for one, when its grade does not say it.
+NATURAL_BADGES = {NATURAL_TWENTY: "★ Nat 20", NATURAL_ONE: "✖ Nat 1"}
+
+
+def natural_kind(
+    die: int,
+    degree: int | None,
+    critical: bool,
+    *,
+    routine: bool = False,
+    lifted: bool = False,
+) -> str | None:
+    """Whether a roll came up a natural 20 or 1: :data:`NATURAL_TWENTY`,
+    :data:`NATURAL_ONE`, or ``None``.
+
+    A graded roll says so itself (``critical`` is worked out from the face that came
+    up, so a minion's 20 that adds nothing is not one). An ungraded one goes by its
+    die — unless it was a routine 10 or a lucky re-roll, whose die may have been
+    lifted onto 20 and is not to be celebrated as a natural one.
+    """
+    if routine:
+        return None
+    if critical:
+        return NATURAL_TWENTY if die == 20 else NATURAL_ONE
+    if degree is not None or lifted:
+        return None
+    if die == 20:
+        return NATURAL_TWENTY
+    if die == 1:
+        return NATURAL_ONE
+    return None
+
+
+def roll_natural(roll: dict) -> str | None:
+    """:func:`natural_kind` for a history record."""
+    if roll.get("kind", KIND_ROLL) != KIND_ROLL:
+        return None
+    degree = roll.get("degree")
+    return natural_kind(
+        int(roll.get("die", 0) or 0),
+        None if degree is None else int(degree),
+        bool(roll.get("critical")),
+        routine=bool(roll.get("routine")),
+        lifted=bool(roll.get("reroll")),
+    )
+
+
+def mark_natural(card: QFrame, roll: dict) -> str | None:
+    """Edge a history card in gold for a natural 20, crimson for a natural 1, with a
+    faint wash of the same behind it; returns which it was (``None``: neither).
+
+    The number line carries the badge (:func:`roll_headline`); this is what makes the
+    card stand out of a column of them at a glance.
+    """
+    kind = roll_natural(roll)
+    if kind is None:
+        return None
+    token = NATURAL_TOKENS[kind]
+    card.setObjectName("naturalCard")
+    card.setProperty("natural", kind)
+    card.setStyleSheet(
+        "#naturalCard {"
+        f" border: {int(theme.metric('border.width.emphasis'))}px solid {theme.color(token)};"
+        f" border-radius: {int(theme.metric('radius.card'))}px;"
+        f" background: {theme.wash(token, 0.10)};"
+        "}"
+    )
+    return kind
+
+
+def natural_badge_html(kind: str) -> str:
+    """A natural 20 or 1 as a bold badge in its colour, for a number line."""
+    colour = theme.color(NATURAL_TOKENS[kind])
+    return (
+        f"<span style='white-space:nowrap;color:{colour};font-weight:bold'>"
+        f"{escape_rich_text(NATURAL_BADGES[kind])}</span>"
+    )
+
+
 def degree_label(degree: int | None, critical: bool, die: int) -> str:
     """Human-readable degree of success from the graded numbers themselves.
 
@@ -202,6 +292,37 @@ def degree_label(degree: int | None, critical: bool, die: int) -> str:
     if critical:
         text += " — Nat 20!" if die == 20 else " — Nat 1!"
     return text
+
+
+def degree_html(degree: int | None, critical: bool, die: int, *, lead: str = "") -> str:
+    """:func:`degree_label` as rich text that never breaks inside a phrase.
+
+    In the narrow strip a result used to wrap as "Failure (2" over "degrees)". Each
+    phrase is a ``white-space: nowrap`` span, so a line can still break before the "—"
+    of a natural 1 or 20, but never inside "Failure (2 degrees)" or "— Nat 20!". A span
+    rather than non-breaking spaces, so the words read the same to anything searching
+    the text.
+
+    *lead* goes inside the first phrase's span, so it never parts from it: the "· "
+    between a total and its grade (:func:`roll_headline`) used to stay at the end of
+    the line when the grade wrapped, a dot hanging off "21 vs DC 12 ·".
+    """
+    text = degree_label(degree, critical, die)
+    if not text:
+        return ""
+    phrases = text.split(" — ")
+    phrases[0] = f"{lead}{phrases[0]}"
+    phrases[1:] = [f"— {phrase}" for phrase in phrases[1:]]
+    # The natural 20 or 1 in its own colour and bold, not the grade's: it is the news.
+    natural = ""
+    if critical and len(phrases) > 1:
+        token = NATURAL_TOKENS[NATURAL_TWENTY if die == 20 else NATURAL_ONE]
+        natural = f";color:{theme.color(token)};font-weight:bold"
+    return " ".join(
+        f"<span style='white-space:nowrap{natural if index else ''}'>"
+        f"{escape_rich_text(phrase)}</span>"
+        for index, phrase in enumerate(phrases)
+    )
 
 
 def roll_parameters(roll: dict) -> dict:
@@ -276,6 +397,7 @@ class QuickRollStar(QPushButton):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._saved = False
         self.set_state(False, True)
+        fit_to_text_line(self)
 
     def is_saved(self) -> bool:
         """Whether this star is currently lit (its roll is in the strip)."""
@@ -296,6 +418,7 @@ class QuickRollStar(QPushButton):
                 f" background: {theme.wash('accent.dice', 0.25)};"
                 f" border: {width}px solid {accent};"
                 f" border-radius: {radius}px;"
+                " padding: 0px;"
             )
             return
         self.setText("☆")
@@ -311,6 +434,7 @@ class QuickRollStar(QPushButton):
             " background: transparent;"
             f" border: {width}px solid transparent;"
             f" border-radius: {radius}px;"
+            " padding: 0px;"
         )
 
 
@@ -320,7 +444,7 @@ def chain_widgets(
     die: int,
     degree: int | None,
     on_follow_up: Callable[[RollSpec], None],
-    localize: bool = True,
+    own: bool = False,
     total: int | None = None,
     on_plain: Callable[[RollSpec], None] | None = None,
     added_success: bool = True,
@@ -350,12 +474,13 @@ def chain_widgets(
     impression) takes as its DC. ``added_success`` is false for a minion's roll (the
     record's ``minion``), whose natural 20 raises no follow-up's DC.
 
-    ``localize`` is what decides whether the follow-up arrives with the reader's own
-    resistance filled in (:func:`~mm_companion.core.rules.localize_spec`, applied
-    downstream by the Dice block). It is off on **one's own** card: you are not the
-    target of your own attack, so quietly filling in your own Toughness there would
-    be a confident wrong number. It is carried by dropping the spec's trait key
-    rather than by a flag the whole chain would have to thread.
+    The follow-up arrives with the reader's own resistance filled in
+    (:func:`~mm_companion.core.rules.localize_spec`, applied downstream by the Dice
+    block) — on **one's own** card too. ``own`` marks that case
+    (:func:`~mm_companion.core.rules.own_attack_save`): the roller is resisting their
+    own attack, and the result carries a ⚠ saying so (:func:`own_attack_mark`). It
+    used to roll a bare d20 there instead, which read as the app forgetting the
+    roller's Toughness.
     """
 
     resolved = spec if isinstance(spec, RollSpec) else RollSpec.from_dict(spec)
@@ -366,8 +491,8 @@ def chain_widgets(
     for follow_up in follow_ups_for_result(
         resolved, die, degree, load_game_data(), total, added_success=added_success
     ):
-        if not localize:
-            follow_up = replace(follow_up, trait_key="")
+        if own:
+            follow_up = own_attack_save(follow_up)
         widgets.append(
             roll_button(
                 follow_up,
@@ -408,11 +533,9 @@ def request_widgets(
     waiting for somebody to make it. Wrapping it as its own follow-up to reuse
     that function would mean a spec whose label nothing ever reads.
 
-    It also never drops the spec's :attr:`~RollSpec.trait_key` the way
-    ``chain_widgets(localize=False)`` does on one's own card. That rule is about
-    *saves* — you are not the target of your own attack — and it does not hold
-    here: someone who asks the table to roll Perception is asking themselves too,
-    and their own sheet is the one screen that can fill the number in for certain.
+    Nor does it mark the roll as :func:`chain_widgets` marks a save on one's own card
+    (:attr:`~RollSpec.own_attack`): someone who asks the table to roll Perception is
+    asking themselves too, and that is nothing to warn about.
     """
 
     resolved = spec if isinstance(spec, RollSpec) else RollSpec.from_dict(spec)
@@ -442,6 +565,26 @@ def request_widgets(
             )
         )
     return buttons
+
+
+#: The small sign beside a roll whose roller resisted their own attack.
+OWN_ATTACK_MARK = "⚠"
+
+
+def own_attack_mark(spec: object, *, own: bool = True) -> QLabel | None:
+    """The ⚠ a card puts by its ☆ when its roll resisted its roller's own attack.
+
+    ``None`` for any other roll. *own* says whether the reader made the roll: the
+    hover says "you" only to them. Its words are on hover, not on the card, since
+    the roll is otherwise an ordinary save.
+    """
+    resolved = spec if isinstance(spec, RollSpec) else RollSpec.from_dict(spec)
+    if resolved is None or not resolved.own_attack:
+        return None
+    mark = QLabel(OWN_ATTACK_MARK)
+    mark.setStyleSheet(tinted_style("tint.warning", bold=True))
+    mark.setToolTip(OWN_ATTACK_HINT if own else OWN_ATTACK_HINT_OTHER)
+    return mark
 
 
 def reroll_label(label: str, reroll: bool) -> str:
@@ -483,36 +626,183 @@ def roll_heading(roll: dict) -> str:
     return heading
 
 
-def roll_headline(roll: dict) -> str:
-    """A roll's number line, as rich text: the total, how it was made, and how it went.
+#: What a routine check (take 10) shows where the die would be.
+ROUTINE_WORD = "take 10"
+#: The breakdown's line for the modifier box when nothing named was loaded.
+MODIFIER_PART = "Modifier"
+#: ...and for what the box added on top of a loaded trait.
+CIRCUMSTANCE_PART = "Circumstance"
 
-    The degree rides on the **same line** as the total rather than one of its own. A
-    history is a column of these in a strip a few cards tall, and the line a degree
-    used to take was a third of every card — the difference between three rolls in
-    view and five.
+
+def _signed(amount: int) -> str:
+    """``+4`` / ``−2`` with a real minus sign, for a line people read."""
+    return f"{amount:+d}".replace("-", "−")
+
+
+def _other_die(roll: dict) -> int:
+    """The die an Aim roll dropped (rolled twice, the higher kept), or 0."""
+    other = roll.get("other_die")
+    if isinstance(other, int) and not isinstance(other, bool) and other > 0:
+        return other
+    return 0
+
+
+def roll_working(
+    die: int, modifier: int, *, routine: bool = False, other_die: int = 0, total_html: str = ""
+) -> str:
+    """How a total was reached, as rich text: the die, the net bonus or penalty, the total.
+
+    ``19 + 4 = 23``, ``7 − 2 = 5``, ``take 10 + 4 = 14``; with nothing added, just the
+    die — the die *is* the total. A dropped Aim die is struck through beside the kept
+    one. The die and the modifier are muted and the total is bold (or *total_html*, for
+    a caller that sizes or tints it), so the eye lands on the number that counts.
+    Everything else a roll was made of is on hover (:func:`roll_breakdown`).
+    """
+    muted = theme.color("text.muted.rich")
+    total = total_html or f"<b>{die + modifier}</b>"
+    shown = ROUTINE_WORD if routine else str(die)
+    if other_die and not routine:
+        shown = f"{shown} <s>{other_die}</s>"
+    if not modifier and not routine and not other_die:
+        return total
+    working = shown
+    if modifier:
+        sign = "+" if modifier > 0 else "−"
+        working = f"{shown} {sign} {abs(modifier)}"
+    return f"<span style='color:{muted}'>{working} =</span> {total}"
+
+
+def roll_headline(roll: dict) -> str:
+    """A roll's number line, as rich text: the die, the net bonus or penalty, the total,
+    and how it went (``19 + 4 = 23 vs DC 15 · Success``).
+
+    Only those: what the bonus is made of is on hover (:func:`roll_breakdown`). The
+    degree rides on the **same line** as the total rather than one of its own. A history
+    is a column of these in a strip a few cards tall, and the line a degree used to take
+    was a third of every card — the difference between three rolls in view and five.
     """
     die = int(roll.get("die", 0))
     modifier = int(roll.get("bonus", 0)) - int(roll.get("penalty", 0))
-    muted = theme.color("text.muted.rich")
-    # A routine check rolled nothing: say so, rather than show a 10 that never came up.
-    made = "routine" if roll.get("routine") else "d20"
-    # Rolled twice for the higher (Aim): the dropped die, struck through beside the kept.
-    other = roll.get("other_die")
-    if isinstance(other, int) and not isinstance(other, bool) and other > 0:
-        made = f"{made} {die} <s>{other}</s>"
-    else:
-        made = f"{made} {die}"
-    breakdown = f"<span style='color:{muted}'>({made} {modifier:+d})</span>"
-    headline = f"<b>{die + modifier}</b> {breakdown}"
+    headline = roll_working(
+        die, modifier, routine=bool(roll.get("routine")), other_die=_other_die(roll)
+    )
     dc = roll.get("dc")
-    if dc is not None:
+    if dc is not None and not label_names_dc(str(roll.get("label", "")), int(dc)):
         headline += f" vs DC {int(dc)}"
     degree = roll.get("degree")
+    # The "·" rides at the head of what follows it, so a wrap puts it at the start of
+    # the next line rather than leaving it hanging off the end of this one.
     if degree is not None:
         colour = theme.color("tint.better" if int(degree) > 0 else "tint.worse")
-        words = degree_label(int(degree), bool(roll.get("critical")), die)
-        headline += f" · <span style='color:{colour}'>{escape_rich_text(words)}</span>"
+        words = degree_html(int(degree), bool(roll.get("critical")), die, lead="· ")
+        headline += f" <span style='color:{colour}'>{words}</span>"
+    elif (natural := roll_natural(roll)) is not None:
+        # Ungraded, nothing else says it: the badge does.
+        headline += f" <span style='white-space:nowrap'>· {natural_badge_html(natural)}</span>"
     return headline
+
+
+def label_names_dc(label: str, dc: int | None) -> bool:
+    """Whether a roll's *label* already says the DC it was rolled against.
+
+    A save is named for it — "Toughness vs. 18" — so a number line adding "vs DC 18"
+    under that heading said the same thing twice. Those lines leave it out when the
+    heading has it; the hover breakdown still says it in full.
+    """
+    if dc is None or not label:
+        return False
+    return re.search(rf"(?:\bvs\.?|\bDC)\s*{int(dc)}\b", label) is not None
+
+
+def breakdown_lines(roll: dict) -> list[tuple[str, str]]:
+    """Every line of a roll's hover breakdown, as ``(name, value)`` text pairs.
+
+    The die (or the routine 10, or the kept die of two), then each part of the loaded
+    trait's modifier as its spec names them (:func:`~mm_companion.core.rules.spec_parts`
+    — "Strength +4", "Athletics ranks +5", "All-Out Attack +3"), then whatever the
+    modifier box added on top, then the total.
+    """
+    die = int(roll.get("die", 0))
+    modifier = int(roll.get("bonus", 0)) - int(roll.get("penalty", 0))
+    other = _other_die(roll)
+    if roll.get("routine"):
+        lines = [("Take 10", str(die))]
+    elif other:
+        lines = [("d20, best of two", f"{die} (dropped {other})")]
+    elif roll.get("reroll"):
+        lines = [("d20, lucky reroll", str(die))]
+    else:
+        lines = [("d20", str(die))]
+    spec = RollSpec.from_dict(roll.get("spec"))
+    named = spec_parts(spec) if spec is not None else ()
+    lines += [(name, _signed(amount)) for name, amount in named]
+    rest = modifier - sum(amount for _name, amount in named)
+    if rest:
+        lines.append((CIRCUMSTANCE_PART if named else MODIFIER_PART, _signed(rest)))
+    lines.append(("Total", str(die + modifier)))
+    return lines
+
+
+def roll_breakdown(roll: dict) -> str:
+    """A roll's hover breakdown as rich text: what was rolled, every stat, bonus and
+    penalty that went into it, the total, and how it went against the DC."""
+    label = reroll_label(str(roll.get("label", "")), bool(roll.get("reroll")))
+    dc = roll.get("dc")
+    degree = roll.get("degree")
+    verdict = ""
+    if dc is not None:
+        verdict = f"vs DC {int(dc)}"
+        if degree is not None:
+            words = degree_label(int(degree), bool(roll.get("critical")), int(roll.get("die", 0)))
+            verdict += f" — {words}"
+    return _breakdown_html(label, breakdown_lines(roll), verdict)
+
+
+def _breakdown_html(label: str, lines: list[tuple[str, str]], verdict: str) -> str:
+    """A breakdown as rich text: *label* in bold, *lines* as a table whose last row is
+    bold, and *verdict* muted under it."""
+    rows = []
+    for index, (name, value) in enumerate(lines):
+        last = index == len(lines) - 1
+        style = " style='font-weight:bold'" if last else ""
+        rows.append(
+            f"<tr><td{style}>{escape_rich_text(name)}</td>"
+            f"<td align='right'{style}>&nbsp;&nbsp;{escape_rich_text(value)}</td></tr>"
+        )
+    html = f"<b>{escape_rich_text(label)}</b>" if label else ""
+    html += f"<table cellspacing='0' cellpadding='1'>{''.join(rows)}</table>"
+    if verdict:
+        muted = theme.color("text.muted.rich")
+        html += f"<span style='color:{muted}'>{escape_rich_text(verdict)}</span>"
+    return html
+
+
+def staged_working(modifier: int, *, twice: bool = False) -> str:
+    """What a roll *will* be, before the die is thrown: ``d20 + 1``, ``d20 − 2``, plain
+    ``d20``, or ``best of 2d20 + 4`` for a roll made twice (Aim)."""
+    dice = "best of 2d20" if twice else "d20"
+    if not modifier:
+        return dice
+    return f"{dice} {'+' if modifier > 0 else '−'} {abs(modifier)}"
+
+
+def staged_breakdown(
+    spec: RollSpec | None, circumstance: int, dc: int | None, *, twice: bool = False
+) -> str:
+    """The hover over the roller's preview: what the next roll is made of.
+
+    The same table a rolled card's hover shows (:func:`roll_breakdown`), with no die
+    yet: each part of the loaded trait's modifier (the action lines among them), then
+    the modifier box, then the roll as it will be made.
+    """
+    named = spec_parts(spec) if spec is not None else ()
+    lines = [(name, _signed(amount)) for name, amount in named]
+    if circumstance:
+        lines.append((CIRCUMSTANCE_PART if named else MODIFIER_PART, _signed(circumstance)))
+    total = sum(amount for _name, amount in named) + circumstance
+    lines.append(("Roll", staged_working(total, twice=twice)))
+    label = spec.label if spec is not None else ""
+    return _breakdown_html(label, lines, "" if dc is None else f"vs DC {int(dc)}")
 
 
 def _rich(text: str) -> QLabel:
@@ -555,6 +845,9 @@ def toast_accent(entry: dict) -> str | None:
         return theme.color("accent.dice")
     if kind != KIND_ROLL:
         return None
+    natural = roll_natural(entry)
+    if natural is not None:
+        return theme.color(NATURAL_TOKENS[natural])
     degree = entry.get("degree")
     if degree is None:
         return theme.color("accent.dice")
@@ -591,13 +884,125 @@ def heading_row(info: QVBoxLayout, line: QWidget) -> QHBoxLayout:
     return buttons
 
 
+#: The dynamic property a card's small button carries when it shows only while the
+#: pointer is over its card (see :func:`show_on_hover`).
+SHOW_ON_HOVER = "mmShowOnHover"
+
+
+def show_on_hover(button: QWidget) -> QWidget:
+    """Hide *button* until the pointer is over its card, keeping its room meanwhile.
+
+    For the ✕ on a card: removing a roll is rare, and a bordered ✕ on every card was
+    the loudest thing in the history, louder than the star beside it. The room is kept
+    so the heading beside it wraps the same either way and nothing moves under the
+    pointer — the quick-roll pills' ``×`` makes the same bargain. The card shows it
+    (:func:`reveal_hover_buttons`, from its enter and leave events).
+    """
+    policy = button.sizePolicy()
+    policy.setRetainSizeWhenHidden(True)
+    button.setSizePolicy(policy)
+    button.setProperty(SHOW_ON_HOVER, True)
+    button.hide()
+    return button
+
+
+def reveal_hover_buttons(card: QWidget, shown: bool) -> None:
+    """Show or hide every :func:`show_on_hover` button on *card*."""
+    for child in card.findChildren(QPushButton):
+        if child.property(SHOW_ON_HOVER):
+            child.setVisible(shown)
+
+
 def remove_button(tooltip: str, on_remove: Callable[[], None]) -> QPushButton:
-    """The GM's ✕ on a card."""
+    """The ✕ on a card: flat, and shown only while the pointer is over the card."""
     button = QPushButton("✕")
+    button.setFlat(True)
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
     button.setToolTip(tooltip)
     button.setFixedWidth(int(theme.metric("column.roll-button")))
+    button.setStyleSheet("padding: 0px;")
+    fit_to_text_line(button)
     button.clicked.connect(lambda _=False: on_remove())
+    show_on_hover(button)
     return button
+
+
+def fit_to_text_line(button: QWidget) -> None:
+    """Make a card's small button one line of card text tall, so its glyph sits level
+    with the card's first line beside it (:func:`heading_row` tops them both).
+
+    At a button's own height the ☆ stood a few pixels above or below the line it
+    belonged to — which way depended on how tall the platform drew the button. The
+    button carries no padding of its own (its caller's stylesheet says so); the room
+    is the line and the button's border either side.
+    """
+    border = int(theme.metric("border.width.emphasis"))
+    button.setFixedHeight(button.fontMetrics().height() + 2 * border)
+
+
+#: How long a pause between two entries is before the newer one says so.
+GAP_SECONDS = 10 * 60
+
+
+def entry_time(entry: dict) -> datetime | None:
+    """When a log entry was made, in local time — ``None`` when it does not say."""
+    raw = entry.get("timestamp")
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        when = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return when.astimezone() if when.tzinfo is not None else when
+
+
+def gap_text(previous: datetime | None, when: datetime | None) -> str:
+    """What a card says about the pause before it, or ``""`` when there was none worth
+    saying: "25 min later", "2 h 5 min later", or the date and time across a day."""
+    if previous is None or when is None:
+        return ""
+    if previous.tzinfo is None or when.tzinfo is None:
+        previous, when = previous.replace(tzinfo=None), when.replace(tzinfo=None)
+    seconds = (when - previous).total_seconds()
+    if seconds < GAP_SECONDS:
+        return ""
+    if when.date() != previous.date():
+        return when.strftime("%a %d %b · %H:%M")
+    minutes = int(seconds // 60)
+    hours, minutes = divmod(minutes, 60)
+    if not hours:
+        return f"{minutes} min later"
+    return f"{hours} h {minutes} min later" if minutes else f"{hours} h later"
+
+
+def latest_time(card: QWidget) -> datetime | None:
+    """The newest moment a card on screen stands for (see :func:`stamp_card`)."""
+    return getattr(card, "when", None)
+
+
+def stamp_card(card: QWidget, when: datetime | None, previous: datetime | None) -> None:
+    """Say when *card*'s entry was made: on hover, and above its heading after a pause.
+
+    A long session's history used to be one undifferentiated column — the fight before
+    the break read as part of the one after it. The time is the card's tooltip (its
+    buttons keep their own), and a card made :data:`GAP_SECONDS` or more after the one
+    below it opens with a muted line saying how long it had been. The line is part of
+    the card rather than a widget between two, so striking, trimming or replaying
+    cards can never leave one stranded.
+    """
+    card.when = when
+    if when is None:
+        return
+    card.setToolTip(f"{when:%H:%M}")
+    text = gap_text(previous, when)
+    layout = card.layout()
+    info = layout.itemAt(0).layout() if layout is not None and layout.count() else None
+    if not text or info is None:
+        return
+    gap = QLabel(f"⋯ {text}")
+    gap.setObjectName("timeGap")
+    gap.setStyleSheet(muted_style(italic=True))
+    info.insertWidget(0, gap)
 
 
 def fit_button(text: str) -> QPushButton:
@@ -632,9 +1037,19 @@ class HistoryCard(QFrame):
         # a negative one so it too has a stable id to remove by. Only an entry with
         # no id at all cannot be struck.
         self.seq = seq if isinstance(seq, int) else None
+        #: When the entry was made (see :func:`stamp_card`), or ``None``.
+        self.when: datetime | None = None
 
     def set_save_state(self, saved_keys: set, room: bool) -> None:
         """No-op unless the card carries a star (see :class:`SessionRollCard`)."""
+
+    def enterEvent(self, event) -> None:  # noqa: N802 - Qt override
+        reveal_hover_buttons(self, True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802 - Qt override
+        reveal_hover_buttons(self, False)
+        super().leaveEvent(event)
 
 
 class NoteCard(HistoryCard):
@@ -823,8 +1238,11 @@ class SessionRollCard(HistoryCard):
         info = QVBoxLayout()
         tighten_card(layout, info)
 
+        mark_natural(self, roll)
         self._buttons = heading_row(info, _rich(roll_heading(roll)))
-        info.addWidget(_rich(roll_headline(roll)))
+        headline = _rich(roll_headline(roll))
+        headline.setToolTip(roll_breakdown(roll))
+        info.addWidget(headline)
 
         # The chain — on every card, whoever rolled it. A save an attack forced is
         # made by the *other* side of the table, so the button has to be on the
@@ -835,13 +1253,17 @@ class SessionRollCard(HistoryCard):
             degree=None if degree is None else int(degree),
             total=die + int(roll.get("bonus", 0)) - int(roll.get("penalty", 0)),
             on_follow_up=self.rollFollowUp.emit,
-            localize=not own,
+            own=own,
             on_plain=self.rollPlain.emit,
             added_success=_counts_twenty(roll),
         ):
             info.addWidget(widget)
 
         layout.addLayout(info, stretch=1)
+
+        mark = own_attack_mark(roll.get("spec"), own=own)
+        if mark is not None:
+            self._add_button(mark)
 
         # Only for a roll of one's own: saving someone else's modifiers into your
         # quick rolls would be saving their character's numbers.
@@ -1644,6 +2066,7 @@ class RollHistoryPanel(QWidget):
             card.rollPlain.connect(self.rollPlain)
         else:
             card = self._roll_card(roll)
+        stamp_card(card, entry_time(roll), self._newest_time())
         # Newest on top: insert above every existing card (the stretch is last).
         self._layout.insertWidget(0, card)
         self._trim()
@@ -1660,8 +2083,11 @@ class RollHistoryPanel(QWidget):
         table = next(
             (c for c in self.cards() if isinstance(c, GroupTableCard) and c.key == key), None
         )
+        when = entry_time(roll)
         if table is not None:
             table.add_record(roll)
+            if when is not None and (table.when is None or when > table.when):
+                table.when = when
             return
         table = GroupTableCard(key, can_remove=self._gm)
         table.undo_lookup = self._undo.get
@@ -1669,6 +2095,7 @@ class RollHistoryPanel(QWidget):
         table.revealRequested.connect(self._request_reveal)
         table.joinRequested.connect(self.teamJoinRequested)
         table.add_record(roll)
+        stamp_card(table, when, self._newest_time())
         self._layout.insertWidget(0, table)
         self._trim()
         self._empty.setVisible(False)
@@ -1813,6 +2240,11 @@ class RollHistoryPanel(QWidget):
         self._seen.clear()
         self._held.clear()
         self._empty.setVisible(not waiting)
+
+    def _newest_time(self) -> datetime | None:
+        """When the newest stamped entry on screen was made — what a new card's pause
+        is measured from."""
+        return next((t for t in map(latest_time, self.cards()) if t is not None), None)
 
     def _waiting(self) -> list[HistoryCard]:
         """The action cards on screen still waiting on the GM, newest first."""

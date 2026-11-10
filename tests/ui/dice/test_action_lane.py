@@ -10,7 +10,7 @@ from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstan
 from mm_companion.core.rules import RollSpec, attack_choices
 from mm_companion.ui.action_menu import NO_AREAS, NO_ATTACKS, SKIP_TARGET
 from mm_companion.ui.attack_targets import SceneTarget
-from mm_companion.ui.dice_roller import MODIFIER_LIMIT, NO_DC_WARNING
+from mm_companion.ui.dice_roller import MODIFIER_LIMIT, NO_DC_SHORT, NO_DC_WARNING
 from mm_companion.ui.roller.action_lane import NEEDS_ATTACK
 from mm_companion.ui.roller.view import DiceRollerView
 from mm_companion.ui.sections.dice import DiceSection
@@ -157,7 +157,7 @@ def test_an_empty_lane_takes_no_room_and_the_actions_button_stays_put(qapp) -> N
     qapp.processEvents()
     assert panel._lane.isVisible()
     assert where() == resting
-    assert panel._lane.geometry().top() > panel._toolbar.geometry().bottom()
+    assert panel._lane.geometry().top() > panel._controls.geometry().bottom()
     panel.action_lines()[0].removed.emit("charge")
     qapp.processEvents()
     assert panel.action_lines() == []
@@ -266,8 +266,11 @@ def test_an_attack_rolled_with_no_dc_and_no_target_is_warned_about(qapp, instant
     panel = view.panel
     panel.set_dc(None)
     panel.roll_spec(_attack())
-    assert "No DC and no target" in panel._readout.text()
-    assert NO_DC_WARNING.startswith("⚠")
+    # A short flag beside the result, the whole sentence on hover (the user's call).
+    assert panel.warning_text() == NO_DC_SHORT and NO_DC_SHORT.startswith("⚠")
+    assert "No DC and no target" in panel._warning.toolTip()
+    assert "No DC" not in panel._readout.text()
+    assert len(NO_DC_SHORT) < len(NO_DC_WARNING) // 4
 
 
 def test_no_warning_with_a_dc_or_for_a_plain_check(qapp, instant_die) -> None:
@@ -275,10 +278,10 @@ def test_no_warning_with_a_dc_or_for_a_plain_check(qapp, instant_die) -> None:
     panel = view.panel
     panel.set_dc(15)
     panel.roll_spec(_attack())
-    assert "No DC" not in panel._readout.text()
+    assert panel.warning_text() == ""
     panel.set_dc(None)
     panel.roll_spec(RollSpec(label="Athletics", modifier=4))
-    assert "No DC" not in panel._readout.text()
+    assert panel.warning_text() == ""
 
 
 def test_no_warning_for_an_aimed_attack(qapp, instant_die) -> None:
@@ -287,7 +290,7 @@ def test_no_warning_for_an_aimed_attack(qapp, instant_die) -> None:
     view = DiceRollerView()
     view.panel.set_dc(None)
     view.panel.roll_spec(replace(_attack(), targets=("Thug",), action_id="a1"))
-    assert "No DC" not in view.panel._readout.text()
+    assert view.panel.warning_text() == ""
 
 
 # -- the Attack tile -------------------------------------------------------------------

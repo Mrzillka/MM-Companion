@@ -124,7 +124,11 @@ The fix has two parts:
   (`self._helper = Helper(self)`) to hunt one by one, and the live app runs the same
   socket threads.
 
-**The rule:** never store a closure over `self` on `self` when a method would do. If
+**The rule:** never store a closure over `self` on `self` when a method would do.
+Nor a widget's **parent** on the widget: the parent's wrapper already keeps the child's,
+so the two hold each other. `ActionGridPopup` kept the Actions button it is a child of
+(2026-11), and its test died with an access violation once the cycle was dropped; it
+now keeps the button's on-screen rectangle instead. If
 `gc.isenabled()` is ever true in the app or the UI tests, the guard has been undone.
 
 ## Running only what a change affects

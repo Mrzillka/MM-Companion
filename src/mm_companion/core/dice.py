@@ -16,6 +16,15 @@ from dataclasses import dataclass
 
 D20_SIDES = 20
 
+#: Where an unseeded die comes from: the operating system's entropy, read afresh for
+#: every roll. Python's default generator is a Mersenne Twister seeded once at start-up,
+#: which is statistically sound, but it is one shared state that every thread of the
+#: session server draws from in turn and whose past outputs predict its future ones.
+#: A table that saw two players roll the same number four times running (2026-11-10)
+#: was a coincidence by every test we could find; this takes the shared state out of
+#: the question altogether. Tests that want a fixed sequence still pass an ``rng``.
+_SYSTEM_DICE = random.SystemRandom()
+
 #: The die a **routine check** assumes instead of rolling (PDF p17): take 10. It is
 #: never a natural 1 or 20, so a routine check scores no added success or failure.
 #: Against a minion any check may be routine (PDF p25), which is what the roller's
@@ -46,9 +55,10 @@ class CheckResult:
 
 
 def roll_d20(rng: random.Random | None = None) -> int:
-    """Roll a single d20 (1-20). Pass an ``rng`` to make the roll reproducible."""
+    """Roll a single d20 (1-20). Pass an ``rng`` to make the roll reproducible;
+    without one the die is the operating system's (:data:`_SYSTEM_DICE`)."""
 
-    roller = rng if rng is not None else random
+    roller = rng if rng is not None else _SYSTEM_DICE
     return roller.randint(1, D20_SIDES)
 
 

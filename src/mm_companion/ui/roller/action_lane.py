@@ -19,7 +19,9 @@ room to double it, so a limit may read the other lines' values (the host's calla
 asks the panel). Whenever a line's value moves, or a line comes or goes, the lane works
 the others' limits out again (:meth:`ActionLine.relimit`): their ranges follow, and a
 value past its new maximum is pulled down to it — never pushed up, which is what keeps
-two lines from chasing each other.
+two lines from chasing each other. A pull-down can tighten another line as well as
+loosen it (Accurate pulled down takes the attack bonus Power Attack was spending), so the
+passes repeat until one moves no value; values only fall, so that ends.
 """
 
 from __future__ import annotations
@@ -288,13 +290,16 @@ class ActionLine(QWidget):
     def _relimit(self, *, reset: bool) -> None:
         maximum, reason = self._limit(self.bound_spec)
         maximum = max(0, int(maximum))
+        self._cap_reason = reason if maximum > 0 else ""
+        # Available before the value moves: the move tells the lane, and the other
+        # lines read only the lines that apply — a fresh line still greyed would be
+        # left out of their limits.
+        self._set_available(maximum > 0, "" if maximum > 0 else reason)
         if reset or self._spin.maximum() != maximum:
             value = maximum if reset else min(self._spin.value(), maximum)
             self._slider.setRange(0, maximum)
             self._spin.setRange(0, maximum)
             self._spin.setValue(value)
-        self._cap_reason = reason if maximum > 0 else ""
-        self._set_available(maximum > 0, "" if maximum > 0 else reason)
         self._sync_cap_tooltip()
         self._sync_idle()
 
@@ -413,10 +418,15 @@ class ActionLane(QWidget):
             for line in self._lines:
                 if line.key != key:
                     line.relimit()
-            # A pass only ever pulls values down, which only loosens the others'
-            # limits; a second one widens the ranges the first left narrower than
-            # they need be, and moves no value.
-            for line in self._lines:
-                line.relimit()
+            # Pulling one value down can tighten another line, not only loosen it:
+            # Accurate pulled down takes the attack bonus Power Attack was spending.
+            # So pass again until a pass moves no value. Values only fall, so it ends,
+            # and the last pass leaves every range matching its cap.
+            while True:
+                before = [line.value() for line in self._lines]
+                for line in self._lines:
+                    line.relimit()
+                if [line.value() for line in self._lines] == before:
+                    break
         finally:
             self._settling = False

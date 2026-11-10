@@ -1071,8 +1071,16 @@ replaces its line.
   on the combined shifts), so whenever a value moves, or a line comes or goes, the lane
   re-limits the others (`ActionLine.relimit`): ranges follow, and a value past its new
   maximum is **pulled down, never pushed up** — that is what keeps two lines from
-  chasing each other. A second pass widens what the first left too narrow; the lane's
+  chasing each other. Passes repeat **until one moves no value**: a pull-down does not
+  only loosen the others — Accurate pulled down takes away the attack bonus Power Attack
+  was spending, so Power must drop too, which can knock on to All-Out. Two fixed passes
+  used to stop short of that and could leave the attack bonus below 0 (attack +3,
+  Defense 3: Defensive, Power, All-Out 5, re-pick Power, Defense to 1). Values only
+  fall, so the loop ends; the last pass leaves every range matching its cap. A line is
+  marked available **before** its value is set, since the other lines read only the
+  lines that apply — a fresh line still greyed was left out of their limits. The lane's
   `_settling` flag stops a pass from starting another.
+  `tests/ui/dice/test_lane_settles.py` fuzzes the four maneuvers on one lane.
 - **Spent by the roll**: `_start_roll` notes the lines that applied (`_rolled_lines`,
   `(key, value)` pairs, and `lines` on the roll Reroll throws again); `_spend_extras`
   removes them and raises **`linesRolled`** with them — the host's cue to land what they

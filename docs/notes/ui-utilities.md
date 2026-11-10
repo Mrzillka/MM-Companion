@@ -86,7 +86,10 @@ through rather than reinvent. When building new sheet widgets, use it:
   sized by the `action-grid.*` tokens, the caption by `size.action-tile`), one
   `FlowLayout` per section, so the columns follow the width. **Short sections share a
   row** (a *shelf*, `_shelve`): consecutive sections that each fit one line and together
-  fit the row sit side by side, in fixed rows rather than flows. It is a frameless
+  fit the row sit side by side, in fixed rows rather than flows, each **whole tile
+  columns wide** (`_section_columns`, its title's width counted) so a shelf keeps to
+  the grid of a full row. A `GridSection.note` is a muted line under the title (what
+  the whole section is waiting on); a section with one keeps its row. It is a frameless
   `Qt.Popup` **parented to its anchor** (never parentless — see the standing rule),
   closes on a pick, Esc or a click outside, and walks its tiles with the arrow keys
   (enabled tiles only). `show_under(anchor)` opens it **under the anchor**, scrolling

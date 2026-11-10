@@ -40,7 +40,7 @@ from ..data_loader.game_data import (
     CombatAction,
 )
 from .derived import defense_class_in_play
-from .rolls import RollSpec
+from .rolls import RollSpec, add_part
 
 __all__ = [
     "ManeuverLimit",
@@ -290,7 +290,15 @@ def shift_maneuvers(spec: RollSpec, picks: Iterable[Pick], game_data: GameData) 
     if effect:
         follow_up = None if follow_up is None else _shift_save(follow_up, effect)
         also = tuple(_shift_save(s, effect) for s in also)
-    return replace(spec, label=label, modifier=modifier, follow_up=follow_up, also=also)
+    shifted = spec
+    if attack:
+        # One breakdown line per maneuver, so the hover says which traded what.
+        for action_id, amount in picks:
+            part = _shifts([(action_id, amount)], game_data).get(MANEUVER_ATTACK_CHECK, 0)
+            action = maneuver_action(game_data, action_id)
+            if part and action is not None:
+                shifted = add_part(shifted, action.name, part)
+    return replace(shifted, label=label, modifier=modifier, follow_up=follow_up, also=also)
 
 
 def lasting_conditions(picks: Iterable[Pick], game_data: GameData) -> list[tuple[str, int]]:

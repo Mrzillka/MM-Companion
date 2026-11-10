@@ -15,6 +15,7 @@ own last roll, Ask from whether the host gave it any traits to ask for.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Mapping, Sequence
 
 from PySide6.QtCore import QPoint
@@ -148,11 +149,13 @@ def combat_menu(
     sections: list[GridSection] = []
     for section in combat.menu:
         items = []
+        reasons: list[str | None] = []
         for action_id in section.items:
             action = combat.action(action_id)
             if action is None or (action.gm_only and not gm):
                 continue
             reason = offered.get(action_id, NOT_BUILT)
+            reasons.append(reason)
             items.append(
                 GridItem(
                     key=action.id,
@@ -163,5 +166,19 @@ def combat_menu(
                 )
             )
         if items:
-            sections.append(GridSection(section.title, tuple(items)))
+            sections.append(GridSection(section.title, tuple(items), note=section_note(reasons)))
     return sections
+
+
+def section_note(reasons: Sequence[str | None]) -> str:
+    """The line under a section's title when **every** tile in it is greyed: the reason
+    most of them share, said once — rather than a row of dead tiles to be hovered one by
+    one to find out why. ``""`` while any tile is live, or no reason is shared.
+
+    Most, not all: Surprise Attack is greyed for a reason of its own (the GM grants it)
+    beside five maneuvers waiting on an attack, and the five are what the line is for.
+    """
+    if not reasons or any(reason is None for reason in reasons):
+        return ""
+    reason, count = Counter(reasons).most_common(1)[0]
+    return str(reason) if count > 1 else ""

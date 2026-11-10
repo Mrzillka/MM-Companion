@@ -48,12 +48,22 @@ import math
 import random
 from collections.abc import Callable, Mapping, Sequence
 
-from PySide6.QtCore import QElapsedTimer, QPoint, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QFont, QIcon, QKeySequence, QPixmap, QShortcut, QTextDocument
+from PySide6.QtCore import QElapsedTimer, QEvent, QPoint, QRect, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QIcon,
+    QKeySequence,
+    QPalette,
+    QPixmap,
+    QShortcut,
+    QTextDocument,
+)
 from PySide6.QtWidgets import (
     QBoxLayout,
     QCheckBox,
     QFrame,
+    QGraphicsDropShadowEffect,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -78,7 +88,7 @@ from mm_companion.ui.action_menu import (
     action_tooltip,
     choose_from_menu,
 )
-from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
+from mm_companion.ui.flow_layout import FlowLayout
 from mm_companion.ui.reflow import ReflowBox
 from mm_companion.ui.roll_history import (
     HIDDEN_MARK,
@@ -87,6 +97,8 @@ from mm_companion.ui.roll_history import (
     escape_rich_text,
     fit_button,
     reroll_label,
+    roll_breakdown,
+    roll_working,
 )
 from mm_companion.ui.roller.action_lane import (
     ActionLane,
@@ -129,7 +141,7 @@ NOT_SENT = "The roll could not be sent to the session."
 
 # What the chip and the readout say while a trait is loaded. Both are part of the
 # same guard: a loaded chip arms the die, so the panel has to be obvious about it.
-CHIP_PREFIX = "🎲 Rolling: "
+CHIP_PREFIX = "🎲 "
 IDLE_PROMPT = "Click the die to roll."
 #: Written in the chip's empty slot.
 CHIP_SLOT_HINT = "Click a trait on a sheet to roll it"
@@ -166,6 +178,13 @@ TAKE_TEN_SHORTCUT = "Ctrl+T"
 #: How long the die glows with how the roll went before it settles back.
 OUTCOME_GLOW_MS = 3000
 
+#: The button under a result that throws it again.
+REROLL_LABEL = "↻ Reroll"
+REROLL_HINT = (
+    "**Reroll:** throw this roll again — same trait, modifier and DC — as a lucky "
+    "re-roll: a 1–10 counts 10 more (a Hero Point, or the Luck advantage)."
+)
+
 #: The roller's take-10 button (PDF p17): a routine check, made as a 10.
 ROUTINE_LABEL = "Take 10"
 ROUTINE_HINT = (
@@ -173,6 +192,20 @@ ROUTINE_HINT = (
     "is no natural 1 or 20. For a check made without pressure.\n\nTakes whatever is loaded, "
     "with the modifier and the DC set."
 )
+
+
+#: Qt's "no maximum" for a widget's size.
+QWIDGETSIZE_MAX = 16777215
+
+
+def _capsule_inset() -> int:
+    """How far the Modifier and DC labels sit in from their column's edge."""
+    return 2 * int(theme.metric("space.xs"))
+
+
+def _stretch_across(widget: QWidget) -> None:
+    """Let *widget* take a share of its row's width: a justified row, not a ragged one."""
+    widget.setSizePolicy(QSizePolicy.Policy.Expanding, widget.sizePolicy().verticalPolicy())
 
 
 def outcome_token(
@@ -232,9 +265,9 @@ def spec_caption(spec: RollSpec) -> str:
     the Bonus slider) or a named quick roll — reads as just its name rather than a
     bare ``+0``. Its DC, if it set one, is already visible in the DC box.
 
-    Worded as a **state**: the die is armed until the chip is cleared, and every
-    later click folds this modifier in. A caption reading only "Athletics +9" was
-    easy to skim past.
+    It used to lead with "Rolling:", which made "Rolling: Blast: Attack +7" — two
+    colons — and said what the halo on the die already says: that it is armed. The
+    chip's loud accent frame and the halo carry the state; the caption names the roll.
     """
 
     trait = f"{spec.label} {spec.modifier:+d}" if spec.modifier else spec.label
@@ -265,18 +298,17 @@ def readout_html(
             f"<span style='color:{theme.color('accent.dice')}'>"
             f"{escape_rich_text(label)}</span><br>"
         )
-    made = "routine" if routine else "d20"
-    # Rolled twice for the higher (Aim): the dropped die struck through.
-    shown = f"{die} <s>{other_die}</s>" if other_die else f"{die}"
     # Graded, the total itself wears how it went: the number is what the eye finds
     # first, and the degree line under it is the detail.
     tint = "" if degree is None else theme.color("tint.better" if degree > 0 else "tint.worse")
     colour = f"color:{tint};" if tint else ""
-    html += (
+    big = (
         f"<span style='font-size:{theme.font_size('size.roll-readout')}pt;{colour}'>"
-        f"<b>{total}</b></span> "
-        f"<span style='color:{muted}'>({made} {shown} {modifier:+d})</span>"
+        f"<b>{total}</b></span>"
     )
+    # The die, the net bonus or penalty, the total — the history's line; what the bonus
+    # is made of is on hover (see :meth:`DiceRollerPanel._update_readout`).
+    html += roll_working(die, modifier, routine=routine, other_die=other_die, total_html=big)
     if dc is not None:
         html += f" vs DC {dc}"
     if degree is not None:
@@ -557,36 +589,47 @@ class DiceRollerPanel(
         **Actions** button — and the action lane. The lane grows *under* the toolbar,
         so the Actions button stays where it is when a pick puts a line on the lane;
         it used to sit under the lane's last line and moved away from the pointer.
+
+        **Justified, on one label column.** "Modifier" and "DC" share the grid's first
+        column, so the two rows start their controls at the same x, and each row's
+        controls share out the whole width rather than huddling at the left edge with
+        a slab of nothing beside them (the user's call, 2026-11-10).
         """
         part = QWidget()
         grid = QGridLayout(part)
         grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(int(theme.metric("space.md")))
+        grid.setVerticalSpacing(int(theme.metric("space.sm")))
         # Kept, because in a row the quick rolls move in under these controls
         # (:meth:`~mm_companion.ui.roller.shape.RollerShapeMixin.apply_reflow`).
         self._settings_grid = grid
-        # The modifier's row is the only one with a label column; everything else
-        # spans both, and the steps take the slack.
+        # The labels' column is as wide as the wider label; the controls take the rest.
         grid.setColumnStretch(1, 1)
 
         self._spec_chip = self._build_spec_chip()
         grid.addWidget(self._build_chip_slot(), 0, 0, 1, 2)
 
-        # One signed box, centred between its penalty steps and its bonus steps:
-        # −5 −2 [+0] +2 +5. It used to be a −30..+30 slider, which is no way to hit +2.
+        # One signed box between its penalty steps and its bonus steps: −5 −2 [+0] +2 +5,
+        # all sharing the row's width. It used to be a −30..+30 slider, which is no way
+        # to hit +2.
         self._modifier_spin = make_signed_spin_box(MODIFIER_LIMIT, snug=True)
         self._modifier_spin.setToolTip(MODIFIER_HINT)
+        self._modifier_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        _stretch_across(self._modifier_spin)
         self._modifier_spin.valueChanged.connect(self._mark_extras)
         self._modifier_label = QLabel(MODIFIER_LABEL)
         self._modifier_label.setToolTip(MODIFIER_HINT)
+        # Both labels sit a little in from the column's edge: the DC capsule is drawn
+        # from that edge (it cannot reach past the panel's), and its text needs air.
+        self._modifier_label.setContentsMargins(_capsule_inset(), 0, 0, 0)
         self._modifier_row = QHBoxLayout()
         self._modifier_row.setContentsMargins(0, 0, 0, 0)
         self._modifier_row.setSpacing(int(theme.metric("space.xs")))
-        self._modifier_row.addWidget(self._modifier_spin)
-        self._modifier_row.addStretch(1)
+        self._modifier_row.addWidget(self._modifier_spin, stretch=1)
         grid.addWidget(self._modifier_label, 1, 0)
         grid.addLayout(self._modifier_row, 1, 1)
 
-        grid.addWidget(self._build_toolbar(), 2, 0, 1, 2)
+        self._build_toolbar(grid, 2)
 
         # The action lane: one line per action riding on the next roll.
         self._lane = ActionLane()
@@ -602,37 +645,40 @@ class DiceRollerPanel(
             grid.addWidget(self._hidden_check, 4, 0, 1, 2)
         return part
 
-    def _build_toolbar(self) -> QWidget:
-        """The DC box, Take 10 and the Actions button, in one row that wraps when narrow.
+    def _build_toolbar(self, grid: QGridLayout, row: int) -> None:
+        """The DC box, Take 10 and the Actions button: the "DC" label in the labels'
+        column, the three controls sharing the rest of *row* across.
 
-        The DC is **one** box where empty (``—``) means no DC — it used to be a
+        The DC is **one** box where empty (``none``) means no DC — it used to be a
         checkbox beside a box that sat greyed at 15 while unticked, two controls for
         one number. Nobody grades a roll against DC 0, so 0 is free to mean "none".
 
         Take 10 is a **button** that makes the check now, rather than a checkbox that
         changed what the next click of the die did and had to be remembered.
 
-        A flow rather than a row, because the roller is narrow in compact mode and in
-        the strip, and a fixed row would hold it open.
+        It was a wrapping flow at its natural widths, which left the row ragged against
+        the modifier's above it. One row is no wider than the modifier's, so there is
+        nothing a wrap would save.
         """
+        parent = grid.parentWidget()
+        # The capsule a set DC is drawn as: a frame *behind* the label and the box, not
+        # round them in a layout, since the two sit in different columns of the grid.
+        # Created first so it stacks under them; :meth:`_place_dc_capsule` keeps it on
+        # their united rectangle. Its border is there transparent while no DC is set,
+        # so the capsule costs no pixels to appear.
+        self._dc_pair = QFrame(parent)
+        self._dc_pair.setObjectName("dcPair")
+        self._dc_pair.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
         self._dc_label = QLabel(DC_LABEL)
         self._dc_label.setToolTip(DC_HINT)
+        self._dc_label.setContentsMargins(_capsule_inset(), 0, 0, 0)
         self._dc_spin = make_spin_box(0, 60, value=0, buttons=False, snug=True)
         self._dc_spin.setSpecialValueText(DC_NONE)
         self._dc_spin.setToolTip(DC_HINT)
+        self._dc_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        _stretch_across(self._dc_spin)
         self._dc_spin.valueChanged.connect(self._mark_dc)
-        # A frame, so a DC that is set can be drawn as a tinted capsule round the label
-        # and the box (:meth:`_mark_dc`). Its margins are there in both states, so
-        # setting a DC never moves the toolbar.
-        dc_pair = QFrame()
-        dc_pair.setObjectName("dcPair")
-        self._dc_pair = dc_pair
-        pair = QHBoxLayout(dc_pair)
-        small = int(theme.metric("space.xs"))
-        pair.setContentsMargins(int(theme.metric("space.sm")), 0, small, 0)
-        pair.setSpacing(int(theme.metric("space.sm")))
-        pair.addWidget(self._dc_label)
-        pair.addWidget(self._dc_spin)
 
         self._routine_button = QPushButton(ROUTINE_LABEL)
         self._routine_button.setToolTip(help_markup(f"{ROUTINE_HINT} ({TAKE_TEN_SHORTCUT})"))
@@ -644,13 +690,29 @@ class DiceRollerPanel(
         )
         self._actions_button.clicked.connect(self.open_actions)
 
-        self._toolbar = FlowContainer()
-        flow = FlowLayout(self._toolbar, spacing=int(theme.metric("space.md")))
-        flow.setContentsMargins(0, 0, 0, 0)
-        for widget in (dc_pair, self._routine_button, self._actions_button):
-            flow.addWidget(widget)
+        self._toolbar = QWidget()
+        across = QHBoxLayout(self._toolbar)
+        across.setContentsMargins(0, 0, 0, 0)
+        across.setSpacing(int(theme.metric("space.xs")))
+        for widget in (self._dc_spin, self._routine_button, self._actions_button):
+            across.addWidget(widget, stretch=1)
+        grid.addWidget(self._dc_label, row, 0)
+        grid.addWidget(self._toolbar, row, 1)
+        for widget in (self._dc_label, self._dc_spin, self._toolbar):
+            widget.installEventFilter(self)
         self._mark_dc()
-        return self._toolbar
+
+    def _place_dc_capsule(self) -> None:
+        """Lay the DC capsule over the label and the box, a little proud of both."""
+        pair = getattr(self, "_dc_pair", None)
+        if pair is None:
+            return
+        parent = pair.parentWidget()
+        label = self._dc_label.geometry()
+        box = QRect(self._dc_spin.mapTo(parent, QPoint(0, 0)), self._dc_spin.size())
+        pad = int(theme.metric("space.xs"))
+        pair.setGeometry(label.united(box).adjusted(0, -pad, pad, pad))
+        pair.lower()
 
     def set_modifier_steps(self, steps: Sequence[int]) -> None:
         """Put *steps* either side of the modifier box, as penalties and as bonuses.
@@ -658,7 +720,7 @@ class DiceRollerPanel(
         ``(2, 5)`` — the common circumstance modifiers (PDF p17), which the host reads
         from the game data — gives ``−5 −2 [+0] +2 +5``. A step **adds** to the box, so
         +2 twice is +4. The panel reads no game data, so until a host calls this there
-        are no steps, only the box.
+        are no steps, only the box. The steps and the box share the row's width.
         """
         for button in self._step_buttons:
             self._modifier_row.removeWidget(button)
@@ -666,16 +728,20 @@ class DiceRollerPanel(
         self._step_buttons = []
         sizes = sorted({abs(int(step)) for step in steps if int(step)})
         for index, size in enumerate(reversed(sizes)):
-            self._modifier_row.insertWidget(index, self._step_button(-size))
+            self._modifier_row.insertWidget(index, self._step_button(-size), stretch=1)
         after = self._modifier_row.indexOf(self._modifier_spin) + 1
         for index, size in enumerate(sizes):
-            self._modifier_row.insertWidget(after + index, self._step_button(size))
+            self._modifier_row.insertWidget(after + index, self._step_button(size), stretch=1)
         self.updateGeometry()
         self.contentChanged.emit()
 
     def _step_button(self, step: int) -> QPushButton:
         caption = f"{step:+d}".replace("-", "−")
         button = fit_button(caption)
+        # As narrow as its caption at the least, and as wide as the row shares out.
+        button.setMinimumWidth(button.width())
+        button.setMaximumWidth(QWIDGETSIZE_MAX)
+        _stretch_across(button)
         button.setToolTip(f"{caption} to the modifier")
         button.setEnabled(not self._rolling)
         button.clicked.connect(lambda _=False, amount=step: self.add_bonus(amount))
@@ -883,6 +949,7 @@ class DiceRollerPanel(
         token = "accent.dice"
         width = int(theme.metric("border.width"))
         radius = int(theme.metric("radius.chip"))
+        self._place_dc_capsule()
         if self._dc_spin.value():
             look = (
                 f"border: {width}px solid {theme.color(token)};"
@@ -1069,6 +1136,8 @@ class DiceRollerPanel(
         # callback — the die called ``False(…)`` and never rolled.
         self._die_button.clicked.connect(self._on_die_clicked)
         self._die_button.setToolTip(f"Roll ({ROLL_SHORTCUT}) — {REROLL_SHORTCUT} rerolls")
+        self._die_hovered = False
+        self._die_button.installEventFilter(self)
 
         self._face = QLabel("?")
         self._face.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1085,8 +1154,25 @@ class DiceRollerPanel(
         # A little air on the right, so a long name wraps short of the block's border
         # rather than flush against it, which reads as text that has overflowed.
         self._readout.setContentsMargins(0, 0, int(theme.metric("space.sm")), 0)
+
+        # Reroll, right under the result it would throw again — the Actions popup's tile
+        # was the only way to it, two clicks and a hunt away from the number in question.
+        self._reroll_button = fit_button(REROLL_LABEL)
+        self._reroll_button.setToolTip(help_markup(f"{REROLL_HINT} ({REROLL_SHORTCUT})"))
+        self._reroll_button.clicked.connect(lambda _=False: self.reroll())
+        self._reroll_button.hide()
+
+        self._result = QWidget()
+        column = QVBoxLayout(self._result)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(int(theme.metric("space.xs")))
+        column.addStretch(1)
+        column.addWidget(self._readout)
+        column.addWidget(self._reroll_button)
+        column.addStretch(1)
+        self._result_column = column
         self._die_box.addWidget(self._die_holder)
-        self._die_box.addWidget(self._readout, stretch=1)
+        self._die_box.addWidget(self._result, stretch=1)
         self._arrange_die(stacked=False)
         self._prompt_readout(replace_result=True)
         return part
@@ -1099,9 +1185,29 @@ class DiceRollerPanel(
         if stacked:
             self._die_box.setAlignment(self._die_holder, Qt.AlignmentFlag.AlignHCenter)
             self._readout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._result_column.setAlignment(self._reroll_button, Qt.AlignmentFlag.AlignHCenter)
         else:
             self._die_box.setAlignment(self._die_holder, Qt.AlignmentFlag.AlignVCenter)
             self._readout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            self._result_column.setAlignment(self._reroll_button, Qt.AlignmentFlag.AlignLeft)
+
+    def _sync_reroll_button(self) -> None:
+        """Show Reroll under a result that can be thrown again, and nowhere else.
+
+        Not under the resting prompt, a roll the session never answered, a die still
+        tumbling, or a routine check (take 10 rolled nothing to be lucky with).
+        """
+        last = self._last_roll
+        show = (
+            self._showing_result
+            and not self._rolling
+            and last is not None
+            and not last.get("routine")
+        )
+        if self._reroll_button.isHidden() == (not show):
+            return
+        self._reroll_button.setVisible(show)
+        self._readout_changed()
 
     def _set_die_size(self, size_token: str, face_token: str) -> None:
         """Draw the die at the size *size_token* names, with *face_token*'s numeral.
@@ -1130,37 +1236,70 @@ class DiceRollerPanel(
         self._face.setFont(font)
 
     def _apply_die_style(self) -> None:
-        """Ring the die while a trait is loaded, and leave it bare when none is.
+        """Light a halo round the die's outline: how the last roll went, else that a
+        trait is loaded, else (faintly) that the pointer is over it.
 
-        The other half of the loud chip: the chip says what is loaded, and the thing
-        you are about to click says it is loaded with *something*. The ring is drawn
-        inside the button's existing ``die.padding`` chrome, so the button's fixed
-        size never moves — a size change here would ripple out through
-        :attr:`contentChanged` into the splitter for what is only a highlight.
+        A halo rather than a ring: the ring was a rounded square with a tinted fill
+        drawn round the button, and after a failed roll the strip showed a red square
+        that read as an error tile rather than "this roll failed". The halo is a soft
+        glow of the drawing's own silhouette (a drop shadow at no offset), so it follows
+        the d20 and costs no layout: the button's fixed size never moves, and nothing
+        ripples out through :attr:`contentChanged` for what is only a highlight.
+
+        The button itself is drawn bare in every state — no border, no fill, hover
+        included — so nothing rectangular is ever lit behind the die.
         """
-        # How the last roll went outranks the armed ring while it lasts: it is the
+        # How the last roll went outranks the armed halo while it lasts: it is the
         # news, and the chip above still says what is loaded.
         token = self._outcome or ("accent.dice" if self._spec is not None else None)
-        if token is None:
-            # An *empty* sheet rather than "no border": a rule of our own would take
-            # the flat button's hover painting away from the style with it.
-            self._die_button.setStyleSheet("")
-            return
-        fill = 0.22 if self._outcome else 0.10
-        border = (
-            f"border: {int(theme.metric('border.width.emphasis'))}px solid"
-            f" {theme.color(token)};"
-            f" border-radius: {int(theme.metric('radius.card'))}px;"
-        )
+        strength = 1.0 if self._outcome else 0.85
+        if token is None and self._die_hovered and self._die_button.isEnabled():
+            token, strength = "accent.dice", 0.45
         self._die_button.setStyleSheet(
-            f"#dieButton {{ {border} background: {theme.wash(token, fill)}; }}"
-            # Hover has to be restated for the same reason: a background of ours
-            # outranks the one the style would have painted under the cursor.
-            f"#dieButton:hover {{ {border} background: {theme.wash(token, fill + 0.10)}; }}"
+            "#dieButton, #dieButton:hover, #dieButton:pressed, #dieButton:disabled"
+            " { border: none; background: transparent; }"
         )
+        if token is None:
+            self._die_button.setGraphicsEffect(None)
+            return
+        colour = QColor(theme.color(token))
+        if not colour.isValid():  # a preset that follows the OS names a palette role
+            colour = self.palette().color(QPalette.ColorRole.Highlight)
+        colour.setAlphaF(strength)
+        halo = QGraphicsDropShadowEffect(self._die_button)
+        halo.setOffset(0, 0)
+        halo.setBlurRadius(float(theme.metric("die.halo")))
+        halo.setColor(colour)
+        # Owned by the button from here: setting the next one deletes this.
+        self._die_button.setGraphicsEffect(halo)
+
+    def halo_token(self) -> str | None:
+        """The colour token the die's halo is lit in right now, or ``None`` for none."""
+        if self._die_button.graphicsEffect() is None:
+            return None
+        if self._outcome:
+            return self._outcome
+        return "accent.dice"
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: ANN001, N802 - Qt override
+        """The die's hover (a faint halo says it can be clicked), and the DC capsule
+        following its label and box about."""
+        if event.type() in (QEvent.Type.Move, QEvent.Type.Resize) and watched in (
+            getattr(self, "_dc_label", None),
+            getattr(self, "_dc_spin", None),
+            getattr(self, "_toolbar", None),
+        ):
+            self._place_dc_capsule()
+        if watched is getattr(self, "_die_button", None) and event.type() in (
+            QEvent.Type.Enter,
+            QEvent.Type.Leave,
+        ):
+            self._die_hovered = event.type() == QEvent.Type.Enter
+            self._apply_die_style()
+        return super().eventFilter(watched, event)
 
     def _glow_outcome(self, token: str | None) -> None:
-        """Ring the die in *token* for :data:`OUTCOME_GLOW_MS` — how the roll went, at a
+        """Light the die's halo in *token* for :data:`OUTCOME_GLOW_MS` — how the roll went, at a
         glance — or, with ``None``, put it straight back to its resting look."""
         self._outcome = token
         if token is None:
@@ -1188,6 +1327,8 @@ class DiceRollerPanel(
         layout.setContentsMargins(0, 0, 0, 0)
         self._quick_container = QuickRollStrip()
         self._quick_flow = FlowLayout(self._quick_container, spacing=int(theme.metric("space.sm")))
+        # Each line of pills shares out the whole width, like the rows above it.
+        self._quick_flow.set_justify(True)
         self._quick_flow.setContentsMargins(0, 0, 0, 0)
         self._quick_container.reordered.connect(self._reorder_quick_roll)
         layout.addWidget(self._quick_container)
@@ -1305,6 +1446,8 @@ class DiceRollerPanel(
         # The rich-text token: a palette role means nothing inside HTML.
         muted = theme.color("text.muted.rich")
         self._readout.setText(f"<span style='color:{muted}'>{IDLE_PROMPT}</span>")
+        self._readout.setToolTip("")
+        self._sync_reroll_button()
 
     def add_bonus(self, amount: int) -> None:
         """Add *amount* to the Bonus/Penalty slider, clamped to the range it offers.
@@ -1534,6 +1677,7 @@ class DiceRollerPanel(
             self._rolled_lines = ()
             self._then = None
         self._rolling = True
+        self._sync_reroll_button()
         self._glow_outcome(None)
         self._die_button.setEnabled(False)
         for widget in self._input_widgets():
@@ -1659,6 +1803,7 @@ class DiceRollerPanel(
             if dc is not None
             else None
         )
+        spec = self._rolled_spec()
         self._update_readout(
             die,
             modifier,
@@ -1667,6 +1812,19 @@ class DiceRollerPanel(
             bool(result is not None and result.critical),
             routine=routine,
             other_die=other_die,
+            record={
+                "die": die,
+                "bonus": bonus,
+                "penalty": penalty,
+                "dc": dc,
+                "degree": None if result is None else result.degree,
+                "critical": bool(result is not None and result.critical),
+                "label": self._roll_label(),
+                "spec": None if spec is None else spec.to_dict(),
+                "reroll": self._rerolling,
+                "routine": routine,
+                "other_die": other_die,
+            },
         )
         self.localRoll.emit(
             {
@@ -1676,7 +1834,7 @@ class DiceRollerPanel(
                 "dc": dc,
                 "result": result,
                 "label": self._roll_label(),
-                "spec": self._rolled_spec(),
+                "spec": spec,
                 "reroll": self._rerolling,
                 "routine": routine,
                 "minion": minion,
@@ -1719,6 +1877,7 @@ class DiceRollerPanel(
             hidden=bool(roll.get("hidden")),
             routine=bool(roll.get("routine")),
             other_die=int(roll.get("other_die") or 0),
+            record=roll,
         )
         self._unlock_inputs()
         # The die has settled — a paired history panel can now show this own roll.
@@ -1762,6 +1921,8 @@ class DiceRollerPanel(
         self.awaitingOwnRoll.emit(False)
         self._face.setText("?")
         self._readout.setText(f"<span style='color:{theme.color('tint.worse')}'>{message}</span>")
+        self._readout.setToolTip("")
+        self._reroll_button.hide()
         self._readout_changed()
         self._showing_result = True  # not a number, but not the prompt either
         # The chip stays (see :meth:`_settle_spec`); only its transience goes, so the
@@ -1804,7 +1965,10 @@ class DiceRollerPanel(
         hidden: bool = False,
         routine: bool = False,
         other_die: int = 0,
+        record: dict | None = None,
     ) -> None:
+        """Show a result beside the die: the short line, and on hover everything the
+        roll was made of (:func:`~mm_companion.ui.roll_history.roll_breakdown`)."""
         self._showing_result = True
         label = reroll_label(self._roll_label(), self._rerolling)
         html = readout_html(
@@ -1820,6 +1984,8 @@ class DiceRollerPanel(
             other_die=other_die,
         )
         self._readout.setText(html)
+        self._readout.setToolTip(roll_breakdown(record) if record is not None else "")
+        self._sync_reroll_button()
         self._readout_changed()
         self._glow_outcome(
             outcome_token(die, degree, critical, routine=routine, lifted=self._rerolling)

@@ -31,11 +31,12 @@ top-level window of its own, and showing one is the flash the sheet tests watch 
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, Signal
-from PySide6.QtGui import QIcon, QKeyEvent, QPalette
+from PySide6.QtGui import QFont, QFontMetrics, QIcon, QKeyEvent, QPalette
 from PySide6.QtWidgets import (
     QAbstractButton,
     QFrame,
@@ -50,7 +51,7 @@ from PySide6.QtWidgets import (
 from mm_companion.ui import theme
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.svg_assets import action_icon_pixmap
-from mm_companion.ui.widgets import BOLD_STYLE
+from mm_companion.ui.widgets import BOLD_STYLE, ElidingLabel, muted_style
 
 
 @dataclass(frozen=True)
@@ -71,10 +72,12 @@ class GridItem:
 
 @dataclass(frozen=True)
 class GridSection:
-    """A titled run of tiles."""
+    """A titled run of tiles, and a *note* — a muted line under the title, for what the
+    whole section is waiting on (every tile greyed for the one reason)."""
 
     title: str
     items: tuple[GridItem, ...] = ()
+    note: str = ""
 
 
 class GridTile(QToolButton):
@@ -158,24 +161,38 @@ class ActionGridPopup(QFrame):
         self._follow_up: QPoint | None = None
         live = [s for s in sections if s.items]
         self._columns = max((len(s.items) for s in live), default=1)
+        #: The muted "why it is all greyed" lines under section titles.
+        self._notes: list[ElidingLabel] = []
         for shelf in self._shelve(live):
             if len(shelf) == 1:
                 title, flow = self._section(shelf[0], flowing=True)
                 column.addWidget(title)
+                if shelf[0].note:
+                    note = ElidingLabel(shelf[0].note)
+                    note.setStyleSheet(muted_style(italic=True))
+                    self._notes.append(note)
+                    column.addWidget(note)
                 column.addWidget(flow)
                 self._flows.append(flow)
                 continue
             row = QWidget()
             across = QHBoxLayout(row)
             across.setContentsMargins(0, 0, 0, 0)
-            across.setSpacing(self._shelf_gap())
+            # The tiles' own gap, and each section as wide as whole tile columns: so a
+            # shelf's tiles stand in the same columns as a full row's above them, and
+            # each title sits over its own tiles. A wider gap here put "Dice" over the
+            # gap between columns, a column away from its Reroll tile.
+            across.setSpacing(int(theme.metric("action-grid.gap")))
             for section in shelf:
-                part = QVBoxLayout()
-                part.setSpacing(column.spacing())
+                part = QWidget()
+                part.setFixedWidth(self._row_width(self._section_columns(section)))
+                stack = QVBoxLayout(part)
+                stack.setContentsMargins(0, 0, 0, 0)
+                stack.setSpacing(column.spacing())
                 title, tiles = self._section(section, flowing=False)
-                part.addWidget(title)
-                part.addWidget(tiles)
-                across.addLayout(part)
+                stack.addWidget(title)
+                stack.addWidget(tiles)
+                across.addWidget(part)
             across.addStretch(1)
             column.addWidget(row)
             self._shelves.append(row)
@@ -185,34 +202,39 @@ class ActionGridPopup(QFrame):
     # -- building ------------------------------------------------------------
 
     @staticmethod
-    def _shelf_gap() -> int:
-        """The space between two sections sharing a row: wider than between tiles, so
-        they still read as two."""
-        return 2 * int(theme.metric("space.lg"))
-
-    @staticmethod
     def _row_width(tiles: int) -> int:
         """How wide *tiles* tiles stand in one row."""
         side = int(theme.metric("action-grid.tile"))
         gap = int(theme.metric("action-grid.gap"))
         return tiles * side + max(0, tiles - 1) * gap
 
+    def _section_columns(self, section: GridSection) -> int:
+        """How many tile columns *section* takes on a shared row: its tiles, or as many
+        as its title needs, whichever is more — "Area & Group" over one tile takes two,
+        so the next section's title does not start over that tile's neighbour."""
+        side = int(theme.metric("action-grid.tile"))
+        gap = int(theme.metric("action-grid.gap"))
+        font = QFont(self.font())
+        font.setBold(True)
+        title = QFontMetrics(font).horizontalAdvance(section.title)
+        return max(len(section.items), math.ceil((title + gap) / (side + gap)))
+
     def _shelve(self, sections: Sequence[GridSection]) -> list[list[GridSection]]:
         """Group *sections* into rows: a run of short ones that fits in one row
-        together shares it; anything else has its row (or rows) to itself."""
+        together shares it; anything else has its row (or rows) to itself. A section
+        with a note keeps a row of its own, where the note has the width to be read."""
         wanted = max(1, min(int(theme.metric("action-grid.columns")), self._columns))
-        room = self._row_width(wanted)
         shelves: list[list[GridSection]] = []
-        width = 0  # of the last shelf, or 0 when it can take no more
+        used = 0  # columns the last shelf holds, or 0 when it can take no more
         for section in sections:
-            own = self._row_width(len(section.items))
-            short = len(section.items) <= wanted
-            if short and width and width + self._shelf_gap() + own <= room:
+            own = self._section_columns(section)
+            short = own <= wanted and not section.note
+            if short and used and used + own <= wanted:
                 shelves[-1].append(section)
-                width += self._shelf_gap() + own
+                used += own
                 continue
             shelves.append([section])
-            width = own if short else 0
+            used = own if short else 0
         return shelves
 
     def _section(self, section: GridSection, *, flowing: bool) -> tuple[QLabel, QWidget]:
@@ -285,6 +307,7 @@ class ActionGridPopup(QFrame):
         spacing = self._scroll.widget().layout().spacing()
         shelved = {id(t) for shelf in self._shelves for t in shelf.findChildren(QLabel)}
         parts = [t.sizeHint().height() for t in self._titles if id(t) not in shelved]
+        parts += [note.sizeHint().height() for note in self._notes]
         parts += [f.heightForWidth(width) for f in self._flows]
         parts += [shelf.sizeHint().height() for shelf in self._shelves]
         return sum(parts) + spacing * max(0, len(parts) - 1)

@@ -47,6 +47,7 @@ from mm_companion.core.rules import (
     is_team_call,
     outcome_is_failure,
     resistance_outcome,
+    spec_parts,
 )
 from mm_companion.core.session.model import KIND_MOD, KIND_NOTE, KIND_REQUEST, KIND_ROLL
 from mm_companion.ui import theme
@@ -503,27 +504,66 @@ def roll_heading(roll: dict) -> str:
     return heading
 
 
-def roll_headline(roll: dict) -> str:
-    """A roll's number line, as rich text: the total, how it was made, and how it went.
+#: What a routine check (take 10) shows where the die would be.
+ROUTINE_WORD = "take 10"
+#: The breakdown's line for the modifier box when nothing named was loaded.
+MODIFIER_PART = "Modifier"
+#: ...and for what the box added on top of a loaded trait.
+CIRCUMSTANCE_PART = "Circumstance"
 
-    The degree rides on the **same line** as the total rather than one of its own. A
-    history is a column of these in a strip a few cards tall, and the line a degree
-    used to take was a third of every card — the difference between three rolls in
-    view and five.
+
+def _signed(amount: int) -> str:
+    """``+4`` / ``−2`` with a real minus sign, for a line people read."""
+    return f"{amount:+d}".replace("-", "−")
+
+
+def _other_die(roll: dict) -> int:
+    """The die an Aim roll dropped (rolled twice, the higher kept), or 0."""
+    other = roll.get("other_die")
+    if isinstance(other, int) and not isinstance(other, bool) and other > 0:
+        return other
+    return 0
+
+
+def roll_working(
+    die: int, modifier: int, *, routine: bool = False, other_die: int = 0, total_html: str = ""
+) -> str:
+    """How a total was reached, as rich text: the die, the net bonus or penalty, the total.
+
+    ``19 + 4 = 23``, ``7 − 2 = 5``, ``take 10 + 4 = 14``; with nothing added, just the
+    die — the die *is* the total. A dropped Aim die is struck through beside the kept
+    one. The die and the modifier are muted and the total is bold (or *total_html*, for
+    a caller that sizes or tints it), so the eye lands on the number that counts.
+    Everything else a roll was made of is on hover (:func:`roll_breakdown`).
+    """
+    muted = theme.color("text.muted.rich")
+    total = total_html or f"<b>{die + modifier}</b>"
+    shown = ROUTINE_WORD if routine else str(die)
+    if other_die and not routine:
+        shown = f"{shown} <s>{other_die}</s>"
+    if not modifier and not routine and not other_die:
+        return total
+    working = shown
+    if modifier:
+        sign = "+" if modifier > 0 else "−"
+        working = f"{shown} {sign} {abs(modifier)}"
+    return f"<span style='color:{muted}'>{working} =</span> {total}"
+
+
+def roll_headline(roll: dict) -> str:
+    """A roll's number line, as rich text: the die, the net bonus or penalty, the total,
+    and how it went (``19 + 4 = 23 vs DC 15 · Success``).
+
+    Only those: what the bonus is made of is on hover (:func:`roll_breakdown`). The
+    degree rides on the **same line** as the total rather than one of its own. A history
+    is a column of these in a strip a few cards tall, and the line a degree used to take
+    was a third of every card — the difference between three rolls in view and five.
     """
     die = int(roll.get("die", 0))
     modifier = int(roll.get("bonus", 0)) - int(roll.get("penalty", 0))
-    muted = theme.color("text.muted.rich")
-    # A routine check rolled nothing: say so, rather than show a 10 that never came up.
-    made = "routine" if roll.get("routine") else "d20"
-    # Rolled twice for the higher (Aim): the dropped die, struck through beside the kept.
-    other = roll.get("other_die")
-    if isinstance(other, int) and not isinstance(other, bool) and other > 0:
-        made = f"{made} {die} <s>{other}</s>"
-    else:
-        made = f"{made} {die}"
-    breakdown = f"<span style='color:{muted}'>({made} {modifier:+d})</span>"
-    headline = f"<b>{die + modifier}</b> {breakdown}"
+    headline = roll_working(
+        die, modifier, routine=bool(roll.get("routine")), other_die=_other_die(roll)
+    )
     dc = roll.get("dc")
     if dc is not None:
         headline += f" vs DC {int(dc)}"
@@ -533,6 +573,62 @@ def roll_headline(roll: dict) -> str:
         words = degree_html(int(degree), bool(roll.get("critical")), die)
         headline += f" · <span style='color:{colour}'>{words}</span>"
     return headline
+
+
+def breakdown_lines(roll: dict) -> list[tuple[str, str]]:
+    """Every line of a roll's hover breakdown, as ``(name, value)`` text pairs.
+
+    The die (or the routine 10, or the kept die of two), then each part of the loaded
+    trait's modifier as its spec names them (:func:`~mm_companion.core.rules.spec_parts`
+    — "Strength +4", "Athletics ranks +5", "All-Out Attack +3"), then whatever the
+    modifier box added on top, then the total.
+    """
+    die = int(roll.get("die", 0))
+    modifier = int(roll.get("bonus", 0)) - int(roll.get("penalty", 0))
+    other = _other_die(roll)
+    if roll.get("routine"):
+        lines = [("Take 10", str(die))]
+    elif other:
+        lines = [("d20, best of two", f"{die} (dropped {other})")]
+    elif roll.get("reroll"):
+        lines = [("d20, lucky reroll", str(die))]
+    else:
+        lines = [("d20", str(die))]
+    spec = RollSpec.from_dict(roll.get("spec"))
+    named = spec_parts(spec) if spec is not None else ()
+    lines += [(name, _signed(amount)) for name, amount in named]
+    rest = modifier - sum(amount for _name, amount in named)
+    if rest:
+        lines.append((CIRCUMSTANCE_PART if named else MODIFIER_PART, _signed(rest)))
+    lines.append(("Total", str(die + modifier)))
+    return lines
+
+
+def roll_breakdown(roll: dict) -> str:
+    """A roll's hover breakdown as rich text: what was rolled, every stat, bonus and
+    penalty that went into it, the total, and how it went against the DC."""
+    muted = theme.color("text.muted.rich")
+    label = reroll_label(str(roll.get("label", "")), bool(roll.get("reroll")))
+    rows = []
+    lines = breakdown_lines(roll)
+    for index, (name, value) in enumerate(lines):
+        last = index == len(lines) - 1
+        style = " style='font-weight:bold'" if last else ""
+        rows.append(
+            f"<tr><td{style}>{escape_rich_text(name)}</td>"
+            f"<td align='right'{style}>&nbsp;&nbsp;{escape_rich_text(value)}</td></tr>"
+        )
+    html = f"<b>{escape_rich_text(label)}</b>" if label else ""
+    html += f"<table cellspacing='0' cellpadding='1'>{''.join(rows)}</table>"
+    dc = roll.get("dc")
+    degree = roll.get("degree")
+    if dc is not None:
+        verdict = f"vs DC {int(dc)}"
+        if degree is not None:
+            words = degree_label(int(degree), bool(roll.get("critical")), int(roll.get("die", 0)))
+            verdict += f" — {escape_rich_text(words)}"
+        html += f"<span style='color:{muted}'>{verdict}</span>"
+    return html
 
 
 def _rich(text: str) -> QLabel:
@@ -951,7 +1047,9 @@ class SessionRollCard(HistoryCard):
         tighten_card(layout, info)
 
         self._buttons = heading_row(info, _rich(roll_heading(roll)))
-        info.addWidget(_rich(roll_headline(roll)))
+        headline = _rich(roll_headline(roll))
+        headline.setToolTip(roll_breakdown(roll))
+        info.addWidget(headline)
 
         # The chain — on every card, whoever rolled it. A save an attack forced is
         # made by the *other* side of the table, so the button has to be on the

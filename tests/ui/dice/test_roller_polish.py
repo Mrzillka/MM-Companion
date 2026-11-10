@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from PySide6.QtCore import QPointF
-from PySide6.QtGui import QEnterEvent, QKeySequence, QShortcut
+from PySide6.QtGui import QColor, QEnterEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import QAbstractButton, QApplication, QLabel, QPushButton
 
 from mm_companion.core.character import Character
@@ -105,11 +105,13 @@ def test_the_die_glows_after_a_roll_and_settles_back(qapp: QApplication, monkeyp
     panel.set_dc(15)
     panel._finish_roll()
     assert panel.outcome == "tint.worse"
-    assert theme.color("tint.worse") in panel._die_button.styleSheet()
+    assert panel.halo_token() == "tint.worse"
+    halo = panel._die_button.graphicsEffect()
+    assert halo.color().name() == QColor(theme.color("tint.worse")).name()
     assert panel._outcome_timer.isActive()
     panel._outcome_timer.timeout.emit()
     assert panel.outcome is None
-    assert panel._die_button.styleSheet() == ""
+    assert panel.halo_token() is None  # nothing loaded: no halo at all
 
 
 def test_a_new_roll_puts_the_glow_out(qapp: QApplication, monkeypatch) -> None:
@@ -186,7 +188,7 @@ def test_the_roller_rolls_rerolls_and_takes_10_from_the_keyboard(
     assert len(view._local_history.cards()) == 2
     _shortcut(panel, TAKE_TEN_SHORTCUT).activated.emit()
     assert len(view._local_history.cards()) == 3
-    assert "routine" in view._local_history.cards()[0].findChild(QLabel).text()
+    assert "take 10" in view._local_history.cards()[0].findChild(QLabel).text()
 
 
 def test_the_roll_key_does_nothing_while_a_die_tumbles(qapp: QApplication) -> None:

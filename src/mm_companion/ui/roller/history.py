@@ -35,6 +35,7 @@ from mm_companion.ui.roll_history import (
     remove_button,
     reroll_label,
     reveal_hover_buttons,
+    roll_breakdown,
     roll_headline,
     size_history_scroll,
     stamp_card,
@@ -48,11 +49,6 @@ from mm_companion.ui.widgets import (
 LOCAL_EMPTY_TEXT = (
     "No rolls yet. Click the die, or a trait on the sheet. ☆ on a roll keeps it as a quick " "roll."
 )
-
-#: The name a roll made with nothing loaded goes under, so no card is a bare number.
-PLAIN_ROLL = "d20"
-#: ...and a routine check made with nothing loaded.
-PLAIN_ROUTINE = "Take 10"
 
 
 def local_record(
@@ -112,6 +108,7 @@ class RollCard(QFrame):
         reroll: bool = False,
         routine: bool = False,
         minion: bool = False,
+        other_die: int = 0,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -126,20 +123,26 @@ class RollCard(QFrame):
         tighten_card(layout, info)
 
         # The same number line the shared history's card prints — degree and all, on
-        # one line (see roll_headline).
-        headline = roll_headline(local_record(die, bonus, penalty, dc, result, routine=routine))
-        # What was rolled leads, the way the shared history's card names the player —
-        # a private history of bare numbers is unreadable a few rolls later. A roll with
-        # nothing loaded is still named, plainly, so every card starts the same way.
-        shown = reroll_label(label or (PLAIN_ROUTINE if routine else PLAIN_ROLL), reroll)
-        headline = (
-            f"<span style='color:{theme.color('accent.dice')}'>"
-            f"{escape_rich_text(shown)}</span><br>"
-            f"{headline}"
-        )
+        # one line (see roll_headline) — and the same breakdown on hover.
+        record = local_record(die, bonus, penalty, dc, result, routine=routine, label=label)
+        record["reroll"] = reroll
+        record["other_die"] = other_die
+        record["spec"] = spec.to_dict() if isinstance(spec, RollSpec) else spec
+        headline = roll_headline(record)
+        # What was rolled leads, the way the shared history's card names the player. A
+        # roll with nothing loaded has no name: its line says it was a d20 and what it
+        # came to, and a "d20" over it in the accent colour read as a link.
+        shown = reroll_label(label, reroll)
+        if shown:
+            headline = (
+                f"<span style='color:{theme.color('accent.dice')}'>"
+                f"{escape_rich_text(shown)}</span><br>"
+                f"{headline}"
+            )
         title = QLabel(headline)
         title.setTextFormat(Qt.TextFormat.RichText)
         title.setWordWrap(True)
+        title.setToolTip(roll_breakdown(record))
         # The star and the ✕ sit beside the first line, as on the shared history's
         # card (see heading_row), so the chain's buttons below get the card's width.
         buttons = heading_row(info, title)
@@ -274,6 +277,7 @@ class LocalRollHistory(QWidget):
             reroll=bool(roll.get("reroll")),
             routine=bool(roll.get("routine")),
             minion=bool(roll.get("minion")),
+            other_die=int(roll.get("other_die") or 0),
         )
         card.set_save_state(self._saved_keys, self._quick_room)
         card.saveToggled.connect(self.saveToggled)

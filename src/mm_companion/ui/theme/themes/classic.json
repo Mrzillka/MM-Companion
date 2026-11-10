@@ -99,10 +99,12 @@
     "canvas.hint.height": 120,
     "platform.features.height": 160,
 
-    "_die.padding": "The flat button's chrome around the drawing, so the button is die.size + this on each axis. It is what keeps the die from sitting flush against the readout beside it, and where the ring goes while a trait is loaded.",
+    "_die.padding": "The flat button's chrome around the drawing, so the button is die.size + this on each axis. It is what keeps the die from sitting flush against the readout beside it, and where the halo glows.",
     "die.size": 120,
     "die.size.compact": 96,
     "die.padding": 16,
+    "_die.halo": "How far the glow round the die's outline spreads, in pixels: how a roll went, that a trait is loaded, or the pointer over it. It is drawn in the die.padding chrome and beyond, so it never moves anything.",
+    "die.halo": 30,
 
     "_compact.width": "The size the window opens at in compact mode, before the user resizes it. The minimums are deliberately far below the roller's own content: past them the die and the history simply scroll, which is what lets the mini window be shoved into a corner of a shared screen.",
     "compact.width": 380,

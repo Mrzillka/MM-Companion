@@ -103,6 +103,13 @@ class DiceRollerView(ReflowBox, QWidget):
         self.panel.contentChanged.connect(self._on_panel_resized)
         self._splitter = QSplitter(Qt.Orientation.Vertical, self)
         self._splitter.setChildrenCollapsible(False)
+        # The handle is still there to drag, but drawn only under the pointer: at rest
+        # the style painted it as a dark band across the block, which read as a stray
+        # separator line above the history.
+        self._splitter.setStyleSheet(
+            "QSplitter::handle { background: transparent; }"
+            f" QSplitter::handle:hover {{ background: {theme.wash('accent.dice', 0.35)}; }}"
+        )
         for part in self.reflow_parts():
             self._splitter.addWidget(part)
         self._splitter.setStretchFactor(0, 0)  # the panel is sized by its content...
@@ -132,10 +139,11 @@ class DiceRollerView(ReflowBox, QWidget):
         self._settle.timeout.connect(self._redivide)
 
         layout = QVBoxLayout(self)
-        # A little air inside the block's frame: the roll controls used to get it from
-        # a "Roll" group box, which is gone (see :func:`titled_box`).
-        pad = int(theme.metric("space.sm"))
-        layout.setContentsMargins(pad, pad, pad, pad)
+        # Air inside the block's frame, as a group box gives every other block's
+        # content: the roll controls used to get it from a "Roll" group box, which is
+        # gone (see :func:`titled_box`), and the space.sm they had after it left the
+        # labels and the lane's spin box against the frame's edge.
+        layout.setContentsMargins(*theme.box("card.margins"))
         layout.addWidget(self._splitter)
 
         self.init_reflow()

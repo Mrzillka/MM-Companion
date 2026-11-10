@@ -22,7 +22,9 @@ def test_the_actions_button_sits_where_the_action_row_was(qapp) -> None:
     view = DiceRollerView()  # held: the panel's widgets die with it
     panel = view.panel
     assert panel._actions_button.text() == ACTIONS_LABEL
-    assert not hasattr(panel, "_reroll_button")
+    # The action row is gone; Reroll is back only as the button under a result, and
+    # hidden until there is one (see test_roller_justified).
+    assert panel._reroll_button.isHidden()
 
 
 def test_without_a_host_menu_the_popup_offers_the_panels_own_two(qapp) -> None:

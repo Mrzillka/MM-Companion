@@ -127,19 +127,34 @@ class _QuickRollButton(QToolButton):
 class _QuickChip(QFrame):
     """One quick roll as a pill, whose ``×`` shows only while the pointer is over it.
 
-    The ``×`` keeps its room while hidden, so the row never re-wraps under the
-    pointer; right-click ▸ Remove does the same for anyone not using a mouse there.
+    The ``×`` **floats** over the pill's right end rather than sitting in its layout:
+    it used to keep its room while hidden, which left every pill's caption off-centre
+    with a blank stretch on its right. Floating, it takes no room at all, so the row
+    never re-wraps under the pointer either. Right-click ▸ Remove does the same for
+    anyone not using a mouse there.
     """
 
     def __init__(self, remove: QPushButton) -> None:
         super().__init__()
         self._remove = remove
-        policy = remove.sizePolicy()
-        policy.setRetainSizeWhenHidden(True)
-        remove.setSizePolicy(policy)
+        # Parented before anything can show it: a parentless widget is a window.
+        remove.setParent(self)
+        remove.hide()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        self._place_remove()
+
+    def _place_remove(self) -> None:
+        inset = int(theme.metric("space.xs"))
+        height = max(1, self.height() - 2 * inset)
+        width = self._remove.width()
+        self._remove.setGeometry(self.width() - width - inset, inset, width, height)
 
     def enterEvent(self, event) -> None:  # noqa: N802 - Qt override
+        self._place_remove()
         self._remove.show()
+        self._remove.raise_()
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:  # noqa: N802 - Qt override
@@ -382,7 +397,7 @@ class RollerQuickRollsMixin:
 
     def _make_quick_chip(self, entry: dict, index: int) -> QWidget:
         remove_button = QPushButton("×")
-        remove_button.setFlat(True)
+        # Not flat: it floats over the caption's end, so it needs a face of its own.
         remove_button.setFixedWidth(int(theme.metric("column.chip-button")))
         remove_button.setToolTip("Remove this quick roll")
         remove_button.clicked.connect(lambda _=False, e=entry: self._remove_quick_roll(e))
@@ -397,7 +412,9 @@ class RollerQuickRollsMixin:
             f" background: {theme.wash('accent.dice', 0.08)};"
             "}"
         )
-        chip.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        # Preferred, not Maximum: a layout only widens an item whose policy lets it grow,
+        # and the justified strip shares each line's spare width out between its pills.
+        chip.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         # Right-click is where a chip is named. Set on the frame alone: a child button
         # leaves a context-menu event unhandled, so it propagates up to here.
         chip.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -406,7 +423,8 @@ class RollerQuickRollsMixin:
         )
         layout = QHBoxLayout(chip)
         small = int(theme.metric("space.xs"))
-        layout.setContentsMargins(int(theme.metric("space.sm")), small, small, small)
+        side = int(theme.metric("space.sm"))
+        layout.setContentsMargins(side, small, side, small)
         layout.setSpacing(small)
 
         roll_button = _QuickRollButton(quick_label(entry), index)
@@ -414,9 +432,9 @@ class RollerQuickRollsMixin:
             "Click to roll it. Drag to reorder; right-click to rename or remove."
         )
         roll_button.clicked.connect(lambda _=False, e=entry: self._apply_quick_roll(e))
+        # The caption takes whatever width the justified row gives the pill, centred.
+        roll_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         layout.addWidget(roll_button)
-        layout.addWidget(remove_button)
-        remove_button.hide()
         return chip
 
     def _show_chip_menu(self, chip: QWidget, pos: QPoint, entry: dict) -> None:

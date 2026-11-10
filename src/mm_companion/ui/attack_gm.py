@@ -75,7 +75,7 @@ from mm_companion.ui.action_run import ActionRun, group_line, total_of
 from mm_companion.ui.action_ui import ADJUST_LIMIT
 from mm_companion.ui.attack_targets import KIND_ATTACK, AttackDeclaration, aimed_spec
 from mm_companion.ui.impress import PARTY_NPC, PARTY_PLAYER, ImpressParty, new_action_id
-from mm_companion.ui.roll_history import ActionCard
+from mm_companion.ui.roll_history import ROUTINE_WORD, ActionCard
 from mm_companion.ui.widgets import guard_wheel, make_signed_spin_box
 
 ACCEPT_CAPTION = "Accept"
@@ -98,14 +98,25 @@ def save_text(save: RollSpec, record: dict) -> str:
 
 
 def roll_text(roll: dict) -> str:
-    """What an attack came to, with how it was made: "20 (d20 14 +6)".
+    """What an attack came to, with how it was made: "14 + 6 = 20" — the history's
+    working (:func:`~mm_companion.ui.roll_history.roll_working`) as plain text.
 
-    The breakdown keeps a total of 20 from reading as a natural 20.
+    The working keeps a total of 20 from reading as a natural 20.
     """
     die = int(roll.get("die", 0))
     modifier = int(roll.get("bonus", 0)) - int(roll.get("penalty", 0))
-    made = "routine" if roll.get("routine") else "d20"
-    return f"{die + modifier} ({made} {die} {modifier:+d})"
+    shown = ROUTINE_WORD if roll.get("routine") else str(die)
+    if not modifier:
+        return f"{shown} = {die}" if roll.get("routine") else str(die)
+    sign = "+" if modifier > 0 else "−"
+    return f"{shown} {sign} {abs(modifier)} = {die + modifier}"
+
+
+def roll_text_html(roll: dict) -> str:
+    """:func:`roll_text` as rich text, the total in bold."""
+    text = roll_text(roll)
+    head, sep, total = text.rpartition(" = ")
+    return f"{html.escape(head)} = <b>{total}</b>" if sep else f"<b>{html.escape(text)}</b>"
 
 
 class AttackHost(Protocol):
@@ -538,8 +549,7 @@ class AttackController(QObject):
             f"<b>{html.escape(decl.target_name)}</b> ({html.escape(decl.spec.label)})"
         )
         if aimed.roll is not None:
-            total, _space, breakdown = roll_text(aimed.roll).partition(" ")
-            text += f" — rolled <b>{total}</b> {html.escape(breakdown)}"
+            text += f" — rolled {roll_text_html(aimed.roll)}"
         aimed.card.set_text(text)
         if aimed.accepted:
             return

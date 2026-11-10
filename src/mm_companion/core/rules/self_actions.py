@@ -57,7 +57,7 @@ from .maneuvers import (
 )
 from .movement import speed_lines
 from .recovery import can_recover, recovery_roll
-from .rolls import LADDER_DAMAGE, RollSpec, ability_roll, localize_spec, skill_roll
+from .rolls import LADDER_DAMAGE, RollSpec, ability_roll, add_part, localize_spec, skill_roll
 from .targeted import bare_attack_check
 
 __all__ = [
@@ -261,8 +261,11 @@ def _apply_effect(
     attack = has_attack_check(spec, game_data)
     if attack and effect.attack_modifier:
         modifier = spec.modifier + effect.attack_modifier
-        spec = replace(
-            spec, modifier=modifier, label=_relabel_check(spec.label, spec.modifier, modifier)
+        spec = add_part(
+            spec,
+            action.name,
+            effect.attack_modifier,
+            label=_relabel_check(spec.label, spec.modifier, modifier),
         )
     if attack and effect.roll_twice:
         spec = replace(spec, roll_twice=True)
@@ -421,7 +424,8 @@ def reaction_spec(
     if made:
         detail += f", {made} earlier {'block' if made == 1 else 'blocks'} {shift:+d}"
     label = f"{action.name} ({detail})" + (f" {rule.line}" if rule.line else "")
-    return replace(spec, label=label, modifier=modifier, dc=None, hint=action.tooltip)
+    spec = add_part(spec, "Earlier blocks", shift)
+    return replace(spec, label=label, dc=None, hint=action.tooltip)
 
 
 def reaction_changes(action: CombatAction) -> tuple[ConditionChange, ...]:

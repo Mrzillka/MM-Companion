@@ -127,6 +127,74 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
     width the history now gets. `row_minimum_width` / `row_natural_width` count the
     controls column as the wider of the two, whichever layout holds the pills, so the
     reflow decides the same either way. Compact takes them out first.
+- **The justified pass** (2026-11-10, the user's calls on a third review; tests in
+  `tests/ui/dice/test_roller_justified.py` and `tests/core/test_roll_parts.py`):
+  - **A halo, not a ring** (`_apply_die_style`). The armed ring and the outcome glow were
+    a rounded square with a tinted fill round the die button, and after a failed roll the
+    strip showed a red square that read as an error tile. Now the button is drawn bare in
+    every state (no border, no fill, hover included) and a `QGraphicsDropShadowEffect` at
+    no offset glows the drawing's own silhouette: the outcome at full strength, a loaded
+    trait in `accent.dice`, the pointer over an idle die faintly (an event filter on the
+    button). Its spread is the `die.halo` token. `halo_token()` says what is lit. The
+    effect paints into the `die.padding` chrome and beyond, so it moves nothing.
+  - **The result line is the die, the net bonus or penalty, and the total**:
+    `19 + 4 = 23` (`roll_working`), `7 − 2 = 5`, `take 10 + 3 = 13`, and just `18` when
+    nothing was added. The history cards, the readout beside the die and the GM's
+    attack and action cards (`attack_gm.roll_text`) all say it this way. It replaced
+    `23 (d20 19 +4)`, which read as dice notation.
+  - **Everything else is on hover** (`roll_breakdown`, `breakdown_lines`): the die (or
+    the take-10, the kept die of two, a lucky reroll), each part of the loaded trait's
+    modifier, then the modifier box as **Circumstance** (as **Modifier** when nothing was
+    loaded), the total and how it went against the DC. On the readout and on every
+    card's number line, one's own and everyone else's. The parts come from the spec:
+    `RollSpec.parts`, below.
+  - **`RollSpec.parts`** — what a spec's modifier is made of, `(name, amount)` pairs:
+    "Strength" 4, "Athletics ranks" 5, "Impaired" −2, "All-Out Attack" +3. Core builds
+    them where it builds the number (the trait rolls; `skill_parts`, `resistance_parts`;
+    a power's attack check off `EffectRollNumbers.check_parts`; the conditions overlay's
+    new `ConditionEffect.labels`), and whatever *shifts* a spec does it through
+    `add_part` (maneuvers one line each, targeted and self actions, a team join, the
+    attacker's natural 1, `localize_spec` filling in the target's trait). **`spec_parts`
+    always adds up**: a spec whose parts fell behind gets an `OTHER_PART` line, and one
+    with none is one line named for itself. On the wire (protocol v20, still unreleased:
+    `sanitize_spec` keeps up to `MAX_SPEC_PARTS`), so every seat's hover is the same.
+    Left out of equality, as `marks` is.
+  - **Justified controls on one label column.** "Modifier" and "DC" share the settings
+    grid's first column, so both rows start their controls at the same x, and each row's
+    controls (`_stretch_across`, equal stretch) share out the whole width — they used to
+    huddle at the left with a slab of nothing beside them. The toolbar is one `QHBoxLayout`
+    now, not a wrapping flow: it is no wider than the modifier's row. **The DC capsule**
+    can no longer wrap the label and the box in one frame (they are in different
+    columns), so `#dcPair` is a frame *behind* them, created first and `lower()`ed, kept
+    on their united rectangle by `_place_dc_capsule` from an event filter (move/resize of
+    the label, the box, the toolbar). Both labels sit `_capsule_inset()` in from the
+    column's edge: the capsule cannot reach past the panel's, and was clipped there in
+    the bottom strip.
+  - **More air in the block**: the view's margins are `card.margins`, not `space.sm`;
+    the labels and the lane's spin box sat against the frame.
+  - **Pills share their line** (`FlowLayout.set_justify`: each line's spare width shared
+    between its items; widths only, so the wrapping and the height are what they were) —
+    which needs the chip's horizontal policy to be `Preferred`, since a layout clamps a
+    `Maximum` item to its hint. The caption is centred, and the `×` **floats** over the
+    pill's right end on hover (a child of the chip, outside its layout, `_place_remove`)
+    rather than keeping its room while hidden, which left every caption off-centre.
+  - **Plain rolls have no title.** A private card with nothing loaded was headed `d20` in
+    the accent colour, which read as a link; its number line says it was a d20.
+  - **The chip just names the roll** (`CHIP_PREFIX` is the 🎲 alone): "Rolling: Blast:
+    Attack +7" had two colons, and the halo says it is armed.
+  - **↻ Reroll under the result** (`_reroll_button`, `_sync_reroll_button`): shown only
+    under a result Reroll can throw again — not under the prompt, an unanswered session
+    roll, a tumbling die or a take-10. The Actions popup's tile was the only way to it.
+  - **The splitter handle** between the controls and the history is transparent at rest
+    and tinted under the pointer: the style drew it as a dark band, a stray separator.
+  - **The Actions popup**: sections sharing a row (a shelf) are whole tile columns wide
+    (`_section_columns`, the title's width counted) with the tiles' own gap between them,
+    so their tiles stand in the columns of a full row and each title sits over its own
+    tiles — "Dice" used to sit over the gap a column short of Reroll. And a section whose
+    tiles are **all** greyed says once, under its title, the reason most of them share
+    (`section_note`, `GridSection.note`): "This character has no attack to make." over
+    the maneuvers, Surprise Attack being greyed for a reason of its own. A section with
+    a note keeps a row to itself.
 - **Deferral is a window, not a flag, and that was a bug first.** The shared history
   holds one's *own* roll back so the card lands as the die settles rather than the
   instant the server answers. Only the roller's `sessionRollRevealed` lets a held roll
@@ -198,12 +266,10 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
 - **Quick rolls** are pills (`_QuickChip`): the caption is a flat `QToolButton` — a
   push button asks for the platform's default width, which made every pill a slab —
   that rolls on a click and **drags** to reorder once the pointer passes the drag
-  distance (it used to need a `⠿` grip), and a `×` shown only while the pointer is over
-  the pill, its room kept while hidden so the row never re-wraps under the pointer
-  (right-click ▸ Remove does the same). The whole part is hidden while the strip is
-  empty. Private history cards are titled `d20` (or `Take 10`) when nothing was loaded,
-  so no card is a bare number, and their remove button is `✕` like every other card's
-  (a `−` read as "collapse").
+  distance (it used to need a `⠿` grip), and a `×` floating over the pill's end while
+  the pointer is over it (see "The justified pass"; right-click ▸ Remove does the
+  same). The whole part is hidden while the strip is empty. A private history card's
+  remove button is `✕` like every other card's (a `−` read as "collapse").
 - **Quick rolls** are capped at `MAX_QUICK_ROLLS` (6). The cap is a layout constraint,
   not a preference: the strip shares the block with the controls and the die, so an
   unbounded chip list ratchets the block — and the pinned strip holding it — ever
@@ -617,10 +683,9 @@ has no bonus — call one or the other.
 The other half of the same guard is that a loaded chip is **loud** — an `accent.dice`
 fill inside an `accent.dice` border (`#specChip`, scoped to the object name, since a
 bare rule on a widget reaches the `✕` button inside it), a caption worded as a state
-(`🎲 Rolling: Athletics +9`), a matching ring on the die (`_apply_die_style`, drawn
-inside the button's existing `die.padding` so its fixed size never moves and
-`contentChanged` is not dragged in for a highlight), and a readout that says
-`Rolling Athletics — click the die.` in place of the resting prompt. `_showing_result`
+(`🎲 Athletics +9` — it said "Rolling:" until the halo took that over), a matching
+halo on the die (`_apply_die_style`, see "The justified pass"; it costs no layout, so
+`contentChanged` is not dragged in for a highlight), and the resting prompt beside it. `_showing_result`
 is what keeps that prompt from eating a number: `load_spec` writes it whenever a spec
 is loaded, but on a *clear* only while the readout is not holding a result — and
 clearing is precisely what `_settle_spec` does one line after the roll wrote one there.

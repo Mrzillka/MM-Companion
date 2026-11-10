@@ -334,6 +334,9 @@ class ActionLane(QWidget):
 
     #: A line came or went, so the panel's height may have moved.
     changed = Signal()
+    #: A line's value moved — by hand, or pulled down by a limit. What the next roll
+    #: comes to has changed with it (the roller's preview), though no height has.
+    edited = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -373,6 +376,7 @@ class ActionLane(QWidget):
             self._column.addWidget(line)
         line.removed.connect(self.remove)
         line.valueChanged.connect(self._relimit_others)
+        line.valueChanged.connect(lambda _key: self.edited.emit())
         self._show_lines()
         self._relimit_others(line.key)
         self.changed.emit()

@@ -23,6 +23,7 @@ about, and grading is plain arithmetic over the roll dict.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -290,7 +291,7 @@ def degree_label(degree: int | None, critical: bool, die: int) -> str:
     return text
 
 
-def degree_html(degree: int | None, critical: bool, die: int) -> str:
+def degree_html(degree: int | None, critical: bool, die: int, *, lead: str = "") -> str:
     """:func:`degree_label` as rich text that never breaks inside a phrase.
 
     In the narrow strip a result used to wrap as "Failure (2" over "degrees)". Each
@@ -298,11 +299,16 @@ def degree_html(degree: int | None, critical: bool, die: int) -> str:
     of a natural 1 or 20, but never inside "Failure (2 degrees)" or "— Nat 20!". A span
     rather than non-breaking spaces, so the words read the same to anything searching
     the text.
+
+    *lead* goes inside the first phrase's span, so it never parts from it: the "· "
+    between a total and its grade (:func:`roll_headline`) used to stay at the end of
+    the line when the grade wrapped, a dot hanging off "21 vs DC 12 ·".
     """
     text = degree_label(degree, critical, die)
     if not text:
         return ""
     phrases = text.split(" — ")
+    phrases[0] = f"{lead}{phrases[0]}"
     phrases[1:] = [f"— {phrase}" for phrase in phrases[1:]]
     # The natural 20 or 1 in its own colour and bold, not the grade's: it is the news.
     natural = ""
@@ -388,6 +394,7 @@ class QuickRollStar(QPushButton):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._saved = False
         self.set_state(False, True)
+        fit_to_text_line(self)
 
     def is_saved(self) -> bool:
         """Whether this star is currently lit (its roll is in the strip)."""
@@ -408,6 +415,7 @@ class QuickRollStar(QPushButton):
                 f" background: {theme.wash('accent.dice', 0.25)};"
                 f" border: {width}px solid {accent};"
                 f" border-radius: {radius}px;"
+                " padding: 0px;"
             )
             return
         self.setText("☆")
@@ -423,6 +431,7 @@ class QuickRollStar(QPushButton):
             " background: transparent;"
             f" border: {width}px solid transparent;"
             f" border-radius: {radius}px;"
+            " padding: 0px;"
         )
 
 
@@ -656,17 +665,31 @@ def roll_headline(roll: dict) -> str:
         die, modifier, routine=bool(roll.get("routine")), other_die=_other_die(roll)
     )
     dc = roll.get("dc")
-    if dc is not None:
+    if dc is not None and not label_names_dc(str(roll.get("label", "")), int(dc)):
         headline += f" vs DC {int(dc)}"
     degree = roll.get("degree")
+    # The "·" rides at the head of what follows it, so a wrap puts it at the start of
+    # the next line rather than leaving it hanging off the end of this one.
     if degree is not None:
         colour = theme.color("tint.better" if int(degree) > 0 else "tint.worse")
-        words = degree_html(int(degree), bool(roll.get("critical")), die)
-        headline += f" · <span style='color:{colour}'>{words}</span>"
+        words = degree_html(int(degree), bool(roll.get("critical")), die, lead="· ")
+        headline += f" <span style='color:{colour}'>{words}</span>"
     elif (natural := roll_natural(roll)) is not None:
         # Ungraded, nothing else says it: the badge does.
-        headline += f" · {natural_badge_html(natural)}"
+        headline += f" <span style='white-space:nowrap'>· {natural_badge_html(natural)}</span>"
     return headline
+
+
+def label_names_dc(label: str, dc: int | None) -> bool:
+    """Whether a roll's *label* already says the DC it was rolled against.
+
+    A save is named for it — "Toughness vs. 18" — so a number line adding "vs DC 18"
+    under that heading said the same thing twice. Those lines leave it out when the
+    heading has it; the hover breakdown still says it in full.
+    """
+    if dc is None or not label:
+        return False
+    return re.search(rf"(?:\bvs\.?|\bDC)\s*{int(dc)}\b", label) is not None
 
 
 def breakdown_lines(roll: dict) -> list[tuple[str, str]]:
@@ -701,10 +724,22 @@ def breakdown_lines(roll: dict) -> list[tuple[str, str]]:
 def roll_breakdown(roll: dict) -> str:
     """A roll's hover breakdown as rich text: what was rolled, every stat, bonus and
     penalty that went into it, the total, and how it went against the DC."""
-    muted = theme.color("text.muted.rich")
     label = reroll_label(str(roll.get("label", "")), bool(roll.get("reroll")))
+    dc = roll.get("dc")
+    degree = roll.get("degree")
+    verdict = ""
+    if dc is not None:
+        verdict = f"vs DC {int(dc)}"
+        if degree is not None:
+            words = degree_label(int(degree), bool(roll.get("critical")), int(roll.get("die", 0)))
+            verdict += f" — {words}"
+    return _breakdown_html(label, breakdown_lines(roll), verdict)
+
+
+def _breakdown_html(label: str, lines: list[tuple[str, str]], verdict: str) -> str:
+    """A breakdown as rich text: *label* in bold, *lines* as a table whose last row is
+    bold, and *verdict* muted under it."""
     rows = []
-    lines = breakdown_lines(roll)
     for index, (name, value) in enumerate(lines):
         last = index == len(lines) - 1
         style = " style='font-weight:bold'" if last else ""
@@ -714,15 +749,38 @@ def roll_breakdown(roll: dict) -> str:
         )
     html = f"<b>{escape_rich_text(label)}</b>" if label else ""
     html += f"<table cellspacing='0' cellpadding='1'>{''.join(rows)}</table>"
-    dc = roll.get("dc")
-    degree = roll.get("degree")
-    if dc is not None:
-        verdict = f"vs DC {int(dc)}"
-        if degree is not None:
-            words = degree_label(int(degree), bool(roll.get("critical")), int(roll.get("die", 0)))
-            verdict += f" — {escape_rich_text(words)}"
-        html += f"<span style='color:{muted}'>{verdict}</span>"
+    if verdict:
+        muted = theme.color("text.muted.rich")
+        html += f"<span style='color:{muted}'>{escape_rich_text(verdict)}</span>"
     return html
+
+
+def staged_working(modifier: int, *, twice: bool = False) -> str:
+    """What a roll *will* be, before the die is thrown: ``d20 + 1``, ``d20 − 2``, plain
+    ``d20``, or ``best of 2d20 + 4`` for a roll made twice (Aim)."""
+    dice = "best of 2d20" if twice else "d20"
+    if not modifier:
+        return dice
+    return f"{dice} {'+' if modifier > 0 else '−'} {abs(modifier)}"
+
+
+def staged_breakdown(
+    spec: RollSpec | None, circumstance: int, dc: int | None, *, twice: bool = False
+) -> str:
+    """The hover over the roller's preview: what the next roll is made of.
+
+    The same table a rolled card's hover shows (:func:`roll_breakdown`), with no die
+    yet: each part of the loaded trait's modifier (the action lines among them), then
+    the modifier box, then the roll as it will be made.
+    """
+    named = spec_parts(spec) if spec is not None else ()
+    lines = [(name, _signed(amount)) for name, amount in named]
+    if circumstance:
+        lines.append((CIRCUMSTANCE_PART if named else MODIFIER_PART, _signed(circumstance)))
+    total = sum(amount for _name, amount in named) + circumstance
+    lines.append(("Roll", staged_working(total, twice=twice)))
+    label = spec.label if spec is not None else ""
+    return _breakdown_html(label, lines, "" if dc is None else f"vs DC {int(dc)}")
 
 
 def _rich(text: str) -> QLabel:
@@ -840,9 +898,24 @@ def remove_button(tooltip: str, on_remove: Callable[[], None]) -> QPushButton:
     button.setCursor(Qt.CursorShape.PointingHandCursor)
     button.setToolTip(tooltip)
     button.setFixedWidth(int(theme.metric("column.roll-button")))
+    button.setStyleSheet("padding: 0px;")
+    fit_to_text_line(button)
     button.clicked.connect(lambda _=False: on_remove())
     show_on_hover(button)
     return button
+
+
+def fit_to_text_line(button: QWidget) -> None:
+    """Make a card's small button one line of card text tall, so its glyph sits level
+    with the card's first line beside it (:func:`heading_row` tops them both).
+
+    At a button's own height the ☆ stood a few pixels above or below the line it
+    belonged to — which way depended on how tall the platform drew the button. The
+    button carries no padding of its own (its caller's stylesheet says so); the room
+    is the line and the button's border either side.
+    """
+    border = int(theme.metric("border.width.emphasis"))
+    button.setFixedHeight(button.fontMetrics().height() + 2 * border)
 
 
 #: How long a pause between two entries is before the newer one says so.

@@ -71,6 +71,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSlider,
     QStackedWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -100,10 +101,13 @@ from mm_companion.ui.roll_history import (
     degree_label,
     escape_rich_text,
     fit_button,
+    label_names_dc,
     natural_kind,
     reroll_label,
     roll_breakdown,
     roll_working,
+    staged_breakdown,
+    staged_working,
 )
 from mm_companion.ui.roller.action_lane import (
     ActionLane,
@@ -334,7 +338,9 @@ def readout_html(
     # The die, the net bonus or penalty, the total — the history's line; what the bonus
     # is made of is on hover (see :meth:`DiceRollerPanel._update_readout`).
     html += roll_working(die, modifier, routine=routine, other_die=other_die, total_html=big)
-    if dc is not None:
+    # Not when the name already says it: "Toughness vs. 18" over "10 vs DC 18" was the
+    # DC twice in two lines.
+    if dc is not None and not label_names_dc(label, dc):
         html += f" vs DC {dc}"
     if degree is not None:
         html += f"<br><span style='color:{tint}'>{degree_html(degree, critical, die)}</span>"
@@ -521,9 +527,15 @@ class DiceRollerPanel(
         self._then: RollSpec | None = None
         # Set by Take 10 for the one roll it starts (see :meth:`take_ten`).
         self._routine_next = False
+        # Set while a roll that has just landed clears its inputs (:meth:`_wind_down`):
+        # those changes are the roll's, not the player's, and must not trade the result
+        # beside the die for the preview (:meth:`_inputs_edited`).
+        self._winding_down = False
+        # The natural 20 or 1 the readout is showing, if any (no Reroll under a 20).
+        self._shown_natural: str | None = None
         # The circumstance steps either side of the modifier box, pushed in by the
         # host (see :meth:`set_modifier_steps`); none until it does.
-        self._step_buttons: list[QPushButton] = []
+        self._step_buttons: list[QToolButton] = []
         # The colour token the die glows in after a roll lands (see
         # :meth:`_glow_outcome`), and the timer that lets it settle back.
         self._outcome: str | None = None
@@ -650,10 +662,14 @@ class DiceRollerPanel(
         # all sharing the row's width. It used to be a −30..+30 slider, which is no way
         # to hit +2.
         self._modifier_spin = make_signed_spin_box(MODIFIER_LIMIT, snug=True)
+        # "+0" at rest, not "0": signed like every value it can hold, so it reads as the
+        # modifier the steps either side of it move, not as a sixth button.
+        self._modifier_spin.set_zero_text("+0")
         self._modifier_spin.setToolTip(MODIFIER_HINT)
         self._modifier_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
         _stretch_across(self._modifier_spin)
         self._modifier_spin.valueChanged.connect(self._mark_extras)
+        self._modifier_spin.valueChanged.connect(self._inputs_edited)
         self._modifier_label = QLabel(MODIFIER_LABEL)
         self._modifier_label.setToolTip(MODIFIER_HINT)
         # Both labels sit a little in from the column's edge: the DC capsule is drawn
@@ -662,7 +678,8 @@ class DiceRollerPanel(
         self._modifier_row = QHBoxLayout()
         self._modifier_row.setContentsMargins(0, 0, 0, 0)
         self._modifier_row.setSpacing(int(theme.metric("space.xs")))
-        self._modifier_row.addWidget(self._modifier_spin, stretch=1)
+        # Twice a step's share: the field is the row's one box, the steps flat beside it.
+        self._modifier_row.addWidget(self._modifier_spin, stretch=2)
         # The other way to set it (Settings ▸ General): a slider before the box, in place
         # of the step buttons. Built either way, so the setting can switch it live.
         self._modifier_slider = QSlider(Qt.Orientation.Horizontal)
@@ -685,6 +702,7 @@ class DiceRollerPanel(
         # The action lane: one line per action riding on the next roll.
         self._lane = ActionLane()
         self._lane.changed.connect(self._on_lane_changed)
+        self._lane.edited.connect(self._refresh_preview)
         grid.addWidget(self._lane, 3, 0, 1, 2)
 
         self._hidden_check = QCheckBox("Hidden roll")
@@ -770,9 +788,13 @@ class DiceRollerPanel(
         self._dc_spin = make_spin_box(0, 60, value=0, buttons=False, snug=True)
         self._dc_spin.setSpecialValueText(DC_NONE)
         self._dc_spin.setToolTip(DC_HINT)
-        self._dc_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Left, as every other field in the app is, and the widest thing on the row:
+        # centred between two buttons of its own size, a muted "not set" read as a
+        # third, greyed-out button.
+        self._dc_spin.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         _stretch_across(self._dc_spin)
         self._dc_spin.valueChanged.connect(self._mark_dc)
+        self._dc_spin.valueChanged.connect(self._inputs_edited)
 
         self._routine_button = QPushButton(ROUTINE_LABEL)
         self._routine_button.setToolTip(help_markup(f"{ROUTINE_HINT} ({TAKE_TEN_SHORTCUT})"))
@@ -788,7 +810,8 @@ class DiceRollerPanel(
         across = QHBoxLayout(self._toolbar)
         across.setContentsMargins(0, 0, 0, 0)
         across.setSpacing(int(theme.metric("space.xs")))
-        for widget in (self._dc_spin, self._routine_button, self._actions_button):
+        across.addWidget(self._dc_spin, stretch=2)
+        for widget in (self._routine_button, self._actions_button):
             across.addWidget(widget, stretch=1)
         grid.addWidget(self._dc_label, row, 0)
         grid.addWidget(self._toolbar, row, 1)
@@ -831,13 +854,20 @@ class DiceRollerPanel(
         self.updateGeometry()
         self.contentChanged.emit()
 
-    def _step_button(self, step: int) -> QPushButton:
+    def _step_button(self, step: int) -> QToolButton:
+        """One circumstance step: **flat**, lit under the pointer. Boxed like the
+        buttons below, five boxes in a row left the one field among them reading as
+        just another button."""
         caption = f"{step:+d}".replace("-", "−")
-        button = fit_button(caption)
-        # As narrow as its caption at the least, and as wide as the row shares out.
-        button.setMinimumWidth(button.width())
-        button.setMaximumWidth(QWIDGETSIZE_MAX)
-        _stretch_across(button)
+        button = QToolButton()
+        button.setText(caption)
+        # Flat under Classic too, which draws a tool button natively.
+        button.setAutoRaise(True)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        # As narrow as its caption at the least, as wide as the row shares out, and as
+        # tall as the field beside it, so its hover fills the row.
+        button.setMinimumWidth(button.sizeHint().width())
+        button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         button.setToolTip(f"{caption} to the modifier")
         button.setEnabled(not self._rolling)
         button.clicked.connect(lambda _=False, amount=step: self.add_bonus(amount))
@@ -1176,6 +1206,9 @@ class DiceRollerPanel(
         )
         self._lane.add(line)
         line.bind(self.loaded_attack())
+        # A pick is the player setting up the next roll, so the result beside the die
+        # gives way to what that roll now comes to (it is in the history either way).
+        self._inputs_edited()
         return line
 
     def set_line_shift(self, shift: LineShift | None) -> None:
@@ -1223,6 +1256,9 @@ class DiceRollerPanel(
     def _on_lane_changed(self) -> None:
         self.updateGeometry()
         self.contentChanged.emit()
+        # A line came or went — the player's doing, or the roll's as it lands, which
+        # :meth:`_inputs_edited` tells apart.
+        self._inputs_edited()
 
     def _build_die(self) -> QWidget:
         """The die and the number it rolled, side by side — one part, since the two
@@ -1328,6 +1364,9 @@ class DiceRollerPanel(
             and not self._rolling
             and last is not None
             and not last.get("routine")
+            # Nobody throws a natural 20 away. Reroll is still on the Actions popup and
+            # Ctrl+Shift+R for the table that wants it.
+            and self._shown_natural != NATURAL_TWENTY
         )
         if self._reroll_button.isHidden() == (not show):
             return
@@ -1566,15 +1605,68 @@ class DiceRollerPanel(
         """
         if self._showing_result and not replace_result:
             return
+        if not hasattr(self, "_readout"):  # an input moved while the panel was building
+            return
+        was_result = self._showing_result
         self._showing_result = False
-        # The same words whatever is loaded: the chip above already names it, and the
-        # ring on the die says the die is armed. Repeating the name here made three.
-        # The rich-text token: a palette role means nothing inside HTML.
+        self._shown_natural = None
+        # The chip names what is loaded and the halo says the die is armed, so the name
+        # is not repeated here (that made three). What *is* here is what the chip cannot
+        # say: what a click rolls now, the modifier and the action lines added in. The
+        # rich-text token: a palette role means nothing inside HTML.
         muted = theme.color("text.muted.rich")
-        self._readout.setText(f"<span style='color:{muted}'>{IDLE_PROMPT}</span>")
-        self._readout.setToolTip("")
+        preview, breakdown = self.staged_preview()
+        html = f"<b>{preview}</b><br>" if preview else ""
+        html += f"<span style='color:{muted}'>{IDLE_PROMPT}</span>"
+        before = self._readout.text()
+        self._readout.setText(html)
+        self._readout.setToolTip(breakdown)
         self._show_warning(False)
         self._sync_reroll_button()
+        if was_result or before != html:
+            # It may wrap to a different number of lines: whatever holds the panel
+            # shares its height out again.
+            self._readout_changed()
+
+    def staged_preview(self) -> tuple[str, str]:
+        """What a click of the die would roll now, as ``(line, hover)`` rich text —
+        ``("d20 + 1 vs DC 15", <the breakdown>)`` — or ``("", "")`` for a plain d20
+        with nothing set, where there is nothing to add up.
+
+        The chip names the trait at its own number ("Blast: Attack +0 vs. Defense");
+        the modifier box and an All-Out Attack's +3 are on top of that, and nothing
+        showed the +1 they came to until the die had been thrown.
+        """
+        spec = self.with_lines(self._spec)
+        box = self._modifier_spin.value()
+        dc = spec.dc if spec is not None and spec.dc is not None else self.dc()
+        if spec is None and not box and dc is None:
+            return "", ""
+        twice = spec is not None and spec.roll_twice
+        modifier = box + (spec.modifier if spec is not None else 0)
+        line = escape_rich_text(staged_working(modifier, twice=twice))
+        if dc is not None and not label_names_dc(spec.label if spec else "", dc):
+            line += f" vs DC {dc}"
+        return line, staged_breakdown(spec, box, dc, twice=twice)
+
+    def _inputs_edited(self, *_args) -> None:
+        """The player moved the modifier, the DC or the lane: show what the next roll
+        now comes to, in place of a result already read (it is in the history).
+
+        Not while a die is in the air, and not for the changes a roll makes itself as
+        it lands (:attr:`_winding_down`) — those would wipe the number it just rolled.
+        """
+        if self._rolling or self._winding_down:
+            return
+        self._prompt_readout(replace_result=True)
+
+    def _refresh_preview(self) -> None:
+        """Bring the preview up to date if it is what the readout shows. Never trades a
+        result away: what calls this (a line's limit pulled down after a roll's condition
+        landed) is not the player setting up a roll."""
+        if self._rolling or self._showing_result:
+            return
+        self._prompt_readout(replace_result=False)
 
     def add_bonus(self, amount: int) -> None:
         """Add *amount* to the Bonus/Penalty slider, clamped to the range it offers.
@@ -1982,11 +2074,24 @@ class DiceRollerPanel(
         )
         self._unlock_inputs()
         # Last, so everything above still sees what was rolled.
+        self._wind_down()
+
+    def _wind_down(self) -> None:
+        """Clear what the roll that just landed used up — its one-roll trait, its
+        modifier, its lines, a take 10 — leaving its result beside the die.
+
+        Those inputs moving is the roll's doing, not the player's, so for as long as
+        this runs they do not trade the result for the preview (:meth:`_inputs_edited`).
+        """
         self._rerolling = False
         self._flight = None
-        self._settle_spec()
-        self._spend_extras()
-        self._spend_routine()
+        self._winding_down = True
+        try:
+            self._settle_spec()
+            self._spend_extras()
+            self._spend_routine()
+        finally:
+            self._winding_down = False
 
     def _commit_last_roll(self) -> None:
         """The roll in flight has a result, so it is now the one Reroll throws."""
@@ -2026,11 +2131,7 @@ class DiceRollerPanel(
         # And the window closes *after* the reveal, so the card this roll produced
         # is placed by the cue above rather than by the flush the close performs.
         self.awaitingOwnRoll.emit(False)
-        self._rerolling = False
-        self._flight = None
-        self._settle_spec()
-        self._spend_extras()
-        self._spend_routine()
+        self._wind_down()
 
     def _abandon_roll(self, message: str) -> None:
         """Give up on a session roll that never came back.
@@ -2063,6 +2164,7 @@ class DiceRollerPanel(
         self._readout.setToolTip("")
         self._warning.hide()
         self._reroll_button.hide()
+        self._shown_natural = None
         self._readout_changed()
         self._showing_result = True  # not a number, but not the prompt either
         # The chip stays (see :meth:`_settle_spec`); only its transience goes, so the
@@ -2127,6 +2229,7 @@ class DiceRollerPanel(
         self._readout.setText(html)
         self._readout.setToolTip(roll_breakdown(record) if record is not None else "")
         self._show_warning(self._unjudged_attack(dc))
+        self._shown_natural = natural
         self._sync_reroll_button()
         self._readout_changed()
         self._glow_outcome(

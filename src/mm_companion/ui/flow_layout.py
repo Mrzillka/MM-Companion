@@ -126,7 +126,9 @@ class FlowLayout(QLayout):
     def set_justify(self, justify: bool) -> None:
         """Whether each line's items share out the line's spare width between them, so
         the lines run edge to edge (a justified row) rather than stopping short at the
-        left. Only widths change: the wrapping, and so the height, are the same."""
+        left. Only widths change: the wrapping, and so the height, are the same. The last
+        of several lines grows no more than the one above it, as text justification
+        leaves its last line ragged."""
         self._justify = bool(justify)
         self.invalidate()
 
@@ -224,14 +226,22 @@ class FlowLayout(QLayout):
         # done so a justified line can widen them first. A rule moves along with its
         # neighbours but never widens.
         line: list[tuple[QLayoutItem, int, int, QSize, bool]] = []
+        # What each item on the line above grew by, for a justified last line.
+        above: list[int | None] = [None]
 
-        def place(items: list[tuple[QLayoutItem, int, int, QSize, bool]]) -> None:
+        def place(items: list[tuple[QLayoutItem, int, int, QSize, bool]], final: bool) -> None:
             if test_only or not items:
                 return
             growing = sum(1 for entry in items if not entry[4])
             last = items[-1]
             spare = right - (last[1] + last[3].width()) if self._justify and growing else 0
             share, extra = divmod(max(0, spare), max(1, growing))
+            # The last of several lines grows no more than the line above did. Shared
+            # out in full, one pill left over on a line of its own stretched the whole
+            # width and read as the roller's main button.
+            if final and above[0] is not None and share >= above[0]:
+                share, extra = above[0], 0
+            above[0] = share
             shift = grown = 0
             for entry, left, top, size, rule in items:
                 grow = 0
@@ -260,7 +270,7 @@ class FlowLayout(QLayout):
             # Against the edge itself, not ``right()``: that is the last pixel *inside*
             # the rect, so a row that fitted exactly used to wrap its last item.
             if next_x - spacing > effective.x() + effective.width() and line_height > 0:
-                place(line)
+                place(line, final=False)
                 line = []
                 x = effective.x()
                 y = y + line_height + spacing
@@ -269,6 +279,6 @@ class FlowLayout(QLayout):
             line.append((item, x, y, hint, id(item) in self._separators))
             x = next_x
             line_height = max(line_height, hint.height())
-        place(line)
+        place(line, final=True)
 
         return y + line_height - rect.y() + margins.bottom()

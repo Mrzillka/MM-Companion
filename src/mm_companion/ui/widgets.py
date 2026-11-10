@@ -86,8 +86,16 @@ class SignedSpinBox(QSpinBox):
     Typing "+5" or "5" both mean five.
     """
 
+    _zero = "0"
+
+    def set_zero_text(self, text: str) -> None:
+        """What 0 reads as: "0" by default, "+0" where the box should read as a
+        modifier even at rest (the dice roller's)."""
+        self._zero = text
+        self.lineEdit().setText(self.textFromValue(self.value()))
+
     def textFromValue(self, value: int) -> str:  # noqa: N802 (Qt override)
-        return f"{value:+d}" if value else "0"
+        return f"{value:+d}" if value else self._zero
 
 
 class _Snug:

@@ -4,6 +4,8 @@ dragged to reorder, and kept in the settings.
 
 from __future__ import annotations
 
+import re
+
 from PySide6.QtCore import QMimeData, QPoint, QSize, Qt, Signal
 from PySide6.QtGui import QDrag, QFontMetrics
 from PySide6.QtWidgets import (
@@ -65,12 +67,46 @@ def quick_label(params: dict) -> str:
 
     Both halves, always. A chip used to show its name *or* its numbers, so a named one
     hid its modifier and an unnamed one was a bare "+2" that said nothing of what it
-    rolled. A chip with a recipe is named for the attack as rolled ("Blast: Attack +11
-    vs. Defense (All-Out Attack +3)"), which already says its number.
+    rolled. A chip with a recipe is named for the attack as rolled, which is long, so
+    it is captioned short (:func:`recipe_caption`); the whole name is its tooltip.
     """
     if params.get("spec") and params.get("name"):
-        return str(params["name"])
+        return recipe_caption(str(params["name"]), _params_label(params))
     return f"{params.get('name') or PLAIN_CHIP} {_params_label(params)}"
+
+
+#: The word an attack maneuver's name ends in, left off a pill: the Actions popup's
+#: tiles call them "Accurate", "All-Out", "Power" too.
+_MANEUVER_TAIL = re.compile(r"\s+Attack$")
+#: A signed number at the end of a phrase: "All-Out Attack +5".
+_TRAILING_NUMBER = re.compile(r"\s*[+\-−]\d+$")
+#: How a power's attack check is named after the power: "Blast: Attack".
+_ATTACK_TAIL = re.compile(r":\s*Attack$")
+
+
+def recipe_caption(name: str, modifier: str) -> str:
+    """A short caption for a pill saved off a maneuvered attack.
+
+    The roll's own name is the whole story — "Rumbling: Attack +15 vs. Defense
+    (Accurate Attack +5, All-Out Attack +5)" — and elided in a pill it lost the part
+    that tells two such pills apart. Short, it is what the attack is, its number, and
+    which maneuvers ride on it: "Rumbling +15 · Accurate, All-Out". A name that is not
+    in that shape is left whole.
+    """
+    base, paren, lines = name.partition(" (")
+    if not paren or not lines.endswith(")"):
+        return name
+    # "Blast: Attack +11 vs. Defense" → "Blast"; "Close Combat: Unarmed +8 vs. …" keeps
+    # its "Unarmed", which is what tells it from the other close attacks.
+    head = _TRAILING_NUMBER.sub("", base.split(" vs", 1)[0].strip())
+    head = _ATTACK_TAIL.sub("", head).strip()
+    picks = []
+    for part in lines[:-1].split(","):
+        part = _MANEUVER_TAIL.sub("", _TRAILING_NUMBER.sub("", part.strip()))
+        if part:
+            picks.append(part)
+    caption = f"{head or base} {modifier}"
+    return f"{caption} · {', '.join(picks)}" if picks else caption
 
 
 def clean_recipe(entry: dict) -> dict:
@@ -574,8 +610,10 @@ class RollerQuickRollsMixin:
         caption = quick_label(entry)
         roll_button = _QuickRollButton(caption, index)
         again = " Its action lines go back on the lane." if entry.get("spec") else ""
+        # A recipe pill's caption is short (recipe_caption): the hover has it in full.
+        whole = str(entry["name"]) if entry.get("spec") and entry.get("name") else caption
         roll_button.setToolTip(
-            f"{caption}\n\nClick to roll it.{again} Drag to reorder; right-click to rename "
+            f"{whole}\n\nClick to roll it.{again} Drag to reorder; right-click to rename "
             "or remove."
         )
         roll_button.clicked.connect(lambda _=False, e=entry: self._apply_quick_roll(e))

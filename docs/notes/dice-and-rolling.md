@@ -174,7 +174,8 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
     the bottom strip.
   - **More air in the block**: the view's margins are `card.margins`, not `space.sm`;
     the labels and the lane's spin box sat against the frame.
-  - **Pills share their line** (`FlowLayout.set_justify`: each line's spare width shared
+  - **Pills share their line** (`FlowLayout.set_justify`; the last line only as much as
+    the one above, since the UX pass below: each line's spare width shared
     between its items; widths only, so the wrapping and the height are what they were) —
     which needs the chip's horizontal policy to be `Preferred`, since a layout clamps a
     `Maximum` item to its hint. The caption is centred, and the `×` **floats** over the
@@ -254,6 +255,49 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
     "— Nat 20!" phrase is bold in that colour), and a toast's edge the same colour.
     Crimson & Gold's `dice.critical` was inherited from Classic and nearly matched its
     own `accent.dice`, the armed halo: it is a brighter yellow there now.
+- **The UX pass** (2026-11-11, the user took all nine points of a fresh-eyes review;
+  tests in `tests/ui/dice/test_roller_preview.py`):
+  - **The readout previews the roll** (`staged_preview`): beside an idle die, what a
+    click rolls now — `d20 + 1 vs DC 15`, `best of 2d20 + 4` for Aim — bold over the
+    muted `IDLE_PROMPT`, the loaded spec with the lane's lines applied (`with_lines`)
+    plus the modifier box; its hover is `staged_breakdown`, the rolled card's table
+    without a die. Nothing for a plain d20 with nothing set. The chip still names the
+    trait at its own number ("Attack +0"); the preview is the only place the +1 that
+    the −2 box and All-Out's +3 came to was ever shown before the throw.
+  - **When the preview replaces a result**: the player moving the modifier, the DC or
+    the lane (`_inputs_edited`, also from `start_action_line` and `_on_lane_changed`)
+    trades the result beside the die for the preview — they are setting up the next
+    roll, and the result is in the history, the same reasoning `load_spec` already
+    used. **Never** for what a landing roll clears itself: `_wind_down` (the shared
+    end of `_finish_roll` and `_reveal_session_roll`) holds `_winding_down` around
+    `_settle_spec` / `_spend_extras`, which zero the box, drop the lines and empty a
+    spec's DC — without it every roll's number vanished the instant it landed. A line's
+    value moving (`ActionLane.edited`, which a limit pulled down after a condition also
+    fires) only refreshes a preview already showing (`_refresh_preview`).
+  - **The modifier and the DC read as fields.** The steps are flat `QToolButton`s
+    (`autoRaise`, lit on hover by the theme's tool-button rule), the box takes twice a
+    step's share and reads `+0` at rest (`SignedSpinBox.set_zero_text`); five equal
+    boxes made the one field look like a sixth button. The DC box is left-aligned like
+    every other field in the app and takes twice the share of Take 10 and Actions: a
+    centred muted "not set" between two buttons its own size read as a greyed button.
+  - **A lone last pill keeps its size** (`FlowLayout`'s justify): the last of several
+    lines grows no more than the line above did. Shared out in full, one leftover pill
+    spanned the block and read as the main Roll button.
+  - **A recipe pill is captioned short** (`recipe_caption`): "Rumbling +15 · Accurate,
+    All-Out" from "Rumbling: Attack +15 vs. Defense (Accurate Attack +5, All-Out Attack
+    +5)" — elided, the long name lost the part that tells two pills apart. The tooltip
+    keeps the whole name; a name not in that shape (a renamed pill) stays whole.
+  - **No DC twice** (`label_names_dc`): a save is named "Toughness vs. 18", so the
+    readout, the card's number line and the preview leave out their "vs DC 18" when the
+    name has it. The hover breakdown still says it.
+  - **The "·" before a grade goes with the grade** (`degree_html(lead=…)`): it is inside
+    the grade's first `nowrap` span, so a wrap starts the next line "· Failure (2
+    degrees)" instead of leaving "21 vs DC 12 ·" with a dot hanging off it.
+  - **No ↻ Reroll under a natural 20** (`_shown_natural`, `_sync_reroll_button`). Reroll
+    is still on the Actions popup and `Ctrl+Shift+R`.
+  - **A card's ☆ and ✕ are one text line tall** (`fit_to_text_line`, padding 0), so
+    heading_row's top alignment puts their glyph level with the first line; at a
+    button's own height they sat a few pixels off, up or down by platform.
 - **Deferral is a window, not a flag, and that was a bug first.** The shared history
   holds one's *own* roll back so the card lands as the die settles rather than the
   instant the server answers. Only the roller's `sessionRollRevealed` lets a held roll

@@ -39,6 +39,11 @@
       "down": ["incapacitated"],
       "dead": ["dead"]
     },
+    "_attackRanges": "Which effective Range values make an attack check a close or a ranged one: what a posture condition's attackMods key off (Prone, PDF p239: -5 on your own close attacks, +5 to close and -5 to ranged attacks against you). An attack at any other range (Perception, Rank) is neither.",
+    "attackRanges": {
+      "close": "Close",
+      "ranged": "Ranged"
+    },
     "trait_keys": {
       "attack": "ATK",
       "defense": "DEF",

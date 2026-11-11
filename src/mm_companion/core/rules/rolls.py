@@ -34,6 +34,8 @@ from ..powers import Power, PowerEffectInstance
 from .appliers import CATEGORY_ABILITY, CATEGORY_RESISTANCE, skill_for_row
 from .area import area_dodge_bonus
 from .conditions import (
+    ATTACK_CLOSE,
+    ATTACK_RANGED,
     condition_attack_check_mod,
     condition_check_penalty,
     condition_scope_penalty,
@@ -57,6 +59,7 @@ from .extra_effort import effect_use_costs
 from .improvised import ImprovisedPlan
 from .powers_cost import effect_action_at_most, effect_resistance_dc_base
 from .powers_terms import (
+    effect_attack_range,
     effect_attack_skill_bonus,
     effect_live_rank,
     effect_makes_attack,
@@ -355,6 +358,13 @@ class RollSpec:
     #: running both sides or a player testing a character. Every card the roll lands
     #: on shows a ⚠ for it, so it is on the wire.
     own_attack: bool = False
+    #: On an attack check: whether it is a close or a ranged attack
+    #: (:data:`~.conditions.ATTACK_CLOSE` / :data:`~.conditions.ATTACK_RANGED`, off the
+    #: effect's effective Range), ``""`` when neither or unknown. The wielder's own
+    #: posture is already in :attr:`modifier` (a prone attacker's −5 close); on the wire
+    #: so the GM's judge can add the *target's* (+5 close / −5 ranged against someone
+    #: prone, :func:`~.conditions.condition_incoming_attack_mod`).
+    attack_range: str = ""
 
     def follow_ups(self) -> tuple[RollSpec, ...]:
         """Every roll this one provokes: :attr:`follow_up`, then :attr:`also`."""
@@ -418,6 +428,8 @@ class RollSpec:
             raw["critical_hit"] = True
         if self.own_attack:
             raw["own_attack"] = True
+        if self.attack_range:
+            raw["attack_range"] = self.attack_range
         if self.parts:
             raw["parts"] = [[name, amount] for name, amount in self.parts]
         if self.follow_up is not None:
@@ -474,6 +486,7 @@ class RollSpec:
             pick=str(raw.get("pick", "")),
             critical_hit=raw.get("critical_hit") is True,
             own_attack=raw.get("own_attack") is True,
+            attack_range=_attack_range_from_wire(raw.get("attack_range")),
             parts=_parts_from_wire(raw.get("parts")),
             also=(
                 tuple(s for s in (cls.from_dict(a) for a in also) if s is not None)
@@ -503,6 +516,12 @@ def _parts_from_wire(raw: object) -> tuple[tuple[str, int], ...]:
             if not isinstance(amount, bool):
                 parts.append((name, amount))
     return tuple(parts)
+
+
+def _attack_range_from_wire(raw: object) -> str:
+    """:attr:`RollSpec.attack_range` off the wire: one of the two kinds, else ``""``."""
+
+    return raw if raw in (ATTACK_CLOSE, ATTACK_RANGED) else ""
 
 
 def spec_parts(spec: RollSpec) -> tuple[tuple[str, int], ...]:
@@ -1424,8 +1443,10 @@ def _effect_roll_parts(
         actor = numbers.check_actor
         check_parts = list(numbers.check_parts)
         marks: tuple[str, ...] = ()
+        attack_range = ""
         if numbers.attack_check:
-            shift, because = _attack_condition(char, game_data)
+            attack_range = effect_attack_range(effect, game_data)
+            shift, because = _attack_condition(char, game_data, attack_range)
             actor += shift
             if shift:
                 check_parts.append(("Conditions", shift))
@@ -1441,6 +1462,7 @@ def _effect_roll_parts(
             marks=marks,
             follow_up=provoked[0] if provoked else None,
             also=tuple(provoked[1:]),
+            attack_range=attack_range,
         )
     after = tuple(spec for spec in (save, opposed) if spec is not None)
     # Using the effect is what Tiring and Distracting charge for, and the first roll the
@@ -1489,12 +1511,15 @@ def _counted_use(
     return part
 
 
-def _attack_condition(char: Character | None, game_data: GameData) -> tuple[int, str]:
-    """What the wielder's conditions add to an attack check, and the hint saying so."""
+def _attack_condition(
+    char: Character | None, game_data: GameData, attack_range: str = ""
+) -> tuple[int, str]:
+    """What the wielder's conditions add to an attack check of *attack_range* (a prone
+    wielder's close attack takes −5), and the hint saying so."""
 
     if char is None:
         return 0, ""
-    shift, because = condition_attack_check_mod(char, game_data)
+    shift, because = condition_attack_check_mod(char, game_data, attack_range)
     return shift, (f"Conditions: {because}." if shift else "")
 
 
@@ -1511,7 +1536,11 @@ def _linked_check(
     members = [parts[i] for i in attack.indices]
     provoked = [fu for part in members if part.check is not None for fu in part.check.follow_ups()]
     names = " + ".join(prefixes[i] for i in attack.indices if prefixes[i])
-    shift, because = _attack_condition(char, game_data)
+    first = members[0].check if members and members[0].check is not None else None
+    # Linked effects share one Range (``power_linked_range_violations`` says so when they
+    # do not), so the group's attack is as close or ranged as its first.
+    attack_range = first.attack_range if first is not None else ""
+    shift, because = _attack_condition(char, game_data, attack_range)
     bonus = attack.bonus + shift
     label = f"Attack {bonus:+d} vs. {attack.against}"
     differ = len(set(attack.bonuses)) > 1
@@ -1524,7 +1553,6 @@ def _linked_check(
         dict.fromkeys(c for part in members if part.check is not None for c in part.check.costs)
     )
     spends = tuple(i for part in members if part.check is not None for i in part.check.spends)
-    first = members[0].check if members and members[0].check is not None else None
     base = [p for p in (first.parts if first is not None else ()) if p[0] != "Conditions"]
     if sum(amount for _name, amount in base) != attack.bonus:
         base = [("Attack", attack.bonus)]
@@ -1539,6 +1567,7 @@ def _linked_check(
         costs=costs,
         spends=spends,
         marks=(game_data.system.trait_keys.attack_check,),
+        attack_range=attack_range,
     )
 
 

@@ -1033,6 +1033,7 @@ _SPEC_TEXT_KEYS = (
     "recovers",
     "recovers_parameter",
     "pick",
+    "attack_range",
 )
 _SPEC_INT_KEYS = ("modifier", "dc", "dc_if_resisted")
 #: How many names a spec's ``targets`` may carry — a scene's worth.

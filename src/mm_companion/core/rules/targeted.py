@@ -60,7 +60,11 @@ from ..data_loader.game_data import (
     TARGETED_ON_TARGET,
 )
 from ..data_loader.traits import OPPOSING_ATTACKED, OPPOSING_ATTACKING
-from .conditions import applied_condition_name, apply_condition
+from .conditions import (
+    applied_condition_name,
+    apply_condition,
+    condition_incoming_attack_mod,
+)
 from .derived import defense_class_in_play
 from .rolls import (
     KIND_ABILITY,
@@ -421,7 +425,9 @@ class OpposingEffects:
     :attr:`attack` goes on the attacker's check, :attr:`defense` on the target's Defense,
     and the target's Defense is judged as if under each of :attr:`defense_as`. The
     instances counted are spent by the attack: :attr:`attacker_spent` off the attacker,
-    :attr:`target_spent` off the target. :attr:`notes` names each, for the GM's card.
+    :attr:`target_spent` off the target. :attr:`notes` names each, for the GM's card —
+    and the target's posture (Prone), which moves :attr:`attack` but is never spent, so
+    :attr:`any` (something to spend) can be false while there are notes.
     """
 
     attack: int = 0
@@ -442,10 +448,18 @@ def opposing_effects(
     target: Character | None,
     target_name: str,
     game_data: GameData,
+    attack_range: str = "",
 ) -> OpposingEffects:
     """The attacker's opposing conditions that name the target and are spent by its
     attacking (Aided Attack, Trick Advantage, Tricked), and the target's that name the
-    attacker and are spent by being attacked (Feinted, Aided Defense)."""
+    attacker and are spent by being attacked (Feinted, Aided Defense).
+
+    With the attack's *attack_range* (its spec's ``attack_range``), the target's
+    posture counts as well: Prone's +5 to a close attack and −5 to a ranged one
+    (:func:`~.conditions.condition_incoming_attack_mod`), on :attr:`~OpposingEffects.attack`
+    and named in the notes. A posture is not spent: it lasts until the target stands.
+    The attacker's own posture is not here — it is already in the rolled bonus.
+    """
 
     catalog = game_data.condition_catalog()
     attack = defense = 0
@@ -481,6 +495,11 @@ def opposing_effects(
             defense_as.append(rule.defense_as)
         target_spent.append(applied)
         notes.append(f"{target_name}: {applied_condition_name(applied, condition)}")
+    if target is not None:
+        posture, because = condition_incoming_attack_mod(target, game_data, attack_range)
+        if posture:
+            attack += posture
+            notes.append(f"{target_name}: {because}")
     return OpposingEffects(
         attack=attack,
         defense=defense,

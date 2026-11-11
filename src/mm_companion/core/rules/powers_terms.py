@@ -28,6 +28,7 @@ from .area import (
     area_spread_label,
     effect_is_area,
 )
+from .conditions import ATTACK_CLOSE, ATTACK_RANGED
 from .costs import power_points_spent
 from .derived import effective_ability, resistance_total, skill_total
 from .powers_cost import (
@@ -1044,6 +1045,27 @@ def ranged_distance_ranks(
         base_rank, multiplier = source + spec.offset, 1
     rank = base_rank + _distance_rank_bonus(effect, game_data)
     return RangedDistance(base_rank=base_rank, rank=rank, multiplier=multiplier)
+
+
+def effect_attack_range(effect: PowerEffectInstance, game_data: GameData) -> str:
+    """Whether *effect* attacks at close range or ranged: :data:`~.conditions.ATTACK_CLOSE`,
+    :data:`~.conditions.ATTACK_RANGED`, or ``""`` for neither (Perception, Personal, Rank).
+
+    Read off the effect's *effective* Range — a Ranged extra on a Close Damage makes it a
+    ranged attack — matched against ``system.attack_ranges``, case-insensitively. What a
+    posture condition does to an attack (Prone, :func:`~.conditions.condition_attack_check_mod`)
+    turns on it.
+    """
+
+    reach = effective_effect_stats(effect, game_data).get("range", "").strip().casefold()
+    if not reach:
+        return ""
+    ranges = game_data.system.attack_ranges
+    if reach == ranges.close.strip().casefold():
+        return ATTACK_CLOSE
+    if reach == ranges.ranged.strip().casefold():
+        return ATTACK_RANGED
+    return ""
 
 
 def ranged_distance_increments(reach: RangedDistance, game_data: GameData, spec) -> str:

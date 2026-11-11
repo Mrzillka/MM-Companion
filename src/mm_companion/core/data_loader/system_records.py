@@ -379,6 +379,21 @@ class DefeatSystem:
 
 
 @dataclass(frozen=True)
+class AttackRanges:
+    """Which effective Range values make an attack a close or a ranged one
+    (``system.json``'s ``attackRanges``).
+
+    A posture condition's ``attackMods`` key off this (Prone: a penalty on the
+    bearer's own close attacks, a bonus to close and a penalty to ranged attacks
+    against them). Compared case-insensitively against an effect's effective
+    ``range``; an attack at any other range (Perception, Rank) is neither.
+    """
+
+    close: str = "Close"
+    ranged: str = "Ranged"
+
+
+@dataclass(frozen=True)
 class SystemRules:
     """System-level rule references (from ``system.json``).
 
@@ -423,6 +438,8 @@ class SystemRules:
     minions: MinionSystem = field(default_factory=MinionSystem)
     #: The conditions that take a creature out of the fight (see :class:`DefeatSystem`).
     defeat: DefeatSystem = field(default_factory=DefeatSystem)
+    #: Which ranges are close and ranged attacks (see :class:`AttackRanges`).
+    attack_ranges: AttackRanges = field(default_factory=AttackRanges)
     #: How several attacks combine into one (see :class:`TeamAttackRules`).
     team_attack: TeamAttackRules = field(default_factory=TeamAttackRules)
     #: Team and group checks (see :class:`GroupCheckRules`).

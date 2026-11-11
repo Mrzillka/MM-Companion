@@ -203,7 +203,8 @@ Built in phase 8 of the combat maneuvers (see [the actions notes](actions.md#aid
   the action landed; renaming a creature (or a namesake's number shifting) leaves one
   that never matches.
 - **Feint's "corresponding" attack bonus.** The target resists with the better of both
-  combat skills, since an attack does not record whether it is close or ranged.
+  combat skills, since the feinter's check (a skill roll) does not record whether it was
+  the close or the ranged one; only a power's attack check carries `attack_range`.
 
 ## Grab, Trip, Disarm, Smash, Escape and Block: what is left
 
@@ -219,7 +220,8 @@ notes](actions.md#grab-trip-disarm-smash-and-escape)).
 - **The advantages are not read.** Improved Grab, Improved Hold (−5 to Escape),
   Improved Trip, Improved Disarm and Improved Smash change nothing yet.
 - **"Close" is not checked.** A Grab, a Trip or a Block may be made with any attack the
-  picker offers; a spec does not record its range.
+  picker offers. A power's attack spec now records its range (`RollSpec.attack_range`),
+  but nothing refuses a ranged one.
 - **Two holds share one bundle.** Holding (Ana) and Holding (Bo) give Hindered and
   Vulnerable the same provenance, so letting go of one takes both bundles' members.
 - **The GM's judge does not block.** A Blocking creature's block is rolled by hand with
@@ -236,11 +238,12 @@ the targeted actions' own). Each of these was seen and left on purpose.
   the player or the GM takes them off with **Clear temporary**. End turn does not clear
   them (the user's call: they end at the *start* of the creature's next turn). A turn
   tracker would clear a creature's temporaries as its turn starts.
-- **Prone's ±5 on attacks never reaches an attack roll.** `condition_attack_mods`
-  (close +5 against a prone target, ranged −5, and the prone attacker's own −5) is read
-  by the Conditions block's display only; `power_rolls` folds in the amount mods
-  (`condition_attack_check_mod`) but not these. Found in phase 1; out of the feature's
-  scope.
+- **A prone target's ±5 counts only where the opposing conditions do.** The prone
+  attacker's own −5 on a close attack is in the roll `power_rolls` builds; the target's
+  +5 close / −5 ranged is added by the GM's judge (`opposing_effects(attack_range=…)`)
+  to an aimed attack and a targeted action's attack only. An unaimed attack (the DC box
+  standing for the Defense), an area's primary and a team attack's entries leave it to
+  the table, as the entry above says of the opposing conditions.
 - **Charge's −2 is not in the maneuvers' caps.** `maneuver_values` reads the attack's
   modifier before the lines' fixed shifts, so a +2 attack charged (+0) can still be
   doubled by All-Out to +4.

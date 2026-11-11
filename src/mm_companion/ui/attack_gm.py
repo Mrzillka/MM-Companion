@@ -357,11 +357,13 @@ class AttackController(QObject):
             target.character,
             target.name,
             self._data,
+            attack_range=spec.attack_range,
         )
         modifier = int(roll.get("bonus", 0)) - int(roll.get("penalty", 0)) + opposing.attack
         dc = defense_against(target.character, self._data, opposing)
-        if opposing.any:
+        if opposing.notes:
             aimed.said.append("with " + ", ".join(opposing.notes))
+        if opposing.any:
             self._spend(aimed, target, opposing)
         routine = None
         if rules.routine_attacks and target.minion and not aimed.source.minion:

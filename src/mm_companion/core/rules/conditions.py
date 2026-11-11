@@ -356,19 +356,88 @@ def condition_amount_mods(character: Character, game_data: GameData) -> dict[str
     return {key: value for key, value in totals.items() if value}
 
 
-def condition_attack_check_mod(character: Character, game_data: GameData) -> tuple[int, str]:
-    """What the conditions add to every attack check, and the tooltip line saying so.
+#: What kind of attack a check is, for a posture condition's ``attackMods`` (Prone's):
+#: the value of :attr:`~.rolls.RollSpec.attack_range`. Which effective Range counts as
+#: which is data (``system.attack_ranges``, read by
+#: :func:`~.powers_terms.effect_attack_range`); these are only the two keys.
+ATTACK_CLOSE = "close"
+ATTACK_RANGED = "ranged"
 
-    Only the ``amountMods`` naming ``system.trait_keys.attack_check`` (Defensive
-    Attack's −X): the build's attack bonus stays condition-free, and this is folded
-    into the roll :func:`~.rolls.power_rolls` builds.
+#: The :class:`~..data_loader.AttackMods` field each kind of attack reads, on the
+#: attacker (own) and on the target (incoming). The bearer's own ranged attack has no
+#: field: Prone says nothing about it.
+_OWN_ATTACK_FIELDS = {ATTACK_CLOSE: "own_close"}
+_INCOMING_ATTACK_FIELDS = {ATTACK_CLOSE: "incoming_close", ATTACK_RANGED: "incoming_ranged"}
+
+
+def _posture_parts(
+    character: Character, game_data: GameData, field_name: str
+) -> list[tuple[int, str]]:
+    """``(delta, condition name)`` for each condition whose ``attackMods`` moves
+    *field_name*. A posture does not stack with itself, so a condition applied twice
+    (directly and through an umbrella) counts once."""
+
+    catalog = game_data.condition_catalog()
+    seen: set[str] = set()
+    found: list[tuple[int, str]] = []
+    for applied in character.conditions:
+        cond = catalog.get(applied.condition_id)
+        if cond is None or cond.attack_mods is None or cond.id in seen:
+            continue
+        delta = getattr(cond.attack_mods, field_name, 0)
+        if delta:
+            seen.add(cond.id)
+            found.append((delta, cond.name))
+    return found
+
+
+def _summed(parts: list[tuple[int, str]]) -> tuple[int, str]:
+    """The total of ``(delta, name)`` *parts*, and the line naming each."""
+
+    total = sum(delta for delta, _name in parts)
+    return total, "; ".join(f"{delta:+d} {name}" for delta, name in parts)
+
+
+def condition_attack_check_mod(
+    character: Character, game_data: GameData, attack_range: str = ""
+) -> tuple[int, str]:
+    """What the conditions add to an attack check, and the tooltip line saying so.
+
+    The ``amountMods`` naming ``system.trait_keys.attack_check`` (Defensive Attack's
+    −X), on every attack; and on a close one (*attack_range* :data:`ATTACK_CLOSE`) the
+    ``attackMods`` a posture puts on the bearer's own close attacks (Prone's −5). The
+    build's attack bonus stays condition-free, and this is folded into the roll
+    :func:`~.rolls.power_rolls` builds.
     """
 
     key = game_data.system.trait_keys.attack_check
-    parts = [p for p in amount_contributions(character, game_data) if p.trait == key]
-    total = sum(p.delta for p in parts)
-    text = "; ".join(f"{p.delta:+d} {p.condition.name}" for p in parts)
-    return total, text
+    parts = [
+        (p.delta, p.condition.name)
+        for p in amount_contributions(character, game_data)
+        if p.trait == key
+    ]
+    own = _OWN_ATTACK_FIELDS.get(attack_range)
+    if own:
+        parts += _posture_parts(character, game_data, own)
+    return _summed(parts)
+
+
+def condition_incoming_attack_mod(
+    target: Character, game_data: GameData, attack_range: str
+) -> tuple[int, str]:
+    """What *target*'s posture adds to an attack made **against** it, and the line
+    saying so: Prone's +5 to a close attack and −5 to a ranged one.
+
+    *attack_range* is the attack spec's :attr:`~.rolls.RollSpec.attack_range`; an
+    attack whose range is unknown, or neither (Perception), gets nothing. Read by
+    whoever judges the attack against the target — the GM's app, which sees both sides
+    (:func:`~.targeted.opposing_effects`).
+    """
+
+    incoming = _INCOMING_ATTACK_FIELDS.get(attack_range)
+    if not incoming:
+        return 0, ""
+    return _summed(_posture_parts(target, game_data, incoming))
 
 
 #: The two ways a temporary condition can leave a stat — what a stat's dot is drawn as

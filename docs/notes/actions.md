@@ -593,6 +593,10 @@ click**: it rolls, as it always did. Its **right click** lists the Scene's creat
   if Vulnerable (`rules.defense_against`). Each counted instance comes off its bearer,
   hit or miss, through the GM window's `combat_land` (an NPC's model, a player's remove
   command). The card says which ("with Aided Attack (Thug) +5, Thug: Feinted (Ana)").
+  The target's **posture** counts here too: given the attack spec's `attack_range`,
+  `opposing_effects` adds a prone target's +5 to a close attack or −5 to a ranged one
+  ("Thug: +5 Prone"), which is never spent. The attacker's own close −5 is already in
+  the rolled bonus (see [conditions](conditions-and-damage.md)).
 - **The saves come back through the session.** The controller hands every roll to its
   runs first (`take_roll`), as the area and Impress controllers do. It did not at
   first, so at a live table an NPC's save was rolled by the server and never landed,
@@ -883,8 +887,8 @@ These are in [the debts](debts.md):
 - the grab rules past the first hold (improving one, size, carrying, squeezing,
   throwing), the Improved Grab / Hold / Trip / Disarm / Smash advantages, and a block
   the GM's judge makes by itself;
-- the combat maneuvers' leftovers: no turn clock (temporaries come off by hand), Prone's
-  ±5 never reaching an attack roll, Charge's −2 outside the maneuvers' caps, Recover's
-  once per scene and Aim's lapse untracked.
+- the combat maneuvers' leftovers: no turn clock (temporaries come off by hand), a prone
+  target's ±5 counted only where the opposing conditions are, Charge's −2 outside the
+  maneuvers' caps, Recover's once per scene and Aim's lapse untracked.
 
 Counting earlier Impress attempts automatically was dropped: the GM sets the slider.

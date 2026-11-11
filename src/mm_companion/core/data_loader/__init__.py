@@ -133,6 +133,7 @@ from .power_records import (
 from .system_records import (
     DEFAULT_TRAIT_RANGES,
     QUICK_NPC_STATS,
+    AttackRanges,
     Costs,
     DamageDefenses,
     DefeatSystem,
@@ -225,6 +226,7 @@ __all__ = [
     "DEFAULT_TRAIT_RANGES",
     "DamageDefenses",
     "Debilitation",
+    "AttackRanges",
     "DefeatSystem",
     "DefenseMod",
     "DerivedTrait",

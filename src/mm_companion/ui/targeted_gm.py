@@ -348,12 +348,18 @@ class TargetedController(QObject):
         rules = self._host.minion_rules()
         die = int(roll.get("die", 0))
         opposing = opposing_effects(
-            act.source.character, act.source.name, target.character, target.name, self._data
+            act.source.character,
+            act.source.name,
+            target.character,
+            target.name,
+            self._data,
+            attack_range=decl.spec.attack_range,
         )
         modifier = int(roll.get("bonus", 0)) - int(roll.get("penalty", 0)) + opposing.attack
         dc = defense_against(target.character, self._data, opposing)
-        if opposing.any:
+        if opposing.notes:
             act.said.append("with " + ", ".join(opposing.notes))
+        if opposing.any:
             self._spend(act, target, opposing)
         routine = None
         if rules.routine_attacks and target.minion and not act.source.minion:

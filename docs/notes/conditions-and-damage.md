@@ -178,6 +178,19 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   (`derived.defense_class_in_play`), so Vulnerable, All-Out Attack and Defending all move
   the DC the attack has to beat (the aimed attack, the area window's primary, the team
   attack).
+- **Prone's `attackMods` reach the attack.** Whether an attack is close or ranged is
+  `RollSpec.attack_range` (`ATTACK_CLOSE` / `ATTACK_RANGED`, or `""`), set by
+  `power_rolls` on an attack check from the effect's *effective* Range
+  (`effect_attack_range`: a Ranged extra makes a Close Damage ranged), matched against
+  `system.json`'s `attackRanges` — the range names are data. The bearer's own close −5
+  is folded into the check with the amount mods (`condition_attack_check_mod(…,
+  attack_range)`, the "Conditions" part; a Linked group's one check takes it once, at
+  its first effect's range). The target's +5 close / −5 ranged is the judge's, since
+  only it sees the target: `condition_incoming_attack_mod`, added by `opposing_effects`
+  when given the spec's `attack_range`, so an aimed attack and a targeted action's
+  attack count it (named in the card's "with …" line, never spent). The key is on the
+  wire (`sanitize_spec` whitelists it, protocol v20). A posture applied twice counts
+  once. `condition_attack_mods` still feeds the Conditions block's display.
 - **The sheet shows which numbers are borrowed** (combat maneuvers, phase 2). Every stat
   a temporary condition moves gets a **dot** (`ui/stat_mark.py`): green when
   `temporary_marks` says the temporaries leave it higher, red when lower, the sources in

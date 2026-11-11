@@ -48,12 +48,14 @@ from ..data_loader.game_data import (
 from .conditions import apply_condition, remove_condition
 from .extra_effort import extra_effort_rules
 from .maneuvers import (
+    LINE_KEY_SEPARATOR,
     _relabel_check,
     _relabel_save,
     _shift_save,
     has_attack_check,
     maneuver_caption,
     shift_maneuvers,
+    split_line_key,
 )
 from .movement import speed_lines
 from .recovery import can_recover, recovery_roll
@@ -81,21 +83,12 @@ __all__ = [
     "split_line_key",
 ]
 
-#: Joins an action id and the option it was taken with in a lane line's key.
-LINE_KEY_SEPARATOR = "/"
-
 Pick = tuple[str, "int | None"]
 
 
 def line_key(action_id: str, option_id: str = "") -> str:
     """The lane key of *action_id* taken as *option_id* (``"charge/slam"``)."""
     return f"{action_id}{LINE_KEY_SEPARATOR}{option_id}" if option_id else action_id
-
-
-def split_line_key(key: str) -> tuple[str, str]:
-    """``(action id, option id)`` out of a lane key (the option ``""`` when none)."""
-    action_id, _sep, option_id = key.partition(LINE_KEY_SEPARATOR)
-    return action_id, option_id
 
 
 def self_action(game_data: GameData, action_id: str) -> CombatAction | None:

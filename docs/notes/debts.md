@@ -51,33 +51,22 @@ Austria, so ask in the same message if that could matter.
 
 **Then the repo work:**
 
-1. **A privacy statement covering the update check.** The terms want either a linked
-   privacy policy or the statement that the program "will not transfer any
-   information to other networked systems unless specifically requested". The second
-   is not true today. `check_for_updates` is on by default (`core/storage.py`), so
-   at every launch `core/updates.py` sends one request to GitHub's "latest release"
-   endpoint with the User-Agent `MM-Companion/<version>`. It downloads the installer
-   only when the user accepts. Either write a short privacy policy, linked from the
-   README, that says this and points to GitHub's own policy, or turn the check off by
-   default and ask on first launch. Have the policy also say what the session server
-   (our own VPS) sees when someone opens GM Mode or joins a table: their IP address
-   and the session's traffic.
-2. **Version details on the program files.** SignPath requires the product name and
+1. **Version details on the program files.** SignPath requires the product name and
    version to be set on what it signs. `installer/mm_companion.spec` builds
    `MM-Companion.exe` and the portable exe with no Windows version resource. Add one to
    both `EXE(...)` calls (PyInstaller's `version=` file, generated from
    `mm_companion.__version__`, product name "MM-Companion"). The installer already sets
    `VersionInfoVersion`; add `VersionInfoProductName` beside it in
    `installer/mm_companion.iss`.
-3. **A "Code signing policy" section.** The words "Code signing policy" must appear
+2. **A "Code signing policy" section.** The words "Code signing policy" must appear
    on the home page and the download page: the README, and the release notes the
    `make-release` skill writes into `docs/releases/`. The section states "Free code
    signing provided by SignPath.io, certificate by SignPath Foundation", lists the
    roles (authors, reviewers, approvers, which today are all the maintainer) and links
-   the privacy policy from step 1.
-4. **Two-factor login** on both the GitHub account and the SignPath account; the terms
+   the privacy policy, [`PRIVACY.md`](../../PRIVACY.md).
+3. **Two-factor login** on both the GitHub account and the SignPath account; the terms
    require it for every team member.
-5. **Sign in `release.yml`.** Split the Windows job so signing happens in two places:
+4. **Sign in `release.yml`.** Split the Windows job so signing happens in two places:
    build with PyInstaller, then send `MM-Companion.exe` and the portable exe to SignPath
    (its GitHub action), and wait for the approval. Wrap the signed files with ISCC and
    send the finished installer for signing too, then upload it. Inno Setup's `SignTool`

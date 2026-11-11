@@ -302,6 +302,13 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the rationale behind the `core` /
 - [`docs/mm-session-networking.md`](docs/mm-session-networking.md) — playing over the internet, tunnels, the relay, troubleshooting.
 - [`docs/packaging.md`](docs/packaging.md) — building the Windows installer and Linux tarball.
 
+## Privacy
+
+MM-Companion has no accounts, telemetry or analytics. It checks GitHub for a newer
+release when it starts (you can turn this off), and it sends data to a session
+server only when you play online. See the [privacy policy](PRIVACY.md) for exactly
+what is sent and stored.
+
 ## License
 
 - **Source code:** MIT — see [`LICENSE`](LICENSE).

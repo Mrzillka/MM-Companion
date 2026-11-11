@@ -56,7 +56,15 @@ double-click to roll it at once; a power's 🎲 rolls its attack. A modifier box
 ±2 and ±5 steps covers the situational extras for a single roll, a DC box grades
 the result in degrees of success, **Take 10** makes a routine check, and rolls you make often can be starred into
 **quick rolls**. An attack that hits offers the save it forces right on its card in
-the history, so the target can roll it from there.
+the history, so the target can roll it from there. Hover any result to see how it
+was worked out.
+
+**Combat maneuvers.** The roller's **Actions** button opens the combat actions:
+All-out, Defensive, Power and Accurate Attack trade bonuses on a slider for the
+next attack, and Aim, Charge, Defend, Recover, Grab, Trip, Disarm, Feint, Aid,
+Block and the rest are a click away. What outlasts the roll lands on the sheet as a
+temporary condition, with a mark beside each number it moves. In a session, an
+action aimed at another creature is judged by the GM's app.
 
 **Rules engine.** A headless, pure-Python `core` layer handles d20 resolution and
 degrees of success, the mutable character model, derived character math,
@@ -261,8 +269,6 @@ Next up:
   be made a minion, with the minion rules set per session.)
 - **Ranks & Measures** — the rank / measurement table as a tool: convert distance,
   mass, time and volume both ways, and work out the rank of a feat.
-- **Actions** — the combat maneuvers on the sheet (All-out Attack, Defensive Attack,
-  Power Attack, Accurate Attack and the rest), trading bonuses as the rules allow.
 - **GM actions** — the GM's own table tools: acting for NPCs, applying effects and
   conditions to several creatures at once.
 - **GM request help** — a player asks the GM for a ruling or a hand, and the GM

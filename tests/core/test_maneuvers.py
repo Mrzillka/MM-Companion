@@ -150,6 +150,39 @@ def test_opposite_maneuvers_give_each_other_room(data) -> None:
     assert _limit(data, POWER, hero, {ACCURATE: 4}) == 5
 
 
+CHARGE, SLAM = "charge", "charge/slam"
+
+
+@pytest.mark.parametrize("charge", [CHARGE, SLAM])
+def test_a_charged_attack_is_capped_as_charged(data, charge) -> None:
+    # +2 charged (−2) is +0: All-Out could double the +2 to +4 before, but +0 doubles
+    # to nothing, and Power has no bonus left to spend.
+    hero = _hero(data, attack=2, defense=9)
+    spec = _attack(hero, data)
+    assert maneuver_values(spec, hero, data, [(charge, None)])["attack_check"] == 0
+    assert _limit(data, ALL_OUT, hero) == 2
+    limit = maneuver_limit(data, ALL_OUT, spec, hero, {charge: None})
+    assert limit.maximum == 0
+    assert "+0 with Charge" in limit.reason
+    assert _limit(data, POWER, hero, {charge: None}) == 0
+
+
+def test_a_charge_shrinks_the_room_without_closing_it(data) -> None:
+    # +5 charged is +3: All-Out may take it to +6 (3, not 5), Power down to +0 (3).
+    hero = _hero(data, attack=5, defense=9)
+    assert _limit(data, ALL_OUT, hero, {CHARGE: None}) == 3
+    assert _limit(data, POWER, hero, {CHARGE: None}) == 3
+    limit = maneuver_limit(data, ALL_OUT, _attack(hero, data), hero, {CHARGE: None})
+    assert "+3 with Charge" in limit.reason
+    # The maneuvers' own shifts still count on top: Accurate +2 leaves All-Out 1.
+    assert _limit(data, ALL_OUT, hero, {CHARGE: None, ACCURATE: 2}) == 1
+
+
+def test_a_line_that_moves_no_attack_leaves_the_caps_alone(data) -> None:
+    hero = _hero(data, attack=2, defense=9)
+    assert _limit(data, ALL_OUT, hero, {"aim": None, "finishing_attack": None}) == 2
+
+
 def test_a_maneuver_ignores_its_own_entry_in_the_others(data) -> None:
     hero = _hero(data, attack=4)
     assert _limit(data, ACCURATE, hero, {ACCURATE: 4}) == 4

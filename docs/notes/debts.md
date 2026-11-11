@@ -241,9 +241,6 @@ the targeted actions' own). Each of these was seen and left on purpose.
   by the Conditions block's display only; `power_rolls` folds in the amount mods
   (`condition_attack_check_mod`) but not these. Found in phase 1; out of the feature's
   scope.
-- **Charge's −2 is not in the maneuvers' caps.** `maneuver_values` reads the attack's
-  modifier before the lines' fixed shifts, so a +2 attack charged (+0) can still be
-  doubled by All-Out to +4.
 - **Recover works "once per scene"** says its tooltip; nothing counts it.
 - **Aim's "lost if your next standard action is not that attack"** is not tracked. The
   line stays (greyed) through a roll that is not an attack, and the player drops it with

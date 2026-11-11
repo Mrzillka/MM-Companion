@@ -9,7 +9,8 @@ arithmetic, read generically off those records:
   ``limits.maxShift``, the penalised value never below ``limits.floor``, and (with
   ``limits.doubleCap``) the bonused value never more than doubled. Several maneuvers
   may ride on one attack, so the caps are checked against the **combined** shifts of
-  the others already set;
+  the others already set, starting from the value as the lane's fixed lines leave it
+  (Charge's −2: a +2 attack charged is +0, which cannot be doubled);
 - :func:`apply_maneuvers` — the attack spec as rolled: its modifier moved, and every
   save it provokes moved with the effect rank (its DC, and the ladder's rank that a
   target's Impervious is measured against), named in the label;
@@ -33,7 +34,9 @@ from dataclasses import dataclass, replace
 from ..character import Character
 from ..data_loader import GameData
 from ..data_loader.game_data import (
+    COMBAT_KIND_LOADER,
     COMBAT_KIND_MANEUVER,
+    COMBAT_KIND_SELF,
     MANEUVER_ATTACK_CHECK,
     MANEUVER_DEFENSE,
     MANEUVER_EFFECT_RANK,
@@ -43,6 +46,7 @@ from .derived import defense_class_in_play
 from .rolls import RollSpec, add_part
 
 __all__ = [
+    "LINE_KEY_SEPARATOR",
     "ManeuverLimit",
     "apply_maneuvers",
     "has_attack_check",
@@ -53,6 +57,7 @@ __all__ = [
     "maneuver_trade",
     "maneuver_values",
     "shift_maneuvers",
+    "split_line_key",
 ]
 
 #: How each value a maneuver moves is named in a reason.
@@ -71,6 +76,16 @@ _SHORT_NOUNS = {
 
 #: Picks as the lane hands them over: ``(action id, X)``; a fixed line's X is ``None``.
 Pick = tuple[str, "int | None"]
+
+#: Joins an action id and the option it was taken with in a lane line's key
+#: (``"charge/slam"``; see :func:`~.self_actions.line_key`).
+LINE_KEY_SEPARATOR = "/"
+
+
+def split_line_key(key: str) -> tuple[str, str]:
+    """``(action id, option id)`` out of a lane key (the option ``""`` when none)."""
+    action_id, _sep, option_id = key.partition(LINE_KEY_SEPARATOR)
+    return action_id, option_id
 
 
 @dataclass(frozen=True)
@@ -109,12 +124,43 @@ def _ranked_saves(spec: RollSpec) -> list[RollSpec]:
     return [f for f in spec.follow_ups() if f.dc is not None and f.effect_rank > 0]
 
 
+def _fixed_shifts(picks: Iterable[Pick], game_data: GameData) -> dict[str, list[tuple[str, int]]]:
+    """What the fixed lines in *picks* — a self action riding on the attack, not a
+    maneuver — move whatever the maneuvers do, per value: ``[(action name, shift), …]``.
+
+    Only the attack check has one: a line's ``attackModifier`` (Charge's −2). A Slam's
+    rank is not a fixed shift (it reads the actor's speed and the rank the maneuvers
+    leave), so it is not counted here.
+    """
+
+    fixed: dict[str, list[tuple[str, int]]] = {}
+    for key, _amount in picks:
+        action_id, option_id = split_line_key(key)
+        action = game_data.combat.action(action_id)
+        if action is None or action.kind not in (COMBAT_KIND_SELF, COMBAT_KIND_LOADER):
+            continue
+        effect = action.effect_for(option_id)
+        if effect.line and effect.attack_modifier:
+            fixed.setdefault(MANEUVER_ATTACK_CHECK, []).append(
+                (action.name, effect.attack_modifier)
+            )
+    return fixed
+
+
 def maneuver_values(
-    spec: RollSpec | None, character: Character | None, game_data: GameData
+    spec: RollSpec | None,
+    character: Character | None,
+    game_data: GameData,
+    lines: Iterable[Pick] = (),
 ) -> dict[str, int | None]:
     """What each value a maneuver can move stands at now, ``None`` where the attack has
     no such value: its attack bonus, the lowest rank of the saves it forces (a Linked
-    attack moves every one of them), and the actor's Defense as it stands in play."""
+    attack moves every one of them), and the actor's Defense as it stands in play.
+
+    *lines* are the other lines on the lane. Their fixed shifts (Charge's −2) are in the
+    values, since they apply whatever the maneuvers do: the caps read the attack as
+    charged. The maneuvers among them are not (:func:`maneuver_limit` adds those).
+    """
 
     values: dict[str, int | None] = {
         MANEUVER_ATTACK_CHECK: None,
@@ -131,6 +177,10 @@ def maneuver_values(
         values[MANEUVER_DEFENSE] = (
             defense_class_in_play(character, game_data) - game_data.system.defense_dc_base
         )
+    for target, moves in _fixed_shifts(lines, game_data).items():
+        value = values.get(target)
+        if value is not None:
+            values[target] = value + sum(shift for _name, shift in moves)
     return values
 
 
@@ -158,10 +208,12 @@ def maneuver_limit(
 ) -> ManeuverLimit:
     """How far *action_id* may go on the attack *spec*, given the *others* already set.
 
-    *others* maps the other maneuvers on the lane to their X. Their shifts are added
-    before the caps are read, so two maneuvers that both raise the attack check share
-    the room to double it, while two that cancel (Accurate and Power) leave each other
-    alone. A maximum of 0 comes with the reason.
+    *others* maps the other lines on the lane to their X. The maneuvers' shifts are
+    added before the caps are read, so two maneuvers that both raise the attack check
+    share the room to double it, while two that cancel (Accurate and Power) leave each
+    other alone. A fixed line's shift (Charge's −2) is in the value the caps start from
+    (:func:`maneuver_values`): a +2 attack charged is +0, which cannot be doubled. A
+    maximum of 0 comes with the reason.
     """
 
     action = maneuver_action(game_data, action_id)
@@ -170,8 +222,10 @@ def maneuver_limit(
     if spec is None:
         return ManeuverLimit(0, "Load an attack first.")
     limits = game_data.combat.limits
-    values = maneuver_values(spec, character, game_data)
-    shifts = _shifts(((k, v) for k, v in (others or {}).items() if k != action_id), game_data)
+    lines = [(k, v) for k, v in (others or {}).items() if k != action_id]
+    values = maneuver_values(spec, character, game_data, lines)
+    fixed = _fixed_shifts(lines, game_data)
+    shifts = _shifts(lines, game_data)
     room = limits.max_shift
     # Why the room is what it is, once a cap other than maxShift binds.
     why = ""
@@ -182,25 +236,29 @@ def maneuver_limit(
         value = values.get(target)
         if value is None:
             return ManeuverLimit(0, f"This attack has no {noun} to trade.")
+        # The value as the fixed lines leave it, and which: "+0 with Charge".
+        said = f"{value:+d}"
+        if target in fixed:
+            said += " with " + " and ".join(name for name, _shift in fixed[target])
         moved = shifts.get(target, 0)
         shifted = value + moved
         if penalised:
             # The penalised value may not go below the floor.
             if value <= limits.floor:
-                return ManeuverLimit(0, f"Your {noun} is {value:+d}: there is nothing to trade.")
+                return ManeuverLimit(0, f"Your {noun} is {said}: there is nothing to trade.")
             cap = shifted - limits.floor
             rule = f"it cannot go below {limits.floor:+d}"
         elif limits.double_cap:
             # The bonused value may not more than double, so a 0 cannot be raised.
             if value <= 0:
-                return ManeuverLimit(0, f"Your {noun} is {value:+d}: it cannot be doubled.")
+                return ManeuverLimit(0, f"Your {noun} is {said}: it cannot be doubled.")
             cap = 2 * value - shifted
             rule = "a maneuver can at most double it"
         else:
             continue
         if cap < room:
             room = cap
-            why = f"Your {noun} is {value:+d}"
+            why = f"Your {noun} is {said}"
             if moved:
                 why += f", the other maneuvers move it {moved:+d}"
             why += f", and {rule}."

@@ -757,6 +757,12 @@ each record's `bonus` / `penalty` (`attack_check`, `effect_rank`, `defense` — 
   the caps, so two that raise the attack check share the room to double it, and two
   that oppose (Accurate and Power) give each other room. Several lines at once is
   allowed (§2 of the plan).
+- **Fixed lines first**: a self action's line with an `attackModifier` (Charge's −2,
+  any of its ways) is in the value the caps start from — `maneuver_values(…, lines)`
+  adds it, and the reason names it ("Your attack bonus is +0 with Charge: it cannot be
+  doubled"). A +2 attack charged is +0, so All-Out cannot raise it, and Power has
+  nothing to spend. A Slam's rank is not counted: it reads the actor's speed and the
+  rank the maneuvers leave, so it is no fixed shift.
 - **The shift** (`apply_maneuvers`) moves the modifier and restates the label's bonus,
   moves each ranked save's DC (and the number in its label), its ladder's `rank` (what
   Impervious is measured against) and `dc_if_resisted`, and names the maneuvers in
@@ -884,7 +890,6 @@ These are in [the debts](debts.md):
   throwing), the Improved Grab / Hold / Trip / Disarm / Smash advantages, and a block
   the GM's judge makes by itself;
 - the combat maneuvers' leftovers: no turn clock (temporaries come off by hand), Prone's
-  ±5 never reaching an attack roll, Charge's −2 outside the maneuvers' caps, Recover's
-  once per scene and Aim's lapse untracked.
+  ±5 never reaching an attack roll, Recover's once per scene and Aim's lapse untracked.
 
 Counting earlier Impress attempts automatically was dropped: the GM sets the slider.

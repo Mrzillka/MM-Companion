@@ -145,29 +145,28 @@ Minions are in (see [the minions notes](minions.md)). These rules about them are
   card against the rolled total, minions included. The routine DC (and the better of the
   two, as a resolved Impress uses) wants the request card to know who is a minion.
 
-## End of turn does one thing so far
+## End of turn: what is left
 
-A creature's card on the GM's board has an **End turn** item. It gives every
-impression the GM's table put on that creature a new resistance check against its
-original DC (the book's "overcoming impressions"), and rolls every condition whose
-`recoveryCheck` is made at the end of a turn (Dazed, Stunned). It is the seam the rest
+A creature's card on the GM's board has an **End turn** item. It resists every
+impression and overcomes every Affliction on that creature again against the original
+DC, read off the `ShakeOff` each condition carries (see [the conditions
+notes](conditions-and-damage.md)), and rolls every condition whose own `recoveryCheck`
+is made at the end of a turn (a damage-caused Dazed or Stunned). It is the seam the rest
 of the turn economy should hang off:
 
-- **Other end-of-turn checks.** An Affliction is overcome with its `overcomeBy`
-  resistance against its own DC; Suffocation forces a Fortitude check each turn.
-- **It does not know why a condition is on.** Dazed and Stunned are rolled off with
-  DC 10 Stamina because their record says so, and the record means a *damage-caused*
-  one (`recoveryCheck.condition`). One an impression put on is recognised and shaken
-  off as the impression instead; one an Affliction put on is not, and End turn offers
-  it the Stamina check as well. The fix is the per-condition record below: written
-  when an impression or an Affliction lands a condition, it says how that condition is
-  shaken off, and a condition with none is the damage-caused one.
-- **What it remembers lives in the GM's app.** The impressions to shake off are kept in
-  memory by `ImpressController` (`_lingering`), keyed by scene ref, from impressions the
-  table *resolved* — a request-only one, or a condition put on by hand, is not
-  remembered. Restarting the GM's app forgets them. The debt's earlier note suggested a
-  per-condition record on `AppliedCondition`, written by `targeting.apply_rung`, which
-  would survive a restart and travel with a player's sheet.
+- **Suffocation** forces a Fortitude check each turn; nothing rolls it.
+- **A third-degree Affliction** is overcome once a minute (PDF p109). End turn names it
+  and rolls nothing; the GM rolls it by hand when the minute is up.
+- **The Affliction modifiers that change overcoming** are not read: Progressive (a
+  failed check adds a degree), Cumulative, Increasing / Decreasing Difficulty (±1 DC per
+  check), Instant Recovery, Prolonged (a check per scene), Fatal (Dying on a failed
+  third-degree check). Increasing Difficulty would want a check count on the record.
+- **Only a rung the table resolved writes a record.** A request-only Impress, a save a
+  player rolled off an unaimed attack's card, or a condition put on by hand carries none,
+  so a Dazed or Stunned among them still gets the damage Stamina check.
+- **Shaking one off is End turn's alone.** A chip with a record shows no 🎲 (the
+  Stamina one is refused), and the Recover action's third option — a new resistance
+  check against an ongoing effect (PDF p206) — is not offered.
 - **There is no turn tracker.** The GM ends each creature's turn by hand; initiative
   order is on the board, but nothing walks it.
 

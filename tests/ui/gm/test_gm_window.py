@@ -1216,7 +1216,7 @@ def test_picking_a_condition_sends_it_to_that_player(
 
     window._cards["p0"]._choose_condition(a_condition("dazed"))
 
-    assert sent == [("p0", "dazed", None, {"amount": None, "temporary": False})]
+    assert sent == [("p0", "dazed", None, {"amount": None, "temporary": False, "shake_off": None})]
     assert "Dazed" in window._notice_label.text()
 
 

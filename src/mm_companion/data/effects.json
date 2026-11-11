@@ -205,6 +205,8 @@
       "resistanceDcBase": 10,
       "resistanceOutcomes": {
         "note": "Affliction's rungs are the conditions the player picked when building the power, so each degree reads its own config field rather than a fixed list.",
+        "_overcome": "Overcoming an Affliction (PDF p109): a new resistance check against the effect's DC at the end of each of the target's turns, made with the overcomeBy resistance when one is chosen and the resisting one otherwise; one success removes every condition it put on. From the third degree the check is made once a minute instead.",
+        "overcome": { "configKey": "overcomeBy", "eachMinuteFromDegree": 3 },
         "degrees": [
           { "configKey": "degree1", "scopeKey": "scope" },
           { "configKey": "degree2", "scopeKey": "scope" },

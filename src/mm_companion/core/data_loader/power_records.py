@@ -333,6 +333,23 @@ class Measure:
 
 
 @dataclass(frozen=True)
+class Overcome:
+    """How the conditions an effect's resistance ladder lands are shaken off.
+
+    The ``overcome`` block of ``resistanceOutcomes`` (an Affliction's, PDF p109): a new
+    resistance check against the effect's own DC as each of the target's turns ends,
+    and one success removes every condition the effect put on. ``config_key`` names
+    the instance field holding the resistance it is overcome with, when that differs
+    from the one it was resisted with ("" or an empty field: the same one).
+    ``each_minute_from`` is the degree of failure from which the check comes once a
+    minute instead of every turn (0: never).
+    """
+
+    config_key: str = ""
+    each_minute_from: int = 0
+
+
+@dataclass(frozen=True)
 class ResistanceOutcome:
     """One rung of an effect's degree-of-failure ladder (``resistanceOutcomes``).
 
@@ -619,6 +636,10 @@ class Effect:
     #: What *making* the check still costs the target, for the effects where that is
     #: not nothing (Damage's Hit). ``None`` where a made save really is a clean escape.
     resistance_success: ResistanceOutcome | None = None
+    #: How the conditions that ladder lands come off again (an Affliction's overcome
+    #: check). ``None`` for an effect whose conditions recover as their records say —
+    #: Damage's Dazed and Stunned.
+    overcome: Overcome | None = None
     #: The DC of the effect's own check, for an effect that is *checked* rather than
     #: resisted (Healing's DC 10). ``None`` for every other effect.
     check_dc: int | None = None

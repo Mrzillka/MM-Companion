@@ -46,6 +46,7 @@ from .power_records import (
     EffectReach,
     Measure,
     Modifier,
+    Overcome,
     PowerConfiguration,
     RepeatableColumn,
     ResistanceGrant,
@@ -591,6 +592,19 @@ def _parse_resistance_success(raw: object) -> ResistanceOutcome | None:
     return _parse_outcome_rung(raw.get("success"))
 
 
+def _parse_overcome(raw: object) -> Overcome | None:
+    """The ``overcome`` block of a ``resistanceOutcomes`` object, if it has one."""
+
+    block = raw.get("overcome") if isinstance(raw, dict) else None
+    if not isinstance(block, dict):
+        return None
+    minute = block.get("eachMinuteFromDegree", 0)
+    return Overcome(
+        config_key=str(block.get("configKey", "") or ""),
+        each_minute_from=minute if isinstance(minute, int) and minute > 0 else 0,
+    )
+
+
 def _parse_action_modifier(raw: dict) -> ActionModifier:
     kind = str(raw.get("kind", "toggle"))
     return ActionModifier(
@@ -978,6 +992,7 @@ def _parse_effect(e: dict, ranged_distance: RangeDistance | None = None) -> Effe
         resistance_vs_check=bool(e.get("resistanceVsCheck", False)),
         resistance_outcomes=_parse_resistance_outcomes(e.get("resistanceOutcomes")),
         resistance_success=_parse_resistance_success(e.get("resistanceOutcomes")),
+        overcome=_parse_overcome(e.get("resistanceOutcomes")),
         check_dc=_check_dc(e.get("checkOutcomes")),
         success_removes=_success_removes(e.get("checkOutcomes")),
         implicit_modifiers=tuple(e.get("implicitModifiers", ())),

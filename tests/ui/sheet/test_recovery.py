@@ -201,3 +201,18 @@ def test_a_session_record_of_a_made_check_takes_it_off(qapp, data) -> None:
     sheet.dice.settle_recovery({"spec": sanitize_spec(spec.to_dict()), "degree": 1})
 
     assert sheet.character.conditions == []
+
+
+def test_a_chip_put_on_by_an_affliction_says_how_it_comes_off(data) -> None:
+    """Not the damage-caused Stunned's DC 10 Stamina check its record describes."""
+    from mm_companion.core.character import SHAKE_EFFECT, ShakeOff
+    from mm_companion.ui.sections.conditions import condition_tooltip
+
+    catalog = data.condition_catalog()
+    shake = ShakeOff(SHAKE_EFFECT, "Sleep Ray", 17, "affliction", "resistance:WILL")
+    applied = AppliedCondition("stunned", shake_off=shake)
+    tip = condition_tooltip(applied, catalog["stunned"], catalog, data)
+    assert "Sleep Ray" in tip and "DC 17" in tip
+    assert "Sleep Ray" not in condition_tooltip(
+        AppliedCondition("stunned"), catalog["stunned"], catalog, data
+    )

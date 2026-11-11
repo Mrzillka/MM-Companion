@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.core import library, storage
-from mm_companion.core.character import AppliedCondition, Character
+from mm_companion.core.character import AppliedCondition, Character, ShakeOff
 from mm_companion.core.rules import (
     MinionRules,
     RollSpec,
@@ -23,10 +23,12 @@ from mm_companion.core.rules import (
     condition_changes,
     critical_answer,
     is_minion,
+    ladder_shake_off,
     localize_spec,
     minion_save_spec,
     resolve_rung,
     rung_caption,
+    trait_ref,
 )
 from mm_companion.core.session.model import (
     KIND_REQUEST,
@@ -115,7 +117,7 @@ class GMRollsMixin:
                 caption = rung_caption(crit, self._data) or "the worst outcome"
                 action = menu.addAction(
                     f"{party.name} — {CRITICAL_MARK} {caption}, no save",
-                    lambda p=party, r=crit: self._crit_minion(p, r, where),
+                    lambda p=party, r=crit: self._crit_minion(p, r, where, spec),
                 )
                 action.setToolTip("A critical hit on a minion lands its worst, unrolled.")
                 portrait = self._scene_board.portrait(party.ref)
@@ -205,10 +207,33 @@ class GMRollsMixin:
         rung = answer_rung(ladder, int(degree), entry.character, self._data, self.minion_rules())
         if rung is None:
             return
-        self._land_answer(party, rung, answering.where.source, roll.get("seq"))
+        rolled = RollSpec.from_dict(roll.get("spec"))
+        dc = roll.get("dc")
+        shake = ladder_shake_off(
+            ladder,
+            dc if isinstance(dc, int) and not isinstance(dc, bool) else answering.spec.dc,
+            int(degree),
+            trait=self._resisted_with(answering.spec, rolled),
+            source=answering.where.source,
+        )
+        self._land_answer(party, rung, answering.where.source, roll.get("seq"), shake)
 
-    def _land_answer(self, party: ImpressParty, rung, source: str, seq: object) -> None:
-        """Put *rung* on an NPC, say so, and hang a ↶ on the card *seq* names."""
+    def _resisted_with(self, spec: RollSpec, rolled: RollSpec | None) -> str:
+        """The ``kind:key`` a save was rolled with — what overcoming it defaults to."""
+        key = spec.trait_key or (rolled.trait_key if rolled is not None else "")
+        return trait_ref(self._data, key)
+
+    def _land_answer(
+        self,
+        party: ImpressParty,
+        rung,
+        source: str,
+        seq: object,
+        shake: ShakeOff | None = None,
+    ) -> None:
+        """Put *rung* on an NPC, say so, and hang a ↶ on the card *seq* names.
+
+        *shake* is how what it lands comes off again (an Affliction's overcome check)."""
         entry = self._npc_state.get(party.source)
         if entry is None:
             return
@@ -216,7 +241,7 @@ class GMRollsMixin:
         changes = resolve_rung(entry.character, rung, self._data, source=source)
         if not changes:
             return
-        self.impress_apply(party, list(changes))
+        self.impress_apply(party, list(changes), shake)
         added, removed = condition_changes(before, entry.character.conditions)
         if not added and not removed:
             return
@@ -229,7 +254,9 @@ class GMRollsMixin:
                 lambda: self._undo_answer(seq, party, added, removed, names),
             )
 
-    def _crit_minion(self, party: ImpressParty, rung, where: AnswerContext) -> None:
+    def _crit_minion(
+        self, party: ImpressParty, rung, where: AnswerContext, spec: RollSpec | None = None
+    ) -> None:
         """A critical hit on a minion: its worst, with no resistance check (PDF p197).
 
         Nothing is rolled, so the history gets a line saying what happened, and the
@@ -237,7 +264,16 @@ class GMRollsMixin:
         """
         caption = rung_caption(rung, self._data) or "the worst outcome"
         self._post_note(f"{party.name}: critical hit on a minion — {caption}, no save")
-        self._land_answer(party, rung, where.source, where.seq)
+        shake = None
+        if spec is not None:
+            shake = ladder_shake_off(
+                spec.ladder,
+                spec.dc,
+                -len(spec.ladder.rungs) if spec.ladder is not None else None,
+                trait=self._resisted_with(spec, None),
+                source=where.source,
+            )
+        self._land_answer(party, rung, where.source, where.seq, shake)
         if where.seq is not None:
             self._answered.setdefault(where.seq, set()).add(party.name)
 

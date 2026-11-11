@@ -23,7 +23,8 @@ rung resolver it shares, and under ``rolls``; ``impress`` sits on ``rolls``.
 an area's size on the card; ``area_attack`` (resolving one against a scene) sits on
 ``rolls``, beside ``impress``. ``answering`` (a roll answered for a creature, and what
 its spec's ladder does to it) sits on ``rolls``, and so does ``recovery`` (the check
-that rolls a condition off, and what making it sheds).
+that rolls a condition off, and what making it sheds). ``shaking`` (how a condition an
+impression or an Affliction put on comes off) sits on ``impress`` and ``targeting``.
 ``maneuvers`` (the attack maneuvers' caps and the spec they shift) sits on ``rolls`` and
 ``derived`` (the Defense in play). ``team_call`` (a team attack anyone joins) sits on
 ``team_attack`` and ``maneuvers``. ``targeted`` (Aid, Feint, Trick, and the opposing
@@ -83,6 +84,7 @@ from .recovery import *  # noqa: F401,F403
 from .rolls import *  # noqa: F401,F403
 from .runtime import *  # noqa: F401,F403
 from .self_actions import *  # noqa: F401,F403
+from .shaking import *  # noqa: F401,F403
 from .size import *  # noqa: F401,F403
 from .subbuilds import *  # noqa: F401,F403
 from .targeted import *  # noqa: F401,F403

@@ -674,7 +674,7 @@ class NPCCard(QFrame):
             record = self._conditions_by_id.get(applied.condition_id)
             chip = _ConditionChip(
                 condition_display_name(applied, record),
-                tooltip=condition_tooltip(applied, record, self._conditions_by_id),
+                tooltip=condition_tooltip(applied, record, self._conditions_by_id, self._data),
                 compact=self._collapsed,
                 tone=condition_tone_token(record),
                 temporary=applied.temporary,

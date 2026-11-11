@@ -26,6 +26,7 @@ other roll, so there is one way to say "and +2 for cover".
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 
 from ..character import Character
@@ -185,6 +186,13 @@ class SpecLadder:
     are Penetrating — what the *target's* Impervious or Hardened Toughness is measured
     against (:mod:`.defenses`). Both 0 when unknown, which waives the rank tests and
     leaves a ladder from an older build reading as it always did.
+
+    ``effect`` is the id of an effect whose conditions are *overcome* (an Affliction's,
+    :class:`~mm_companion.core.data_loader.Overcome`), empty for one whose conditions
+    recover as their records say (Damage); ``overcome`` is the ``kind:key`` of the trait
+    they are overcome with when it is not the save's own; ``name`` what the table calls
+    it (the power's name). Whoever lands a rung of it writes them onto the conditions as
+    a :class:`~mm_companion.core.character.ShakeOff` (:func:`~.shaking.ladder_shake_off`).
     """
 
     kind: str
@@ -192,6 +200,9 @@ class SpecLadder:
     success: ResistanceOutcome | None = None
     rank: int = 0
     penetrating: int = 0
+    effect: str = ""
+    overcome: str = ""
+    name: str = ""
 
     def to_dict(self) -> dict:
         raw: dict = {"kind": self.kind, "rungs": [_rung_to_dict(r) for r in self.rungs]}
@@ -201,6 +212,9 @@ class SpecLadder:
             raw["rank"] = self.rank
         if self.penetrating:
             raw["penetrating"] = self.penetrating
+        for key in ("effect", "overcome", "name"):
+            if getattr(self, key):
+                raw[key] = getattr(self, key)
         return raw
 
     @classmethod
@@ -218,7 +232,16 @@ class SpecLadder:
             success=_rung_from_dict(success) if isinstance(success, dict) else None,
             rank=_nonnegative(raw.get("rank")),
             penetrating=_nonnegative(raw.get("penetrating")),
+            effect=_text(raw.get("effect")),
+            overcome=_text(raw.get("overcome")),
+            name=_text(raw.get("name")),
         )
+
+
+def _text(value: object) -> str:
+    """A wire string that may be missing or junk (``""`` for either)."""
+
+    return value if isinstance(value, str) else ""
 
 
 def _nonnegative(value: object) -> int:
@@ -739,12 +762,18 @@ def effect_outcome_ladder(
 
 
 def effect_spec_ladder(
-    effect: PowerEffectInstance, game_data: GameData, base_effect: Effect | None = None
+    effect: PowerEffectInstance,
+    game_data: GameData,
+    base_effect: Effect | None = None,
+    *,
+    name: str = "",
 ) -> SpecLadder | None:
     """This effect's ladder as data for its save's spec — ``None`` if it has none.
 
     Damage's is :data:`LADDER_DAMAGE` (the ruleset's damage effect), every other
-    effect's :data:`LADDER_EFFECT`.
+    effect's :data:`LADDER_EFFECT`. An effect whose conditions are overcome (an
+    Affliction) says so, with the trait its instance overcomes them with and *name*
+    (the power's) — what the conditions' shake-off record is written from.
     """
 
     if base_effect is None:
@@ -760,7 +789,39 @@ def effect_spec_ladder(
             for rung in base_effect.resistance_outcomes
         ),
         None if success is None else concrete_rung(success, game_data, effect.config),
+        effect=base_effect.id if base_effect.overcome is not None else "",
+        overcome=overcome_trait(base_effect, effect.config, game_data),
+        name=(name or base_effect.name) if base_effect.overcome is not None else "",
     )
+
+
+def overcome_trait(base_effect: Effect | None, config: Mapping, game_data: GameData) -> str:
+    """The ``kind:key`` an effect instance's conditions are overcome with, when its
+    config chose one (an Affliction's "Overcome by"); ``""`` for the resisting one."""
+
+    rule = base_effect.overcome if base_effect is not None else None
+    if rule is None or not rule.config_key:
+        return ""
+    chosen = str((config or {}).get(rule.config_key, "") or "")
+    return trait_ref(game_data, _save_key(chosen, game_data)) if chosen else ""
+
+
+def trait_ref(game_data: GameData, key: str) -> str:
+    """``kind:key`` for a trait key — how a :class:`~.impress.TraitChoice` names one.
+
+    A resistance, an ability or a skill (by name), in that order; ``""`` for a key that
+    is none of them.
+    """
+
+    if not key:
+        return ""
+    if any(r.key == key for r in game_data.resistances):
+        return f"{KIND_RESISTANCE}:{key}"
+    if any(a.key == key for a in game_data.abilities):
+        return f"{KIND_ABILITY}:{key}"
+    if any(s.name == key for s in game_data.skills):
+        return f"{KIND_SKILL}:{key}"
+    return ""
 
 
 def effect_success_outcome(
@@ -1357,9 +1418,16 @@ def _effect_rank(effect: PowerEffectInstance, game_data: GameData, dc: int | Non
 
 
 def _effect_roll_parts(
-    effect: PowerEffectInstance, game_data: GameData, char: Character | None, prefix: str
+    effect: PowerEffectInstance,
+    game_data: GameData,
+    char: Character | None,
+    prefix: str,
+    owner: str = "",
 ) -> _EffectRolls:
-    """The rolls one effect calls for, before :func:`power_rolls` orders them."""
+    """The rolls one effect calls for, before :func:`power_rolls` orders them.
+
+    *owner* is the power's name, which an overcome effect's ladder is called by.
+    """
 
     attack_bonus = effect_attack_skill_bonus(effect, char, game_data)
     rows = {r.key: r for r in effect_stat_rows(effect, game_data, char, attack_bonus)}
@@ -1387,7 +1455,10 @@ def _effect_roll_parts(
             trait_key=save_key,
             pick=pick,
             ladder=_damage_measured(
-                effect_spec_ladder(effect, game_data, base_effect), effect, game_data, numbers.dc
+                effect_spec_ladder(effect, game_data, base_effect, name=owner or prefix),
+                effect,
+                game_data,
+                numbers.dc,
             ),
             effect_rank=_effect_rank(effect, game_data, numbers.dc),
         )
@@ -1599,7 +1670,7 @@ def power_rolls(power: Power, char: Character | None, game_data: GameData) -> li
         prefixes.append(prefix)
     parts = [
         _counted_use(
-            _effect_roll_parts(effect, game_data, char, prefix),
+            _effect_roll_parts(effect, game_data, char, prefix, power.name),
             (power.id, index),
             effect,
             game_data,

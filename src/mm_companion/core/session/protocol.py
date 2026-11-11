@@ -153,7 +153,10 @@ from typing import ClassVar
 #: makes every hit of it a critical (Finishing Attack). And a spec's ``parts`` — what
 #: its modifier is made of, ``[[name, amount], …]`` — so every seat's history can show
 #: how a roll's number was reached on hover. And a spec's ``own_attack``: a save its
-#: attacker rolled off their own card, which every seat's card marks with a ⚠.
+#: attacker rolled off their own card, which every seat's card marks with a ⚠. And
+#: :class:`ApplyCondition`'s ``shake_off``: how a condition an impression or an
+#: Affliction put on a player comes off again, kept on their sheet (and so in the
+#: snapshot the GM's End turn reads), plus the ladder's ``overcome`` and ``name``.
 PROTOCOL_VERSION = 20
 
 #: Hard cap on one encoded message, including its trailing newline. A character
@@ -886,6 +889,9 @@ class ApplyCondition(Message):
     amount: int | None = None
     #: Lasts only until the start of the player's next turn (v20).
     temporary: bool = False
+    #: How it comes off, for one an impression or an effect put on (v20): a
+    #: ``ShakeOff`` record, checked by :func:`sanitize_shake_off` on the way in.
+    shake_off: dict | None = None
 
 
 @_register
@@ -1178,6 +1184,12 @@ def _sanitize_ladder(raw: object) -> dict | None:
         value = raw.get(key)
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
             ladder[key] = min(value, MAX_LADDER_RANK)
+    # How what it lands comes off again (an Affliction's overcome check), and what
+    # the table calls it: plain short text.
+    for key in ("overcome", "effect", "name"):
+        value = raw.get(key)
+        if isinstance(value, str) and value:
+            ladder[key] = value[:MAX_SPEC_TEXT]
     return ladder
 
 
@@ -1185,6 +1197,34 @@ def _sanitize_ladder(raw: object) -> dict | None:
 #: creatures on a scene, so it never needs more lines than a scene has entries.
 MAX_GROUP_LINES = 24
 MAX_ACTION_ID = 64
+
+
+#: The shake-off record's text keys, and its numbers' bound.
+_SHAKE_TEXT_KEYS = ("kind", "name", "ref", "trait", "skill", "source")
+MAX_SHAKE_NUMBER = 999
+
+
+def sanitize_shake_off(raw: object) -> dict | None:
+    """An :class:`ApplyCondition`'s ``shake_off``, checked into shape — or ``None``.
+
+    Structural only: short text keys and two bounded counts. What it means is the
+    rules' (``ShakeOff`` on the character model).
+    """
+    if not isinstance(raw, dict):
+        return None
+    kept: dict = {}
+    for key in _SHAKE_TEXT_KEYS:
+        value = raw.get(key)
+        if isinstance(value, str) and value:
+            kept[key] = value[:MAX_SPEC_TEXT]
+    for key in ("dc", "degree"):
+        value = raw.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            kept[key] = max(0, min(value, MAX_SHAKE_NUMBER))
+    if not kept.get("kind") or "dc" not in kept:
+        return None
+    kept.setdefault("name", "")
+    return kept
 
 
 def sanitize_action_id(raw: object) -> str:

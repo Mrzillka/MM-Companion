@@ -23,7 +23,7 @@ import pytest
 from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMessageBox
 
 from mm_companion.core import library, storage
-from mm_companion.core.character import AdvantageSelection, Character
+from mm_companion.core.character import SHAKE_EFFECT, AdvantageSelection, Character, ShakeOff
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
 from mm_companion.core.rules import apply_condition
@@ -673,6 +673,23 @@ def test_the_gm_can_set_a_players_hero_points(qapp: QApplication, table) -> None
         )
         == 3,
     )
+
+
+def test_how_a_condition_comes_off_rides_with_it_and_comes_back(qapp: QApplication, table) -> None:
+    """Protocol v20: an impression's or an Affliction's record lands on the sheet, and the
+    snapshot hands it back to the GM, whose End turn reads it there."""
+    host, player = table
+    sheet, _pusher, receiver = joined_sheet(player)
+    player_id = player.client.player_id
+    shake = ShakeOff(kind=SHAKE_EFFECT, name="Sleep Ray", dc=17, ref="affliction", degree=2)
+    host.server.apply_condition(player_id, "stunned", shake_off=shake.to_dict())
+
+    assert wait_for(qapp, lambda: receiver.applied == 1)
+    (stunned,) = sheet.character.conditions
+    assert stunned.shake_off == shake
+    assert wait_for(qapp, lambda: host.state.players[player_id].character.get("conditions"))
+    (stored,) = host.state.players[player_id].character["conditions"]
+    assert ShakeOff.from_dict(stored["shakeOff"]) == shake
 
 
 def test_a_command_naming_somebody_else_is_ignored(qapp: QApplication, table) -> None:

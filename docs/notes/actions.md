@@ -512,14 +512,22 @@ A trait roll clicked in the GM's history — a request card, or a save chip unde
 ## End of turn
 
 - A creature's card on the GM's board offers **End turn**. It does two things. First,
-  every impression the table resolved onto that creature (`ImpressController._lingering`,
-  remembered as each rung lands, with its DC and how the target resisted) is resisted
-  again **against the original DC** — the server rolls an NPC's, a player is asked for
-  each in turn (`Shake off Demoralized`). One that is made comes off; one that is
-  failed stays. An impression whose conditions are already gone is forgotten unrolled.
-- Second, every condition on it whose `recoveryCheck` cadence is `end_of_turn` (Dazed,
-  Stunned — `end_of_turn_recoveries`) is rolled off, unless an impression put it there:
-  that one is shaken off as the impression, at its DC, and not rolled twice. An NPC's
+  every impression and every Affliction on that creature is resisted again **against
+  the original DC** — read off the creature's own conditions (`held_shake_offs`: the
+  `ShakeOff` each one's rung wrote, see [the conditions
+  notes](conditions-and-damage.md)), so it is the NPC's model or the player's latest
+  snapshot that says what is on them, and a GM restart forgets nothing. The server
+  rolls an NPC's (`shake_off_roll`), a player is asked for each in turn (`Shake off
+  Demoralized`, `Shake off Sleep Ray`). One that is made comes off with every condition
+  it put on; one that is failed stays. An impression is resisted with what the GM chose
+  then, or the creature's best option; an Affliction with its "Overcome by" resistance,
+  or the one it was resisted with. An Affliction at its third degree is overcome once a
+  minute, not as a turn ends (`shake_off_each_minute`, the effect's
+  `overcome.eachMinuteFromDegree`): End turn names it and rolls nothing.
+- Second, every condition on it whose `recoveryCheck` cadence is `end_of_turn` (a
+  damage-caused Dazed or Stunned — `end_of_turn_recoveries`) is rolled off. One an
+  impression or an Affliction put on is not offered (`can_recover`): it comes off with
+  what put it there, and is not rolled twice. An NPC's
   checks are lines of the same server-rolled group, and a made one sheds through the
   path the chip's 🎲 takes (`GMWindow._shed_npc_recovery`). A player gets the same
   request card the chip's 🎲 sends, and their own app settles it.
@@ -882,9 +890,9 @@ stages through a real hosted session.
 
 These are in [the debts](debts.md):
 
-- End turn's other checks (Affliction overcome, Suffocation), knowing *why* a Dazed or
-  Stunned is on (only a damage-caused one is rolled off with Stamina), and a memory of
-  impressions that outlives the GM's app;
+- End turn's other checks (Suffocation), the Affliction modifiers that change
+  overcoming (Progressive, Cumulative, Increasing Difficulty, Instant Recovery), a
+  third-degree Affliction's once-a-minute check, and shaking one off from the chip;
 - the area pieces left out: a Hero Point inside the table, and Nullify and Move Object
   areas;
 - the targeted actions off the air, and the opposing conditions in anything but an

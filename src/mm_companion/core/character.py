@@ -93,6 +93,70 @@ class NotesState:
         )
 
 
+#: A :class:`ShakeOff` from an impression (an Impress action's rung).
+SHAKE_IMPRESSION = "impression"
+#: A :class:`ShakeOff` from an effect's save (an Affliction's rung).
+SHAKE_EFFECT = "effect"
+
+
+@dataclass(frozen=True)
+class ShakeOff:
+    """How a condition an impression or an effect put on is shaken off.
+
+    Written onto the :class:`AppliedCondition` by whoever lands the rung, so it travels
+    with the condition — into a save, onto a player's sheet, back to the GM in their
+    snapshot — and outlives the app that applied it. A condition with none came by
+    damage or by hand, and comes off as its catalog record says (Dazed's Stamina check).
+
+    ``kind`` is :data:`SHAKE_IMPRESSION` or :data:`SHAKE_EFFECT`; ``name`` what the
+    table calls it ("Demoralized", the power's name); ``ref`` the impression id or the
+    effect id; ``dc`` the check's original DC; ``trait`` the ``kind:key`` it is resisted
+    with (a :class:`~.rules.impress.TraitChoice` ref — empty for "the best of what the
+    bearer may resist with"); ``skill`` the skill row an impression was made with, which
+    decides what may resist it; ``source`` who put it on; ``degree`` the degrees of
+    failure that landed it (an Affliction at the third is overcome once a minute, not as
+    a turn ends — PDF p109). Conditions landed by one rung share one record, and are
+    shaken off together: one success removes them all.
+    """
+
+    kind: str
+    name: str
+    dc: int
+    ref: str = ""
+    trait: str = ""
+    skill: str = ""
+    source: str = ""
+    degree: int = 0
+
+    def to_dict(self) -> dict:
+        data: dict = {"kind": self.kind, "name": self.name, "dc": self.dc}
+        for key in ("ref", "trait", "skill", "source"):
+            value = getattr(self, key)
+            if value:
+                data[key] = value
+        if self.degree:
+            data["degree"] = self.degree
+        return data
+
+    @classmethod
+    def from_dict(cls, raw: object) -> ShakeOff | None:
+        """Rebuild a record from :meth:`to_dict`, or ``None`` for anything unusable."""
+        if not isinstance(raw, dict):
+            return None
+        kind, name, dc = raw.get("kind"), raw.get("name"), raw.get("dc")
+        if not isinstance(kind, str) or not kind or not isinstance(name, str):
+            return None
+        if isinstance(dc, bool) or not isinstance(dc, int):
+            return None
+        text = {key: raw.get(key, "") for key in ("ref", "trait", "skill", "source")}
+        if not all(isinstance(value, str) for value in text.values()):
+            return None
+        degree = raw.get("degree", 0)
+        if isinstance(degree, bool) or not isinstance(degree, int):
+            degree = 0
+        return cls(kind=kind, name=name, dc=dc, degree=max(0, degree), **text)
+
+
 @dataclass
 class AppliedCondition:
     """One condition currently on a character — an entity in the condition tracker.
@@ -111,6 +175,10 @@ class AppliedCondition:
     record's ``amountMods`` say what it moves); ``temporary`` marks an instance that
     lasts until the start of its bearer's next turn and goes with "Clear temporary".
     Both are omitted from a save at their defaults, so older saves load unchanged.
+
+    ``shake_off`` says how a condition an impression or an effect put on comes off
+    (:class:`ShakeOff`); ``None`` — damage, or a condition picked by hand — means its
+    catalog record's own recovery check. Only a directly applied condition carries one.
     """
 
     condition_id: str
@@ -119,6 +187,7 @@ class AppliedCondition:
     provenance: str | None = None
     amount: int | None = None
     temporary: bool = False
+    shake_off: ShakeOff | None = None
 
     def to_dict(self) -> dict:
         """Serialize, omitting defaulted fields to keep saves compact."""
@@ -134,6 +203,8 @@ class AppliedCondition:
             data["amount"] = self.amount
         if self.temporary:
             data["temporary"] = True
+        if self.shake_off is not None:
+            data["shakeOff"] = self.shake_off.to_dict()
         return data
 
     @classmethod
@@ -146,6 +217,7 @@ class AppliedCondition:
             provenance=raw.get("provenance"),
             amount=int(amount) if amount is not None else None,
             temporary=bool(raw.get("temporary", False)),
+            shake_off=ShakeOff.from_dict(raw.get("shakeOff")),
         )
 
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from mm_companion.core import library
-from mm_companion.core.character import Character
+from mm_companion.core.character import Character, ShakeOff
 from mm_companion.core.rules import (
     RollSpec,
     apply_condition,
@@ -73,25 +73,45 @@ class GMActionsMixin:
         sources += [party for party in targets if party.kind == PARTY_PLAYER]
         return sources, targets
 
-    def impress_apply(self, party: ImpressParty, changes: list[tuple[str, str | None]]) -> bool:
-        """Put an impression's conditions on one creature.
+    def impress_apply(
+        self,
+        party: ImpressParty,
+        changes: list[tuple[str, str | None]],
+        shake_off: ShakeOff | None = None,
+    ) -> bool:
+        """Put an impression's (or a save's) conditions on one creature.
 
         An NPC's go straight onto its model, through the path every other condition
         change takes (its card, an open sheet, the file, the board). A player's go to
-        their app as commands, exactly as the GM's own "+" sends one.
+        their app as commands, exactly as the GM's own "+" sends one. *shake_off* goes
+        with each: how an impression's or an Affliction's conditions come off again, which
+        End turn reads back off the creature (its model, or the player's snapshot).
         """
         if party.kind == PARTY_NPC:
             entry = self._npc_state.get(party.source)
             if entry is None:
                 return False
             for condition_id, parameter in changes:
-                apply_condition(entry.character, condition_id, self._data, parameter=parameter)
-            self._after_npc_condition_change(entry, list(changes), applying=True)
+                apply_condition(
+                    entry.character,
+                    condition_id,
+                    self._data,
+                    parameter=parameter,
+                    shake_off=shake_off,
+                )
+            self._after_npc_condition_change(
+                entry, list(changes), applying=True, shake_off=shake_off
+            )
             return True
+        wire = shake_off.to_dict() if shake_off is not None else None
         delivered = True
         for condition_id, parameter in changes:
             delivered = (
-                bool(self._bridge.apply_condition(party.source, condition_id, parameter))
+                bool(
+                    self._bridge.apply_condition(
+                        party.source, condition_id, parameter, shake_off=wire
+                    )
+                )
                 and delivered
             )
         return delivered

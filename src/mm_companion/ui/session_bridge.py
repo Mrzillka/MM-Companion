@@ -461,16 +461,14 @@ class SessionBridge(QObject):
         *,
         amount: int | None = None,
         temporary: bool = False,
+        shake_off: dict | None = None,
     ):
-        """Put a condition on a player's live sheet."""
+        """Put a condition on a player's live sheet (*shake_off*: a ``ShakeOff`` dict)."""
+        kwargs = {"amount": amount, "temporary": temporary, "shake_off": shake_off}
         if self._server is not None:
-            return self._server.apply_condition(
-                player_id, condition_id, parameter, amount=amount, temporary=temporary
-            )
+            return self._server.apply_condition(player_id, condition_id, parameter, **kwargs)
         if self._client is not None:
-            return self._client.apply_condition(
-                player_id, condition_id, parameter, amount=amount, temporary=temporary
-            )
+            return self._client.apply_condition(player_id, condition_id, parameter, **kwargs)
         return False
 
     def clear_temporary(self, player_id: str) -> bool:

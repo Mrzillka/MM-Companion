@@ -22,16 +22,6 @@ notes](session.md)). Neither reaches the VPS by itself:
   branch reaches `main` puts the old hook back.
 - **The hub code** goes out with the next release and redeploy.
 
-### Conditions remember how they come off (#20b)
-
-When an Affliction puts on Stunned, End turn offers it the Stamina recovery check
-that belongs to *damage-caused* Stunned. Impressions the GM's table tracks
-(`ImpressController._lingering`) are forgotten when the GM's app restarts. Both are
-fixed by one per-condition record on `AppliedCondition`, written by
-`targeting.apply_rung`, saying how that condition is shaken off. Probably a protocol
-bump (the user is fine with that). Details are in [the debts file](debts.md#end-of-turn-does-one-thing-so-far).
-Rules mistakes are what M&M players will spot first.
-
 ### Combat maneuvers
 
 All-out Attack, Defensive Attack, Power Attack, Accurate Attack and the rest, on the
@@ -93,7 +83,8 @@ And the engine debts, all in [the debts file](debts.md):
 
 - The rest of the minion rules: Takedown's free attack (#21), Menaces, Assess
   against a group (#21), a minion's 20 against a minion, request-mode Impress DCs.
-- The rest of End turn: Affliction overcome checks, Suffocation, a turn tracker.
+- The rest of End turn: Suffocation, the Affliction modifiers that change overcoming,
+  a turn tracker.
 - The rest of area attacks: a Hero Point inside the table, area Nullify and Move
   Object, Selective / cover / the size rule.
 - Restating the Powers and Equipment cards instead of rebuilding them (#19). It

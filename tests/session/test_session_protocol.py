@@ -139,6 +139,11 @@ ROUND_TRIP_CASES = [
     ScenePortrait(ref="e1", portrait="AAAA"),
     ApplyCondition(player_id="p1", condition_id="dazed", parameter="Strength"),
     ApplyCondition(player_id="p1", condition_id="all_out_attack", amount=3, temporary=True),
+    ApplyCondition(
+        player_id="p1",
+        condition_id="stunned",
+        shake_off={"kind": "effect", "name": "Sleep Ray", "dc": 17, "degree": 2},
+    ),
     ClearTemporary(player_id="p1"),
     RemoveCondition(player_id="p1", condition_id="dazed"),
     SetHeroPoints(player_id="p1", value=3),
@@ -352,6 +357,43 @@ def test_text_and_ladders_are_capped() -> None:
     assert len(spec["hint"]) == protocol.MAX_SPEC_TEXT
     assert len(spec["outcomes"]) == protocol.MAX_SPEC_OUTCOMES
     assert len(spec["outcomes"][0]) == protocol.MAX_SPEC_TEXT
+
+
+def test_a_ladder_keeps_how_its_conditions_are_overcome() -> None:
+    spec = sanitize_spec(
+        {
+            "label": "Sleep Ray",
+            "ladder": {
+                "kind": "effect",
+                "rungs": [],
+                "effect": "affliction",
+                "overcome": "resistance:WILL",
+                "name": "N" * 5000,
+                "surprise": 1,
+            },
+        }
+    )
+
+    ladder = spec["ladder"]
+    assert ladder["effect"] == "affliction" and ladder["overcome"] == "resistance:WILL"
+    assert len(ladder["name"]) == protocol.MAX_SPEC_TEXT
+    assert "surprise" not in ladder
+
+
+def test_a_shake_off_record_is_checked_into_shape() -> None:
+    kept = protocol.sanitize_shake_off(
+        {"kind": "effect", "name": "X" * 5000, "dc": 10**9, "degree": -3, "extra": [1]}
+    )
+
+    assert kept == {
+        "kind": "effect",
+        "name": "X" * protocol.MAX_SPEC_TEXT,
+        "dc": protocol.MAX_SHAKE_NUMBER,
+        "degree": 0,
+    }
+    assert protocol.sanitize_shake_off({"kind": "effect", "name": "X"}) is None  # no DC
+    assert protocol.sanitize_shake_off({"dc": 10}) is None  # no kind
+    assert protocol.sanitize_shake_off("effect") is None
 
 
 def test_a_deep_chain_is_cut_rather_than_followed() -> None:

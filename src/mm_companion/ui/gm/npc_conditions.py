@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from mm_companion.core import library
-from mm_companion.core.character import AppliedCondition
+from mm_companion.core.character import AppliedCondition, ShakeOff
 from mm_companion.core.rules import (
     apply_condition,
     apply_condition_requests,
@@ -257,6 +257,7 @@ class GMNpcConditionsMixin:
         amount: int | None = None,
         clearing: bool = False,
         requests: tuple = (),
+        shake_off: ShakeOff | None = None,
     ) -> None:
         """Restate the NPC's card and persist one or more condition changes.
 
@@ -269,7 +270,8 @@ class GMNpcConditionsMixin:
         *amount* rides along with an applied condition that has one; *clearing*
         replays a "Clear temporary" (with no *changes*) rather than ids; *requests*
         replays a combat action's ``condition-requested`` payload (temporary flags and
-        amounts kept) through the open sheet's ``take_conditions``.
+        amounts kept) through the open sheet's ``take_conditions``; *shake_off* rides
+        along with applied ones, so the open sheet keeps how they come off.
         """
         window = self._window_for(entry.path)
         section = getattr(window.sheet, "conditions", None) if window is not None else None
@@ -287,7 +289,9 @@ class GMNpcConditionsMixin:
                     section.take_conditions(requests)
                 for condition_id, parameter in changes:
                     if applying:
-                        section.apply_condition_by_id(condition_id, parameter, amount=amount)
+                        section.apply_condition_by_id(
+                            condition_id, parameter, amount=amount, shake_off=shake_off
+                        )
                     else:
                         section.remove_condition_by_id(condition_id, parameter)
         else:

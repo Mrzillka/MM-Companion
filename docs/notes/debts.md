@@ -7,6 +7,89 @@ touching the area rather than after.
 
 Take one off this list by doing it, and delete its entry in the same commit.
 
+## Before release
+
+Work kept for the stable **1.0 release**. Ordinary releases go out without it; pick
+it up when 1.0 is being planned (see [the road to 1.0](road-to-1.0.md)).
+
+### Sign the Windows installer through SignPath Foundation
+
+The installer is unsigned, so SmartScreen warns the first time someone runs it. The
+chosen route (2026-11-11) is the **SignPath Foundation**, which signs open-source
+projects for free. The alternatives were Azure Trusted Signing (about $10 a month,
+identity check, only some countries) and a classic certificate (about $200–400 a
+year, with the key on a hardware token, which is awkward in CI). The terms below were
+read at <https://signpath.org/terms> on 2026-11-11, when the page was marked as a
+draft, so read them again before applying.
+
+Signing does not remove the warning at once. SmartScreen builds trust in a
+signature as people download it, so the warning fades over the first releases.
+
+**What we accept by choosing it.** The certificate belongs to SignPath, so Windows
+shows **"SignPath Foundation"** as the publisher, not us. Every signing request needs
+a manual approval in SignPath, so a release waits for that click. Only builds made by
+GitHub Actions can be signed, so installers built locally by the `build-installer`
+skill stay unsigned. SignPath may pause the signing or revoke the certificate without
+notice if it thinks a rule was broken, and it decides applications at its own
+discretion, with no appeal.
+
+**Ask SignPath first.** Two things could stop the application, so settle them before
+doing the repo work:
+
+- **The game data's licence.** The terms require "an OSI-approved Open Source license
+  … for all components". The code is MIT and PySide6/Qt are LGPL, which is fine, but
+  `src/mm_companion/data/` is Open Game Content under the **OGL 1.0a**, which is not an
+  OSI licence, and it ships inside the installer. The terms say nothing about content
+  that is not code, so ask whether it is acceptable.
+- **Reputation.** For programs (not libraries) SignPath wants "a certain verifiable
+  reputation". A project with a handful of users may be told to come back later. Apply
+  early if the 1.0 installer must be signed at launch; otherwise apply once the launch
+  has brought users.
+
+The terms say nothing about which countries are eligible. SignPath is based in
+Austria, so ask in the same message if that could matter.
+
+**Then the repo work:**
+
+1. **A privacy statement covering the update check.** The terms want either a linked
+   privacy policy or the statement that the program "will not transfer any
+   information to other networked systems unless specifically requested". The second
+   is not true today. `check_for_updates` is on by default (`core/storage.py`), so
+   at every launch `core/updates.py` sends one request to GitHub's "latest release"
+   endpoint with the User-Agent `MM-Companion/<version>`. It downloads the installer
+   only when the user accepts. Either write a short privacy policy, linked from the
+   README, that says this and points to GitHub's own policy, or turn the check off by
+   default and ask on first launch. Have the policy also say what the session server
+   (our own VPS) sees when someone opens GM Mode or joins a table: their IP address
+   and the session's traffic.
+2. **Version details on the program files.** SignPath requires the product name and
+   version to be set on what it signs. `installer/mm_companion.spec` builds
+   `MM-Companion.exe` and the portable exe with no Windows version resource. Add one to
+   both `EXE(...)` calls (PyInstaller's `version=` file, generated from
+   `mm_companion.__version__`, product name "MM-Companion"). The installer already sets
+   `VersionInfoVersion`; add `VersionInfoProductName` beside it in
+   `installer/mm_companion.iss`.
+3. **A "Code signing policy" section.** The words "Code signing policy" must appear
+   on the home page and the download page: the README, and the release notes the
+   `make-release` skill writes into `docs/releases/`. The section states "Free code
+   signing provided by SignPath.io, certificate by SignPath Foundation", lists the
+   roles (authors, reviewers, approvers, which today are all the maintainer) and links
+   the privacy policy from step 1.
+4. **Two-factor login** on both the GitHub account and the SignPath account; the terms
+   require it for every team member.
+5. **Sign in `release.yml`.** Split the Windows job so signing happens in two places:
+   build with PyInstaller, then send `MM-Companion.exe` and the portable exe to SignPath
+   (its GitHub action), and wait for the approval. Wrap the signed files with ISCC and
+   send the finished installer for signing too, then upload it. Inno Setup's `SignTool`
+   directive would also sign the uninstaller, but only if signing can run on the build
+   machine. Give the waits a timeout long enough for a manual approval.
+
+Already satisfied: the installer comes with an uninstaller, the releases are built
+from the public repo by CI, and the app does not change system settings.
+
+**Later, optional:** once the installer is signed, the updater could check its
+signature on the downloaded installer as well as the SHA-256 it checks today.
+
 ## The Powers and Equipment cards should be restated, not rebuilt
 
 `PowersSection._rebuild_list` and `EquipmentSection._rebuild_cards` still destroy

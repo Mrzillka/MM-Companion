@@ -74,8 +74,9 @@ what the box can actually hold, and what a new GM sees when the cap is reached
 ### Sign the Windows installer (optional)
 
 The installer is unsigned, so SmartScreen warns on first run. The README now says
-so. Signing would remove the warning: SignPath offers free signing to open-source
-projects, and Azure Trusted Signing is a few dollars a month.
+so. Signing would remove the warning over time. The route is chosen (SignPath
+Foundation, free for open-source projects), and what has to happen first is in
+[the debts file](debts.md#sign-the-windows-installer-through-signpath-foundation).
 
 ## After 1.0
 

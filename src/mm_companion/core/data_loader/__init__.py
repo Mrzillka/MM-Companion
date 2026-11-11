@@ -113,6 +113,8 @@ from .parsing_rules import (
     vehicle_entry,
 )
 from .power_records import (
+    CADENCE_CLEARS,
+    CADENCE_SCENE,
     AllocationOption,
     BaseCostBy,
     ConfigOption,
@@ -124,6 +126,7 @@ from .power_records import (
     Measure,
     Modifier,
     Overcome,
+    OvercomeModifier,
     PowerConfiguration,
     RepeatableColumn,
     ResistanceGrant,
@@ -274,6 +277,9 @@ __all__ = [
     "ReachRules",
     "Readout",
     "Overcome",
+    "OvercomeModifier",
+    "CADENCE_SCENE",
+    "CADENCE_CLEARS",
     "RecoveryCheck",
     "RepeatableColumn",
     "ResistOptions",

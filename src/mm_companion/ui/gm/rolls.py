@@ -32,10 +32,12 @@ from mm_companion.core.rules import (
 )
 from mm_companion.core.session.model import (
     KIND_REQUEST,
+    KIND_ROLL,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.action_grid import GridSection
 from mm_companion.ui.action_menu import combat_menu
+from mm_companion.ui.action_run import resolved_by_a_run
 from mm_companion.ui.action_ui import (
     TABLE_MOD_ID,
     TABLE_SESSION_KEY,
@@ -47,6 +49,7 @@ from mm_companion.ui.gm.model import (
     AS_WRITTEN_CAPTION,
     CRITICAL_MARK,
     NO_NPCS_TO_ANSWER,
+    SCENE_PLAYER,
     UNTRAINED_MARK,
     _Answering,
 )
@@ -55,6 +58,7 @@ from mm_companion.ui.impress import (
     IMPRESS_ACTION,
     KIND_IMPRESS,
     PARTY_NPC,
+    PARTY_PLAYER,
     ImpressParty,
 )
 from mm_companion.ui.roll_history import AnswerContext
@@ -217,6 +221,80 @@ class GMRollsMixin:
             source=answering.where.source,
         )
         self._land_answer(party, rung, answering.where.source, roll.get("seq"), shake)
+
+    def _on_player_save(self, roll: object) -> None:
+        """A player's save is back: land what it did on them, as an aimed one lands.
+
+        A save carrying a ladder that a player rolled off a request card (an Impress or
+        an area run as "request only") or off a chip under someone's attack: its rung is
+        resolved against their latest snapshot and sent to their sheet, with the record
+        of how it comes off — what the table would have done had it resolved the action.
+        Left alone: a roll an action run of this app asked for (that run lands it), one
+        the GM rolled as an NPC (:meth:`_apply_answer`), one an attacker rolled off their
+        own card for their target, and a ladder kind the GM's "Saves you roll for NPCs"
+        switches turned off.
+        """
+        if not isinstance(roll, dict) or roll.get("kind", KIND_ROLL) != KIND_ROLL:
+            return
+        degree = roll.get("degree")
+        if isinstance(degree, bool) or not isinstance(degree, int):
+            return
+        spec = RollSpec.from_dict(roll.get("spec"))
+        if spec is None or spec.ladder is None or spec.actor or spec.own_attack:
+            # An NPC's answer is _apply_answer's; an attacker rolling the save off their
+            # own card rolled it for someone else, who is not named.
+            return
+        if resolved_by_a_run(spec.action_id):
+            return
+        player_id = str(roll.get("player_id", "") or "")
+        if not player_id or player_id == self._bridge.own_player_id():
+            return
+        if not storage.gm_auto_apply().get(spec.ladder.kind, True):
+            return
+        party = self._player_party(player_id)
+        if party is None or party.character is None:
+            return
+        ladder = spec.ladder
+        rung = answer_rung(ladder, degree, party.character, self._data, self.minion_rules())
+        if rung is None:
+            return
+        # Resolved on a copy: the snapshot is the player's, and comes back changed.
+        changes = list(
+            resolve_rung(deepcopy(party.character), rung, self._data, source=ladder.source)
+        )
+        if not changes:
+            return
+        dc = roll.get("dc")
+        shake = ladder_shake_off(
+            ladder,
+            dc if isinstance(dc, int) and not isinstance(dc, bool) else spec.dc,
+            degree,
+            trait=trait_ref(self._data, spec.trait_key),
+            source=ladder.source,
+        )
+        names = self._change_names(changes)
+        if self.impress_apply(party, changes, shake):
+            self._show_notice(f"{party.name}: {names}", theme.color("tint.worse"))
+        else:
+            self._show_notice(f"{party.name}: {names} (not delivered)", theme.color("tint.worse"))
+
+    def _player_party(self, player_id: str) -> ImpressParty | None:
+        """The player in *player_id*'s seat as an action party: their board card if they
+        have one, else their seat, read off their latest snapshot."""
+        _sources, targets = self.impress_parties()
+        party = next((p for p in targets if p.kind == PARTY_PLAYER and p.source == player_id), None)
+        if party is not None:
+            return party
+        snapshot = self._snapshots.get(player_id)
+        if not snapshot:
+            return None
+        return ImpressParty(
+            f"{SCENE_PLAYER}:{player_id}",
+            self._player_name(player_id),
+            PARTY_PLAYER,
+            player_id,
+            Character.from_dict(snapshot),
+        )
 
     def _resisted_with(self, spec: RollSpec, rolled: RollSpec | None) -> str:
         """The ``kind:key`` a save was rolled with — what overcoming it defaults to."""

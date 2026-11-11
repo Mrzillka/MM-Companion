@@ -945,6 +945,7 @@ class AreaController(QObject):
             WORST_DEGREE if crit else degree,
             name=declared.attempt.use.power_name,
             resisted_with=effect.resistance if plain else "",
+            mods=effect.overcome_mods,
             source=source,
         )
         if changes and not self._host.impress_apply(target.party, changes, shake):

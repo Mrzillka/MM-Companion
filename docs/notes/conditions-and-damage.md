@@ -133,7 +133,10 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   a `resistanceOutcomes` block's `overcome` (`Overcome`, read into `SpecLadder.effect` /
   `overcome` / `name`). Before this the impressions lived in the GM's app
   (`ImpressController._lingering`) and were lost on a restart; now they are on the NPC's
-  file, and on a player's sheet, which the GM reads back in their snapshot. A chip
+  file, and on a player's sheet, which the GM reads back in their snapshot. The record
+  also carries the Affliction's modifiers that change overcoming it, its failed-check
+  count and each degree's conditions (`mods`, `checks`, `rungs` — see [the actions
+  notes](actions.md#end-of-turn)). A chip
   carrying one has no 🎲, so its tooltip says how it comes off instead of the record's
   own recovery (`shake_off_hint`, through `condition_tooltip(…, data)`).
 - **Some conditions have an amount, and some are temporary** (combat maneuvers). An

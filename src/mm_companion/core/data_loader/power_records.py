@@ -342,11 +342,45 @@ class Overcome:
     the instance field holding the resistance it is overcome with, when that differs
     from the one it was resisted with ("" or an empty field: the same one).
     ``each_minute_from`` is the degree of failure from which the check comes once a
-    minute instead of every turn (0: never).
+    minute instead of every turn (0: never). ``modifiers`` are the instance modifiers
+    that change overcoming it (its ``modifiers`` map, by modifier id).
     """
 
     config_key: str = ""
     each_minute_from: int = 0
+    modifiers: tuple[OvercomeModifier, ...] = ()
+
+    def modifier(self, modifier_id: str) -> OvercomeModifier | None:
+        return next((m for m in self.modifiers if m.id == modifier_id), None)
+
+
+#: When an overcome check comes (:attr:`OvercomeModifier.cadence`): at the end of each
+#: scene (Prolonged), or never — the conditions clear by themselves (Instant Recovery).
+CADENCE_SCENE = "scene"
+CADENCE_CLEARS = "clears"
+
+
+@dataclass(frozen=True)
+class OvercomeModifier:
+    """What one modifier on an effect instance does to overcoming its conditions.
+
+    ``worsens``: a failed check adds a degree (Progressive). ``dc_per_check``: the DC
+    moves this much per overcome check after the first (Decreasing Difficulty, −1), or
+    per check after the initial resistance check with ``from_initial`` (Increasing
+    Difficulty, +1). ``cadence``: when the check comes instead of each turn's end
+    (:data:`CADENCE_SCENE`, :data:`CADENCE_CLEARS`), only for an instance of
+    ``duration`` when one is named. ``applies``: the condition a failed check puts on
+    from the ``fail_from_degree`` degree (Fatal's Dying).
+    """
+
+    id: str
+    worsens: bool = False
+    dc_per_check: int = 0
+    from_initial: bool = False
+    cadence: str = ""
+    duration: str = ""
+    applies: str = ""
+    fail_from_degree: int = 0
 
 
 @dataclass(frozen=True)

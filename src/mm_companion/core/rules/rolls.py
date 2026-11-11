@@ -29,7 +29,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 
-from ..character import Character
+from ..character import Character, ShakeOff
 from ..data_loader import Effect, GameData, ResistanceOutcome
 from ..powers import Power, PowerEffectInstance
 from .appliers import CATEGORY_ABILITY, CATEGORY_RESISTANCE, skill_for_row
@@ -193,6 +193,11 @@ class SpecLadder:
     they are overcome with when it is not the save's own; ``name`` what the table calls
     it (the power's name). Whoever lands a rung of it writes them onto the conditions as
     a :class:`~mm_companion.core.character.ShakeOff` (:func:`~.shaking.ladder_shake_off`).
+    ``mods`` are the instance's modifiers that change overcoming it (Progressive…).
+
+    An impression's ladder (:data:`LADDER_IMPRESS`) names the impression in ``effect``
+    and ``name``, the skill it was made with in ``skill``, and the impresser in
+    ``source``, so a request card's resistance writes the same record the table does.
     """
 
     kind: str
@@ -203,6 +208,9 @@ class SpecLadder:
     effect: str = ""
     overcome: str = ""
     name: str = ""
+    mods: tuple[str, ...] = ()
+    skill: str = ""
+    source: str = ""
 
     def to_dict(self) -> dict:
         raw: dict = {"kind": self.kind, "rungs": [_rung_to_dict(r) for r in self.rungs]}
@@ -212,9 +220,11 @@ class SpecLadder:
             raw["rank"] = self.rank
         if self.penetrating:
             raw["penetrating"] = self.penetrating
-        for key in ("effect", "overcome", "name"):
+        for key in ("effect", "overcome", "name", "skill", "source"):
             if getattr(self, key):
                 raw[key] = getattr(self, key)
+        if self.mods:
+            raw["mods"] = list(self.mods)
         return raw
 
     @classmethod
@@ -235,6 +245,13 @@ class SpecLadder:
             effect=_text(raw.get("effect")),
             overcome=_text(raw.get("overcome")),
             name=_text(raw.get("name")),
+            mods=(
+                tuple(m for m in (raw.get("mods") or []) if isinstance(m, str) and m)
+                if isinstance(raw.get("mods"), list)
+                else ()
+            ),
+            skill=_text(raw.get("skill")),
+            source=_text(raw.get("source")),
         )
 
 
@@ -325,6 +342,10 @@ class RollSpec:
     #: GM *asks* a player for still knows what it is for when that player rolls it.
     recovers: str = ""
     recovers_parameter: str = ""
+    #: The record a check **shakes off** when it is made — Recover's new resistance
+    #: check against an impression or an Affliction (PDF p206): every condition carrying
+    #: it comes off. On the wire for :attr:`recovers`' reason.
+    shakes_off: ShakeOff | None = None
     #: What *using* the effect costs its wielder, as condition ids put on the roller's
     #: own sheet when this roll is thrown — Tiring's rung of fatigue, Distracting's
     #: Vulnerable (:func:`~.extra_effort.effect_use_costs`). **Local only**, and never
@@ -445,6 +466,8 @@ class RollSpec:
             raw["recovers"] = self.recovers
         if self.recovers_parameter:
             raw["recovers_parameter"] = self.recovers_parameter
+        if self.shakes_off is not None:
+            raw["shakes_off"] = self.shakes_off.to_dict()
         if self.pick:
             raw["pick"] = self.pick
         if self.critical_hit:
@@ -506,6 +529,7 @@ class RollSpec:
             ladder=SpecLadder.from_dict(raw.get("ladder")),
             recovers=str(raw.get("recovers", "")),
             recovers_parameter=str(raw.get("recovers_parameter", "")),
+            shakes_off=ShakeOff.from_dict(raw.get("shakes_off")),
             pick=str(raw.get("pick", "")),
             critical_hit=raw.get("critical_hit") is True,
             own_attack=raw.get("own_attack") is True,
@@ -792,7 +816,32 @@ def effect_spec_ladder(
         effect=base_effect.id if base_effect.overcome is not None else "",
         overcome=overcome_trait(base_effect, effect.config, game_data),
         name=(name or base_effect.name) if base_effect.overcome is not None else "",
+        mods=overcome_mods(effect, base_effect, game_data),
     )
+
+
+def overcome_mods(
+    effect: PowerEffectInstance, base_effect: Effect | None, game_data: GameData
+) -> tuple[str, ...]:
+    """The ids of *effect*'s modifiers its base effect's ``overcome`` block says change
+    overcoming it — one tied to a duration only when the instance has that duration
+    (Instant Recovery clears an Instant Affliction by itself)."""
+
+    rule = base_effect.overcome if base_effect is not None else None
+    if rule is None or not rule.modifiers:
+        return ()
+    attached = {m.modifier_id for m in (*effect.extras, *effect.flaws)}
+    duration = ""
+    out = []
+    for mod in rule.modifiers:
+        if mod.id not in attached:
+            continue
+        if mod.duration:
+            duration = duration or effective_effect_stats(effect, game_data).get("duration", "")
+            if duration != mod.duration:
+                continue
+        out.append(mod.id)
+    return tuple(out)
 
 
 def overcome_trait(base_effect: Effect | None, config: Mapping, game_data: GameData) -> str:

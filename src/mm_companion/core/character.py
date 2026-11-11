@@ -117,6 +117,12 @@ class ShakeOff:
     failure that landed it (an Affliction at the third is overcome once a minute, not as
     a turn ends — PDF p109). Conditions landed by one rung share one record, and are
     shaken off together: one success removes them all.
+
+    ``mods`` are the ids of the effect instance's modifiers that change overcoming it
+    (Progressive, Increasing Difficulty, Prolonged…), which the effect's ``overcome``
+    block in the data says the meaning of; ``checks`` how many overcome checks it has
+    failed so far (Increasing Difficulty counts them); ``rungs`` the condition ids each
+    degree lands, kept only for a modifier that worsens it a degree on a failure.
     """
 
     kind: str
@@ -127,6 +133,9 @@ class ShakeOff:
     skill: str = ""
     source: str = ""
     degree: int = 0
+    mods: tuple[str, ...] = ()
+    checks: int = 0
+    rungs: tuple[tuple[str, ...], ...] = ()
 
     def to_dict(self) -> dict:
         data: dict = {"kind": self.kind, "name": self.name, "dc": self.dc}
@@ -136,6 +145,12 @@ class ShakeOff:
                 data[key] = value
         if self.degree:
             data["degree"] = self.degree
+        if self.mods:
+            data["mods"] = list(self.mods)
+        if self.checks:
+            data["checks"] = self.checks
+        if self.rungs:
+            data["rungs"] = [list(rung) for rung in self.rungs]
         return data
 
     @classmethod
@@ -151,10 +166,32 @@ class ShakeOff:
         text = {key: raw.get(key, "") for key in ("ref", "trait", "skill", "source")}
         if not all(isinstance(value, str) for value in text.values()):
             return None
-        degree = raw.get("degree", 0)
-        if isinstance(degree, bool) or not isinstance(degree, int):
-            degree = 0
-        return cls(kind=kind, name=name, dc=dc, degree=max(0, degree), **text)
+        return cls(
+            kind=kind,
+            name=name,
+            dc=dc,
+            degree=_count(raw.get("degree")),
+            mods=_texts(raw.get("mods")),
+            checks=_count(raw.get("checks")),
+            rungs=tuple(_texts(rung) for rung in _list(raw.get("rungs"))),
+            **text,
+        )
+
+
+def _count(value: object) -> int:
+    """A saved non-negative count that may be missing or junk (0 for either)."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return max(0, value)
+
+
+def _list(value: object) -> list:
+    return value if isinstance(value, list) else []
+
+
+def _texts(value: object) -> tuple[str, ...]:
+    """A saved list of strings, junk entries dropped."""
+    return tuple(item for item in _list(value) if isinstance(item, str) and item)
 
 
 @dataclass

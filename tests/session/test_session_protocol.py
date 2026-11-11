@@ -396,6 +396,43 @@ def test_a_shake_off_record_is_checked_into_shape() -> None:
     assert protocol.sanitize_shake_off("effect") is None
 
 
+def test_a_records_modifiers_count_and_rungs_cross_in_shape() -> None:
+    kept = protocol.sanitize_shake_off(
+        {
+            "kind": "effect",
+            "name": "Sleep Ray",
+            "dc": 17,
+            "mods": ["progressive", 7, "", "x" * 5000],
+            "checks": 2,
+            "rungs": [["dazed"], ["stunned", None], "junk"],
+        }
+    )
+
+    assert kept["mods"] == ["progressive", "x" * protocol.MAX_SPEC_TEXT]
+    assert kept["checks"] == 2
+    assert kept["rungs"] == [["dazed"], ["stunned"], []]
+
+
+def test_a_ladders_modifiers_and_an_impressions_skill_and_source_cross() -> None:
+    spec = protocol.sanitize_spec(
+        {
+            "label": "Resist",
+            "ladder": {
+                "kind": "impress",
+                "rungs": [],
+                "skill": "Intimidation",
+                "source": "Thug",
+                "mods": ["progressive"],
+            },
+            "shakes_off": {"kind": "effect", "name": "Sleep Ray", "dc": 17, "junk": 1},
+        }
+    )
+
+    assert spec["ladder"]["skill"] == "Intimidation" and spec["ladder"]["source"] == "Thug"
+    assert spec["ladder"]["mods"] == ["progressive"]
+    assert spec["shakes_off"] == {"kind": "effect", "name": "Sleep Ray", "dc": 17}
+
+
 def test_a_deep_chain_is_cut_rather_than_followed() -> None:
     deep: dict = {"label": "bottom"}
     for _ in range(50):

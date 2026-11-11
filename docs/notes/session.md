@@ -777,6 +777,11 @@ The shape:
   player comes off (a `ShakeOff` record, checked by `sanitize_shake_off` on the
   player's client), which their sheet keeps and their snapshot hands back to the GM's
   End turn; a spec's ladder keeps `effect`, `overcome` and `name` for the same reason.
+  The record's `mods`, `checks` and `rungs` (an Affliction's modifiers, its failed checks,
+  each degree's condition ids) cross as short id lists and a bounded count; the ladder
+  also keeps `mods`, `skill` and `source` (a request-only Impress writes the same
+  record), and a spec's `shakes_off` (Recover's check: the record a made one takes off)
+  goes through `sanitize_shake_off` too.
 - **A join code is version 2, and a public-server session's is 24 characters.**
   Version 1 spelled the relay URL out byte by byte and came to 130 characters for
   a session on the hub. `discovery.encode_join_code` now packs every field as

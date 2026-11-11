@@ -47,6 +47,7 @@ from .power_records import (
     Measure,
     Modifier,
     Overcome,
+    OvercomeModifier,
     PowerConfiguration,
     RepeatableColumn,
     ResistanceGrant,
@@ -599,9 +600,34 @@ def _parse_overcome(raw: object) -> Overcome | None:
     if not isinstance(block, dict):
         return None
     minute = block.get("eachMinuteFromDegree", 0)
+    mods = block.get("modifiers")
     return Overcome(
         config_key=str(block.get("configKey", "") or ""),
         each_minute_from=minute if isinstance(minute, int) and minute > 0 else 0,
+        modifiers=tuple(
+            _parse_overcome_modifier(key, value)
+            for key, value in (mods.items() if isinstance(mods, dict) else ())
+            if isinstance(value, dict) and not key.startswith("_")
+        ),
+    )
+
+
+def _parse_overcome_modifier(modifier_id: str, raw: dict) -> OvercomeModifier:
+    """One entry of an ``overcome`` block's ``modifiers`` map."""
+
+    def number(key: str) -> int:
+        value = raw.get(key, 0)
+        return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+    return OvercomeModifier(
+        id=modifier_id,
+        worsens=raw.get("worsens") is True,
+        dc_per_check=number("dcPerCheck"),
+        from_initial=raw.get("fromInitial") is True,
+        cadence=str(raw.get("cadence", "") or ""),
+        duration=str(raw.get("duration", "") or ""),
+        applies=str(raw.get("applies", "") or ""),
+        fail_from_degree=max(0, number("failFromDegree")),
     )
 
 

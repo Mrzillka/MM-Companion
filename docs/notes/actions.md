@@ -457,6 +457,15 @@ The second action on this layer, following the 4e rules (Area Effect extra, PDF 
   adjustment for share their cards. Off the air the dialog leaves the same two.
 - Each card carries the action id, so the answers fill the action's table.
 - The GM answers these cards as an NPC — see *Answering a history roll as an NPC*, below.
+- **A player's answer lands too.** A save a player rolls off a request card or a chip
+  (one no `ActionRun` of the GM's asked for: `action_run.resolved_by_a_run`) is put on
+  them by the GM's window when it comes back (`GMWindow._on_player_save`): the rung
+  resolved against their snapshot and sent to their sheet with its `ShakeOff`, as an
+  aimed one is, under the same "Saves you roll for NPCs" switches. An impression's
+  ladder names the impression, its skill and the impresser (`SpecLadder.effect`,
+  `skill`, `source`), so a request-only Impress writes the same record a resolved one
+  does. A save an attacker rolled off their own card (`own_attack`) is left alone: it
+  was rolled for someone it does not name.
 
 ### Area Healing
 
@@ -522,8 +531,26 @@ A trait roll clicked in the GM's history — a request card, or a save chip unde
   it put on; one that is failed stays. An impression is resisted with what the GM chose
   then, or the creature's best option; an Affliction with its "Overcome by" resistance,
   or the one it was resisted with. An Affliction at its third degree is overcome once a
-  minute, not as a turn ends (`shake_off_each_minute`, the effect's
-  `overcome.eachMinuteFromDegree`): End turn names it and rolls nothing.
+  minute, not as a turn ends (the effect's `overcome.eachMinuteFromDegree`), and a
+  Prolonged one at the end of each scene: End turn names it and rolls nothing
+  (`shake_off_cadence`). An Instant Recovery one clears with no roll.
+- **The Affliction's modifiers** (PDF p110–111) ride on the record (`ShakeOff.mods`, the
+  instance's ids the effect's `overcome.modifiers` names, written by `overcome_mods`).
+  The check is at `shake_off_dc` (Increasing Difficulty +1 for each check after the
+  initial save, Decreasing Difficulty −1 for each after the first, counted in
+  `ShakeOff.checks`), and a failed one does what `shake_off_failed` says: Progressive
+  replaces the conditions with the next degree's (the record keeps each degree's ids
+  in `rungs` for it), Fatal puts Dying on at the third degree, and the record with its
+  new count and degree is written back onto the conditions.
+- **Recover** (the Actions grid) offers a new check against each record on the actor
+  too (PDF p206: `shake_off_recover_spec`, at any cadence, so it is how a third-degree
+  Affliction is checked before its minute is up). The spec carries the record
+  (`RollSpec.shakes_off`); a made one takes off everything carrying it
+  (`shake_off_made`) — on a player's sheet through `DiceSection.settle_recovery`, on an
+  NPC through `_on_recovery_back`. A failed one runs the modifiers as End turn's does
+  (`shake_off_failed_on` on the player's own sheet, `land_shake_failure` on an NPC):
+  at the third degree, where End turn rolls nothing, it is the only check Fatal's Dying
+  can come from.
 - Second, every condition on it whose `recoveryCheck` cadence is `end_of_turn` (a
   damage-caused Dazed or Stunned — `end_of_turn_recoveries`) is rolled off. One an
   impression or an Affliction put on is not offered (`can_recover`): it comes off with
@@ -890,9 +917,9 @@ stages through a real hosted session.
 
 These are in [the debts](debts.md):
 
-- End turn's other checks (Suffocation), the Affliction modifiers that change
-  overcoming (Progressive, Cumulative, Increasing Difficulty, Instant Recovery), a
-  third-degree Affliction's once-a-minute check, and shaking one off from the chip;
+- End turn's other checks (Suffocation), the clock a third-degree or Prolonged
+  Affliction waits on, Increasing Difficulty's cap, and the modifiers that change
+  applying an Affliction (Cumulative, Concentration, Sustained);
 - the area pieces left out: a Hero Point inside the table, and Nullify and Move Object
   areas;
 - the targeted actions off the air, and the opposing conditions in anything but an

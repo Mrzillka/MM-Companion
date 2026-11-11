@@ -45,6 +45,9 @@ from mm_companion.core.character import SHAKE_IMPRESSION, AppliedCondition, Char
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.rules import (
     BOOK_MINION_RULES,
+    CADENCE_CLEARS,
+    CADENCE_MINUTE,
+    CADENCE_TURN,
     MODE_REQUEST,
     ImpressAttempt,
     MinionRules,
@@ -64,8 +67,9 @@ from mm_companion.core.rules import (
     resolve_rung,
     routine_impress_dc,
     rung_caption,
+    shake_off_cadence,
     shake_off_choice,
-    shake_off_each_minute,
+    shake_off_failed,
     shake_off_request,
     shake_off_roll,
 )
@@ -157,6 +161,37 @@ class _Action:
     from_card: bool = False
     #: Which NPC impresses, when the GM started it from that NPC's card.
     preferred: str = ""
+
+
+def land_shake_failure(host, data: GameData, party: ImpressParty, shake: ShakeOff, changes) -> str:
+    """*party* failed a check to shake *shake* off: put what that does on it, and say it.
+
+    Progressive's deeper degree replaces the record's conditions (*changes*), Fatal's
+    Dying goes on beside them, and a count a modifier reads is written back onto the
+    conditions — through *host*'s ``impress_apply`` / ``action_remove``, so an NPC's
+    model or a player's sheet. Used by End turn and by an NPC's failed Recover.
+    """
+    failure = shake_off_failed(data, shake)
+    catalog = data.condition_catalog()
+    worse = ""
+    if failure.worse:
+        host.action_remove(party, list(changes))
+        host.impress_apply(party, [(cid, None) for cid in failure.worse], failure.record)
+        worse = ", ".join(
+            condition_display_name(AppliedCondition(cid), catalog.get(cid)) for cid in failure.worse
+        )
+    elif failure.record != shake:
+        # Same conditions, the record moved on (one more check failed).
+        host.impress_apply(party, list(changes), failure.record)
+    said = f"is still {shake.name}"
+    if worse:
+        said += f", now {worse}"
+    if failure.also:
+        host.impress_apply(party, [(cid, None) for cid in failure.also])
+        said += ", and " + ", ".join(
+            condition_display_name(AppliedCondition(cid), catalog.get(cid)) for cid in failure.also
+        )
+    return said
 
 
 @dataclass
@@ -690,28 +725,40 @@ class ImpressController(QObject):
 
         Each impression on it is resisted again at its original DC, and each Affliction
         overcome against its own: one the creature makes comes off with everything it put
-        on, one it fails stays another turn. An Affliction at its third degree is checked
-        once a minute instead (PDF p109), so it is only named. Each condition whose own
-        recovery check is made as a turn ends (a damage-caused Dazed, Stunned) is rolled
-        too; one an impression or an Affliction put on is not, since it comes off with
-        what put it there.
+        on, one it fails stays another turn — or does what the Affliction's modifiers say
+        (:func:`shake_off_failed`: a degree deeper, Dying, a harder next check). An
+        Affliction at its third degree is checked once a minute instead (PDF p109), and a
+        Prolonged one at the end of the scene, so those are only named; an Instant
+        Recovery one clears with no roll. Each condition whose own recovery check is made
+        as a turn ends (a damage-caused Dazed, Stunned) is rolled too; one an impression
+        or an Affliction put on is not, since it comes off with what put it there.
 
         An NPC's rolls are one server-rolled group. A player is asked for each shake-off
         in turn, and gets a request in the history for each recovery check, which their
         own app settles.
         """
         held = self.held(party)
-        minute = [h for h in held if shake_off_each_minute(self._data, h.shake)]
-        due = [h for h in held if h not in minute]
+        cadence = {id(h): shake_off_cadence(self._data, h.shake) for h in held}
+        due = [h for h in held if cadence[id(h)] == CADENCE_TURN]
+        waiting = [h for h in held if h not in due and cadence[id(h)] != CADENCE_CLEARS]
+        cleared = [h for h in held if cadence[id(h)] == CADENCE_CLEARS]
         recoveries = self._turn_recoveries(party)
-        if minute:
-            names = ", ".join(h.shake.name for h in minute)
+        for item in waiting:
+            when = "a minute" if cadence[id(item)] == CADENCE_MINUTE else "a scene"
             self._host.impress_notice(
-                f"{party.name}: {names} — overcome once a minute, not as a turn ends.",
+                f"{party.name}: {item.shake.name} — overcome once {when}, not as a turn ends.",
                 theme.color("text.muted.rich"),
             )
+        for item in cleared:
+            # Instant Recovery: gone where the first check would come, with no roll.
+            delivered = self._host.action_remove(party, item.changes)
+            self._host.impress_notice(
+                f"{party.name}: {item.shake.name} clears by itself"
+                + ("." if delivered else " (not delivered)."),
+                theme.color("tint.better"),
+            )
         if not due and not recoveries:
-            if not minute:
+            if not waiting and not cleared:
                 self._host.impress_notice(
                     f"{party.name}'s turn ends — nothing to shake off.", theme.color("accent")
                 )
@@ -741,7 +788,7 @@ class ImpressController(QObject):
             if spec is None:
                 unrolled.append(item.shake.name)
                 continue
-            lines.append(group_line(party.name, spec, title=run.title, dc=item.shake.dc))
+            lines.append(group_line(party.name, spec, title=run.title, dc=spec.dc))
             about.append(item)
         for recovery in recoveries:
             lines.append(group_line(party.name, recovery.spec, title=run.title))
@@ -805,7 +852,7 @@ class ImpressController(QObject):
                 outcomes=(),
                 hint="Make it and the impression comes off; fail it and it lasts another turn.",
             )
-        spec = shake_off_request(shake)
+        spec = shake_off_request(shake, self._data)
         if spec is None:
             return None
         return replace(spec, targets=(party.name,), action_id=run.action_id, title=run.title)
@@ -862,13 +909,17 @@ class ImpressController(QObject):
                 if party.kind == PARTY_PLAYER:
                     run.tell(party, f"You shake off {name}.")
             else:
-                said.append(f"is still {name}")
+                said.append(self._still(party, about))
         if said:
             self._host.impress_notice(
                 f"{party.name} " + "; ".join(said) + ".", theme.color("accent")
             )
         if close:
             run.close()
+
+    def _still(self, party: ImpressParty, held: _Held) -> str:
+        """*party* failed to shake *held* off: what its modifiers make of that, said."""
+        return land_shake_failure(self._host, self._data, party, held.shake, held.changes)
 
     def _recovered(self, party: ImpressParty, about: _TurnRecovery, record: dict) -> str:
         """One end-of-turn recovery check is back: shed the condition if it was made."""

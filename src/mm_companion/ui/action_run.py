@@ -67,6 +67,18 @@ def group_line(
     }
 
 
+#: The actions whose players' rolls an :class:`ActionRun` of this app applies itself —
+#: every one that has asked a player. A save a player rolls for one of them is that
+#: run's to land; any other save of theirs that carries a ladder (a request card, a
+#: chip under someone's attack) the GM's window lands (``GMWindow._on_player_save``).
+_RESOLVED_HERE: set[str] = set()
+
+
+def resolved_by_a_run(action_id: str) -> bool:
+    """Whether an action run of this app applies what *action_id*'s rolls do."""
+    return bool(action_id) and action_id in _RESOLVED_HERE
+
+
 def total_of(record: dict) -> int:
     """What a roll came to: the die and its modifier."""
     return int(record.get("die", 0)) + int(record.get("bonus", 0)) - int(record.get("penalty", 0))
@@ -235,6 +247,7 @@ class ActionRun(QObject):
         anyone may answer, an ally interposing); the first roll back counts.
         """
         spec = replace(spec, action_id=self.action_id, title=spec.title or self.title)
+        _RESOLVED_HERE.add(self.action_id)
         name = spec.targets[0] if spec.targets else party.name
         if not spec.targets:
             spec = replace(spec, targets=(name,))

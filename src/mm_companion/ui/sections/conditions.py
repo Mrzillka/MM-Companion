@@ -51,7 +51,9 @@ from mm_companion.core.rules import (
     recovery_hint,
     recovery_roll,
     roll_confused_action,
+    shake_off_failed_on,
     shake_off_hint,
+    shake_off_made,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
@@ -465,7 +467,27 @@ class ConditionsSection(QGroupBox):
         *payload* is ``(condition_id, parameter)``. Sheds one instance of it (a Hit
         stack loses one) or turns it into what it becomes (Dying stabilising), through
         the core resolver. A condition that has gone meanwhile is left alone.
+
+        A :class:`~mm_companion.core.character.ShakeOff` instead is Recover's made check
+        against an impression or an Affliction: everything carrying it comes off; and
+        ``(ShakeOff, False)`` a failed one, which does what its modifiers say.
         """
+        if isinstance(payload, ShakeOff):
+            if shake_off_made(self._character, payload):
+                self._render_conditions()
+                self._emit_conditions_changed()
+            return
+        if (
+            isinstance(payload, tuple)
+            and len(payload) == 2
+            and isinstance(payload[0], ShakeOff)
+            and payload[1] is False
+        ):
+            # A failed one: what the Affliction's modifiers make of it (Fatal's Dying…).
+            if shake_off_failed_on(self._character, self._data, payload[0]):
+                self._render_conditions()
+                self._emit_conditions_changed()
+            return
         if not isinstance(payload, tuple) or len(payload) != 2:
             return
         condition_id, parameter = payload

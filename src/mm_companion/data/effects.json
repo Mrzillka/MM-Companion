@@ -206,7 +206,19 @@
       "resistanceOutcomes": {
         "note": "Affliction's rungs are the conditions the player picked when building the power, so each degree reads its own config field rather than a fixed list.",
         "_overcome": "Overcoming an Affliction (PDF p109): a new resistance check against the effect's DC at the end of each of the target's turns, made with the overcomeBy resistance when one is chosen and the resisting one otherwise; one success removes every condition it put on. From the third degree the check is made once a minute instead.",
-        "overcome": { "configKey": "overcomeBy", "eachMinuteFromDegree": 3 },
+        "_overcomeModifiers": "What the Affliction's own modifiers do to overcoming it (PDF p110-111): Progressive adds a degree on each failed overcome check (to the third at most); Increasing Difficulty raises the DC by 1 for each check after the initial resistance check, Decreasing Difficulty lowers it by 1 for each overcome check after the first; Prolonged moves the check to the end of each scene; Instant Recovery clears the conditions with no check where the first one would come, for an Instant Affliction; Fatal puts Dying on a target that fails an overcome check at the third degree.",
+        "overcome": {
+          "configKey": "overcomeBy",
+          "eachMinuteFromDegree": 3,
+          "modifiers": {
+            "progressive": { "worsens": true },
+            "increasing_difficulty": { "dcPerCheck": 1, "fromInitial": true },
+            "decreasing_difficulty": { "dcPerCheck": -1 },
+            "prolonged": { "cadence": "scene" },
+            "instant_recovery": { "cadence": "clears", "duration": "Instant" },
+            "fatal": { "applies": "dying", "failFromDegree": 3 }
+          }
+        },
         "degrees": [
           { "configKey": "degree1", "scopeKey": "scope" },
           { "configKey": "degree2", "scopeKey": "scope" },

@@ -294,13 +294,22 @@ class DiceSection(QGroupBox):
         spec = roll.get("spec")
         if not isinstance(spec, RollSpec):
             spec = RollSpec.from_dict(spec)
-        if spec is None or not spec.recovers:
+        if spec is None or not (spec.recovers or spec.shakes_off):
             return
         if "result" in roll:
             result = roll.get("result")
             degree = getattr(result, "degree", None)
         else:
             degree = roll.get("degree")
+        if spec.shakes_off is not None:
+            # Recover's check against an impression or an Affliction: every condition
+            # carrying its record comes off.
+            if isinstance(degree, int) and degree >= 1:
+                self.recovered.emit(spec.shakes_off)
+            elif isinstance(degree, int):
+                # Failed: the Affliction's modifiers may still do something (Fatal).
+                self.recovered.emit((spec.shakes_off, False))
+            return
         if recovery_succeeded(self._data, spec, degree):
             self.recovered.emit((spec.recovers, spec.recovers_parameter or None))
 

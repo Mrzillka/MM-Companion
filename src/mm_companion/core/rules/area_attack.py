@@ -67,6 +67,7 @@ from .rolls import (
     _resistance_key,
     best_of_key,
     localize_spec,
+    overcome_mods,
     power_rolls,
     resistance_roll,
     takes_the_worse,
@@ -228,6 +229,9 @@ class AreaEffect:
     #: How many of its ranks are Penetrating — what a target's Impervious Toughness is
     #: measured against (:mod:`.defenses`).
     penetrating: int = 0
+    #: The instance's modifiers that change overcoming its conditions (an Affliction's
+    #: Progressive…, :func:`~.rolls.overcome_mods`), for the record a failed save writes.
+    overcome_mods: tuple[str, ...] = ()
 
     def to_dict(self) -> dict:
         raw = {
@@ -245,6 +249,8 @@ class AreaEffect:
             raw["primary_rank"] = self.primary_rank
         if self.penetrating:
             raw["penetrating"] = self.penetrating
+        if self.overcome_mods:
+            raw["overcome_mods"] = list(self.overcome_mods)
         return raw
 
     @classmethod
@@ -270,7 +276,14 @@ class AreaEffect:
                 else None
             ),
             penetrating=max(0, _int(raw, "penetrating")),
+            overcome_mods=tuple(
+                m for m in _list(raw.get("overcome_mods")) if isinstance(m, str) and m
+            ),
         )
+
+
+def _list(value: object) -> list:
+    return value if isinstance(value, list) else []
 
 
 def area_primary_rank(effect: AreaEffect) -> int:
@@ -589,6 +602,7 @@ def _effect_use(
         config=dict(effect.config),
         primary_rank=full if full != rank else None,
         penetrating=min(penetrating_ranks(effect, game_data), rank),
+        overcome_mods=overcome_mods(effect, base, game_data),
     )
     if free:
         known = {value for value, _label in area_shape_options(game_data)}

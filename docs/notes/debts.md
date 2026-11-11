@@ -154,19 +154,25 @@ notes](conditions-and-damage.md)), and rolls every condition whose own `recovery
 is made at the end of a turn (a damage-caused Dazed or Stunned). It is the seam the rest
 of the turn economy should hang off:
 
-- **Suffocation** forces a Fortitude check each turn; nothing rolls it.
-- **A third-degree Affliction** is overcome once a minute (PDF p109). End turn names it
-  and rolls nothing; the GM rolls it by hand when the minute is up.
-- **The Affliction modifiers that change overcoming** are not read: Progressive (a
-  failed check adds a degree), Cumulative, Increasing / Decreasing Difficulty (±1 DC per
-  check), Instant Recovery, Prolonged (a check per scene), Fatal (Dying on a failed
-  third-degree check). Increasing Difficulty would want a check count on the record.
-- **Only a rung the table resolved writes a record.** A request-only Impress, a save a
-  player rolled off an unaimed attack's card, or a condition put on by hand carries none,
-  so a Dazed or Stunned among them still gets the damage Stamina check.
-- **Shaking one off is End turn's alone.** A chip with a record shows no 🎲 (the
-  Stamina one is refused), and the Recover action's third option — a new resistance
-  check against an ongoing effect (PDF p206) — is not offered.
+- **Suffocation** forces a Fortitude check each turn; nothing rolls it. The book gives
+  it twice and they disagree (PDF p214: DC 10 +1 a round, Incapacitated then Dying;
+  the glossary, p227: DC 11, one degree of Dazed → Stunned → Incapacitated per failure).
+- **A third-degree or Prolonged Affliction** is overcome once a minute (PDF p109) or at
+  the end of each scene (Prolonged, p110). End turn names it and rolls nothing: there is
+  no clock, so the GM rolls it by hand when the time is up, or the bearer takes Recover.
+  An Instant Recovery one at the third degree waits for that minute as well.
+- **Increasing Difficulty's cap** is not applied: once the DC passes the bearer's
+  resistance + 20 it stops rising and only a natural 20 makes it (p110).
+- **The modifiers that change *applying* it** are not read: Cumulative (new uses add
+  their degrees), Concentration and Sustained (a new Affliction each turn it is
+  maintained, no attack), and Instant Recovery on one of those (clears when the user
+  stops). Limited Degree's empty degree lands nothing, so it writes no record either,
+  though the book has the Affliction still running on it (p111).
+- **A condition put on by hand carries no record**, so a Dazed or Stunned put there
+  still gets the damage Stamina check. A save the GM rolls "as written" (nobody's
+  number) lands nowhere.
+- **A chip with a record shows no 🎲.** Shaking one off is End turn's, or Recover's
+  (the Actions grid), not the chip's.
 - **There is no turn tracker.** The GM ends each creature's turn by hand; initiative
   order is on the board, but nothing walks it.
 
@@ -225,7 +231,7 @@ the targeted actions' own). Each of these was seen and left on purpose.
   to an aimed attack and a targeted action's attack only. An unaimed attack (the DC box
   standing for the Defense), an area's primary and a team attack's entries leave it to
   the table, as the entry above says of the opposing conditions.
-- **Recover works "once per scene"** says its tooltip; nothing counts it.
+- **Recover works "once per conflict scene"** says its tooltip; nothing counts it.
 - **Aim's "lost if your next standard action is not that attack"** is not tracked. The
   line stays (greyed) through a roll that is not an attack, and the player drops it with
   its ✕.

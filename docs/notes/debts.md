@@ -51,26 +51,15 @@ Austria, so ask in the same message if that could matter.
 
 **Then the repo work:**
 
-1. **A privacy statement covering the update check.** The terms want either a linked
-   privacy policy or the statement that the program "will not transfer any
-   information to other networked systems unless specifically requested". The second
-   is not true today. `check_for_updates` is on by default (`core/storage.py`), so
-   at every launch `core/updates.py` sends one request to GitHub's "latest release"
-   endpoint with the User-Agent `MM-Companion/<version>`. It downloads the installer
-   only when the user accepts. Either write a short privacy policy, linked from the
-   README, that says this and points to GitHub's own policy, or turn the check off by
-   default and ask on first launch. Have the policy also say what the session server
-   (our own VPS) sees when someone opens GM Mode or joins a table: their IP address
-   and the session's traffic.
-2. **A "Code signing policy" section.** The words "Code signing policy" must appear
+1. **A "Code signing policy" section.** The words "Code signing policy" must appear
    on the home page and the download page: the README, and the release notes the
    `make-release` skill writes into `docs/releases/`. The section states "Free code
    signing provided by SignPath.io, certificate by SignPath Foundation", lists the
    roles (authors, reviewers, approvers, which today are all the maintainer) and links
-   the privacy policy from step 1.
-3. **Two-factor login** on both the GitHub account and the SignPath account; the terms
+   the privacy policy, [`PRIVACY.md`](../../PRIVACY.md).
+2. **Two-factor login** on both the GitHub account and the SignPath account; the terms
    require it for every team member.
-4. **Sign in `release.yml`.** Split the Windows job so signing happens in two places:
+3. **Sign in `release.yml`.** Split the Windows job so signing happens in two places:
    build with PyInstaller, then send `MM-Companion.exe` and the portable exe to SignPath
    (its GitHub action), and wait for the approval. Wrap the signed files with ISCC and
    send the finished installer for signing too, then upload it. Inno Setup's `SignTool`

@@ -11,7 +11,16 @@ through rather than reinvent. When building new sheet widgets, use it:
   `readonly_item`, `hline_separator`) and the shared inline style snippets
   (`muted_style`, `tinted_style`, `BOLD_STYLE`) that keep construction consistent
   and wheel-guarded. Build spin boxes and read-only table cells through these, not
-  by hand.
+  by hand. **`snug=True`** (`SnugSpinBox`, `SnugSignedSpinBox`; the roller's arrowless
+  boxes) makes a box as wide as its widest value and no wider, and stops it
+  stretching. Qt's own hint is roomy: a spare space after the value, and on a box
+  with arrows the arrows counted twice (Qt adds the platform's, and the theme's
+  arrow-column `padding-right` adds them again: ~40px too wide under `windows11`).
+  The snug box measures instead of summing: where the style puts the text field in a
+  probe-width box, and where the line edit puts its text area inside that field (the
+  sheet's padding lands there too, which a first version missed and clipped "15" to
+  "1"). That chrome plus the widest value, rounded up, is the hint, and never more
+  than Qt's.
 - `ui/wheel_guard.py` — `guard_wheel(*widgets)` stops nested spin boxes, combo
   boxes, and inner tables from hijacking the scroll: a guarded widget only reacts
   to the wheel once it has keyboard focus, otherwise the wheel is redirected to a
@@ -57,7 +66,11 @@ through rather than reinvent. When building new sheet widgets, use it:
   which is the rule every adaptive widget on the sheet follows: a minimum is a
   refusal, and a minimum that moved with the decision would be reading a width it
   had itself just set. Reach for one of the three rather than inventing a fourth.
-- `ui/flow_layout.py` — a reflowing layout for wrapping widget rows. **Host a
+- `ui/flow_layout.py` — a reflowing layout for wrapping widget rows.
+  `add_separator(FlowRule(...))` puts a rule between two items that is drawn only
+  while they share a line: where the line wraps around it, it gets no room and no
+  size, decided in the wrapping pass itself. A `FlowRule` is sized by its hint, never
+  fixed, because a fixed size cannot be given zero. **Host a
   `FlowLayout` in a `FlowContainer`, never a bare `QWidget`.** The layout answers
   `hasHeightForWidth` with *no*, on purpose: Qt evaluates that at the parent's
   **hint** width, which for a flow is one item's, so every item claims a row of its
@@ -68,6 +81,25 @@ through rather than reinvent. When building new sheet widgets, use it:
   Senses' twenty check boxes, a `widgetResizable` `QScrollArea` showing the first
   row of the launcher's character library with no scroll bar to reach the rest.
   Neither container asks a second time, which is why the host has to answer right.
+- **`ActionGridPopup`** (`ui/action_grid.py`) is the reusable "pick one, by picture"
+  popup: titled `GridSection`s of square `GridItem` tiles (icon over an elided caption,
+  sized by the `action-grid.*` tokens, the caption by `size.action-tile`), one
+  `FlowLayout` per section, so the columns follow the width. **Short sections share a
+  row** (a *shelf*, `_shelve`): consecutive sections that each fit one line and together
+  fit the row sit side by side, in fixed rows rather than flows, each **whole tile
+  columns wide** (`_section_columns`, its title's width counted) so a shelf keeps to
+  the grid of a full row. A `GridSection.note` is a muted line under the title (what
+  the whole section is waiting on); a section with one keeps its row. It is a frameless
+  `Qt.Popup` **parented to its anchor** (never parentless — see the standing rule),
+  closes on a pick, Esc or a click outside, and walks its tiles with the arrow keys
+  (enabled tiles only). `show_under(anchor)` opens it **under the anchor**, scrolling
+  when the room below is short, and above only where there is more room — it used to
+  flip above whenever it did not fit, run off the top and land in the screen's corner.
+  It **emits `picked(key)` while still open**, then closes: a menu the pick leads to
+  opens over it at `follow_up_point()` (the tile's centre, set only during the pick),
+  and a second pick during the first is ignored. Hosts open their windows non-modally,
+  so nothing waits on the popup. A disabled tile keeps its tooltip, which is where to
+  say why. Rules-free: the roller's sections come from `ui/action_menu.py`.
 - **`WrappingButton`** (`ui/widgets.py`) is a push button whose caption word-wraps, for
   any button whose caption is data rather than a word (a roll's "🎲 Toughness vs. … vs.
   DC 15"). A `QPushButton` reports its one-line caption as its minimum width, so one
@@ -114,6 +146,11 @@ through rather than reinvent. When building new sheet widgets, use it:
   block redraws its speed rows, and each discarded row flashed. Unparenting before
   the delete still matters for the reason it always did — a widget still parented
   to a container keeps painting until the delete is serviced, leaving a ghost.
+- **Open a `QPainter` with `ui.paint.painting(device)`**, never `QPainter(self)` left for
+  Python to end. A paint that raises keeps its frame alive in the traceback PySide
+  holds on to, the frame keeps the painter, and the painter stays *active* on a widget
+  Qt has finished painting — from there the window can stop drawing altogether.
+  `painting` ends it in a `finally`. Every paint in the app goes through it.
 - **Never `setVisible(True)` on a widget that has no parent yet**, for the mirror
   of that reason. Build the host first and add the child to a layout *before*
   settling its visibility; in a constructor that may run before the widget is
@@ -138,7 +175,11 @@ through rather than reinvent. When building new sheet widgets, use it:
   visibly empty and refill on every redraw, and it puts the page's scroll position
   back — twice, because Qt clamps the bar to the shrunken block's maximum while it
   is short and only recomputes the range on the layout pass that follows. It was
-  `preserved_scroll` when it only did the second half.
+  `preserved_scroll` when it only did the second half. **It restores the widget's own
+  setting, not `updatesEnabled()`**, which is also false while an *ancestor* is
+  frozen: Qt makes an explicit `setUpdatesEnabled(False)` sticky
+  (`WA_ForceUpdatesDisabled`, which a parent re-enabling passes over), so a rebuild
+  nested inside another used to leave its block frozen for good — blank from then on.
 - **…and it shows the new children before it returns.** A widget added to the layout
   of a parent already on screen is not shown by the add: `QLayout::addChildWidget`
   *queues* the show for the next turn, and until then every layout passes it over as
@@ -151,6 +192,76 @@ through rather than reinvent. When building new sheet widgets, use it:
   that is hidden only because nobody has shown it yet (not `WA_WState_ExplicitShowHide`,
   and never a window). Freezing the paint could not have covered this: the paint freeze
   is on the block, and the fold was in the page. `tests/ui/sheet/test_click_repaint.py`.
+- **A build the user waits on goes behind `ui/loading.py`'s loading screen.** Opening a
+  sheet (from the launcher, File ▸ New/Open, or a GM card), opening GM Mode, and switching
+  to or from the simple sheet each build widgets for a third of a second to three seconds,
+  and Qt builds widgets only on the GUI thread, so the window used to sit frozen. Wrap the
+  work in `with loading.loading(window, "Opening …"):`. It lays an opaque page with a label
+  and a bar over that window (a child outside every layout: no new window, no resize)
+  and **repaints it synchronously** each time the work reports. Inside, `loading.part(share)`
+  gives a phase a share of *what is left* of the bar, and `expect(n)` / `step()` count
+  that share out; the sheet steps once per block built and once per block locked, the
+  simple sheet once per box, the GM window once per block. Three decisions not to undo:
+  - **No `processEvents`.** It would deliver timers, session messages and clicks into a
+    sheet that is half built. A synchronous `repaint` paints the page and nothing else.
+  - **Opaque, by `autoFillBackground` alone.** `WA_OpaquePaintEvent` as well tells Qt the
+    widget fills itself, so the fill is skipped and the half-built window shows through.
+    The first build did exactly that.
+  - **Every report is a no-op when no screen is up**, and a `loading` inside another one
+    is a `part` of it rather than a second screen. A spare NPC sheet built in idle time,
+    a hidden window and the tests report into nothing; a sheet that opens straight into
+    the simple sheet runs one bar from the launcher's click to the end. A screen goes up
+    only over a window that is visible. A dialog that must report a failure is shown
+    *after* the `with` block, once the screen is down.
+  - **It waits `SHOW_AFTER_S` (0.15 s) before going up**, at the first report after
+    that. A GM card handed to a ready spare sheet is done in a blink, and a page flashing
+    over the window for a few milliseconds reads worse than nothing. Work that starts
+    by waiting on the network reports nothing while it waits, so the player's join
+    passes `at_once=True` and GM Mode's connect calls `loading.say("Connecting…")`,
+    which puts the screen up immediately. The test suite sets the delay to `None`
+    (never) in `tests/ui/conftest.py`, since whether a screen went up would otherwise
+    depend on the machine's speed.
+  - **A view switch fades through the screen** (`loading.fade_through(window, text, work,
+    finished)`; the simple sheet's switch is the one user). The old view fades out
+    *before* the work starts, while the event loop still runs, so the press answers at
+    once with a real animation; the work then runs behind the screen; the new view
+    fades in once the loop is free. A fade drawn from the work's own reports would
+    stutter: the switch has gaps of 130–310 ms between reports. Both fades cross
+    between pictures (`QWidget.grab`, ~25 ms), laid over the window as a `_Veil`: the
+    view under the fade out is about to be torn up, and a picture over the new view
+    keeps Qt from painting the whole sheet once a frame. Whether the screen it fades to
+    carries the bar is how long *the same switch took last time in that window*
+    (`_took`): a quick one fades between the two views over the bare page, and a bar
+    still comes up if this one runs past `SHOW_AFTER_S`. So **`set_simple` returns
+    before the switch is made** on a visible window, and `simpleChanged` says when it
+    is; a second press while it fades is refused and answered with `simpleChanged` for
+    what is showing, which keeps the menu tick honest. A hidden window, a switch inside
+    other work (a sheet opened straight into the simple sheet), and the test suite get
+    plain `loading` — made by the time the call returns. `FADE_S` (0.15 s) is each
+    fade's length; tests that want a fade turn it on with the `fades` fixture.
+  - **The launcher fades too.** Opening a sheet (a card, Open From File, Create New),
+    joining a session and opening GM Mode all go through `fade_through` over the
+    launcher: it fades to its screen at the click, the window is built behind it, and
+    `finished` shows the new window with `loading.show_window`, which fades it in by
+    its own window opacity. A sheet *replaces* the launcher (`replacing=`): the launcher
+    keeps its screen up under the fading-in sheet and is hidden only once the sheet is
+    in, so there is no frame with neither on screen. GM Mode leaves the launcher up,
+    which fades back to its cards. A failure's warning box goes in `after`, which runs
+    once the screen is down; `at_once=True` puts the bar up from the start for a join,
+    which begins by waiting on the network. A click while the launcher fades is
+    refused (`loading.fading`).
+  - **Nothing runs inside an animation's `finished` signal.** The step after a fade —
+    the whole build, or a warning box with its own event loop — is posted to a turn of
+    the loop of its own (`QTimer.singleShot(0, …)`). Run inside the signal, it ran inside
+    Qt's animation timer mid-tick, and a GM window built there aborted the process
+    about one time in five in the tests: no message, just `Fatal Python error: Aborted`.
+  - **The start of the app is behind a bar too.** `__main__.main()` puts a splash up
+    right after the `QApplication` and the theme, *then* imports the interface a module
+    at a time (`_INTERFACE`, most of a start) as steps of its bar, then the workspace and
+    mods, then builds the launcher. The splash is a plain frameless `QWidget`, not a
+    `QSplashScreen`: on Windows that one's `show()` waits for the window to say it is
+    exposed and gives up only after a full second, which every start used to pay.
+  `tests/ui/widgets/test_loading.py`.
 - Tests build real windows, and `conftest.py` tears them down after each one.
   `processEvents()` alone does **not** run deferred deletions, so the teardown also
   sends `QEvent.Type.DeferredDelete` explicitly — without it every window built all

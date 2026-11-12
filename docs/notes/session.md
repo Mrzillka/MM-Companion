@@ -49,6 +49,19 @@ The shape:
   (`HOST_STATE_*`), the host-side twin of the client's `EVENT_STATE`. Both ladders
   now read their delays from `net.py` — one cadence for a table, and a host and a
   player giving up at different times would be a puzzle to reason about.
+- **A hub never gives up, because nobody is there to press Reconnect.** When the
+  window runs out, the ladder parks at `unreachable` and waits for the GM's button.
+  On the headless hub that meant a relay down for more than five minutes (a
+  certificate renewal restarts it) left every table unjoinable until someone ran
+  `systemctl restart mm-sessions`. It happened on 2026-09-26. Now
+  `SessionHub._repair`, run on every janitor pass, calls `reconnect()` on any
+  session parked at `unreachable`. It also re-hosts sessions that failed to
+  register at boot because the relay was not listening yet; those used to be
+  skipped until the next restart. A GM asking after one of those before the
+  janitor's pass (`SessionHub._waiting_entry`, from `_owned`) has it hosted on the
+  spot, or gets an error that is *not* "gone" while the relay still refuses it:
+  answering `{}` made the GM's app forget the session's gm token for good.
+  `_rehost` is serialized so the janitor and that request never host it twice.
 - **`relisten` is emphatically not `stop` then `start`, and that is the whole
   design.** `stop` says goodbye to every peer first
   (`Kicked(REASON_SESSION_CLOSED)`) precisely so a client can tell a deliberate end
@@ -238,7 +251,9 @@ The shape:
   character sheet's `ConditionsSection` chips: one gesture wherever a chip appears.
   It replaced a visible `×`, which is the trade — a third of the width of a caption
   like "Hit ×3" back, at the cost of an affordance you cannot see, so the helper
-  writes "Right-click to remove" into the tooltip. A chip that *cannot* be removed
+  writes "Right-click to remove" into the tooltip. A **temporary** condition's chip
+  carries a visible ✕ as well (`_ConditionChip.arm_removal`, when built
+  `temporary=True`): it is the one condition taken off every turn. A chip that *cannot* be removed
   (an offline player's) still swallows the click: falling through to the card's
   "Remove player" is not what someone aiming at a chip asked for. A **scene card**'s
   chips take the same gesture on the GM's board (`SceneCard.removeConditionRequested`
@@ -748,6 +763,30 @@ The shape:
   reason: a v18 server strips it without a word, so a worst-of save clicked on the
   target's card would roll their better number. v18 never shipped, so the hub goes
   from v17 to v19 in one redeploy.
+- **Protocol v20 carries temporary conditions** (combat maneuvers). `ApplyCondition`
+  gains `amount` and `temporary`; `ClearTemporary(player_id)` is the GM's "Clear
+  temporary" on a player's card (relayed by the server like the other GM commands, and
+  raised on the player's side as `conditionCommand("clear_temporary", …)`, which
+  `ConditionReceiver` turns into the Conditions block's `clear_temporary_conditions`);
+  and `_sanitize_scene_conditions` keeps a scene condition's `amount` (bounded by
+  `MAX_SCENE_AMOUNT`) and `temporary`. Bumped for the v13 reason: a v19 server strips the
+  scene keys and drops the command without a word. **Redeploy the hub** with the release
+  that ships it. Still v20 (unreleased): `RollRequest.twice` rolls two dice and keeps the
+  higher (Aim), with the dropped die on the record as `other_die` (0 for any other roll),
+  and a spec's `critical_hit` (a Finishing Attack: every hit a critical) is whitelisted
+  by `sanitize_spec`, as is its `parts` — what its modifier is made of, the roll's hover
+  breakdown (`_sanitize_parts`, at most `MAX_SPEC_PARTS` pairs) — and its `attack_range`
+  (`"close"` / `"ranged"`), so the GM's judge can add a prone target's ±5. And
+  `ApplyCondition.shake_off`: how a condition an impression or an Affliction put on a
+  player comes off (a `ShakeOff` record, checked by `sanitize_shake_off` on the
+  player's client), which their sheet keeps and their snapshot hands back to the GM's
+  End turn; a spec's ladder keeps `effect`, `overcome` and `name` for the same reason.
+  The record's `mods`, `checks` and `rungs` (an Affliction's modifiers, its failed checks,
+  each degree's condition ids) cross as short id lists and a bounded count; the ladder
+  also keeps `mods`, `skill` and `source` (a request-only Impress writes the same
+  record), and a spec's `shakes_off` (Recover's check: the record a made one takes off)
+  goes through `sanitize_shake_off` too. The record's `save` is the trait a maintained
+  Affliction's new use is resisted with.
 - **A join code is version 2, and a public-server session's is 24 characters.**
   Version 1 spelled the relay URL out byte by byte and came to 130 characters for
   a session on the hub. `discovery.encode_join_code` now packs every field as

@@ -114,7 +114,7 @@ def test_an_emptied_strip_still_shows_its_icon(make_sheet) -> None:
 
     assert panel.is_empty()
     assert _pinned(sheet)["lines"] == []
-    assert panel._handle.isVisible()  # the pin icon: drop target, drag handle, menu
+    assert panel._handle.isVisible()  # the empty strip's icon: drop target, drag handle, menu
 
 
 def test_pinning_moves_a_block_off_the_page_and_out_of_its_row(make_sheet) -> None:
@@ -127,7 +127,9 @@ def test_pinning_moves_a_block_off_the_page_and_out_of_its_row(make_sheet) -> No
     assert _pinned(sheet)["lines"] == [["conditions"]]
     assert all("conditions" not in row for row in _rows(sheet))
     assert not sheet.board.panel.is_empty()
-    assert sheet.board.panel._handle.isVisible()  # the handle never goes away
+    # The pin icon is the *empty* strip's content; with a block in it, it steps aside
+    # (its menu is on the strip's divider and in the View menu).
+    assert not sheet.board.panel._handle.isVisible()
 
 
 def test_a_pinned_block_does_not_live_inside_the_scrolling_page(make_sheet) -> None:

@@ -73,6 +73,20 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   open sheet, so the two copies of the character cannot disagree about an escalation.
   Note `dead` supersedes `staggered` for this: it is the terminal rung, and without
   it the third click left a corpse Staggered.
+  **Any failure carries Incapacitated to Dying, and Dying to Dead** (PDF p118, p199:
+  "by any degree"). Those two pairs used to sit on the three-degree rung only, so a
+  one- or two-degree failure left an Incapacitated target merely Hit and never killed a
+  Dying one. Copying the map onto the shallow rungs would not have worked: a pair only
+  fired for an id the rung *names*, and those rungs do not name `incapacitated`. So the
+  ladder states them once, `resistanceOutcomes.failureEscalates`, the loader appends
+  them to every failure rung's `escalates` (`_parse_resistance_outcomes`; the rung's own
+  pair wins a shared source, and the success rung inherits nothing, so a made save on
+  a downed target is still only a Hit), and `resolve_condition_ids` gained one rule: a
+  pair whose source the rung does not name fires when the target is already `_at_least`
+  that source, landing its chained result *on top of* the rung. Folding at load time
+  means no new wire key: a rung on a spec already carries its pairs. The minion cap cuts
+  them from every rung, and keeps a rung's note unless the cut was about a condition
+  the rung itself names (rung 1's "Stunned instead of Dazed" stays).
 - **A target's Toughness can refuse the ladder** (`core/rules/defenses.py`). Impervious
   leaves a Damage rank no greater than its own untouched, two degrees of success against
   Hardened, Impervious or Impenetrable leave not even the Hit, and Penetrating cuts back
@@ -103,3 +117,143 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   the GM's **End turn**, which rolls every `end_of_turn` check on the creature (see [the
   actions notes](actions.md#end-of-turn)). Who applies the
   result is whoever owns the creature — see [the session notes](session.md).
+- **A condition remembers how it comes off** (`AppliedCondition.shake_off`, a
+  `ShakeOff`; `core/rules/shaking.py`). The record's `recoveryCheck` is the
+  *damage-caused* condition's: Dazed and Stunned by Damage roll DC 10 Stamina at the end
+  of each turn (PDF p26–27), but the same conditions from an impression are resisted
+  again at the original DC (p201), and from an Affliction overcome with a new check at
+  its own DC, one success removing all it put on (p109). So whoever lands such a rung
+  writes the record on each condition it applies — `impression_shake_off` (the Impress
+  controller) and `ladder_shake_off` / `area_shake_off` (an NPC's answered save, an
+  aimed attack, an area) — and `can_recover` refuses a condition carrying one, so no
+  chip or End turn offers it the Stamina check. Only the directly applied condition
+  carries it (its members leave with it), and a condition already on for another reason
+  keeps coming off that way: re-applying one keeps a record only while the old instance
+  had one too (`_add_or_stack`), as `temporary` does. Which effects are overcome is data:
+  a `resistanceOutcomes` block's `overcome` (`Overcome`, read into `SpecLadder.effect` /
+  `overcome` / `name`). Before this the impressions lived in the GM's app
+  (`ImpressController._lingering`) and were lost on a restart; now they are on the NPC's
+  file, and on a player's sheet, which the GM reads back in their snapshot. The record
+  also carries the Affliction's modifiers that change overcoming it, its failed-check
+  count and each degree's conditions (`mods`, `checks`, `rungs` — see [the actions
+  notes](actions.md#end-of-turn)). A chip
+  carrying one has no 🎲, so its tooltip says how it comes off instead of the record's
+  own recovery (`shake_off_hint`, through `condition_tooltip(…, data)`).
+- **Some conditions have an amount, and some are temporary** (combat maneuvers). An
+  `AppliedCondition` may carry `amount` (All-Out Attack −3) and `temporary` (it lasts
+  until the start of the bearer's next turn); both stay out of a save at their defaults,
+  so older saves load unchanged, and undo carries them because a step is a whole
+  `to_dict`. What an amount *does* is the record's: `amountMods` lists `{trait, sign,
+  parameter?}` — a resistance key such as `DEF`, or `system.trait_keys.attack_check` for
+  attack checks — and `defaultAmount` sizes an instance applied without one (Defending's
+  +2). `tone` (`benefit` / `hindrance`, default hindrance, so nothing old changes colour)
+  is the chip's colour and the sign the shown name carries; `temporary: true` makes a
+  record temporary from wherever it is applied, and `apply_condition(temporary=True)`
+  makes any condition so (a feint's Vulnerable). Re-applying replaces the amount rather
+  than stacking, and an instance stays temporary only if both old and new are — a lasting
+  Vulnerable is not shortened by a temporary one. The shown name ("All-Out Attack -3",
+  "Aided Attack (Thug) +5") is `core.rules.applied_condition_name`, which the UI's
+  `condition_display_name` delegates to, so a dot's tooltip names a condition exactly as
+  its chip does. Three readers fold the amounts in, all display-only: the Defense row's
+  `resistance_condition_effect` (a `delta` after the halve/zero `op`, so Vulnerable +
+  Defending on 8 is 6), `defense_class_in_play` (the Defense Class pin; `defense_class`
+  stays the build's number), and the attack check `power_rolls` builds
+  (`condition_attack_check_mod`, flagged by `EffectRollNumbers.attack_check`, so a
+  Perception-range effect with no attack check is untouched, and a Linked group's one
+  check takes it once). `temporary_marks` says per trait key whether the temporary ones
+  leave it better or worse (an override such as halving is always worse; a net zero is
+  not marked), and `clear_temporary` removes every temporary instance, umbrella members
+  included, returning what went. The maneuvers' records live in the `maneuver` group, so
+  the "+" menu offers them.
+- **Some conditions count only against one creature** (`opposing`, phase 8 of the
+  combat maneuvers: Aided Attack, Aided Defense, Feinted, Tricked, Trick Advantage). The
+  parameter (a `character_ref`, "Against") names that creature, and the record's
+  `opposing` block (`OpposingRule`) says what the condition does in an attack between
+  the two: `attack` / `defense` times the amount on the bearer's check or Defense,
+  `defenseAs` (Feinted judges the bearer's Defense as if Vulnerable), and `spentBy` —
+  `attacking` (the bearer's next attack on that creature) or `attacked` (its next attack
+  on the bearer). Nothing on a sheet moves for one: no `amountMods`, no dot. The GM's
+  aimed-attack judge reads both sides (`core.rules.opposing_effects`,
+  `defense_against`) and takes the counted instances off, hit or miss
+  (`opposing_spent`, by parameter). They are not temporary — the user's call: a
+  start-of-turn clear would take a feint away before the feinter's next attack — so
+  "Clear temporary" leaves them. The match is by the **name** the GM's board shows
+  (numbered namesakes included), the same names `{source}` uses.
+- **Holding** (phase 9) is a grab's mark on the grabber: a lasting (not temporary)
+  umbrella of Hindered and Vulnerable whose parameter names the creature held — a hold
+  outlasts a turn, so a temporary one would be cleared at the start of the grabber's
+  turn, which is when they keep it up. Its ✕ is letting go; the held creature's
+  successful Escape takes it off (by parameter) along with their own Restrained or
+  Bound. Two holds at once share the members' provenance, so letting go of one takes
+  both bundles' Hindered and Vulnerable (a debt).
+- **The roller puts the maneuvers' ones on** (phase 5). An attack rolled with All-Out or
+  Defensive Attack on the roller's lane raises `condition-requested` with
+  `((condition_id, amount), …)` once the die has settled; the Conditions block's
+  `take_conditions` applies each temporary, through `apply_condition`, so undo and the
+  player's snapshot to the GM come with it. See [the roller notes](dice-and-rolling.md).
+  The self actions (phase 6) send `ConditionChange`s on the same topic — Defending,
+  Prone (lasting), Stand's temporary Hindered and Prone *off* — which
+  `core.rules.apply_condition_changes` applies (a removal takes every directly applied
+  instance, with its members). A made Stand check sheds Prone through `recovers`, and a
+  record with no `recoveryCheck` needs one degree (`recovery_succeeded`).
+- **The GM judges an aimed attack against the Defense in play**
+  (`derived.defense_class_in_play`), so Vulnerable, All-Out Attack and Defending all move
+  the DC the attack has to beat (the aimed attack, the area window's primary, the team
+  attack).
+- **Prone's `attackMods` reach the attack.** Whether an attack is close or ranged is
+  `RollSpec.attack_range` (`ATTACK_CLOSE` / `ATTACK_RANGED`, or `""`), set by
+  `power_rolls` on an attack check from the effect's *effective* Range
+  (`effect_attack_range`: a Ranged extra makes a Close Damage ranged), matched against
+  `system.json`'s `attackRanges` — the range names are data. The bearer's own close −5
+  is folded into the check with the amount mods (`condition_attack_check_mod(…,
+  attack_range)`, the "Conditions" part; a Linked group's one check takes it once, at
+  its first effect's range). The target's +5 close / −5 ranged is the judge's, since
+  only it sees the target: `condition_incoming_attack_mod`, added by `opposing_effects`
+  when given the spec's `attack_range`, so an aimed attack and a targeted action's
+  attack count it (named in the card's "with …" line, never spent). The key is on the
+  wire (`sanitize_spec` whitelists it, protocol v20). A posture applied twice counts
+  once. `condition_attack_mods` still feeds the Conditions block's display.
+- **The sheet shows which numbers are borrowed** (combat maneuvers, phase 2). Every stat
+  a temporary condition moves gets a **dot** (`ui/stat_mark.py`): green when
+  `temporary_marks` says the temporaries leave it higher, red when lower, the sources in
+  its tooltip, sized by the `mark.size` token. Two forms. A table cell (the Resistances
+  and Skills totals) is marked with `mark_item`, which writes `MARK_ROLE`, and
+  `StatMarkDelegate` (installed on the Total column) paints the dot in the cell's corner
+  *over* its contents, so a dot costs the column no width and moves no text; call it after
+  whatever writes the cell's tooltip, since it appends to it. A label readout uses the
+  `StatMark` widget, hidden-but-room-keeping (`retainSizeWhenHidden`): the simple sheet's
+  stat boxes (the room mirrored on the left, so the number stays centred) and lines, and a
+  card's roll line. Which roll line is decided in `core`: `RollSpec.marks` names the trait
+  keys whose condition mods a spec folds in (an attack check carries
+  `trait_keys.attack_check`; a Perception-range effect's check does not). It is local
+  only, never in `to_dict`, and `compare=False`, so a spec rebuilt off the wire still
+  equals the roll it was. `RollsFooter(marks=temporary_marks(...))` draws it; the cards
+  are rebuilt on every condition change (`FACTS_CHANGED`), so a footer holds no empty
+  room for a dot. A skill row is marked by its own key first, then its skill's name.
+  **The overlay's colour follows its sign now:** `ConditionEffect.better` (a net rise
+  with no halving and no lost trait) tints a total green rather than the penalty red
+  every overlay used to be, so Defending's +2 Defense reads as the help it is.
+- **Chips wear their tone.** `condition_tone_token(record)` (`tint.better` for a benefit,
+  `tint.worse` otherwise) colours every chip: the GM cards' `_ConditionChip(tone=…)`, the
+  simple sheet's, and on the sheet's own block any benefit or temporary chip (a lasting
+  hindrance keeps the plain panel it always had). A **temporary** chip also gets a visible
+  ✕ beside the right-click (the user's call: it is the condition taken off every turn,
+  often one at a time), and its tooltip says it is temporary. **"Clear temporary"** is
+  shown only while something temporary is on the creature: in the Conditions block's
+  header (`clear_temporary_conditions`, one undo step, plus a history line from
+  `clear_temporary_note` on `noteRequested`), the simple sheet's Conditions view (through
+  the same funnel), and on the GM's NPC, player and Scene cards — **on a line of its own
+  under the chips**, never in their flow, because `condition_names()` reads every widget
+  in the flow as a condition. An NPC's clear changes the GM's model and replays onto an
+  open NPC sheet with `note=False` (the GM window writes one line naming the creature); a
+  player's goes to their app as a `ClearTemporary` command (protocol v20), whose sheet
+  writes the line. The GM's End turn does not clear them (they last to the *start* of the
+  next turn).
+- **The "+" menu asks for an amount** when applying one by hand needs it:
+  `condition_asks_amount` (has `amountMods`, no `defaultAmount` — All-Out and Defensive
+  Attack) makes `prompt_condition_amount` ask, 1 to the record's `maxAmount` (5 for the
+  maneuvers; 20 when unstated). Defending's +2 is applied as it comes. The prompt is a
+  second call after `prompt_condition_parameter` in every "+" (the sheet's, and the GM's
+  on a player and an NPC card), whose `applyConditionRequested` now carries
+  `(key, id, parameter, amount)`; `apply_condition_by_id` takes `amount` and `temporary`.
+

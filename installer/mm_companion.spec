@@ -14,7 +14,9 @@ All game data / UI JSON / the window icon are loaded at runtime through
 explicitly here; PySide6's own hooks cover the Qt DLLs and plugins.
 """
 
+import ast
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -48,8 +50,105 @@ datas = collect_data_files(
         "ui/assets/*.png",
         "ui/assets/*.svg",
         "ui/assets/npc_icons/*.svg",
+        "ui/assets/actions/*.svg",
     ],
 )
+
+
+def read_version(init_file):
+    """The ``__version__`` string assigned in ``mm_companion/__init__.py``.
+
+    Read from the source rather than imported, so the version stamped on the exe
+    is the one in this checkout whatever ``mm_companion`` the build's Python would
+    import (an editable install can point at another checkout).
+    """
+    tree = ast.parse(Path(init_file).read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "__version__" for t in node.targets
+        ):
+            return ast.literal_eval(node.value)
+    raise SystemExit(f"No __version__ assignment found in {init_file}.")
+
+
+def version_tuple(version):
+    """``"0.9.4"`` -> ``(0, 9, 4, 0)``: the four numbers a Windows version holds.
+
+    Only the leading dotted digits count, so a suffix such as ``1.0.0rc1`` still
+    reads as ``(1, 0, 0, 0)``.
+    """
+    match = re.match(r"\d+(?:\.\d+)*", version)
+    if not match:
+        raise SystemExit(f"__version__ {version!r} does not start with a number.")
+    parts = [int(p) for p in match.group(0).split(".")][:4]
+    return tuple(parts + [0] * (4 - len(parts)))
+
+
+def windows_version_info(version, exe_name):
+    """The version resource stamped on a Windows exe (Properties > Details).
+
+    SignPath requires the product name and version on every file it signs. Built
+    here from ``__version__`` so a version bump needs no second edit.
+    """
+    from PyInstaller.utils.win32 import versioninfo as vi
+
+    numbers = version_tuple(version)
+    return vi.VSVersionInfo(
+        ffi=vi.FixedFileInfo(
+            filevers=numbers,
+            prodvers=numbers,
+            mask=0x3F,
+            flags=0x0,
+            OS=0x40004,  # VOS_NT_WINDOWS32
+            fileType=0x1,  # VFT_APP
+            subtype=0x0,
+            date=(0, 0),
+        ),
+        kids=[
+            vi.StringFileInfo(
+                [
+                    vi.StringTable(
+                        "040904B0",  # U.S. English, Unicode
+                        [
+                            vi.StringStruct("ProductName", "MM-Companion"),
+                            # Task Manager shows this as the process's name.
+                            vi.StringStruct("FileDescription", "MM-Companion"),
+                            vi.StringStruct("FileVersion", version),
+                            vi.StringStruct("ProductVersion", version),
+                            vi.StringStruct("InternalName", exe_name),
+                            vi.StringStruct("OriginalFilename", f"{exe_name}.exe"),
+                            vi.StringStruct("LegalCopyright", COPYRIGHT),
+                        ],
+                    )
+                ]
+            ),
+            vi.VarFileInfo([vi.VarStruct("Translation", [0x0409, 1200])]),
+        ],
+    )
+
+
+def read_copyright(license_file):
+    """The ``Copyright (c) <year> <holder>`` line of the MIT licence."""
+    for line in Path(license_file).read_text(encoding="utf-8").splitlines():
+        if line.startswith("Copyright"):
+            return line.strip()
+    raise SystemExit(f"No Copyright line found in {license_file}.")
+
+
+VERSION = read_version(ROOT / "src" / "mm_companion" / "__init__.py")
+COPYRIGHT = read_copyright(ROOT / "LICENSE")
+
+
+def exe_version(exe_name):
+    """``version=`` for ``EXE``: a resource on Windows, nothing elsewhere.
+
+    PyInstaller's versioninfo module needs ``pefile``, which it only installs on
+    Windows, and the Linux build ignores a version resource anyway.
+    """
+    if sys.platform != "win32":
+        return None
+    return windows_version_info(VERSION, exe_name)
+
 
 block_cipher = None
 
@@ -93,6 +192,7 @@ if ONEFILE:
         console=False,
         disable_windowed_traceback=False,
         icon=ICON,
+        version=exe_version("MM-Companion-portable"),
     )
 else:
     exe = EXE(
@@ -108,6 +208,7 @@ else:
         console=False,
         disable_windowed_traceback=False,
         icon=ICON,
+        version=exe_version("MM-Companion"),
     )
     coll = COLLECT(
         exe,

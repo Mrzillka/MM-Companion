@@ -29,7 +29,6 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 
 from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, Signal
-from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import QSizePolicy, QSplitter, QVBoxLayout, QWidget
 
 from mm_companion.ui import theme
@@ -40,6 +39,7 @@ from mm_companion.ui.grid_handle import (
     snap_to_detent,
 )
 from mm_companion.ui.layout_tree import HORIZONTAL, Leaf, Node
+from mm_companion.ui.paint import painting
 from mm_companion.ui.widgets import discard_widget
 
 #: Builds the widget for one leaf. The canvas supplies this: a leaf naming one
@@ -205,6 +205,28 @@ class GridSplitter(QSplitter):
                 self.paneCollapsing.emit(widget, True)
         self._collapsing = wanted
 
+    def cancel_collapse(self) -> None:
+        """Take any "release to close" warning down without closing anything."""
+        collapsing, self._collapsing = self._collapsing, []
+        for widget in collapsing:
+            self.paneCollapsing.emit(widget, False)
+
+    def cancel_drag(self) -> None:
+        """Abandon a handle drag in progress, deciding nothing by it.
+
+        What a view switch does to a gesture it interrupts (see
+        :meth:`~mm_companion.ui.block_canvas.BlockCanvas.end_gestures`): the panes
+        keep the sizes the drag had reached, but nothing is closed for being small
+        at that moment, since nobody let go of anything.
+        """
+        for index in range(1, self.count()):
+            handle = self.handle(index)
+            abandon = getattr(handle, "abandon", None)
+            if callable(abandon):
+                abandon()
+        self.cancel_collapse()
+        self.clear_detent_marks()
+
     def commit_collapse(self) -> None:
         """The handle was let go: close whatever it left too small to see."""
         collapsing, self._collapsing = self._collapsing, []
@@ -319,17 +341,17 @@ class _DetentMark(QWidget):
         del event
         if not self._targets:
             return
-        painter = QPainter(self)
         rect = self.rect()
-        for target in self._targets:
-            lit = self._settled is not None and abs(target - self._settled) <= 1
-            colour = theme.color("drop.indicator" if lit else "text.muted.rich")
-            band = (
-                QRect(target, rect.top(), 1, rect.height())
-                if self._horizontal
-                else QRect(rect.left(), target, rect.width(), 1)
-            )
-            painter.fillRect(band, colour)
+        with painting(self) as painter:
+            for target in self._targets:
+                lit = self._settled is not None and abs(target - self._settled) <= 1
+                colour = theme.color("drop.indicator" if lit else "text.muted.rich")
+                band = (
+                    QRect(target, rect.top(), 1, rect.height())
+                    if self._horizontal
+                    else QRect(rect.left(), target, rect.width(), 1)
+                )
+                painter.fillRect(band, colour)
 
 
 class RowGrip(QWidget):
@@ -362,6 +384,10 @@ class RowGrip(QWidget):
     detentReached = Signal(int)
     #: Emitted on release, once the drag has settled.
     dragFinished = Signal()
+    #: The drag ended without a release — the grip was hidden under it, or the
+    #: gesture was called off (see ``BlockCanvas.end_gestures``). Nothing is
+    #: decided by it.
+    dragAbandoned = Signal()
     #: Double-clicked: put the row above back to the height of its content.
     fitRequested = Signal()
 
@@ -465,6 +491,23 @@ class RowGrip(QWidget):
             return
         super().mouseReleaseEvent(event)
 
+    @property
+    def dragging(self) -> bool:
+        return self._dragging
+
+    def abandon(self) -> None:
+        """Stop dragging without a release: the row keeps its height, nothing closes."""
+        if not self._dragging:
+            return
+        self._dragging = False
+        self.update()
+        self.dragAbandoned.emit()
+
+    def hideEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        # A hidden grip gets no release, so a drag it was in the middle of is over.
+        self.abandon()
+        super().hideEvent(event)
+
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
         """Put the row above back to "as tall as what is in it".
 
@@ -489,7 +532,8 @@ class RowGrip(QWidget):
 
     def paintEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
         del event
-        paint_divider(self, QPainter(self), self._hovered, self._dragging, horizontal=False)
+        with painting(self) as painter:
+            paint_divider(self, painter, self._hovered, self._dragging, horizontal=False)
 
 
 class _RowHolder(QWidget):
@@ -588,6 +632,7 @@ class RowStack(QWidget):
             grip.dragFinished.connect(self._end_grip_drag)
             grip.dragFinished.connect(self.clear_detent_marks)
             grip.dragFinished.connect(self.heightsChanged.emit)
+            grip.dragAbandoned.connect(self._abandon_grip_drag)
             self._layout.addWidget(grip)
             self._grips.append(grip)
         # Slack below the last row stays empty rather than stretching the bottom
@@ -763,6 +808,27 @@ class RowStack(QWidget):
         self._cancel_grip_drag()
         if collapsed is not None:
             self.rowCollapsed.emit(collapsed)
+
+    def cancel_drag(self) -> None:
+        """Call off a grip drag in progress, if there is one (see :meth:`_abandon_grip_drag`)."""
+        grip = self._active_grip
+        if grip is not None and grip.dragging:
+            grip.abandon()  # which comes back through _abandon_grip_drag
+        elif grip is not None or self._frozen_height:
+            self._abandon_grip_drag()
+
+    def _abandon_grip_drag(self) -> None:
+        """A grip drag ended with no release: keep the height it reached, close nothing.
+
+        The height is real — the row is on screen at it — so it is still announced
+        and reaches the model and the layout history like any other resize. Only
+        the decision a *release* makes (close a row dragged to nothing) is skipped.
+        """
+        dragged = self._active_grip is not None
+        self._cancel_grip_drag()
+        self.clear_detent_marks()
+        if dragged:
+            self.heightsChanged.emit()
 
     def _cancel_grip_drag(self) -> None:
         """Let go of the drag without deciding anything by it.

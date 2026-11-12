@@ -61,6 +61,7 @@ from .protocol import (
     ActionRequest,
     ApplyCondition,
     CharacterSnapshot,
+    ClearTemporary,
     ErrorMessage,
     GroupRollRequest,
     Hello,
@@ -93,6 +94,7 @@ from .protocol import (
     SetScenePortrait,
     SetSessionName,
     Welcome,
+    sanitize_shake_off,
     sanitize_snapshot,
 )
 
@@ -118,6 +120,7 @@ EVENT_ACTION_REQUEST = "action_request"  # {"kind", "action_id", "player_id", "p
 EVENT_ACTION_PROMPT = "action_prompt"  # {"player_id", "kind", "action_id", "payload"}
 EVENT_APPLY_CONDITION = "apply_condition"  # {"player_id", "condition_id", "parameter"}
 EVENT_REMOVE_CONDITION = "remove_condition"  # {"player_id", "condition_id", "parameter"}
+EVENT_CLEAR_TEMPORARY = "clear_temporary"  # {"player_id"}
 EVENT_SET_HERO_POINTS = "set_hero_points"  # {"player_id", "value"}
 EVENT_ERROR = "error"  # {"code", "message"}
 EVENT_KICKED = "kicked"  # {"reason"}
@@ -431,11 +434,13 @@ class SessionClient:
         reroll: bool = False,
         routine: bool = False,
         minion: bool = False,
+        twice: bool = False,
     ) -> bool:
         """Ask the server to roll. The result comes back as :data:`EVENT_ROLL`.
 
         ``reroll`` asks for a lucky re-roll, whose die never comes up under 11;
-        ``routine`` for a routine check (take 10); ``minion`` rolls as a minion.
+        ``routine`` for a routine check (take 10); ``minion`` rolls as a minion;
+        ``twice`` rolls two dice and keeps the higher (Aim).
         """
         return self.send(
             RollRequest(
@@ -448,6 +453,7 @@ class SessionClient:
                 reroll=reroll,
                 routine=routine,
                 minion=minion,
+                twice=twice,
             )
         )
 
@@ -492,11 +498,31 @@ class SessionClient:
     # session's gm token; from a player they are ignored. They are *requests*, so
     # a True return means the bytes left, not that the server agreed.
 
-    def apply_condition(self, player_id: str, condition_id: str, parameter: str | None = None):
+    def apply_condition(
+        self,
+        player_id: str,
+        condition_id: str,
+        parameter: str | None = None,
+        *,
+        amount: int | None = None,
+        temporary: bool = False,
+        shake_off: dict | None = None,
+    ):
         """Put a condition on one player's live sheet."""
         return self.send(
-            ApplyCondition(player_id=player_id, condition_id=condition_id, parameter=parameter)
+            ApplyCondition(
+                player_id=player_id,
+                condition_id=condition_id,
+                parameter=parameter,
+                amount=amount,
+                temporary=temporary,
+                shake_off=shake_off,
+            )
         )
+
+    def clear_temporary(self, player_id: str) -> bool:
+        """Take every temporary condition off one player's live sheet."""
+        return self.send(ClearTemporary(player_id=player_id))
 
     def remove_condition(self, player_id: str, condition_id: str, parameter: str | None = None):
         """Take a condition back off one player's live sheet."""
@@ -796,9 +822,13 @@ class SessionClient:
                 {"player_id": message.player_id, "character": dict(message.character)},
             )
         elif isinstance(message, ApplyCondition):
-            self._emit(EVENT_APPLY_CONDITION, message.to_dict())
+            payload = message.to_dict()
+            payload["shake_off"] = sanitize_shake_off(message.shake_off)
+            self._emit(EVENT_APPLY_CONDITION, payload)
         elif isinstance(message, RemoveCondition):
             self._emit(EVENT_REMOVE_CONDITION, message.to_dict())
+        elif isinstance(message, ClearTemporary):
+            self._emit(EVENT_CLEAR_TEMPORARY, message.to_dict())
         elif isinstance(message, SetHeroPoints):
             self._emit(EVENT_SET_HERO_POINTS, message.to_dict())
         elif isinstance(message, ErrorMessage):

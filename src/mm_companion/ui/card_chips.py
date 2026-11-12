@@ -150,6 +150,54 @@ def _edge_step(y: int, height: int) -> int:
 #: What a condition chip's recovery button wears — the die that rolls it off.
 RECOVERY_GLYPH = "🎲"
 
+#: What a temporary condition's chip wears to take just that one off, and what the
+#: cards' "Clear temporary" says. Restated rather than imported from the Conditions
+#: block's module: this one may import nothing from ``ui/sections`` (see above).
+DISMISS_GLYPH = "✕"
+CLEAR_TEMPORARY_TEXT = "Clear temporary"
+CLEAR_TEMPORARY_TIP = (
+    "Take off every temporary condition — do this at the start of the creature's turn."
+)
+
+
+def _flat_glyph_button(parent: QWidget, glyph: str, tooltip: str) -> QToolButton:
+    """A borderless glyph button sized for a chip — the 🎲 and the ✕."""
+    button = QToolButton(parent)
+    button.setText(glyph)
+    button.setAutoRaise(True)
+    button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
+    button.setStyleSheet("QToolButton { border: none; background: transparent; padding: 0; }")
+    font = button.font()
+    font.setPointSizeF(theme.font_size("size.terms"))
+    button.setFont(font)
+    button.setToolTip(tooltip)
+    return button
+
+
+def clear_temporary_button(on_click, *, compact: bool = False) -> QToolButton:
+    """The cards' "Clear temporary": a small button on a line of its own under the chips.
+
+    Not on the card's button row, which would widen a card the GM has lined up with its
+    neighbours, and not in the chip flow, which a card reads back as its list of
+    conditions. The owner shows it only while a temporary condition is on the creature,
+    and parents it by adding it to a layout (it is built hidden, never shown parentless).
+    """
+    button = QToolButton()
+    button.hide()
+    button.setText(CLEAR_TEMPORARY_TEXT)
+    button.setToolTip(CLEAR_TEMPORARY_TIP)
+    button.setAutoRaise(True)
+    button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
+    if compact:
+        font = button.font()
+        font.setPointSizeF(theme.font_size("size.terms"))
+        button.setFont(font)
+    button.clicked.connect(lambda: on_click())
+    return button
+
+
 #: What the Scene toggle wears. An eye, because what it controls is who can *see*
 #: this creature — the players' side of the board, not the GM's.
 SCENE_GLYPH = "👁"
@@ -318,13 +366,20 @@ class _ConditionChip(QFrame):
         *,
         tooltip: str = "",
         compact: bool = False,
+        tone: str = "tint.worse",
+        temporary: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        # *tone* is the condition's colour token (the Conditions block's
+        # ``condition_tone_token``): red for a hindrance, green for a benefit.
+        self.tone = tone
+        #: Whether this is a temporary condition — one that offers its own ✕.
+        self.temporary = temporary
         self.setStyleSheet(
             f"border: {int(theme.metric('border.width'))}px solid"
-            f" {theme.color('tint.worse')};"
-            f"background: {theme.wash('tint.worse', 0.12)};"
+            f" {theme.color(tone)};"
+            f"background: {theme.wash(tone, 0.12)};"
             f"border-radius: {int(theme.metric('radius.chip'))}px;"
         )
         if tooltip:
@@ -344,6 +399,7 @@ class _ConditionChip(QFrame):
         self._compact = compact
         self._removable = False
         self._recover_button: QToolButton | None = None
+        self._dismiss_button: QToolButton | None = None
 
     def text(self) -> str:
         """The chip's caption — what :meth:`PlayerCard.condition_names` reads."""
@@ -359,9 +415,25 @@ class _ConditionChip(QFrame):
         return self._removable
 
     def arm_removal(self, on_remove) -> None:
-        """Let a right-click ask for this condition to come off."""
+        """Let a right-click ask for this condition to come off — and, on a temporary
+        chip, a visible ✕ too: it is the condition that comes off every turn."""
         attach_context_removal(self, on_remove, what=self.text())
         self._removable = True
+        if self.temporary and self._dismiss_button is None:
+            button = _flat_glyph_button(self, DISMISS_GLYPH, f"Take off {self.text()}")
+            button.clicked.connect(lambda: on_remove())
+            self.layout().addWidget(button)
+            self._dismiss_button = button
+
+    def dismiss(self) -> None:
+        """Press the chip's ✕, as a click would."""
+        if self._dismiss_button is not None:
+            self._dismiss_button.click()
+
+    @property
+    def dismissable(self) -> bool:
+        """Whether this chip carries the ✕ that takes it off."""
+        return self._dismiss_button is not None
 
     @property
     def recoverable(self) -> bool:
@@ -380,18 +452,14 @@ class _ConditionChip(QFrame):
         """
         if self._recover_button is not None:
             return
-        button = QToolButton(self)
-        button.setText(RECOVERY_GLYPH)
-        button.setAutoRaise(True)
-        button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        button.setCursor(Qt.CursorShape.PointingHandCursor)
-        button.setStyleSheet("QToolButton { border: none; background: transparent; padding: 0; }")
-        font = button.font()
-        font.setPointSizeF(theme.font_size("size.terms"))
-        button.setFont(font)
-        button.setToolTip(tooltip or "Roll the recovery check — a success takes this off.")
+        button = _flat_glyph_button(
+            self, RECOVERY_GLYPH, tooltip or "Roll the recovery check — a success takes this off."
+        )
         button.clicked.connect(lambda: on_roll())
-        self.layout().addWidget(button)
+        layout = self.layout()
+        # Before the ✕, if there is one: the way off stays the chip's last control.
+        at = layout.indexOf(self._dismiss_button) if self._dismiss_button is not None else -1
+        layout.insertWidget(at, button)
         self._recover_button = button
 
     def roll_recovery(self) -> None:

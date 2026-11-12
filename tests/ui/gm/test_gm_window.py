@@ -1211,12 +1211,12 @@ def test_picking_a_condition_sends_it_to_that_player(
     monkeypatch.setattr(
         window.bridge.server,
         "apply_condition",
-        lambda *args: sent.append(args) or True,
+        lambda *args, **kw: sent.append((*args, kw)) or True,
     )
 
     window._cards["p0"]._choose_condition(a_condition("dazed"))
 
-    assert sent == [("p0", "dazed", None)]
+    assert sent == [("p0", "dazed", None, {"amount": None, "temporary": False, "shake_off": None})]
     assert "Dazed" in window._notice_label.text()
 
 
@@ -1348,7 +1348,7 @@ def test_a_gm_roll_lands_in_the_session_and_the_history(
 ) -> None:
     monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
     start_hosting(qapp, window, canned())
-    window._roller._bonus_spin.setValue(5)
+    window._roller._modifier_spin.setValue(5)
 
     window._roller._start_roll()
     qapp.processEvents()

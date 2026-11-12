@@ -22,7 +22,7 @@ Vocabulary (protocol v2):
 
 **Server → client** — :class:`Welcome`, :class:`Roster`, :class:`RollAdded`,
 :class:`RollRemoved`, :class:`RollRevealed`, :class:`ApplyCondition`,
-:class:`RemoveCondition`,
+:class:`RemoveCondition`, :class:`ClearTemporary`,
 :class:`ModStateUpdate`, :class:`ErrorMessage`, :class:`Kicked`, :class:`Pong`.
 
 A *hidden* roll is stored on the server with ``hidden: true`` and is never
@@ -141,7 +141,28 @@ from typing import ClassVar
 #: ``"best"`` or ``"worst"``) on the spec — Alternate Resistance's "Fortitude or Will".
 #: Bumped for the v13 reason: a v18 server strips the key without a word, and a worst-of
 #: save clicked on the target's card would roll their better number.
-PROTOCOL_VERSION = 19
+#:
+#: v20 brings **temporary conditions** (combat maneuvers): :class:`ApplyCondition`
+#: carries an ``amount`` (All-Out Attack −3) and ``temporary``; :class:`ClearTemporary`
+#: is the GM's "Clear temporary" on a player's card; and a scene entry's conditions
+#: keep ``amount`` and ``temporary``. Bumped for the v13 reason: a v19 server strips the
+#: scene keys and drops the new command without a word, so a GM's All-Out Attack would
+#: land on a player at no size at all and "Clear temporary" would do nothing.
+#: (Still v20, unreleased:) ``RollRequest.twice`` rolls two dice and keeps the higher
+#: (Aim), the record's ``other_die`` is the one dropped, and a spec's ``critical_hit``
+#: makes every hit of it a critical (Finishing Attack). And a spec's ``parts`` — what
+#: its modifier is made of, ``[[name, amount], …]`` — so every seat's history can show
+#: how a roll's number was reached on hover. And a spec's ``own_attack``: a save its
+#: attacker rolled off their own card, which every seat's card marks with a ⚠. And
+#: :class:`ApplyCondition`'s ``shake_off``: how a condition an impression or an
+#: Affliction put on a player comes off again, kept on their sheet (and so in the
+#: snapshot the GM's End turn reads), plus the ladder's ``overcome`` and ``name``. And
+#: the record's ``mods``, ``checks`` and ``rungs`` (the Affliction's modifiers that
+#: change overcoming it), the ladder's ``mods``, ``skill`` and ``source`` (an impression's
+#: request card writes the same record), and a spec's ``shakes_off``: the record a
+#: Recover check takes off when it is made. And the record's ``save``: the trait a
+#: maintained Affliction's new use is resisted with.
+PROTOCOL_VERSION = 20
 
 #: Hard cap on one encoded message, including its trailing newline. A character
 #: snapshot is the largest thing that legitimately travels (tens of KB); anything
@@ -328,6 +349,9 @@ class RollRequest(Message):
     :data:`~mm_companion.core.dice.ROUTINE_DIE`. ``minion`` says the roll is made as a
     minion, whose natural 20 is no added success (PDF p25). Both are stamped on the
     record, so every seat reads the same verdict off it (protocol v18).
+
+    ``twice`` rolls two dice and keeps the higher (Aim, PDF p200); the record keeps
+    the other as ``other_die`` (v20).
     """
 
     TYPE: ClassVar[str] = "roll_request"
@@ -341,6 +365,7 @@ class RollRequest(Message):
     reroll: bool = False
     routine: bool = False
     minion: bool = False
+    twice: bool = False
 
 
 @_register
@@ -865,6 +890,13 @@ class ApplyCondition(Message):
     player_id: str
     condition_id: str
     parameter: str | None = None
+    #: The condition's size, for one that moves traits by an amount (v20).
+    amount: int | None = None
+    #: Lasts only until the start of the player's next turn (v20).
+    temporary: bool = False
+    #: How it comes off, for one an impression or an effect put on (v20): a
+    #: ``ShakeOff`` record, checked by :func:`sanitize_shake_off` on the way in.
+    shake_off: dict | None = None
 
 
 @_register
@@ -877,6 +909,20 @@ class RemoveCondition(Message):
     player_id: str
     condition_id: str
     parameter: str | None = None
+
+
+@_register
+@dataclass(frozen=True)
+class ClearTemporary(Message):
+    """A GM command taking every temporary condition off one player's live sheet (v20).
+
+    What the start of a player's turn does to an All-Out Attack's −Defense; there is
+    no turn clock, so the GM (or the player) says when.
+    """
+
+    TYPE: ClassVar[str] = "clear_temporary"
+
+    player_id: str
 
 
 @_register
@@ -998,10 +1044,13 @@ _SPEC_TEXT_KEYS = (
     "recovers",
     "recovers_parameter",
     "pick",
+    "attack_range",
 )
 _SPEC_INT_KEYS = ("modifier", "dc", "dc_if_resisted")
 #: How many names a spec's ``targets`` may carry — a scene's worth.
 MAX_SPEC_TARGETS = 24
+#: How many lines a spec's ``parts`` (its modifier's breakdown) may carry.
+MAX_SPEC_PARTS = 16
 #: How many condition ids, escalations or parameters one ladder rung may carry.
 MAX_RUNG_ITEMS = 12
 #: The largest effect rank a ladder may carry — far past any Power Level, and only there
@@ -1042,11 +1091,18 @@ def sanitize_spec(raw: object, _depth: int = 0) -> dict | None:
         spec["dc_from_total"] = True
     if raw.get("follow_up_always") is True:
         spec["follow_up_always"] = True
+    if raw.get("critical_hit") is True:
+        spec["critical_hit"] = True
+    if raw.get("own_attack") is True:
+        spec["own_attack"] = True
     targets = raw.get("targets")
     if isinstance(targets, list):
         names = [t[:MAX_SPEC_TEXT] for t in targets[:MAX_SPEC_TARGETS] if isinstance(t, str) and t]
         if names:
             spec["targets"] = names
+    parts = _sanitize_parts(raw.get("parts"))
+    if parts:
+        spec["parts"] = parts
     outcomes = raw.get("outcomes")
     if isinstance(outcomes, list):
         rungs = [o[:MAX_SPEC_TEXT] for o in outcomes[:MAX_SPEC_OUTCOMES] if isinstance(o, str)]
@@ -1055,6 +1111,9 @@ def sanitize_spec(raw: object, _depth: int = 0) -> dict | None:
     ladder = _sanitize_ladder(raw.get("ladder"))
     if ladder is not None:
         spec["ladder"] = ladder
+    shake = sanitize_shake_off(raw.get("shakes_off"))
+    if shake is not None:
+        spec["shakes_off"] = shake
     follow_up = sanitize_spec(raw.get("follow_up"), _depth + 1)
     if follow_up is not None:
         spec["follow_up"] = follow_up
@@ -1065,6 +1124,21 @@ def sanitize_spec(raw: object, _depth: int = 0) -> dict | None:
         if kept:
             spec["also"] = kept
     return spec
+
+
+def _sanitize_parts(raw: object) -> list[list]:
+    """A spec's modifier breakdown: ``[name, amount]`` pairs, text and count capped."""
+    if not isinstance(raw, list):
+        return []
+    kept: list[list] = []
+    for pair in raw[:MAX_SPEC_PARTS]:
+        if not isinstance(pair, list) or len(pair) != 2:
+            continue
+        name, amount = pair
+        if isinstance(name, str) and name and isinstance(amount, int):
+            if not isinstance(amount, bool):
+                kept.append([name[:MAX_SPEC_TEXT], amount])
+    return kept
 
 
 def _text_list(raw: object) -> list[str]:
@@ -1118,13 +1192,65 @@ def _sanitize_ladder(raw: object) -> dict | None:
         value = raw.get(key)
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
             ladder[key] = min(value, MAX_LADDER_RANK)
+    # How what it lands comes off again (an Affliction's overcome check), and what
+    # the table calls it: plain short text.
+    for key in ("overcome", "effect", "name", "skill", "source"):
+        value = raw.get(key)
+        if isinstance(value, str) and value:
+            ladder[key] = value[:MAX_SPEC_TEXT]
+    mods = _short_texts(raw.get("mods"))
+    if mods:
+        ladder["mods"] = mods
     return ladder
+
+
+def _short_texts(raw: object) -> list[str]:
+    """A list of short ids (modifier or condition ids), capped in count and length."""
+    if not isinstance(raw, list):
+        return []
+    return [v[:MAX_SPEC_TEXT] for v in raw[:MAX_RUNG_ITEMS] if isinstance(v, str) and v]
 
 
 #: Bounds on a group roll and on an action's identifiers. A group is aimed at the
 #: creatures on a scene, so it never needs more lines than a scene has entries.
 MAX_GROUP_LINES = 24
 MAX_ACTION_ID = 64
+
+
+#: The shake-off record's text keys, and its numbers' bound.
+_SHAKE_TEXT_KEYS = ("kind", "name", "ref", "trait", "skill", "source", "save")
+MAX_SHAKE_NUMBER = 999
+
+
+def sanitize_shake_off(raw: object) -> dict | None:
+    """An :class:`ApplyCondition`'s ``shake_off``, checked into shape — or ``None``.
+
+    Structural only: short text keys, bounded counts, and short lists of ids. What it
+    means is the rules' (``ShakeOff`` on the character model).
+    """
+    if not isinstance(raw, dict):
+        return None
+    kept: dict = {}
+    for key in _SHAKE_TEXT_KEYS:
+        value = raw.get(key)
+        if isinstance(value, str) and value:
+            kept[key] = value[:MAX_SPEC_TEXT]
+    mods = _short_texts(raw.get("mods"))
+    if mods:
+        kept["mods"] = mods
+    rungs = raw.get("rungs")
+    if isinstance(rungs, list):
+        kept_rungs = [_short_texts(r) for r in rungs[:MAX_SPEC_OUTCOMES]]
+        if any(kept_rungs):
+            kept["rungs"] = kept_rungs
+    for key in ("dc", "degree", "checks"):
+        value = raw.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            kept[key] = max(0, min(value, MAX_SHAKE_NUMBER))
+    if not kept.get("kind") or "dc" not in kept:
+        return None
+    kept.setdefault("name", "")
+    return kept
 
 
 def sanitize_action_id(raw: object) -> str:
@@ -1170,6 +1296,9 @@ def sanitize_group_line(raw: object) -> dict | None:
 # client, not a legitimate one.
 MAX_SCENE_ENTRIES = 24
 MAX_SCENE_CONDITIONS = 12
+#: The largest condition amount a scene entry carries — far past any maneuver's 5; it
+#: only bounds what a hostile client can put through the relay.
+MAX_SCENE_AMOUNT = 99
 MAX_SCENE_TEXT = 80
 #: Hard cap on one entry's base64 thumbnail. Far smaller than a *sheet* portrait
 #: (:data:`~mm_companion.ui.session_portrait.PORTRAIT_MAX_CHARS`) because a scene
@@ -1288,6 +1417,13 @@ def _sanitize_scene_conditions(raw: object) -> list[dict]:
         count = item.get("count")
         if isinstance(count, int) and not isinstance(count, bool) and count > 1:
             applied["count"] = count
+        # A maneuver's size and whether it is temporary (v20), so a card names an
+        # All-Out Attack "-3" and draws it as the passing thing it is.
+        amount = item.get("amount")
+        if isinstance(amount, int) and not isinstance(amount, bool):
+            applied["amount"] = max(-MAX_SCENE_AMOUNT, min(MAX_SCENE_AMOUNT, amount))
+        if item.get("temporary") is True:
+            applied["temporary"] = True
         conditions.append(applied)
     return conditions
 

@@ -16,6 +16,8 @@ from mm_companion.core.character import Character
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import Power, PowerEffectInstance
 from mm_companion.core.rules import (
+    OWN_ATTACK_HINT,
+    OWN_ATTACK_HINT_OTHER,
     PIN_ABILITY,
     PIN_INITIATIVE,
     PIN_POWER,
@@ -29,6 +31,7 @@ from mm_companion.core.rules import (
 from mm_companion.core.session.model import new_session
 from mm_companion.ui import dice_roller
 from mm_companion.ui.character_sheet import CharacterSheet
+from mm_companion.ui.roll_history import OWN_ATTACK_MARK
 from mm_companion.ui.sections.powers import _RollLine
 from mm_companion.ui.sections.skills import COL_TOTAL as SKILL_TOTAL
 from mm_companion.ui.sections.stat_table import COL_NAME, COL_TOTAL, ROLL_ROLE
@@ -181,9 +184,11 @@ def test_a_load_request_shows_the_spec_without_throwing_the_die(qapp: QApplicati
     sheet.abilities.loadRequested.emit(RollSpec(label="Strength", modifier=4))
 
     assert panel.current_spec().label == "Strength"
-    # The chip is there and the readout names what it will throw, but nothing has
-    # been thrown: the die is still showing its resting face.
-    assert "Rolling Strength" in panel._readout.text()
+    # The chip names what it will throw (the readout beside the die only says to
+    # click it: three mentions of the trait was one too many), but nothing has been
+    # thrown: the die is still showing its resting face.
+    assert "Strength" in panel._spec_label.text()
+    assert dice_roller.IDLE_PROMPT in panel._readout.text()
     assert panel._face.text() == "?"
 
 
@@ -423,19 +428,18 @@ def test_an_equipment_card_rolls_through_the_same_channel(qapp: QApplication) ->
 def test_the_sliders_add_on_top_of_the_loaded_trait(qapp: QApplication) -> None:
     sheet = _sheet()
     panel = sheet.dice.panel
-    panel._bonus_spin.setValue(2)
-    panel._penalty_spin.setValue(5)
+    panel._modifier_spin.setValue(-3)
 
     panel.load_spec(RollSpec(label="Athletics", modifier=9))
 
-    # 9 + 2 - 5 = 6, split back into a non-negative bonus/penalty pair for the wire.
+    # 9 - 3 = 6, split back into a non-negative bonus/penalty pair for the wire.
     assert panel._roll_parameters()[:2] == (6, 0)
 
 
 def test_a_net_negative_modifier_becomes_a_penalty(qapp: QApplication) -> None:
     sheet = _sheet()
     panel = sheet.dice.panel
-    panel._penalty_spin.setValue(8)
+    panel._modifier_spin.setValue(-8)
     panel.load_spec(RollSpec(label="Stealth", modifier=3))
 
     assert panel._roll_parameters()[:2] == (0, 5)
@@ -444,7 +448,6 @@ def test_a_net_negative_modifier_becomes_a_penalty(qapp: QApplication) -> None:
 def test_a_specs_own_dc_wins_and_shows_itself_in_the_box(qapp: QApplication) -> None:
     sheet = _sheet()
     panel = sheet.dice.panel
-    panel._dc_check.setChecked(True)
     panel._dc_spin.setValue(15)
 
     panel.load_spec(RollSpec(label="Toughness vs. 18", dc=18))
@@ -461,7 +464,6 @@ def test_a_trait_check_uses_the_dc_box_because_it_has_none_of_its_own(
     panel.load_spec(RollSpec(label="Athletics", modifier=9))
     assert panel._roll_parameters()[2] is None
 
-    panel._dc_check.setChecked(True)
     panel._dc_spin.setValue(15)
     assert panel._roll_parameters()[2] == 15
 
@@ -503,7 +505,7 @@ def test_a_rolled_chip_goes_once_the_die_has_settled(qapp: QApplication) -> None
 
     assert panel.current_spec() is None
     assert not panel._spec_chip.isVisibleTo(panel)
-    assert not panel._dc_check.isChecked()  # the DC it brought went with it
+    assert panel.dc() is None  # the DC it brought went with it
     assert panel._roll_parameters()[:2] == (0, 0)
     # ...and the number it produced is still on screen; the clear must not eat it.
     assert "Athletics" in panel._readout.text()
@@ -547,6 +549,12 @@ def _chain_buttons(card) -> list[QPushButton]:
     return [b for b in card.findChildren(QPushButton) if b.text().startswith("🎲")]
 
 
+def _own_attack_hover(card) -> str | None:
+    """The hover on a card's ⚠ for resisting one's own attack, or ``None`` without one."""
+    marks = [m for m in card.findChildren(QLabel) if m.text() == OWN_ATTACK_MARK]
+    return marks[0].toolTip() if marks else None
+
+
 def test_a_hit_offers_the_save_it_forced(qapp: QApplication) -> None:
     data = load_game_data()
     char = _hero(data)
@@ -557,7 +565,6 @@ def test_a_hit_offers_the_save_it_forced(qapp: QApplication) -> None:
 
     attack = sheet.powers._rolls(char.powers[0])[0]
     panel.load_spec(attack)
-    panel._dc_check.setChecked(True)
     panel._dc_spin.setValue(12)  # the target's Defense
     panel._start_roll()
 
@@ -570,9 +577,16 @@ def test_a_hit_offers_the_save_it_forced(qapp: QApplication) -> None:
     chain[0].click()
     assert rolled.last["label"] == "Toughness vs. 18"
     assert rolled.last["dc"] == 18
+    # With this sheet's own Toughness (Stamina 5), and marked as one's own attack: on
+    # the result beside the die, and on the save's card by its star.
+    assert rolled.last["bonus"] == 5
+    assert panel.warning_text() == dice_roller.OWN_ATTACK_SHORT
+    assert _own_attack_hover(history.cards()[0]) == OWN_ATTACK_HINT
+    # The attack's own card carries no mark: it resisted nothing.
+    assert _own_attack_hover(history.cards()[1]) is None
     # And the chip goes with the roll it was made for, taking its DC back off.
     assert panel.current_spec() is None
-    assert not panel._dc_check.isChecked()
+    assert panel.dc() is None
 
 
 def test_a_failed_save_says_what_it_did_to_the_target(qapp: QApplication) -> None:
@@ -598,7 +612,7 @@ def test_a_save_that_held_still_reports_the_hit_it_cost(qapp: QApplication) -> N
     panel = sheet.dice.panel
     history = sheet.dice.view._local_history
 
-    panel._bonus_spin.setValue(20)  # cannot fail
+    panel._modifier_spin.setValue(20)  # cannot fail
     panel.load_spec(
         RollSpec(
             label="Toughness vs. 18",
@@ -618,7 +632,7 @@ def test_a_save_with_nothing_to_say_on_a_success_says_nothing(qapp: QApplication
     panel = sheet.dice.panel
     history = sheet.dice.view._local_history
 
-    panel._bonus_spin.setValue(20)  # cannot fail
+    panel._modifier_spin.setValue(20)  # cannot fail
     panel.load_spec(RollSpec(label="Will vs. 16", dc=16, outcomes=("Dazed",)))
     panel._start_roll()
 
@@ -633,7 +647,6 @@ def _attack_with_die(sheet: CharacterSheet, die: int, *, dc: int = 12):
     """Roll the sheet's first power's attack on a given die, and return its card."""
     panel = sheet.dice.panel
     panel.load_spec(sheet.powers._rolls(sheet.character.powers[0])[0])
-    panel._dc_check.setChecked(True)
     panel._dc_spin.setValue(dc)
     dice_roller.roll_d20 = lambda *a, **k: die
     panel._start_roll()
@@ -667,7 +680,9 @@ def test_a_natural_1_that_still_hits_helps_the_target_resist(qapp: QApplication)
     assert chain[0].text() == "🎲 Toughness vs. 18 — natural 1, +5 to resist"
     rolled = _Rolled(sheet.dice.panel)
     chain[0].click()
-    assert rolled.last["bonus"] == 5  # the target's help, not a cut to the DC
+    # The target's help, not a cut to the DC — on top of this sheet's own Toughness 5,
+    # since it is one's own card.
+    assert rolled.last["bonus"] == 5 + 5
     assert rolled.last["dc"] == 18  # the DC is untouched
 
 
@@ -727,13 +742,14 @@ def test_another_players_card_offers_the_save_with_their_own_toughness(
     assert rolled.last["dc"] == 18
 
 
-def test_your_own_card_does_not_fill_in_your_own_toughness(qapp: QApplication) -> None:
-    """You are not the target of your own attack.
+def test_your_own_card_fills_in_your_own_toughness_and_says_so(
+    qapp: QApplication,
+) -> None:
+    """Resisting your own attack: your own number, and a ⚠ whose hover says why.
 
-    The button is still there — a GM running both sides needs it — but quietly using
-    the attacker's Toughness for the defender would be a confident wrong number.
+    It used to roll a bare d20 here, which read as the app forgetting your Toughness.
     """
-    sheet = _sheet()
+    sheet = _sheet()  # Stamina 5, so Toughness 5
     save = RollSpec(label="Toughness vs. 18", dc=18, trait_key="TOUGHNESS", rolled_by_target=True)
     mine = {
         "seq": 1,
@@ -750,9 +766,33 @@ def test_your_own_card_does_not_fill_in_your_own_toughness(qapp: QApplication) -
     # One's own roll is held until the die settles, then released — the real path.
     history.release_roll(mine)
 
+    button = _chain_buttons(history.cards()[0])[0]
+    assert button.text() == "🎲 Toughness vs. 18"
+
     rolled = _Rolled(sheet.dice.panel)
-    _chain_buttons(history.cards()[0])[0].click()
-    assert rolled.last["bonus"] == 0
+    button.click()
+    assert rolled.last["bonus"] == 5
+    spec = rolled.last["spec"]
+    assert spec.own_attack
+
+    # The save comes back from the table as one's own roll: the ⚠ says "you".
+    resisted = {
+        "seq": 2,
+        "player_id": "me",
+        "player_name": "Me",
+        "die": 10,
+        "bonus": 5,
+        "dc": 18,
+        "degree": -1,
+        "label": spec.label,
+        "spec": spec.to_dict(),
+    }
+    history.release_roll(resisted)
+    assert _own_attack_hover(history.cards()[0]) == OWN_ATTACK_HINT
+    # Someone else reading the same roll is told it was not them.
+    history._own_id = "someone-else"
+    history.add_roll(dict(resisted, seq=3))
+    assert _own_attack_hover(history.cards()[0]) == OWN_ATTACK_HINT_OTHER
 
 
 # -- pinning a row to a GM card ----------------------------------------------

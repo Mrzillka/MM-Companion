@@ -1,7 +1,7 @@
 # Actions against other characters: Impress, area attacks, and the targeting layer
 
 Matters when touching the Impress action, area attacks, `actions.json`, the roller's
-Action row, the history's table card, or anything that resolves one check against
+Actions popup, the history's table card, or anything that resolves one check against
 several creatures.
 
 Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
@@ -56,7 +56,7 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
     GM's window is where they set things up.
   - Off the air there is no GM, so the dialog always opens.
 - **The GM may start either action for anybody**, a player included: the roller's
-  Impress and Area buttons, an NPC card's 🗣 and 💥, and a creature's card on the board
+  Impress and Area tiles (its Actions popup — see [the dice notes](dice-and-rolling.md#the-actions-button)), an NPC card's 🗣 and 💥, and a creature's card on the board
   (right-click: **Impress…**, **Area attack…**). Impress's impresser combo lists the cast
   and the players; the area window grows an **Attacker** combo for one the GM started,
   and switching it reads that creature's builds afresh (a player's off their snapshot —
@@ -457,6 +457,15 @@ The second action on this layer, following the 4e rules (Area Effect extra, PDF 
   adjustment for share their cards. Off the air the dialog leaves the same two.
 - Each card carries the action id, so the answers fill the action's table.
 - The GM answers these cards as an NPC — see *Answering a history roll as an NPC*, below.
+- **A player's answer lands too.** A save a player rolls off a request card or a chip
+  (one no `ActionRun` of the GM's asked for: `action_run.resolved_by_a_run`) is put on
+  them by the GM's window when it comes back (`GMWindow._on_player_save`): the rung
+  resolved against their snapshot and sent to their sheet with its `ShakeOff`, as an
+  aimed one is, under the same "Saves you roll for NPCs" switches. An impression's
+  ladder names the impression, its skill and the impresser (`SpecLadder.effect`,
+  `skill`, `source`), so a request-only Impress writes the same record a resolved one
+  does. A save an attacker rolled off their own card (`own_attack`) is left alone: it
+  was rolled for someone it does not name.
 
 ### Area Healing
 
@@ -512,14 +521,60 @@ A trait roll clicked in the GM's history — a request card, or a save chip unde
 ## End of turn
 
 - A creature's card on the GM's board offers **End turn**. It does two things. First,
-  every impression the table resolved onto that creature (`ImpressController._lingering`,
-  remembered as each rung lands, with its DC and how the target resisted) is resisted
-  again **against the original DC** — the server rolls an NPC's, a player is asked for
-  each in turn (`Shake off Demoralized`). One that is made comes off; one that is
-  failed stays. An impression whose conditions are already gone is forgotten unrolled.
-- Second, every condition on it whose `recoveryCheck` cadence is `end_of_turn` (Dazed,
-  Stunned — `end_of_turn_recoveries`) is rolled off, unless an impression put it there:
-  that one is shaken off as the impression, at its DC, and not rolled twice. An NPC's
+  every impression and every Affliction on that creature is resisted again **against
+  the original DC** — read off the creature's own conditions (`held_shake_offs`: the
+  `ShakeOff` each one's rung wrote, see [the conditions
+  notes](conditions-and-damage.md)), so it is the NPC's model or the player's latest
+  snapshot that says what is on them, and a GM restart forgets nothing. The server
+  rolls an NPC's (`shake_off_roll`), a player is asked for each in turn (`Shake off
+  Demoralized`, `Shake off Sleep Ray`). One that is made comes off with every condition
+  it put on; one that is failed stays. An impression is resisted with what the GM chose
+  then, or the creature's best option; an Affliction with its "Overcome by" resistance,
+  or the one it was resisted with. An Affliction at its third degree is overcome once a
+  minute, not as a turn ends (the effect's `overcome.eachMinuteFromDegree`), and a
+  Prolonged one at the end of each scene: End turn names it and rolls nothing
+  (`shake_off_cadence`). An Instant Recovery one clears with no roll.
+- **The Affliction's modifiers** (PDF p110–111) ride on the record (`ShakeOff.mods`, the
+  instance's ids the effect's `overcome.modifiers` names, written by `overcome_mods`).
+  The check is at `shake_off_dc` (Increasing Difficulty +1 for each check after the
+  initial save, Decreasing Difficulty −1 for each after the first, counted in
+  `ShakeOff.checks`), and a failed one does what `shake_off_failed` says: Progressive
+  replaces the conditions with the next degree's (the record keeps each degree's ids
+  in `rungs` for it), Fatal puts Dying on at the third degree, and the record with its
+  new count and degree is written back onto the conditions.
+- **A new use on a creature already under it** (PDF p109–110) goes through
+  `merge_landing`, by way of `GMWindow.land_rung` — every place a save's rung lands (an
+  NPC's answer, a player's request save, an aimed attack, an area). Afflictions do not
+  stack: only the highest degree applies, so one no deeper than what is on changes
+  nothing ("no worse than it was"), and a deeper one replaces it. A **Cumulative** one
+  (`addsDegrees`) adds its degrees to those on instead, to the last rung ("adds up to
+  Stunned"). The same power from the same wielder is matched by `same_effect` (kind,
+  effect, power name, source), whatever its DC or degree.
+- **Concentration and Sustained** (`reapplies`): each turn the wielder keeps it up,
+  everyone it is on resists it anew, with no attack (p110). The wielder's End turn
+  does it first (`ImpressController.keep_up`), in a table of its own ("Thug: keeps
+  powers up"): it finds the targets by the records on the board's creatures that name
+  the wielder as their source (`maintained`), rolls an NPC's new save at the original
+  DC with the trait the record keeps for it (`ShakeOff.save`, `reapply_roll`) and asks
+  a player (`reapply_request`). A failure lands as a new use (`reapplied_landing`).
+  Whether it is still kept up is the wielder's power card's on/off switch, by name
+  (`maintained_by`); switched off, it stops (`shake_off_stopped`) — a maintained
+  Instant Recovery one (`whenStopped`) clears, any other loses its maintained
+  modifiers and is overcome as usual. The target's own End turn still overcomes it as
+  any other.
+- **Recover** (the Actions grid) offers a new check against each record on the actor
+  too (PDF p206: `shake_off_recover_spec`, at any cadence, so it is how a third-degree
+  Affliction is checked before its minute is up). The spec carries the record
+  (`RollSpec.shakes_off`); a made one takes off everything carrying it
+  (`shake_off_made`) — on a player's sheet through `DiceSection.settle_recovery`, on an
+  NPC through `_on_recovery_back`. A failed one runs the modifiers as End turn's does
+  (`shake_off_failed_on` on the player's own sheet, `land_shake_failure` on an NPC):
+  at the third degree, where End turn rolls nothing, it is the only check Fatal's Dying
+  can come from.
+- Second, every condition on it whose `recoveryCheck` cadence is `end_of_turn` (a
+  damage-caused Dazed or Stunned — `end_of_turn_recoveries`) is rolled off. One an
+  impression or an Affliction put on is not offered (`can_recover`): it comes off with
+  what put it there, and is not rolled twice. An NPC's
   checks are lines of the same server-rolled group, and a made one sheds through the
   path the chip's 🎲 takes (`GMWindow._shed_npc_recovery`). A player gets the same
   request card the chip's 🎲 sends, and their own app settles it.
@@ -569,16 +624,40 @@ click**: it rolls, as it always did. Its **right click** lists the Scene's creat
   `AttackDeclaration`: the target's Scene ref and name, the aimed spec) and then rolled
   with the declaration's `action_id`, `targets=(name,)` and a "Ana → Thug" title — all
   keys the server already keeps, so **no protocol change**. The roller's
-  `aim_attack` serves the bus topic `attack-requested`.
+  `aim_attack` serves the bus topic `attack-requested`. **The declaration is sent from
+  the roll itself** (`roll_spec(…, before=declare)`), carrying the spec the die is made
+  of: the maneuvers on the roller's lane have moved its modifier and its save's DC by
+  then, and the GM's app asks for the save off the declaration. A declaration that does
+  not go calls the roll off.
 - **The GM's** (`ui/attack_gm.py`, `AttackController`) gets an `ActionCard` with
   **Accept / Decline** (its new optional second button). Accept judges the hit against
-  the target's Defense (`rules.judge_attack`: the roller's arithmetic, so a counted
-  natural 20 is an added degree and a critical) and then:
+  the target's **Defense in play** (`rules.defense_class_in_play`: Vulnerable halves it,
+  All-Out Attack lowers it, Defending raises it — the area window's primary and the team
+  attack judge the same way; before the combat maneuvers it was the build's number) with
+  `rules.judge_attack` (the roller's arithmetic, so a counted natural 20 is an added
+  degree and a critical) and then:
   - one NPC save: rolled by the server at once, at the GM roller's bonus minus penalty
     (`DiceRollerPanel.adjustment`), landed through `answer_rung`;
   - several (a Linked power): `AttackWindow`, a resistance and an adjustment per save;
   - a player target: asked for each save in turn, as an area attack asks.
   Decline settles the card; nothing else happens.
+- **What Aid, Feint and Trick left counts here, and is spent here.** Before judging, the
+  controller reads the opposing conditions between the two (`rules.opposing_effects`):
+  the attacker's Aided Attack or Trick Advantage naming the target goes on the check,
+  the target's Aided Defense on its Defense, and a Feinted target's Defense is judged as
+  if Vulnerable (`rules.defense_against`). Each counted instance comes off its bearer,
+  hit or miss, through the GM window's `combat_land` (an NPC's model, a player's remove
+  command). The card says which ("with Aided Attack (Thug) +5, Thug: Feinted (Ana)").
+  The target's **posture** counts here too: given the attack spec's `attack_range`,
+  `opposing_effects` adds a prone target's +5 to a close attack or −5 to a ranged one
+  ("Thug: +5 Prone"), which is never spent. The attacker's own close −5 is already in
+  the rolled bonus (see [conditions](conditions-and-damage.md)).
+- **The saves come back through the session.** The controller hands every roll to its
+  runs first (`take_roll`), as the area and Impress controllers do. It did not at
+  first, so at a live table an NPC's save was rolled by the server and never landed,
+  and a player's asked save was never gathered; off the air the group is rolled in
+  place, which is all the tests saw. `test_a_hosted_aimed_attacks_save_comes_back_and_lands`
+  watches it through a real hosted session.
 - **The GM's own** aimed attacks (an NPC card's tile, an NPC sheet's line through
   `ATTACK_REQUESTED` in `OUTWARD_REQUESTS`) skip the card and run once the die is in.
   Offline rolls reach the controller through `_show_offline_roll`, which now marks a
@@ -629,11 +708,59 @@ for every check.
 - Each roll is matched to its attacker **by position**, never by name: two creatures in
   one group may share a name.
 
+### A call to roll (the GM's Team attack tile)
+
+The Rolls block's **Team attack** tile is not the group window any more (that is on a
+group's ☰ menu only, the user's call, 2026-11-09): it **calls** a team attack that anyone
+at the table answers with their own roller, maneuvers and all, and the GM resolves.
+
+- **Sending.** `ui/team_call.py`'s `TeamCallWindow` takes the target (the GM's Scene) and
+  one signed Bonus/Penalty; **Send** posts `rules.team_call_spec` as an ordinary
+  **request record** (`bridge.prompt_roll`), kind `KIND_TEAM_CALL` (`"team-call"`),
+  carrying the action id, the title "Team attack → Thug", the target in `targets` and the
+  adjustment as `modifier`. **No wire change**: every key is one a request already
+  carries. The tile is greyed off the air (`NO_SESSION_FOR_CALL` — nobody could answer)
+  and with nobody on the Scene.
+- **The table.** `RollHistoryPanel._insert` routes a call's request (`team_call_of`) into
+  a `GroupTableCard` keyed by its action id. The call is no row: it is a line under the
+  heading with a **Join** button (`join_button`, `joinRequested` →
+  `teamJoinRequested`). Entries fill rows of the same table on every screen, by
+  `action_table_key`. Striking the request takes the button away and leaves the rows.
+- **Joining** arms the presser's roller (`CombatRunner.join_team`: a fixed lane line,
+  `TEAM_LINE`, the attack picker first when none of the actor's attacks is loaded). The
+  **next** attack thrown is stamped by the runner's shift (`rules.team_join_spec`): the
+  call's action id and title, the attacker's name as `targets` (its row), the GM's
+  adjustment on the check, "(team attack +2)" in the label. Stamped *before*
+  `apply_actions`, so a maneuver restates the bonus already moved. With a target named
+  it is an aimed attack by its shape, so no card offers its save. A roll made before
+  joining does not count; a **re-roll** of the entry throws the same stamped spec, so it
+  replaces the entry. A player's sheet hears Join through `DiceRollerView.teamJoinRequested`;
+  the GM's history through `_gm_team_join`, which asks which NPC joins (the target left
+  out) and acts as it.
+- **Gathering** (`TeamCallController.take_roll`, on `rollAdded`): the request's `seq`, and
+  every non-group roll with the call's action id and a save, one entry per
+  `(seat, actor)` — a later roll replaces the earlier one. The target's own roll is
+  ignored. `AttackController.ignore(action_id)` keeps the aimed-attack controller from
+  holding the entries as early rolls. The GM's `ActionCard` (**Resolve** / **Call off**)
+  lists each entry judged now against the target's `defense_class_in_play`
+  (`AttackController.judge_entry`), and "Now: Primary: …" from `combine_team_attack`.
+- **Which entries combine** is `rules.team_fits`: the first entry sets the effect and
+  resistance (ladder kind and save trait); a different one is left out, and so is one
+  whose rank is more than `rankSpread` below the strongest (a rank of 0 is unknown and
+  waives it, as in the group window — `ladder.rank` is on the wire for Damage only).
+- **Resolve** strikes the request (the Join buttons go everywhere) and hands the kept
+  entries to `AttackController.resolve_team`, which shares `_combine_team` with the group
+  window: judge, combine, then the target's one save at the raised rank — rolled for an
+  NPC at the GM roller's adjustment, asked of a player, a minion's critical landing its
+  worst — under the **call's own action id**, so the save joins the call's table.
+  **Call off**, or the GM's ✕ on the table (`rollRemoved` of the request), settles it
+  with nothing done. An entry struck from the history leaves the team.
+
 ## Team checks and group checks
 
 Two more of a group's ☰ menu items (PDF p18), one window (`ui/group_check.py`,
 `GroupCheckWindow`, `MODE_TEAM` / `MODE_GROUP`). The check is any trait the roller's
-Request row offers (`rules.requested_roll_choices`), rolled at each member's own number
+Ask to Roll form offers (`rules.requested_roll_choices`), rolled at each member's own number
 (`localize_spec`; an untrained skill is marked ⚠ but still rolls), with one adjustment on
 every roll. A member who is down starts unticked. Nothing lands — the outcome is posted
 to the history as a line.
@@ -657,14 +784,172 @@ outcome goes to the history first. Rolls the session would not take hand the win
 back, Roll enabled again. A result that wraps onto more lines grows the window
 (`widgets.grow_to_fit`) rather than squeezing the rows above it.
 
+## Combat maneuvers
+
+The roller's Actions popup (see [the roller notes](dice-and-rolling.md#the-actions-button))
+offers the combat maneuvers and actions out of `actions.json`'s `combat` block. The
+plan they are built to, phase by phase, is `docs/plans/combat-maneuvers.md`.
+
+**Every tile has a road.** A host maps each action it runs to `None` or the reason it
+can't run now (`combat_menu`'s *offered*); one it never mentions is greyed `NOT_BUILT`,
+which is now only for a mod's action the app has no road for.
+`test_every_tile_a_player_sees_has_a_road` and `test_every_tile_the_gm_sees_has_a_road`
+fail if a built-in tile falls back to it, and check every greyed tile says why. Where
+each kind is documented: the attack maneuvers below; the self actions, Block and the
+shared runner in [the roller notes](dice-and-rolling.md#the-self-actions-aim-block-charge-defend-recover-drop-prone-stand-finishing-catch);
+the targeted actions in *Aid, Feint and Trick* and *Grab, Trip, Disarm, Smash and
+Escape*; the GM's Team attack tile in *A call to roll*; the temporary conditions they
+leave in [the conditions notes](conditions-and-damage.md).
+
+**The attack maneuvers** (PDF p200) are `core/rules/maneuvers.py`, read generically off
+each record's `bonus` / `penalty` (`attack_check`, `effect_rank`, `defense` — the
+`MANEUVER_*` names) and `lasting`:
+
+- **The caps** are `combat.limits`: X at most `maxShift` (5), the penalised value never
+  below `floor` (0), the bonused one never more than doubled (`doubleCap`). The values
+  are `maneuver_values`: the attack line's modifier (only when it *is* an attack check —
+  its `marks` carry `trait_keys.attack_check`; an effect check takes no attack
+  maneuver), the **lowest** `effect_rank` of the saves it provokes (a Linked attack
+  moves all of them), and the actor's Defense in play. A save whose rank is unknown
+  (Mind Reading's opposed one, no DC) offers no effect rank.
+- **Combined**: `maneuver_limit(…, others)` adds the other lines' shifts before reading
+  the caps, so two that raise the attack check share the room to double it, and two
+  that oppose (Accurate and Power) give each other room. Several lines at once is
+  allowed (§2 of the plan).
+- **Fixed lines first**: a self action's line with an `attackModifier` (Charge's −2,
+  any of its ways) is in the value the caps start from — `maneuver_values(…, lines)`
+  adds it, and the reason names it ("Your attack bonus is +0 with Charge: it cannot be
+  doubled"). A +2 attack charged is +0, so All-Out cannot raise it, and Power has
+  nothing to spend. A Slam's rank is not counted: it reads the actor's speed and the
+  rank the maneuvers leave, so it is no fixed shift.
+- **The shift** (`apply_maneuvers`) moves the modifier and restates the label's bonus,
+  moves each ranked save's DC (and the number in its label), its ladder's `rank` (what
+  Impervious is measured against) and `dc_if_resisted`, and names the maneuvers in
+  brackets after the label. Defense is not on the attack: it lands as a condition.
+- **What stays** (`lasting_conditions`): All-Out's `all_out_attack` (Defense −X) and
+  Defensive's `defensive_attack` (Defense +X, attack checks −X), put on **temporary**
+  once the die has settled, hit or miss — never on a reroll, never on an abandoned
+  roll. Accurate and Power change only the attack being made.
+- **`RollSpec.effect_rank`** is local only (like `marks`): the DC and the ladder's rank
+  are what travel, and both are already shifted. No new wire key, so the maneuvers
+  needed nothing from the protocol.
+- **The GM's roller** takes them too, as the NPC each pick asks for (see [the roller
+  notes](dice-and-rolling.md#one-runner-for-both-rollers-uirollercombat_runnerpy)), and
+  grants Surprise Attack. The NPC-group Team attack window rolls **without** maneuvers
+  (its Adjust is the bonus/penalty); a team attack that takes them is a different card —
+  a call to roll anyone answers with their own roller, the GM resolving (see *A call to
+  roll*, under Team attack).
+
+## Aid, Feint and Trick
+
+The targeted combat actions (PDF p200, p202, p204–205), phase 8 of the combat maneuvers
+plan. Each is one check by the actor, read off its `actions.json` record's `targeted`
+block (`core/rules/targeted.py`):
+
+- **Aid** — an attack check (one of the actor's, off the attack picker) against DC 10,
+  judged as an attack is (`judge_attack`, so a natural 20 adds a degree). One degree
+  gives the **ally** Aided Attack or Aided Defense +2 **against the opponent**, three
+  +5 — Attack or Defense is the tile's option.
+- **Feint** — an attack check (the picker again; −5 as a simple action, an option),
+  opposed by the target's best of Close Combat, Ranged Combat, Deception and Insight
+  (the user's call: an attack does not record close or ranged, so both combat skills
+  count). A win leaves the target **Feinted** against the feinter.
+- **Trick** — Deception, opposed by the target's Deception or Insight. A win leaves the
+  target **Tricked** (narrative: heedless of the risk of acting against the trickster);
+  losing by two or more degrees gives the target **Trick Advantage** (+5) against the
+  trickster.
+
+What they leave are the **opposing** conditions (see [the conditions
+notes](conditions-and-damage.md)): counted and spent by the next aimed attack between the
+two they name (see *Aimed attacks*), never by "Clear temporary" (decision 17).
+
+- **The data.** `targeted`: `check` (`"attack"`, or `{kind, trait}`), `dc` or `resist`
+  (the target's candidates, a `KIND_BEST_OF` key), `ally`. `wins` / `losses` (on the
+  action or an option, merged as an option's fields are) are ladders of `{degrees,
+  applies}`: the deepest rung the actor's degrees of success (or of failure) reach lands.
+  Each `applies` entry names `on` (`target` / `ally`) and `against` (`actor` /
+  `target`), whose name becomes the parameter (`concrete_changes`). In an opposed check
+  the actor's degree is the target's mirrored (`actor_degree`: each degree the target
+  failed by is one the actor won by).
+- **The check** (`targeted_check_spec`) is the attack's line with what it would force
+  taken out — no save, no ladder — and **no `marks`**, so the attack maneuvers neither
+  ride on it nor are spent by it (a line on the lane greys while it is on the chip).
+- **A player** picks the tile (greyed off the air, `NEEDS_A_TABLE`; with nobody on the
+  Scene, `NO_ONE_TO_TARGET`; Aid without two, `NO_ALLY_AND_OPPONENT`), the creature
+  (Aid: "Aid Bo", then "… against Thug"), the option and the attack, and
+  `DiceSection.start_targeted` declares it (`KIND_TARGETED`, a `TargetedDeclaration` —
+  in `ui/attack_targets.py`, the half every seat shares) from the roll itself
+  (`before=`), as an aimed attack does. The check's spec carries the action id, the
+  title "Feint: Ana → Thug" and the actor as its row.
+- **The GM** (`ui/targeted_gm.py`, `TargetedController`) gets an `ActionCard` with
+  **Accept / Decline**. Accept judges a fixed DC at once, or has the target resist the
+  check's total (`opposed_dc`, a minion's 20 adding nothing): an NPC's line rolled by
+  the server at the GM roller's adjustment, a player asked (`targeted_resist_spec`, their
+  own sheet picks the best candidate). What lands goes on through `combat_land`, and a
+  player bearer is told. The GM's own tile (`GMCombatMixin._gm_targeted`) asks which NPC,
+  whom, which way and which attack, and `act_own` rolls the check as that NPC and
+  resolves it with no card.
+- One table per action in the history: the actor's check and the target's resistance
+  are its two rows.
+
+## Grab, Trip, Disarm, Smash and Escape
+
+The rest of the targeted actions (PDF p202–205), phase 9 of the combat maneuvers plan,
+on the same road as Aid, Feint and Trick: declared by a player (or the GM's NPC off the
+tile), accepted on a card, resolved by `TargetedController`. What is new is all in the
+`targeted` block, read generically:
+
+- **`check`** may be a list — the actor rolls the best on their own sheet (Escape:
+  Strength or Sleight of Hand) — and a candidate may be `attack` (the attack picked) or
+  `damage` (its Damage rank, `attack_damage_rank`). `uses_attack` is whether the picker
+  asks.
+- **`dc`** may be `"defense"` (`vs_defense`: Grab, Trip, Disarm, Smash) — judged exactly
+  as an aimed attack (`_judge_hit`): `defense_against` with the opposing conditions
+  between the two counted and spent (a feint makes a grab easier, and is used up), a
+  minion target hit on the routine result. A miss ends it. Or `{base, kind, trait}`
+  (`dc_from`: Escape's 10 + the grabber's Strength, `targeted_dc_from`), read off the
+  target's sheet when the GM accepts; a player target whose sheet has not arrived is
+  "accept again", as an aimed attack is.
+- **`opposed`** `{check, resist}` is a second stage after a hit (Grab: Strength against
+  Strength or Dodge; Trip: close attack bonus or Strength against the same; Disarm: the
+  attack's Damage rank against Strength). The actor's half (`targeted_opposed_spec`) is
+  worked out **on the actor's own sheet** and carried in the declaration
+  (`TargetedDeclaration.opposed`), because the GM's app cannot see a player's Damage rank
+  (`effect_rank` is local). The GM's app then rolls it — a lead-only server group for an
+  NPC, an ask for a player — and the target resists its total (`_resist`, shared with
+  Feint and Trick; `targeted_resist_spec` takes the second stage's candidates when there
+  is one). A Disarm with an attack that deals no Damage is refused at the tile
+  (`NO_OPPOSED_CHECK`).
+- **The outcome** may land on the actor too (`on: "actor"`, `TARGETED_ON_ACTOR`): Grab's
+  **Holding** names the target (see [the conditions notes](conditions-and-damage.md)).
+  A rung may carry `removes` (Escape: Restrained and Bound off the actor, Holding naming
+  the actor off the grabber) and `text` — what the app does not track, said in the
+  history with `{actor}` / `{target}` filled in (Disarm's dropped item, Smash's Damage on
+  the object, Trip's extra distance, Escape's move). `targeted_outcome_text` names a
+  removal only when the bearer bore it.
+- **Smash's** two options are its two penalties (−2 worn or carried, −5 hand-held).
+
+The history table: the actor's row holds the attack and the opposed check, the target's
+row its resistance. `test_a_hosted_grab_runs_both_stages_through_the_server` runs both
+stages through a real hosted session.
+
 ## Not done yet
 
 These are in [the debts](debts.md):
 
-- End turn's other checks (Affliction overcome, Suffocation), knowing *why* a Dazed or
-  Stunned is on (only a damage-caused one is rolled off with Stamina), and a memory of
-  impressions that outlives the GM's app;
+- End turn's other checks (Suffocation), the clock a third-degree or Prolonged
+  Affliction waits on, Increasing Difficulty's cap, and a maintained Affliction
+  re-subjecting a target that has shaken it off;
 - the area pieces left out: a Hero Point inside the table, and Nullify and Move Object
-  areas.
+  areas;
+- the targeted actions off the air, and the opposing conditions in anything but an
+  aimed attack or a targeted action's attack (an unaimed roll, an area's primary, a team
+  attack);
+- the grab rules past the first hold (improving one, size, carrying, squeezing,
+  throwing), the Improved Grab / Hold / Trip / Disarm / Smash advantages, and a block
+  the GM's judge makes by itself;
+- the combat maneuvers' leftovers: no turn clock (temporaries come off by hand), a prone
+  target's ±5 counted only where the opposing conditions are, Recover's once per scene
+  and Aim's lapse untracked.
 
 Counting earlier Impress attempts automatically was dropped: the GM sets the slider.

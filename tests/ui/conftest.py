@@ -15,10 +15,26 @@ import pytest
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtWidgets import QApplication, QToolTip
 
-from mm_companion.ui import theme
+from mm_companion.ui import gc_guard, theme
 from mm_companion.ui.compact import CompactController
 from mm_companion.ui.sections.equipment import EquipmentSection
 from mm_companion.ui.sections.powers import PowersSection
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _collect_on_the_gui_thread(qapp):
+    """Keep Python's cycle collector off the session tests' socket threads, as the app does.
+
+    Left automatic, it runs on whichever thread is allocating — in a session test
+    that is often the server's or the client's — and a Qt object Python owns that
+    sits in a cycle is then destroyed there. Its timers stay registered against
+    freed memory and the next ``processEvents`` crashes the whole run: one CI job in
+    two died that way for weeks (docs/notes/testing.md). ``_close_top_level_widgets``
+    collects on the GUI thread after every test instead.
+    """
+    gc_guard.install(qapp)
+    yield
+    gc_guard.uninstall()
 
 
 @pytest.fixture(autouse=True)
@@ -103,6 +119,23 @@ def _no_spare_npc_sheets():
 
 
 @pytest.fixture(autouse=True)
+def _no_loading_screens():
+    """Keep a slow build from putting a loading screen up behind a test's back.
+
+    Whether one goes up depends on how long the build took (``SHOW_AFTER_S``), which
+    is the machine's speed, not the code — and a screen that did is a child widget,
+    then an unparented one awaiting deletion, that a test counting widgets would
+    trip on. ``tests/ui/widgets/test_loading.py`` turns it back on, with no delay.
+    """
+    from mm_companion.ui import loading
+
+    original = loading.SHOW_AFTER_S
+    loading.SHOW_AFTER_S = None
+    yield
+    loading.SHOW_AFTER_S = original
+
+
+@pytest.fixture(autouse=True)
 def _peer_rolls_land_at_once():
     """Show another seat's roll the moment it arrives, as it was before the hold.
 
@@ -165,3 +198,7 @@ def _close_top_level_widgets():
     # this the widgets above are only *scheduled* to die and in fact pile up all
     # session, which is the very thing this fixture exists to prevent.
     app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    # Whatever the test left in reference cycles, collected here on the GUI thread
+    # (see _collect_on_the_gui_thread) — most tests never turn the event loop the
+    # guard's timer runs on.
+    gc_guard.collect_if_due()

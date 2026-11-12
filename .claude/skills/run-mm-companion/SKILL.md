@@ -64,6 +64,7 @@ python .claude/skills/run-mm-companion/driver.py area-gm      # the GM's area-at
 python .claude/skills/run-mm-companion/driver.py impress-dialog  # a player's Impress (also: impress-dialog-offline)
 python .claude/skills/run-mm-companion/driver.py area-dialog  # a player's area attack (also: area-dialog-offline)
 python .claude/skills/run-mm-companion/driver.py roll-prompt  # the roll the GM asks a player for
+python .claude/skills/run-mm-companion/driver.py roller-lane  # the roller: Modifier/DC rows with Actions and Take 10, an attack loaded, a line on the action lane
 ```
 
 `settings-demo` goes further: it duplicates the active preset, borrows Slate

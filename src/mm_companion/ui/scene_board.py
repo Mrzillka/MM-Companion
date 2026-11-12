@@ -67,6 +67,8 @@ class SceneBoard(QWidget):
     removeConditionRequested = Signal(str, str, object)
     #: ``(ref, condition_id, parameter)`` — roll its recovery check. GM only.
     recoveryRequested = Signal(str, str, object)
+    #: The ref — take every temporary condition off this creature. GM only.
+    clearTemporaryRequested = Signal(str)
 
     def __init__(
         self,
@@ -281,6 +283,7 @@ class SceneBoard(QWidget):
             card.actionRequested.connect(self.actionRequested)
             card.removeConditionRequested.connect(self.removeConditionRequested)
             card.recoveryRequested.connect(self.recoveryRequested)
+            card.clearTemporaryRequested.connect(self.clearTemporaryRequested)
         return card
 
     def set_locked(self, locked: bool) -> None:  # noqa: ARG002 - part of the Block protocol

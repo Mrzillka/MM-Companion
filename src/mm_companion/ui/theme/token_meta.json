@@ -38,6 +38,7 @@
     "column": "Column minimums",
     "canvas": "Canvas",
     "die": "The die",
+    "action-grid": "Actions popup",
     "compact": "Compact mode",
     "gm": "GM cards",
     "opacity": "Opacity",
@@ -129,6 +130,8 @@
     "splash.background": {"label": "Background", "hint": "The startup splash screen."},
     "splash.text": {"label": "Text", "hint": "On the splash screen."},
     "dice.face": {"label": "Die face", "hint": "The rolled number in the dice roller."},
+    "dice.critical": {"label": "Natural 20", "hint": "A natural 20: the glow and burst round the die, its numeral, and the edge and badge of its history card. A #rrggbb: the glow is a wash of it.", "washed": true},
+    "dice.fumble": {"label": "Natural 1", "hint": "A natural 1: the glow and burst round the die, its numeral, and the edge and badge of its history card. A #rrggbb: the glow is a wash of it.", "washed": true},
     "paper.background": {"label": "Paper", "hint": "The page of a printed or exported sheet, whatever the theme. A #rrggbb."},
     "paper.ink": {"label": "Ink", "hint": "Text on a printed sheet. A #rrggbb."},
     "paper.muted": {"label": "Muted ink", "hint": "Secondary text on a printed sheet, and its page footer. A #rrggbb."},
@@ -147,6 +150,26 @@
       "hint": "The standing left edge that marks a power card as clickable."
     },
     "space.xs": {"label": "Extra small"},
+    "mark.size": {
+      "label": "Temporary-condition dot",
+      "hint": "The dot beside a stat a temporary condition is moving, in pixels. Zero hides it."
+    },
+    "action-grid.tile": {
+      "label": "Actions popup tile",
+      "hint": "The side of each square tile in the roller's Actions popup, in pixels."
+    },
+    "action-grid.icon": {
+      "label": "Actions popup icon",
+      "hint": "The size of the drawing on each Actions popup tile, in pixels."
+    },
+    "action-grid.gap": {
+      "label": "Actions popup gap",
+      "hint": "The space between the Actions popup's tiles, in pixels."
+    },
+    "action-grid.columns": {
+      "label": "Actions popup columns",
+      "hint": "How many tiles a row of the Actions popup holds, when the screen has room."
+    },
     "space.sm": {"label": "Small"},
     "space.md": {"label": "Medium"},
     "space.lg": {"label": "Large"},
@@ -182,8 +205,15 @@
       "label": "Die padding",
       "hint": "Room around the drawing inside its button, in pixels."
     },
+    "die.halo": {
+      "label": "Die halo",
+      "hint": "How far the glow round the die spreads, in pixels."
+    },
     "compact.width": {"label": "Window width", "hint": "What the mini roller opens at, in pixels."},
     "toast.width": {"label": "Notification width", "hint": "A roll or session notice card, in pixels."},
+    "loading.width": {"label": "Loading bar width", "hint": "The bar shown while a sheet or the GM window builds, in pixels."},
+    "splash.width": {"label": "Splash width", "hint": "The card shown while the app starts, in pixels."},
+    "splash.height": {"label": "Splash height", "hint": "In pixels."},
     "compact.height": {"label": "Window height", "hint": "In pixels."},
     "compact.min-width": {
       "label": "Minimum width",
@@ -221,6 +251,7 @@
     },
     "column.skill.spin": {"label": "Skill rank spin box"},
     "column.skill.mod": {"label": "Skill modifier"},
+    "column.quick-roll-max": {"label": "Quick-roll pill (widest)", "hint": "Past this a pill's caption is cut short; the whole name is on hover."},
     "column.advantage.name-max": {
         "label": "Advantage name (cap)",
         "hint": "Widest the Advantage column grows before a long name wraps."
@@ -259,6 +290,7 @@
     "size.card-name": {"label": "Power name"},
     "size.pin-value": {"label": "GM card: pinned number", "hint": "The number on each pinned tile of an NPC card."},
     "size.terms": {"label": "Game terms", "hint": "The small print under a power's effects."},
+    "size.action-tile": {"label": "Actions popup captions", "hint": "The name under each tile's drawing in the roller's Actions popup."},
     "size.simple-name": {"label": "Simple sheet: hero name", "hint": "The character's name across the top of the simple sheet."},
     "size.simple-value": {"label": "Simple sheet: key values", "hint": "The numbers a player reads mid-fight — ability and defence totals, skill bonuses, a power's rank and DC."},
     "size.simple-label": {"label": "Simple sheet: names", "hint": "What a value belongs to — a skill, an advantage, a power."},
@@ -280,6 +312,7 @@
     "size.dice-face": {"label": "Die face"},
     "size.dice-face.compact": {"label": "Die face (compact mode)", "hint": "On the smaller die."},
     "size.roll-readout": {"label": "Roll readout"},
+    "size.loading": {"label": "Loading screen"},
     "size.compact-button": {"label": "Shrink button glyph", "hint": "The arrow inside the round button over the roller. Sized against compact.button, the circle it has to fill."},
     "scale.inactive": {
       "label": "Switched-off card",

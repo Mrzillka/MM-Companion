@@ -34,6 +34,7 @@ from .game_data import (
 from .system_records import (
     DEFAULT_TRAIT_RANGES,
     QUICK_NPC_STATS,
+    AttackRanges,
     Costs,
     DamageDefenses,
     DefeatSystem,
@@ -788,6 +789,7 @@ def _parse_system(raw: dict) -> SystemRules:
         toughness=tk_raw.get("toughness", defaults.trait_keys.toughness),
         fortitude=tk_raw.get("fortitude", defaults.trait_keys.fortitude),
         will=tk_raw.get("will", defaults.trait_keys.will),
+        attack_check=tk_raw.get("attack_check", defaults.trait_keys.attack_check),
     )
     paired_caps = tuple(
         PairedCap(cap=p["cap"], traits=tuple(p["traits"]), label=p["label"])
@@ -803,6 +805,16 @@ def _parse_system(raw: dict) -> SystemRules:
         critical_miss_resistance_bonus=int(
             sys.get("criticalMissResistanceBonus", defaults.critical_miss_resistance_bonus)
         ),
+        circumstance_modifiers=tuple(
+            sorted(
+                {
+                    abs(int(step))
+                    for step in sys.get("circumstanceModifiers", defaults.circumstance_modifiers)
+                    if int(step)
+                }
+            )
+        ),
+        dc_start=int(sys.get("dcStart", defaults.dc_start)),
         trait_keys=trait_keys,
         paired_caps=paired_caps,
         unscoped_scope_values=tuple(
@@ -828,6 +840,7 @@ def _parse_system(raw: dict) -> SystemRules:
         quick_npc=_parse_quick_npc(sys.get("quick_npc"), defaults.quick_npc),
         minions=_parse_minions(sys.get("minions"), defaults.minions),
         defeat=_parse_defeat(sys.get("defeat"), defaults.defeat),
+        attack_ranges=_parse_attack_ranges(sys.get("attackRanges"), defaults.attack_ranges),
         team_attack=_parse_team_attack(sys.get("teamAttack"), defaults.team_attack),
         group_checks=_parse_group_checks(
             sys.get("teamCheck"), sys.get("groupCheck"), defaults.group_checks
@@ -881,6 +894,19 @@ def _parse_defeat(raw: object, default: DefeatSystem) -> DefeatSystem:
         return tuple(str(v) for v in value if isinstance(v, str) and v)
 
     return DefeatSystem(down=ids("down", default.down), dead=ids("dead", default.dead))
+
+
+def _parse_attack_ranges(raw: object, default: AttackRanges) -> AttackRanges:
+    """Parse ``system.json``'s ``attackRanges`` block; a missing key keeps *default*'s."""
+
+    if not isinstance(raw, dict):
+        return default
+
+    def value(key: str, fallback: str) -> str:
+        found = raw.get(key)
+        return found if isinstance(found, str) and found else fallback
+
+    return AttackRanges(close=value("close", default.close), ranged=value("ranged", default.ranged))
 
 
 def _parse_minions(raw: object, default: MinionSystem) -> MinionSystem:

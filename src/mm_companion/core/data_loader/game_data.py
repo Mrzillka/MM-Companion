@@ -236,6 +236,313 @@ class AreaRules:
         return bool(self.modifiers and self.dodge)
 
 
+#: The kinds a combat action comes in (``actions.json``'s ``combat.actions``). Kept
+#: as strings so a mod's unknown kind still loads (and is simply not run).
+COMBAT_KIND_MANEUVER = "maneuver"
+COMBAT_KIND_SELF = "self"
+COMBAT_KIND_TARGETED = "targeted"
+COMBAT_KIND_LOADER = "loader"
+COMBAT_KIND_ATTACK = "attack"
+COMBAT_KIND_BUILTIN = "builtin"
+
+#: What a maneuver's ``bonus`` and ``penalty`` may name: the loaded attack's attack
+#: check, the rank of the save it forces, or the actor's Defense.
+MANEUVER_ATTACK_CHECK = "attack_check"
+MANEUVER_EFFECT_RANK = "effect_rank"
+MANEUVER_DEFENSE = "defense"
+
+
+#: What a combat action's ``check`` may roll: an ability, a skill row, a resistance, or
+#: the actor's speed rank (Stand's "speed rank check"). A targeted action's check may
+#: also be the **attack** picked (its attack check: Feint, Grab) or that attack's
+#: **damage** rank (Disarm's opposed check).
+COMBAT_CHECK_ABILITY = "ability"
+COMBAT_CHECK_SKILL = "skill"
+COMBAT_CHECK_RESISTANCE = "resistance"
+COMBAT_CHECK_SPEED = "speed"
+COMBAT_CHECK_ATTACK = "attack"
+COMBAT_CHECK_DAMAGE = "damage"
+
+
+#: Who a targeted action's outcome lands on (:attr:`ConditionChange.on`), and whose
+#: name it is applied against (:attr:`ConditionChange.against`).
+TARGETED_ON_TARGET = "target"
+TARGETED_ON_ALLY = "ally"
+TARGETED_ON_ACTOR = "actor"
+TARGETED_AGAINST_ACTOR = "actor"
+TARGETED_AGAINST_TARGET = "target"
+
+
+@dataclass(frozen=True)
+class ConditionChange:
+    """One condition a combat action puts on the actor, or takes off (``applies`` /
+    ``removes``). *temporary* ``None`` leaves it to the condition's own record.
+
+    A targeted action's outcome also says who it lands :attr:`on` (``target`` or
+    ``ally``) and whom it is :attr:`against` (``actor`` or ``target``: that one's name
+    becomes the :attr:`parameter`, the creature an ``opposing`` condition is about).
+    """
+
+    condition: str
+    amount: int | None = None
+    temporary: bool | None = None
+    remove: bool = False
+    parameter: str | None = None
+    on: str = ""
+    against: str = ""
+
+
+@dataclass(frozen=True)
+class DegreeOutcome:
+    """One rung of a targeted action's ``wins`` or ``losses`` ladder: what lands once the
+    actor's degrees of success (or of failure) reach :attr:`degrees`."""
+
+    degrees: int
+    applies: tuple[ConditionChange, ...] = ()
+    #: What the rung does that the app does not track, said in the history ("drops
+    #: what they were holding").
+    text: str = ""
+
+
+@dataclass(frozen=True)
+class CombatCheck:
+    """A check a combat action rolls: :attr:`kind` (``COMBAT_CHECK_*``) of :attr:`trait`
+    (an ability key, a skill row id or a resistance key; none for speed, the attack or
+    its damage) against :attr:`dc` — or, as a targeted action's derived DC, :attr:`dc`
+    plus the target's :attr:`trait` (Escape: 10 + the grabber's Strength)."""
+
+    kind: str
+    trait: str = ""
+    dc: int | None = None
+
+
+@dataclass(frozen=True)
+class OpposedStage:
+    """A targeted action's second stage, once its attack has hit (Grab, Trip, Disarm):
+    the actor's best of :attr:`checks` opposed by the target's best of :attr:`resist`
+    (``(kind, trait id)`` pairs)."""
+
+    checks: tuple[CombatCheck, ...] = ()
+    resist: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True)
+class TargetedRules:
+    """How a targeted action is rolled. The actor rolls the best of :attr:`checks` (the
+    attack picked, an ability, a skill …) against one of:
+
+    * a fixed :attr:`dc` (Aid's 10);
+    * the target's Defense (:attr:`vs_defense`: Grab, Trip, Disarm, Smash);
+    * :attr:`dc_from` — a base plus one of the target's traits (Escape);
+    * the target's best of :attr:`resist` (``(kind, trait id)`` pairs), opposing the
+      check's total (Feint, Trick).
+
+    An :attr:`opposed` stage follows a hit (Grab's Strength against Strength or Dodge).
+    With :attr:`ally` the outcome lands on an ally, the target being the opponent (Aid).
+    """
+
+    checks: tuple[CombatCheck, ...] = ()
+    dc: int | None = None
+    vs_defense: bool = False
+    dc_from: CombatCheck | None = None
+    resist: tuple[tuple[str, str], ...] = ()
+    opposed: OpposedStage | None = None
+    ally: bool = False
+
+    @property
+    def uses_attack(self) -> bool:
+        """Whether the action rolls one of the actor's attacks (its check, or its damage
+        rank), so the attack picker asks for one."""
+        stages = self.checks + (self.opposed.checks if self.opposed is not None else ())
+        return any(c.kind in (COMBAT_CHECK_ATTACK, COMBAT_CHECK_DAMAGE) for c in stages)
+
+
+@dataclass(frozen=True)
+class ReactionRule:
+    """A self action taken again while its :attr:`condition` is on (Block): instead of
+    readying, it loads a check made with the attack picked — :attr:`step` more for each
+    one already made this round (the condition's count past the first)."""
+
+    condition: str
+    step: int = 0
+    line: str = ""
+
+
+@dataclass(frozen=True)
+class SlamRules:
+    """A Slam Attack's numbers (Charge, p202): the Damage rank is the higher of the
+    attack's rank + :attr:`rank_bonus` and the actor's speed rank, + :attr:`full_speed_bonus`
+    after a full-speed move. The slammer resists the same rank with
+    :attr:`self_resistance`, halved first when :attr:`halve_self` (Resistance, p130)."""
+
+    rank_bonus: int = 1
+    full_speed_bonus: int = 1
+    self_resistance: str = ""
+    halve_self: bool = True
+
+
+@dataclass(frozen=True)
+class KillRule:
+    """Intent to kill (Finishing Attack, p201): :attr:`degrees` or more degrees of
+    failure on the damage save land :attr:`condition` instead."""
+
+    degrees: int = 3
+    condition: str = ""
+
+
+@dataclass(frozen=True)
+class RecoveryRule:
+    """What Recover may shed (p204): a recovery check against the most severe of
+    :attr:`conditions` on the actor (most severe first), or (:attr:`fatigue`) one step
+    down the fatigue ladder."""
+
+    conditions: tuple[str, ...] = ()
+    fatigue: bool = False
+
+
+@dataclass(frozen=True)
+class CombatEffect:
+    """What a self action (or one of its options) does — every field optional.
+
+    A :attr:`line` caption puts it on the roller's lane, riding on the next roll: an
+    :attr:`attack_modifier` (Charge's −2), :attr:`roll_twice` (Aim), a fixed :attr:`dc`
+    and :attr:`critical_hit` (Finishing), :attr:`slam` (with :attr:`full_speed`) and
+    :attr:`kill`. Without one it happens at once: :attr:`applies` / :attr:`removes`
+    conditions, or loads :attr:`check`, whose success sheds :attr:`clears`. :attr:`tone`
+    (``benefit`` / ``hindrance``) colours the line.
+    """
+
+    line: str = ""
+    tone: str = ""
+    attack_modifier: int = 0
+    roll_twice: bool = False
+    dc: int | None = None
+    critical_hit: bool = False
+    slam: bool = False
+    full_speed: bool = False
+    kill: KillRule | None = None
+    applies: tuple[ConditionChange, ...] = ()
+    check: CombatCheck | None = None
+    clears: str = ""
+    #: A targeted action's ladders: what lands as the actor's degrees of success (or of
+    #: failure) reach each rung.
+    wins: tuple[DegreeOutcome, ...] = ()
+    losses: tuple[DegreeOutcome, ...] = ()
+
+
+@dataclass(frozen=True)
+class CombatOption:
+    """One way to take a combat action (Charge or Slam; Stand by a check or slowly),
+    offered on a menu when the tile is picked. Its :attr:`effect` overrides the
+    action's own field by field (see :meth:`CombatAction.effect_for`)."""
+
+    id: str
+    name: str
+    tooltip: str = ""
+    effect: CombatEffect = field(default_factory=CombatEffect)
+
+
+@dataclass(frozen=True)
+class CombatAction:
+    """One combat action the roller's Actions popup offers (``combat.actions``).
+
+    :attr:`caption` is the short name its tile wears (the :attr:`name` when the record
+    gives none) and :attr:`icon` the key of a drawing the app ships — the popup draws
+    a generic one for a key it does not know. A ``maneuver`` shifts up to X from
+    :attr:`penalty` to :attr:`bonus` (``attack_check``, ``effect_rank``, ``defense``)
+    and leaves :attr:`lasting` (a condition id taking X as its amount) on the actor.
+
+    A ``self`` or ``loader`` action does its :attr:`effect` (or one of its
+    :attr:`options`'). :attr:`requires` names conditions the actor must have one of
+    (Stand: Prone; Escape: Restrained or Bound), :attr:`refused_by` one it must not
+    (Drop Prone). :attr:`gm_runs` is why a player's tile is greyed when the GM runs the
+    action (Surprise Attack). :attr:`reaction` is what taking it again does (Block).
+    """
+
+    id: str
+    name: str
+    caption: str = ""
+    icon: str = ""
+    tooltip: str = ""
+    kind: str = COMBAT_KIND_SELF
+    needs_attack: bool = False
+    gm_only: bool = False
+    bonus: str = ""
+    penalty: str = ""
+    lasting: str = ""
+    effect: CombatEffect = field(default_factory=CombatEffect)
+    options: tuple[CombatOption, ...] = ()
+    requires: tuple[str, ...] = ()
+    refused_by: str = ""
+    gm_runs: str = ""
+    slam: SlamRules | None = None
+    recovery: RecoveryRule | None = None
+    #: How a targeted action is rolled (Aid, Feint, Grab …); ``None`` for every other.
+    targeted: TargetedRules | None = None
+    reaction: ReactionRule | None = None
+
+    @property
+    def tile_caption(self) -> str:
+        """What the action's tile is captioned: its short caption, else its name."""
+        return self.caption or self.name
+
+    def option(self, option_id: str) -> CombatOption | None:
+        return next((o for o in self.options if o.id == option_id), None)
+
+    def effect_for(self, option_id: str = "") -> CombatEffect:
+        """The action's :attr:`effect` with *option_id*'s overriding it field by field
+        (a field the option leaves at its default keeps the action's)."""
+        option = self.option(option_id) if option_id else None
+        if option is None:
+            return self.effect
+        base, over, blank = self.effect, option.effect, CombatEffect()
+        merged = {
+            name: (
+                getattr(over, name)
+                if getattr(over, name) != getattr(blank, name)
+                else getattr(base, name)
+            )
+            for name in CombatEffect.__dataclass_fields__
+        }
+        return CombatEffect(**merged)
+
+
+@dataclass(frozen=True)
+class CombatMenuSection:
+    """One titled section of the Actions popup: action ids, in order."""
+
+    id: str
+    title: str
+    items: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ManeuverLimits:
+    """The attack maneuvers' caps: a shift of at most :attr:`max_shift`, never taking
+    the penalised value below :attr:`floor`, and (with :attr:`double_cap`) never more
+    than doubling the bonused one."""
+
+    max_shift: int = 5
+    floor: int = 0
+    double_cap: bool = True
+
+
+@dataclass(frozen=True)
+class CombatRules:
+    """Combat maneuvers and actions, from ``actions.json``'s ``combat`` block.
+
+    Empty when a ruleset ships none, which leaves the Actions popup with only what
+    its host runs itself.
+    """
+
+    menu: tuple[CombatMenuSection, ...] = ()
+    actions: tuple[CombatAction, ...] = ()
+    limits: ManeuverLimits = field(default_factory=ManeuverLimits)
+
+    def action(self, action_id: str) -> CombatAction | None:
+        return next((a for a in self.actions if a.id == action_id), None)
+
+
 @dataclass(frozen=True)
 class GameData:
     """The full parsed game-data content, aggregated across the data files.
@@ -318,6 +625,8 @@ class GameData:
     #: The Impress action, from ``actions.json``.
     impress: ImpressRules = field(default_factory=ImpressRules)
     area: AreaRules = field(default_factory=AreaRules)
+    #: Combat maneuvers and actions — the roller's Actions popup — from ``actions.json``.
+    combat: CombatRules = field(default_factory=CombatRules)
 
     def _catalog(self, key: str, build: Callable[[], dict]) -> dict:
         """Memoize one of the merged ``id ->`` lookups below, per :class:`GameData`.

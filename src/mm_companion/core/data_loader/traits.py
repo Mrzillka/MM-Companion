@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ..components import TONE_HINDRANCE
+
 # ===========================================================================
 # Records — the typed dataclasses each data file parses into. Grouped below by
 # the content they model; the parsing functions that build them follow further
@@ -321,6 +323,47 @@ class RecoveryCheck:
 
 
 @dataclass(frozen=True)
+class AmountMod:
+    """One trait a condition moves by its applied *amount* (All-Out Attack's −X Defense).
+
+    ``trait`` is a trait key — a resistance's (``DEF``) or a roll's
+    (``system.trait_keys.attack_check`` for attack checks); ``sign`` is ``+1`` or ``−1``,
+    multiplied by the applied instance's amount. ``parameter``, when set, limits the mod to
+    an instance applied with that parameter.
+    """
+
+    trait: str
+    sign: int = 1
+    parameter: str = ""
+
+
+#: What spends an ``opposing`` condition (:attr:`OpposingRule.spent_by`): the bearer's
+#: next attack on the creature its parameter names, or that creature's next attack on
+#: the bearer.
+OPPOSING_ATTACKING = "attacking"
+OPPOSING_ATTACKED = "attacked"
+
+
+@dataclass(frozen=True)
+class OpposingRule:
+    """What a condition does only between its bearer and the creature its parameter
+    names — Aid's bonus, a Feint's Vulnerable, a Trick (decision 17 of the combat
+    maneuvers plan). Counted in one attack the GM's app judges between the two, and
+    spent by it (:attr:`spent_by`: :data:`OPPOSING_ATTACKING` / :data:`OPPOSING_ATTACKED`).
+
+    :attr:`attack` and :attr:`defense` are multiplied by the applied amount: the
+    bearer's attack check against that creature, the bearer's Defense against its
+    attack. :attr:`defense_as` judges the bearer's Defense against it as if under that
+    condition (a feint's ``vulnerable``).
+    """
+
+    attack: int = 0
+    defense: int = 0
+    defense_as: str = ""
+    spent_by: str = ""
+
+
+@dataclass(frozen=True)
 class RandomActionRow:
     """One row of a ``random_action`` table (Confused). Loaded now, roll layer later."""
 
@@ -373,6 +416,23 @@ class Condition:
     #: Disabled is a check penalty severe enough to count, Debilitated a real trait
     #: removal, so the data says so outright.
     trait_lost: bool = False
+    #: What the condition does to its bearer on balance — ``"benefit"`` or
+    #: ``"hindrance"`` (:data:`~mm_companion.core.components.TONES`) — and so the colour
+    #: its chip is drawn in. Hindrance unless the record says otherwise.
+    tone: str = TONE_HINDRANCE
+    #: The traits an applied instance moves by its ``amount`` (the maneuvers' ±X).
+    amount_mods: tuple[AmountMod, ...] = ()
+    #: The amount an instance gets when applied without one (Defending's +2).
+    default_amount: int | None = None
+    #: The largest amount the rules allow (a maneuver's 5) — what the "+" menu offers
+    #: up to when it asks for one. ``None`` leaves it open.
+    max_amount: int | None = None
+    #: Always applied as temporary — gone at the start of the bearer's next turn — from
+    #: wherever it is applied, the "+" menu included.
+    temporary: bool = False
+    #: What it does only between the bearer and the creature its parameter names, and
+    #: which judged attack spends it (Aid, Feint, Trick). ``None`` for every other.
+    opposing: OpposingRule | None = None
 
 
 @dataclass(frozen=True)

@@ -70,9 +70,11 @@ def can_recover(char: Character | None, game_data: GameData, applied: AppliedCon
 
     Only a directly applied condition (a bundled member leaves with its umbrella), only
     one whose record is a check, and only while nothing in its ``blockedBy`` list is on
-    the creature too.
+    the creature too. A condition an impression or an effect put on (one carrying a
+    :class:`~..character.ShakeOff`) is not one: the record's check is for the
+    damage-caused kind, and it comes off by resisting what put it there instead.
     """
-    if applied.provenance is not None:
+    if applied.provenance is not None or applied.shake_off is not None:
         return False
     check = recovery_check(game_data.condition_catalog().get(applied.condition_id))
     if check is None:
@@ -158,7 +160,9 @@ def recovery_request(game_data: GameData, applied: AppliedCondition) -> RollSpec
     """
     record = game_data.condition_catalog().get(applied.condition_id)
     check = recovery_check(record)
-    if check is None or applied.provenance is not None or check.trait is None:
+    if check is None or check.trait is None:
+        return None
+    if applied.provenance is not None or applied.shake_off is not None:
         return None
     trait = check.trait
     if any(a.key == trait for a in game_data.abilities):

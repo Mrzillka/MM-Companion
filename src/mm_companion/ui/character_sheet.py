@@ -30,10 +30,12 @@ from dataclasses import replace
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QScrollArea, QVBoxLayout, QWidget
 
+from mm_companion.core import diagnostics
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData, load_game_data
 from mm_companion.core.rules import power_points_spent, stable_build
 from mm_companion.ui import layout_tree as lt
+from mm_companion.ui import loading
 from mm_companion.ui.block_canvas import BlockCanvas
 from mm_companion.ui.block_frame import BlockFrame
 from mm_companion.ui.blocks import (
@@ -126,12 +128,17 @@ class CharacterSheet(QWidget):
         self._descriptor_by_key = {d.key: d for d in self._descriptors}
         panels = []
         sizes = {}
+        # A step per block, and the canvas that frames them weighs about half as
+        # much again — what a loading screen over this build moves by (ui/loading).
+        canvas_steps = max(1, len(self._descriptors) // 2)
+        loading.expect(len(self._descriptors) + canvas_steps)
         for descriptor in self._descriptors:
             section = descriptor.factory(self._data, self.character)
             setattr(self, descriptor.key, section)
             self._sections_by_key[descriptor.key] = section
             panels.append((descriptor.key, descriptor.title, section))
             sizes[descriptor.key] = descriptor.size
+            loading.step()
         self._canvas = BlockCanvas(
             panels,
             sizes,
@@ -139,6 +146,7 @@ class CharacterSheet(QWidget):
             default_pinned=self._without_excluded(default_pin_lines()),
             instance_factory=self._build_instance,
         )
+        loading.step(canvas_steps)
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
@@ -603,8 +611,11 @@ class CharacterSheet(QWidget):
         if locked == self._locked:
             return
         self._locked = locked
-        for key in self._canvas.block_keys():
+        keys = self._canvas.block_keys()
+        loading.expect(len(keys))
+        for key in keys:
             self._canvas.block_frame(key).set_locked(locked)
+            loading.step()
         self._update_min_width()
 
     # -- the simple sheet ----------------------------------------------------
@@ -624,6 +635,7 @@ class CharacterSheet(QWidget):
             self._simple.set_preset(self._simple_preset)
             self.layout().addWidget(self._simple)
             self._simple.hide()
+            self._simple.failed.connect(self._on_simple_failed)
         return self._simple
 
     @property
@@ -677,47 +689,101 @@ class CharacterSheet(QWidget):
         was on the way out. Neither direction writes the model or marks it edited.
         """
         simple = bool(simple)
+        if loading.fading(self):
+            # A second press while a switch is fading is refused, and the menu and
+            # the button put back in step with what is showing (the switch says so
+            # again once its work is done).
+            self.simpleChanged.emit(self.is_simple)
+            return
         if simple == self.is_simple:
             return
+        # A third of a second or more of rebuilding cards, so it goes behind a
+        # loading screen between two fades (ui/loading) — or into the screen already
+        # up, for a sheet that opens straight into the simple sheet. On screen the
+        # fade out runs first, so this returns before the switch is made.
+        text = "Opening the simple sheet…" if simple else "Opening the edit sheet…"
+        loading.fade_through(
+            self,
+            text,
+            lambda: self._switch_simple(simple),
+            # What is actually showing, not what was asked for: a switch that failed
+            # and fell back has to say so, or the menu's label goes on promising the
+            # view that is not there.
+            lambda: self.simpleChanged.emit(self.is_simple),
+        )
+
+    def _switch_simple(self, simple: bool) -> None:
         # Both halves of a switch redraw the card blocks — the lock and the simple
         # look each rebuild every card — so the blocks that can hold a rebuild do it
         # once, at the end, in the state the switch leaves them in.
-        with ExitStack() as holds:
-            for section in self._sections():
-                hold = getattr(section, "held_rebuild", None)
-                if callable(hold):
-                    holds.enter_context(hold())
-            if simple:
-                self._enter_simple()
-            else:
-                self._leave_simple()
-        self.simpleChanged.emit(simple)
+        try:
+            with ExitStack() as holds:
+                for section in self._sections():
+                    hold = getattr(section, "held_rebuild", None)
+                    if callable(hold):
+                        holds.enter_context(hold())
+                if simple:
+                    self._enter_simple()
+                else:
+                    self._leave_simple()
+        except Exception:  # noqa: BLE001 - a half-made switch is a blank window
+            direction = "to" if simple else "back from"
+            diagnostics.log_exception(f"Switching {direction} the simple sheet failed")
+            self._back_to_edit_page()
 
     def _enter_simple(self) -> None:
         view = self.simple_sheet
         self._locked_before_simple = self._locked
+        # A hand still on a divider or a title bar is about to lose the page it was
+        # dragging on; end the gesture now, while it can still be recorded.
+        self._canvas.end_gestures()
         # Only if it is not already: locking rebuilds the card trees, and a sheet a
         # player opens to play from is locked already.
         if not self._locked:
-            self.set_locked(True)
+            with loading.part(0.3):
+                self.set_locked(True)
         # The page is out of sight from here on, and may never have been laid out at
         # all (a sheet opened straight into this view): its layout is what the tree
         # says, not what its dividers read.
         self._canvas.set_sizes_held(True)
+        # Built before the edit page goes: if the build fails, the edit page is
+        # still what is on screen, rather than nothing. The rest of the bar after
+        # this is the card blocks' held rebuild, released by set_simple.
+        with loading.part(0.75):
+            view.activate()
         self._board.hide()
-        view.activate()
         view.show()
 
     def _leave_simple(self) -> None:
+        self._back_to_edit_page()
+
+    def _back_to_edit_page(self) -> None:
+        """Show the edit page, whatever state a switch left the two views in.
+
+        The way out of the simple sheet, and the way back from a switch that failed
+        half way in either direction. Every step is its own: the edit page has to
+        come back even if giving a section back or restoring the lock goes wrong,
+        because the alternative is a window with nothing in it.
+        """
         view = self._simple
-        view.deactivate()
-        view.hide()
+        if view is not None:
+            view.deactivate()  # never raises: see SimpleSheet.deactivate
+            view.hide()
         self._board.show()
         self._canvas.set_sizes_held(False)
         previous = self._locked_before_simple
         self._locked_before_simple = None
         if previous is not None and previous != self._locked:
-            self.set_locked(previous)
+            try:
+                with loading.part(0.6):
+                    self.set_locked(previous)
+            except Exception:  # noqa: BLE001 - see the docstring
+                diagnostics.log_exception("Restoring the lock after the simple sheet failed")
+
+    def _on_simple_failed(self) -> None:
+        """The simple page gave up during a rebuild: put the edit page back."""
+        self._back_to_edit_page()
+        self.simpleChanged.emit(False)
 
     def release_roller(self) -> tuple[QWidget, QWidget] | None:
         """Lend the dice roller out to a compact window, or ``None`` if there is none.
@@ -761,6 +827,13 @@ class CharacterSheet(QWidget):
             if callable(handler):
                 return handler()
         return None
+
+    def end_gestures(self) -> None:
+        """Stop any drag on the page — compact mode asks before it hides the sheet.
+
+        See :meth:`~mm_companion.ui.block_canvas.BlockCanvas.end_gestures`.
+        """
+        self._canvas.end_gestures()
 
     def suspend_windows(self, suspended: bool) -> None:
         """Take this sheet's floated block windows off the screen, or bring them back.

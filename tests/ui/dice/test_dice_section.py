@@ -182,16 +182,17 @@ def _strip_bars(sheet: CharacterSheet) -> tuple[bool, bool]:
     return (scroll.verticalScrollBar().isVisible(), scroll.horizontalScrollBar().isVisible())
 
 
-def test_loading_a_trait_takes_the_room_from_the_history_not_the_window(
+def test_growing_the_roller_takes_the_room_from_the_history_not_the_window(
     qapp: QApplication,
 ) -> None:
     """The regression: clicking a stat row grew the block past the window.
 
-    Showing the spec chip makes the roll panel taller. The history is the elastic
-    part of that block — it is a list with its own scroll area — so it is what has
-    to give the room back. It did not: the splitter handed the panel its old share
-    *plus* the chip, nothing re-divided, and the strip answered the shortfall with
-    a scrollbar.
+    Showing the spec chip made the roll panel taller (the chip's slot keeps its height
+    now; what grows the panel today is a line coming onto the action lane). The
+    history is the elastic part of that block — it is a list with its own scroll
+    area — so it is what has to give the room back. It did not: the splitter handed
+    the panel its old share *plus* the growth, nothing re-divided, and the strip
+    answered the shortfall with a scrollbar.
     """
     sheet = _laid_out(qapp, _sheet(qapp))
     view = sheet.dice.view
@@ -201,9 +202,12 @@ def test_loading_a_trait_takes_the_room_from_the_history_not_the_window(
 
     sheet.dice.load_roll(RollSpec(label="Athletics", modifier=9))
     _settle(qapp)
-
     assert view.panel._spec_chip.isVisible()
-    assert view._history_part.height() < before  # the history gave the chip its room
+    assert view._history_part.height() == before  # the chip's slot was already there
+
+    view.panel.start_action_line("charge", "Charge", fixed="-2 attack")
+    _settle(qapp)
+    assert view._history_part.height() < before  # the history gave the line its room
     assert sheet.height() == window_height  # and the block did not push the window
     assert _strip_bars(sheet) == (False, False)
 

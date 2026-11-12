@@ -63,6 +63,12 @@ DICE_LAYOUT_EXTENDED = "extended"
 #: the writer below validate against this, so a fourth shape is one entry here.
 DICE_LAYOUTS = (DICE_LAYOUT_AUTO, DICE_LAYOUT_COMPACT, DICE_LAYOUT_EXTENDED)
 
+#: How the roller's modifier row is set: step buttons either side of the box (``−5 −1
+#: [+0] +1 +5``, the default) or a slider beside it. See ``modifier_input`` below.
+MODIFIER_INPUT_BUTTONS = "buttons"
+MODIFIER_INPUT_SLIDER = "slider"
+MODIFIER_INPUTS = (MODIFIER_INPUT_BUTTONS, MODIFIER_INPUT_SLIDER)
+
 #: Which corner of the screen a roll notification appears in (see
 #: ``mm_companion.ui.toasts``). The first is the default — where Telegram Desktop and
 #: most messengers put theirs.
@@ -277,6 +283,9 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # only a way to fit a mini window, the second only what GM Mode happened to be
     # built as.
     "dice_layout": DICE_LAYOUT_AUTO,
+    # How the roller's modifier is set: step buttons either side of its box, or a
+    # slider beside it (the user's call, 2026-11-10: buttons by default).
+    "modifier_input": MODIFIER_INPUT_BUTTONS,
     # Whether a roll, a note or a request landing in the history also pops up as a
     # small always-on-top notification in a corner of the screen, and which corner.
     # A history in a pinned strip shows three or four cards at a time; the
@@ -715,6 +724,18 @@ def dice_layout() -> str:
 def set_dice_layout(layout: str) -> None:
     """Choose how the dice roller arranges itself; an unknown value means ``auto``."""
     update_settings(dice_layout=layout if layout in DICE_LAYOUTS else DICE_LAYOUT_AUTO)
+
+
+def modifier_input() -> str:
+    """How the roller's modifier row is set — one of :data:`MODIFIER_INPUTS`; the step
+    buttons when unset or unrecognized (a workspace older than the key reads ``None``)."""
+    value = load_settings().get("modifier_input", MODIFIER_INPUT_BUTTONS)
+    return value if value in MODIFIER_INPUTS else MODIFIER_INPUT_BUTTONS
+
+
+def set_modifier_input(style: str) -> None:
+    """Choose how the roller's modifier row is set; an unknown value means buttons."""
+    update_settings(modifier_input=style if style in MODIFIER_INPUTS else MODIFIER_INPUT_BUTTONS)
 
 
 def roll_notifications() -> bool:

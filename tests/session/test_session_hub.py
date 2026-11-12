@@ -22,6 +22,7 @@ import pytest
 
 from mm_companion.core import storage
 from mm_companion.core.session import hub_client as hub_client_mod
+from mm_companion.core.session import server as server_mod
 from mm_companion.core.session import store
 from mm_companion.core.session.client import SessionClient, SessionClientError
 from mm_companion.core.session.discovery import decode_join_code
@@ -63,6 +64,8 @@ class LoopbackTransports:
 
     def __init__(self) -> None:
         self.ports: dict[str, int] = {}
+        #: Session ids whose relay is "down": listening on them fails.
+        self.down: set[str] = set()
 
     def __call__(self, session_id: str) -> TcpTransport:
         return _RecordingTransport(self, session_id)
@@ -85,6 +88,8 @@ class _RecordingTransport(TcpTransport):
         self._session_id = session_id
 
     def listen(self, host: str = "127.0.0.1", port: int = 0):
+        if self._session_id in self._registry.down:
+            raise OSError("cannot reach the relay")  # what a relay that is down raises
         listener = super().listen("127.0.0.1", 0)
         self._registry.ports[self._session_id] = listener.address[1]
         return listener
@@ -601,6 +606,85 @@ def test_a_busy_session_is_never_unloaded(hub, monkeypatch) -> None:
 
 
 # -- plumbing --------------------------------------------------------------
+
+
+# -- staying on the relay ----------------------------------------------------
+#
+# A hub has nobody to press Reconnect. Both of these once left sessions that
+# nobody could join until somebody restarted the service by hand.
+
+
+def test_a_session_whose_relay_was_down_at_boot_is_hosted_once_it_is_up(hub, monkeypatch) -> None:
+    first, _ = hub()
+    entry = first.create("Friday Game")
+    first.stop()
+    monkeypatch.setattr(hub_mod, "JANITOR_INTERVAL", 0.05)
+    transports = LoopbackTransports()
+    transports.down.add(entry["id"])
+
+    resumed, _ = hub(transports=transports)
+    assert resumed.session_ids() == []
+
+    transports.down.clear()
+    _wait(lambda: resumed.session_ids() == [entry["id"]], "the session hosted")
+    player = join(transports, entry)
+    player.close()
+
+
+def test_a_gm_asking_after_a_session_still_off_the_relay_is_not_told_it_is_gone(hub) -> None:
+    """``{}`` makes the GM's app forget the session's gm token for good."""
+    first, _ = hub()
+    entry = first.create("Friday Game")
+    first.stop()
+    transports = LoopbackTransports()
+    transports.down.add(entry["id"])
+    resumed, _ = hub(transports=transports)
+
+    with pytest.raises(HubError) as refused:
+        resumed.status(entry["id"], entry["gm_token"])
+    assert not isinstance(refused.value, UnknownSessionError)
+    # A caller without the token learns nothing more than about an unknown id.
+    assert resumed.status(entry["id"], "not-the-token") == {}
+
+
+def test_a_gm_asking_after_the_relay_is_back_gets_the_session_before_the_janitor(hub) -> None:
+    first, _ = hub()
+    entry = first.create("Friday Game")
+    first.stop()
+    transports = LoopbackTransports()
+    transports.down.add(entry["id"])
+    resumed, _ = hub(transports=transports)
+    assert resumed.session_ids() == []
+
+    transports.down.clear()  # the relay is up; the janitor's next pass is 30 s off
+    live = resumed.status(entry["id"], entry["gm_token"])
+
+    assert live["id"] == entry["id"]
+    assert resumed.session_ids() == [entry["id"]]
+    resumed._repair([])  # noqa: SLF001 - the janitor's pass does not host it twice
+    assert resumed.session_ids() == [entry["id"]]
+    player = join(transports, entry)
+    player.close()
+
+
+def test_a_session_whose_retry_window_ran_out_is_tried_again(hub, monkeypatch) -> None:
+    """The relay restarting for a certificate renewal, and staying down too long."""
+    monkeypatch.setattr(server_mod, "RECONNECT_DELAYS", (0.01,))
+    monkeypatch.setattr(server_mod, "RECONNECT_WINDOW", 0.05)
+    instance, transports = hub()
+    entry = instance.create("Friday Game")
+    server = instance._entry(entry["id"]).server
+    transports.down.add(entry["id"])
+
+    server._listener.close()  # noqa: SLF001 - the relay dropping the registration
+    _wait(lambda: server.host_state == server_mod.HOST_STATE_UNREACHABLE, "the ladder parked")
+
+    transports.down.clear()
+    instance._repair([instance._entry(entry["id"])])  # noqa: SLF001 - one janitor pass
+
+    _wait(lambda: server.host_state == server_mod.HOST_STATE_LISTENING, "back on the relay")
+    player = join(transports, entry)
+    player.close()
 
 
 def test_stopping_the_hub_stops_every_session(hub) -> None:

@@ -272,7 +272,14 @@ def impress_resist_spec(
         outcomes=impression_outcomes(game_data, impression),
         rolled_by_target=True,
         dc_from_total=True,
-        ladder=SpecLadder(LADDER_IMPRESS, impression.outcomes),
+        ladder=SpecLadder(
+            LADDER_IMPRESS,
+            impression.outcomes,
+            effect=impression.id,
+            name=impression.name,
+            skill=skill_row,
+            source=source,
+        ),
     )
 
 

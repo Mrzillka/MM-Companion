@@ -45,6 +45,7 @@ from ..equipment import EquipmentItem
 from ..powers import Power, PowerEffectInstance
 from .derived import (
     defense_class,
+    defense_class_in_play,
     effective_ability,
     initiative_modifier,
     resistance_total,
@@ -238,15 +239,16 @@ def resolve_pin(
     if ref.kind == PIN_INITIATIVE:
         return _from_initiative(char, game_data, ref, with_conditions)
     if ref.kind == PIN_POWER:
-        # A power's numbers are condition-free already: an effect's rank and the
-        # DC it sets are build facts, so there is nothing here to strip out.
+        # A power's numbers are build facts — an effect's rank and the DC it sets —
+        # bar one: an attack check carries a maneuver's attack-check mod (Defensive
+        # Attack's −X), which is temporary and not worth a second code path here.
         return _from_power(char, game_data, ref)
     if ref.kind == PIN_EQUIPMENT:
         return _from_equipment(char, game_data, ref)
     if ref.kind == PIN_EFFECT:
         return _from_effect(char, game_data, ref)
     if ref.kind == PIN_DEFENSE_CLASS:
-        return _from_defense_class(char, game_data, ref)
+        return _from_defense_class(char, game_data, ref, with_conditions)
     return _missing(ref, pin_label(ref, game_data))
 
 
@@ -354,11 +356,16 @@ def _from_resistance(
     )
 
 
-def _from_defense_class(char: Character, game_data: GameData, ref: PinRef) -> PinnedValue:
+def _from_defense_class(
+    char: Character, game_data: GameData, ref: PinRef, with_conditions: bool = True
+) -> PinnedValue:
     key = game_data.system.trait_keys.defense
     resistance = next((r for r in game_data.resistances if r.key == key), None)
     name = (resistance.abbr or resistance.name) if resistance else key
-    value = defense_class(char, game_data)
+    if with_conditions:
+        value = defense_class_in_play(char, game_data)
+    else:
+        value = defense_class(char, game_data)
     return PinnedValue(
         ref=ref,
         label=f"{name} DC",

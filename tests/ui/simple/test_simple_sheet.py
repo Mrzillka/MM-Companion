@@ -1205,3 +1205,100 @@ def test_an_afflictions_degrees_are_printed_at_ordinary_size(qapp: QApplication)
     assert "Dazed" in line and "Stunned" in line and "Incapacitated" in line
     terms = " ".join(label.text() for label in block.findChildren(TermLabel))
     assert "degree" not in terms
+
+
+# -- a switch that fails part way --------------------------------------------------
+
+
+def test_a_switch_that_fails_leaves_the_edit_page_up(qapp, data, monkeypatch, tmp_path) -> None:
+    # The build raised after it had already borrowed some sections. It used to leave
+    # the edit page hidden and nothing in its place: a blank window, the borrowed
+    # blocks gone from both views, and the menu still offering "Simple sheet".
+    from mm_companion.core import diagnostics
+    from mm_companion.ui.simple.sheet import SimpleSheet
+
+    monkeypatch.setattr(diagnostics, "_errors_path", tmp_path / "errors.log")
+    diagnostics._reset_for_tests()
+    real_make_box = SimpleSheet._make_box
+
+    def failing(self, key):
+        if key == "equipment":  # after the powers have been borrowed
+            raise RuntimeError("boom")
+        return real_make_box(self, key)
+
+    monkeypatch.setattr(SimpleSheet, "_make_box", failing)
+    sheet = CharacterSheet(data, _hero(data))
+    sheet.set_locked(False)
+    sheet.resize(1100, 900)
+    sheet.show()
+    _settle(qapp)
+    announced: list[bool] = []
+    sheet.simpleChanged.connect(announced.append)
+
+    sheet.set_simple(True)
+    _settle(qapp, sheet)
+
+    assert not sheet.is_simple
+    assert announced == [False]  # what is showing, not what was asked for
+    assert sheet.board.isVisible()
+    assert not sheet.simple_sheet.isVisible()
+    assert not any(sheet.block_frame(key).is_lent() for key in sheet.block_keys())
+    assert not sheet.locked  # the lock it went in with is back
+    assert "Switching to the simple sheet failed" in (tmp_path / "errors.log").read_text("utf-8")
+
+
+def test_a_rebuild_that_fails_while_up_goes_back_to_the_edit_page(
+    qapp, data, monkeypatch, tmp_path
+) -> None:
+    from mm_companion.core import diagnostics
+    from mm_companion.ui.simple.sheet import SimpleSheet
+
+    monkeypatch.setattr(diagnostics, "_errors_path", tmp_path / "errors.log")
+    diagnostics._reset_for_tests()
+    sheet = _simple(qapp, data)
+    assert sheet.is_simple
+    announced: list[bool] = []
+    sheet.simpleChanged.connect(announced.append)
+
+    def failing(self):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(SimpleSheet, "_build", failing)
+    sheet.simple_sheet._rebuild()
+    _settle(qapp, sheet)
+
+    assert not sheet.is_simple
+    assert announced == [False]
+    assert sheet.board.isVisible()
+    assert not any(sheet.block_frame(key).is_lent() for key in sheet.block_keys())
+
+
+def test_the_strip_opens_wide_enough_for_the_roller(qapp, data) -> None:
+    """The roller's Roll group cannot reflow narrower than its rows, and a strip opened
+    at a flat width cut the right of it off. It opens at what its content asks for —
+    and still never past its share of the window."""
+    from mm_companion.ui.sections.dice import DiceSection
+    from mm_companion.ui.simple.sheet import DEFAULT_STRIP_EXTENT, STRIP_SHARE
+
+    sheet = CharacterSheet(data, _hero(data))
+    sheet.set_locked(True)
+    sheet.resize(1500, 900)
+    sheet.show()
+    _settle(qapp)
+    (roller,) = sheet.findChildren(DiceSection)
+    # Wider than the strip's flat width whatever the fonts: a row it cannot shed.
+    wide = DEFAULT_STRIP_EXTENT + 60
+    row = QWidget()
+    row.setMinimumWidth(wide)
+    roller.layout().addWidget(row)
+    sheet.set_simple(True)
+    _settle(qapp, sheet)
+
+    view = sheet.simple_sheet
+    assert view._strip_page.isAncestorOf(roller)
+    assert roller.minimumSizeHint().width() >= wide
+    assert roller.parentWidget().width() >= roller.minimumSizeHint().width()  # nothing cut
+
+    sheet.resize(700, 900)
+    _settle(qapp, sheet)
+    assert view._strip.width() <= round(sheet.width() * STRIP_SHARE)

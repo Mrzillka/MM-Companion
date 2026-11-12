@@ -5,7 +5,7 @@ Masterminds* tabletop RPG (3rd / 4th edition), built with Python and PySide6.
 
 ## Status
 
-🚧 **Early development (pre-alpha, `0.9.4`) — but functional.** You can build a
+🚧 **Early development (pre-alpha, `0.9.5`) — but functional.** You can build a
 character point by point, assemble powers in a drag-and-drop constructor, buy
 equipment, roll everything straight off the sheet, play from a one-page simple
 sheet or print it, and run a live online session with your group. The installed
@@ -52,11 +52,19 @@ PDF** print it as real, selectable text, and let you pick which blocks go on the
 page.
 
 **Rolling.** Click an ability, resistance or skill to load it into the roller, or
-double-click to roll it at once; a power's 🎲 rolls its attack. Bonus and penalty
-sliders cover the situational extras for a single roll, a DC box grades the
-result in degrees of success, and rolls you make often can be starred into
+double-click to roll it at once; a power's 🎲 rolls its attack. A modifier box with
+±2 and ±5 steps covers the situational extras for a single roll, a DC box grades
+the result in degrees of success, **Take 10** makes a routine check, and rolls you make often can be starred into
 **quick rolls**. An attack that hits offers the save it forces right on its card in
-the history, so the target can roll it from there.
+the history, so the target can roll it from there. Hover any result to see how it
+was worked out.
+
+**Combat maneuvers.** The roller's **Actions** button opens the combat actions:
+All-out, Defensive, Power and Accurate Attack trade bonuses on a slider for the
+next attack, and Aim, Charge, Defend, Recover, Grab, Trip, Disarm, Feint, Aid,
+Block and the rest are a click away. What outlasts the roll lands on the sheet as a
+temporary condition, with a mark beside each number it moves. In a session, an
+action aimed at another creature is judged by the GM's app.
 
 **Rules engine.** A headless, pure-Python `core` layer handles d20 resolution and
 degrees of success, the mutable character model, derived character math,
@@ -113,6 +121,12 @@ macOS, and Linux. Packaged builds exist for **Windows** (an installer) and
 release, then run it. No Python is required. During setup you can add a desktop
 shortcut and optionally choose a **Portable** install (a single folder that keeps
 its data beside itself).
+
+The installer is not code-signed yet, so Windows SmartScreen may say *"Windows
+protected your PC"* the first time. Click **More info ▸ Run anyway**. The
+installer is built by the public GitHub Actions workflow in
+[`.github/workflows/release.yml`](.github/workflows/release.yml) from the tagged
+source.
 
 User data — settings, saved characters, and installed mods — lives in the per-user
 workspace at `%APPDATA%\MM-Companion` (or a `data\` folder beside the exe for a
@@ -255,8 +269,6 @@ Next up:
   be made a minion, with the minion rules set per session.)
 - **Ranks & Measures** — the rank / measurement table as a tool: convert distance,
   mass, time and volume both ways, and work out the rank of a feat.
-- **Actions** — the combat maneuvers on the sheet (All-out Attack, Defensive Attack,
-  Power Attack, Accurate Attack and the rest), trading bonuses as the rules allow.
 - **GM actions** — the GM's own table tools: acting for NPCs, applying effects and
   conditions to several creatures at once.
 - **GM request help** — a player asks the GM for a ruling or a hand, and the GM
@@ -295,6 +307,13 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the rationale behind the `core` /
 - [`docs/mm-session-architecture.md`](docs/mm-session-architecture.md) — GM Mode and the online session.
 - [`docs/mm-session-networking.md`](docs/mm-session-networking.md) — playing over the internet, tunnels, the relay, troubleshooting.
 - [`docs/packaging.md`](docs/packaging.md) — building the Windows installer and Linux tarball.
+
+## Privacy
+
+MM-Companion has no accounts, telemetry or analytics. It checks GitHub for a newer
+release when it starts (you can turn this off), and it sends data to a session
+server only when you play online. See the [privacy policy](PRIVACY.md) for exactly
+what is sent and stored.
 
 ## License
 

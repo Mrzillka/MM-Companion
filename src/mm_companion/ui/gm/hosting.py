@@ -87,6 +87,8 @@ class GMHostingMixin:
         # How a player's initiative reaches the board. No message of its own: a
         # roll already carries the spec that says what it was.
         self._bridge.rollAdded.connect(self._on_roll_added)
+        # A player's save off a request card or a chip: what it did lands on them.
+        self._bridge.rollAdded.connect(self._on_player_save)
         self._bridge.playerJoined.connect(self._on_player_joined)
         self._bridge.refused.connect(self._on_refused)
         self._bridge.error.connect(self._on_error)
@@ -446,6 +448,9 @@ class GMHostingMixin:
         # And an aimed attack's die, for the same reason.
         if getattr(self, "_attack", None) is not None:
             self._attack.take_roll(record)
+        # And a targeted action's check (Aid, Feint, Trick).
+        if getattr(self, "_targeted", None) is not None:
+            self._targeted.take_roll(record)
 
     def _on_local_roll_removed(self, seq: int) -> None:
         """Persist a roll the GM struck while not hosting.

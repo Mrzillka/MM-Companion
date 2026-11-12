@@ -16,7 +16,7 @@ switch in `core/rules/minions.py`'s `MinionRules`, and every switch defaults to 
 | --- | --- | --- |
 | A minion's natural 20 is no added success (p25) | `no_added_success` | `resolve_check(added_success=False)`; `RollRequest.minion` → `RollRecord.minion`; a group line's `minion`; `follow_up_for_result(added_success=)` reads the record so the save chip gets no crit DC |
 | A failed save is the worst degree (p25) | `worst_degree` | `targeting.outcome_rung(worst=)` via `minions.minion_rung`, called by `answering.answer_rung`, `impress.impress_rung` and `area_attack.area_effect_rung`; the card's damage row becomes ✓ / ✗ |
-| *(table choice)* stop at Incapacitated | `stop_at_incapacitated` | `minions.capped_escalation` cuts every escalation pair from `system.minions.ceiling` onwards, and the rung's note goes with it |
+| *(table choice)* stop at Incapacitated | `stop_at_incapacitated` | `minions.capped_escalation` cuts every escalation pair from `system.minions.ceiling` onwards — on every failure rung, since each inherits the ladder's `failureEscalates` — and the rung's note goes with it when the cut was about a condition the rung names |
 | A critical hit lands the worst, no save (p197) | `crit_auto_fails` | `AnswerContext.critical` → the history menu offers "💥 Critical: …, no save" (`GMWindow._crit_minion`); an area's minion primary (`AreaController._crit_minion`) |
 | Attacks on minions may be routine (p25) | `routine_attacks` | `AreaWindow.routine_attack`: Hit is judged from the better of the roll and 10 + attack, and a routine hit needs no roll |
 | Impress minions as a routine check at +5 (p201) | `routine_impress` | `ImpressController._routine_against` / `_target_dc`: each minion resists `routine_impress_dc`; an all-minion group rolls no check at all |
@@ -27,9 +27,11 @@ The two numbers are data, in `system.json`'s `minions` block: `impressBonus` (5)
 
 ## Decisions the user made (2026-10-27)
 
-- **Full automation, plus take-10 on the roller.** The roller's **Routine (take 10)**
-  box is for any check, not only checks against minions, and it is **one-shot**: it
-  unticks after each roll, so nobody takes 10 against a villain by accident. A routine
+- **Full automation, plus take-10 on the roller.** The roller's **Take 10** is for any
+  check, not only checks against minions, and it is **one-shot**. It was a box that
+  unticked after each roll; since 2026-11-10 it is a button that makes the check at once
+  (see [the dice notes](dice-and-rolling.md)), so nobody takes 10 against a villain by
+  accident. A routine
   roll travels as `RollRequest.routine`, the server sets the die to `ROUTINE_DIE`
   (never natural), the history reads "routine 10", and it cannot be rerolled.
 - **Players see a badge** on a minion's scene card (protocol v18's scene `minion` key).
@@ -94,7 +96,12 @@ it. These paths pass it, through `GMWindow.rolls_as_minion`:
 - a card's pinned tiles (`_npc_roll`);
 - history answers (`_roll_as`);
 - the area window's NPC attacker (`area_roll_attack`);
-- every Impress and area group line (`group_line(minion=)`).
+- every Impress and area group line (`group_line(minion=)`);
+- the combat actions an NPC takes off the GM's Actions popup (`CombatActor.minion`).
+
+**A Finishing Attack's hit is still a critical for a minion.** The book (p25) takes away
+only the added success of "a roll of 20"; Finishing's critical comes from the maneuver,
+not the die, and `judge_attack` ORs `critical_hit` in after the minion check.
 
 A minion's save also travels with its outcome list cut to the worst rung
 (`minion_save_spec`), so every seat's card reads what the GM's table applies, with no

@@ -23,7 +23,12 @@ rung resolver it shares, and under ``rolls``; ``impress`` sits on ``rolls``.
 an area's size on the card; ``area_attack`` (resolving one against a scene) sits on
 ``rolls``, beside ``impress``. ``answering`` (a roll answered for a creature, and what
 its spec's ladder does to it) sits on ``rolls``, and so does ``recovery`` (the check
-that rolls a condition off, and what making it sheds).
+that rolls a condition off, and what making it sheds). ``shaking`` (how a condition an
+impression or an Affliction put on comes off) sits on ``impress`` and ``targeting``.
+``maneuvers`` (the attack maneuvers' caps and the spec they shift) sits on ``rolls`` and
+``derived`` (the Defense in play). ``team_call`` (a team attack anyone joins) sits on
+``team_attack`` and ``maneuvers``. ``targeted`` (Aid, Feint, Trick, and the opposing
+conditions they leave) sits on ``rolls``, ``derived`` and ``targeting``.
 
 ``costs`` moved above ``powers_terms`` (it used to sit beside it) when Morph's Metamorph
 needed a note saying what its alternate forms cost: the rules put that budget at "the
@@ -54,6 +59,7 @@ from .answering import *  # noqa: F401,F403
 from .appliers import *  # noqa: F401,F403
 from .area import *  # noqa: F401,F403
 from .area_attack import *  # noqa: F401,F403
+from .attack_choices import *  # noqa: F401,F403
 from .attacks import *  # noqa: F401,F403
 from .build_cache import *  # noqa: F401,F403
 from .conditions import *  # noqa: F401,F403
@@ -67,6 +73,7 @@ from .extra_effort import *  # noqa: F401,F403
 from .group_checks import *  # noqa: F401,F403
 from .impress import *  # noqa: F401,F403
 from .improvised import *  # noqa: F401,F403
+from .maneuvers import *  # noqa: F401,F403
 from .minions import *  # noqa: F401,F403
 from .movement import *  # noqa: F401,F403
 from .pins import *  # noqa: F401,F403
@@ -76,9 +83,13 @@ from .powers_terms import *  # noqa: F401,F403
 from .recovery import *  # noqa: F401,F403
 from .rolls import *  # noqa: F401,F403
 from .runtime import *  # noqa: F401,F403
+from .self_actions import *  # noqa: F401,F403
+from .shaking import *  # noqa: F401,F403
 from .size import *  # noqa: F401,F403
 from .subbuilds import *  # noqa: F401,F403
+from .targeted import *  # noqa: F401,F403
 from .targeting import *  # noqa: F401,F403
 from .team_attack import *  # noqa: F401,F403
+from .team_call import *  # noqa: F401,F403
 from .trait_rates import *  # noqa: F401,F403
 from .validation import *  # noqa: F401,F403

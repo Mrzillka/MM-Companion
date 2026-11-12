@@ -10,6 +10,10 @@ GM accepts (``ui/attack_gm.py``). The GM's own aimed attacks run straight throug
 The target travels as the Scene entry's opaque ref, and the attack's spec carries the
 declaration's ``action_id`` and the target's name in ``targets`` (all keys the server
 already keeps, so no protocol change).
+
+The targeted combat actions (Aid, Feint, Trick, Grab, Trip, Disarm, Smash, Escape) are
+declared the same way (:data:`KIND_TARGETED`, :class:`TargetedDeclaration`); the GM's
+half of them is ``ui/targeted_gm.py``.
 """
 
 from __future__ import annotations
@@ -79,6 +83,89 @@ class AttackDeclaration:
             spec=spec,
             source_name=source if isinstance(source, str) else "",
         )
+
+
+#: The action kind a player's targeted action is declared to the GM under.
+KIND_TARGETED = "targeted"
+
+
+@dataclass(frozen=True)
+class TargetedDeclaration:
+    """A targeted action, as it travels to the GM: which action (and option), the
+    target's Scene ref and name, Aid's ally, the check the actor rolls, and — for an
+    action with an opposed second stage (Grab, Trip, Disarm) — the actor's check in it,
+    worked out on their own sheet (:attr:`opposed`), which the GM asks them to roll once
+    the attack has hit."""
+
+    action_id: str
+    action: str
+    target_ref: str
+    target_name: str
+    spec: RollSpec
+    source_name: str = ""
+    option: str = ""
+    ally_ref: str = ""
+    ally_name: str = ""
+    opposed: RollSpec | None = None
+
+    def to_dict(self) -> dict:
+        out = {
+            "action_id": self.action_id,
+            "action": self.action,
+            "option": self.option,
+            "target_ref": self.target_ref,
+            "target_name": self.target_name,
+            "ally_ref": self.ally_ref,
+            "ally_name": self.ally_name,
+            "spec": self.spec.to_dict(),
+            "source_name": self.source_name,
+        }
+        if self.opposed is not None:
+            out["opposed"] = self.opposed.to_dict()
+        return out
+
+    @classmethod
+    def from_dict(cls, raw: object) -> TargetedDeclaration | None:
+        if not isinstance(raw, dict):
+            return None
+        spec = RollSpec.from_dict(raw.get("spec"))
+        texts = {
+            key: raw.get(key) if isinstance(raw.get(key), str) else ""
+            for key in (
+                "action_id",
+                "action",
+                "option",
+                "target_ref",
+                "target_name",
+                "ally_ref",
+                "ally_name",
+                "source_name",
+            )
+        }
+        if spec is None or not texts["action_id"] or not texts["action"]:
+            return None
+        if not texts["target_ref"]:
+            return None
+        opposed = RollSpec.from_dict(raw.get("opposed")) if raw.get("opposed") else None
+        return cls(spec=spec, opposed=opposed, **texts)
+
+
+def targeted_roll_spec(spec: RollSpec, action_id: str, title: str, source_name: str) -> RollSpec:
+    """*spec* (the actor's check) as it is rolled: tied to its declaration by
+    *action_id*, titled, and the actor's own row of the action's table."""
+
+    return replace(
+        spec, action_id=action_id, title=title, targets=(source_name,), actor=source_name
+    )
+
+
+def targeted_table_title(action_name: str, source: str, target: str, ally: str = "") -> str:
+    """The heading of a targeted action's table: "Feint: Ana → Thug", "Aid: Ana → Bo
+    (vs Thug)"."""
+
+    if ally:
+        return f"{action_name}: {source} → {ally} (vs {target})"
+    return f"{action_name}: {source} → {target}"
 
 
 def aimed_spec(spec: RollSpec, action_id: str, target_name: str, source_name: str) -> RollSpec:

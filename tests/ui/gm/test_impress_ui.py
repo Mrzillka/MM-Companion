@@ -22,6 +22,7 @@ from mm_companion.core import library, storage
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import ActionModifier
 from mm_companion.core.dice import CheckResult, GroupResult
+from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
 from mm_companion.core.rules import (
     KIND_BEST_OF,
     KIND_IMPRESS,
@@ -29,7 +30,14 @@ from mm_companion.core.rules import (
     MODE_RESOLVE,
     ImpressAttempt,
     RollSpec,
+    apply_condition,
     best_of_key,
+    effect_spec_ladder,
+    held_shake_offs,
+    impress_resist_spec,
+    impression_shake_off,
+    ladder_shake_off,
+    resistance_total,
 )
 from mm_companion.core.session import client as client_mod
 from mm_companion.core.session import discovery
@@ -44,7 +52,6 @@ from mm_companion.ui.action_ui import (
 )
 from mm_companion.ui.gm_window import SCENE_NPC, GMWindow
 from mm_companion.ui.impress import (
-    IMPRESS_ACTION,
     PARTY_NPC,
     PARTY_PLAYER,
     ImpressDialog,
@@ -53,7 +60,12 @@ from mm_companion.ui.impress import (
     ModifiersPanel,
     _fill_impressions,
 )
-from mm_companion.ui.roll_history import ActionCard, GroupTableCard, SessionRollCard
+from mm_companion.ui.roll_history import (
+    ActionCard,
+    AnswerContext,
+    GroupTableCard,
+    SessionRollCard,
+)
 from mm_companion.ui.sections.dice import DiceSection
 from mm_companion.ui.session_bridge import set_active_session
 from mm_companion.ui.session_dialogs import HostOptions
@@ -233,11 +245,18 @@ def test_online_the_dialog_takes_targets_the_way_an_area_does(qapp, data) -> Non
     assert ImpressAttempt.from_dict(attempt.to_dict()) == attempt
 
 
-def test_the_dice_block_offers_impress_on_its_action_row(qapp, data) -> None:
+def test_the_dice_block_offers_impress_in_its_actions_popup(qapp, data) -> None:
     section = DiceSection(data, talker(data))
-    buttons = section.panel._action_buttons
-    assert [b.text() for b in buttons] == [IMPRESS_ACTION[1]]
-    assert section.panel._action_label.isVisibleTo(section.panel)
+    popup = section.panel.open_actions()
+    tile = popup.tile(KIND_IMPRESS)
+    assert tile is not None and tile.isEnabled()
+    picked: list[str] = []
+    # Only what the pick reports: the dialog it opens is tested below.
+    section.panel.actionRequested.disconnect(section.start_action)
+    section.panel.actionRequested.connect(picked.append)
+    tile.click()
+    assert picked == [KIND_IMPRESS]
+    assert not popup.isVisible()
 
 
 def test_offline_the_dice_block_rolls_the_check_itself(qapp, data, monkeypatch) -> None:
@@ -511,7 +530,7 @@ def test_a_roll_during_a_blip_fails_visibly_rather_than_rolling_here(qapp, data)
         def impress_parties(self):
             return [], []
 
-        def impress_apply(self, party, changes) -> bool:
+        def impress_apply(self, party, changes, shake_off=None) -> bool:
             return True
 
         def impress_show_offline(self, record: dict) -> None:
@@ -877,8 +896,11 @@ def test_end_of_turn_shakes_off_an_impression_the_npc_resists(
     qapp, window: GMWindow, data, monkeypatch
 ) -> None:
     mook, party = _demoralize(window, data, monkeypatch)
-    (linger,) = window._impress.lingering(party.ref)
-    assert linger.impression.id == "demoralized" and linger.dc == 20
+    # How it comes off is written on the condition itself, not kept by this window.
+    (held,) = window._impress.held(party)
+    assert held.shake.ref == "demoralized" and held.shake.dc == 20
+    (impaired,) = window._npc_state[mook].character.conditions
+    assert impaired.shake_off == held.shake
     seen: list = []
 
     def made(lines, **kwargs):
@@ -890,7 +912,7 @@ def test_end_of_turn_shakes_off_an_impression_the_npc_resists(
     ((line,),) = seen
     assert line[1] == 20  # against the original DC
     assert window._npc_state[mook].character.conditions == []
-    assert window._impress.lingering(party.ref) == []
+    assert window._impress.held(party) == []
     assert "shakes off Demoralized" in window._notice_label.text()
 
 
@@ -901,7 +923,7 @@ def test_end_of_turn_keeps_an_impression_the_npc_fails_to_shake(
     monkeypatch.setattr(action_run, "resolve_group", staged(0, 0, [-1]))
     window._impress.end_turn(party)
     assert [c.condition_id for c in window._npc_state[mook].character.conditions] == ["impaired"]
-    assert len(window._impress.lingering(party.ref)) == 1
+    assert len(window._impress.held(party)) == 1
     assert "still Demoralized" in window._notice_label.text()
 
 
@@ -964,30 +986,22 @@ def test_end_of_turn_shakes_an_impressions_condition_off_as_the_impression(
     qapp, window: GMWindow, data, monkeypatch
 ) -> None:
     """A Dazed an impression put on is resisted at the impression's DC, not rolled twice."""
-    from mm_companion.ui.impress_gm import _Lingering
-
-    mook, party = _with_conditions(window, data, "dazed")
-    window._impress._lingering[party.ref] = [
-        _Lingering(
-            data.impress.impression("demoralized"),
-            "skill:Intimidation",
-            19,
-            None,
-            [("dazed", None)],
-            "Thug",
-        )
-    ]
+    _thug, mook = _cast(window, data)
+    shake = impression_shake_off(
+        data.impress.impression("demoralized"), "Intimidation", 19, source="Thug", degree=-1
+    )
+    apply_condition(window._npc_state[mook].character, "dazed", data, shake_off=shake)
+    _sources, targets = window.impress_parties()
+    party = next(p for p in targets if p.source == mook)
     seen = _rolling(monkeypatch, [-1])
     window._impress.end_turn(party)
-    ((line,),) = seen
+    ((line,),) = seen  # one line: the impression, not the Stamina check as well
     assert line[1] == 19
 
 
 def test_end_of_turn_asks_a_player_for_their_end_of_turn_recovery_checks(
     qapp, window: GMWindow, data, monkeypatch
 ) -> None:
-    from mm_companion.core.rules import apply_condition
-
     character = Character()
     apply_condition(character, "stunned", data)
     nova = ImpressParty("s-nova", "Nova", PARTY_PLAYER, "p-nova", character)
@@ -1002,13 +1016,12 @@ def test_end_of_turn_asks_a_player_for_their_end_of_turn_recovery_checks(
 def test_end_of_turn_asks_a_player_to_shake_each_impression_off(
     qapp, window: GMWindow, data, monkeypatch
 ) -> None:
-    from mm_companion.ui.impress_gm import _Lingering
-
-    nova = ImpressParty("s-nova", "Nova", PARTY_PLAYER, "p-nova", None)
+    # What their snapshot says is on them, and how it came.
+    character = Character()
     demoralized = data.impress.impression("demoralized")
-    window._impress._lingering["s-nova"] = [
-        _Lingering(demoralized, "skill:Intimidation", 19, None, [("impaired", None)], "Thug")
-    ]
+    shake = impression_shake_off(demoralized, "Intimidation", 19, source="Thug", degree=-1)
+    apply_condition(character, "impaired", data, shake_off=shake)
+    nova = ImpressParty("s-nova", "Nova", PARTY_PLAYER, "p-nova", character)
     asked: list = []
     monkeypatch.setattr(
         window.bridge,
@@ -1028,7 +1041,213 @@ def test_end_of_turn_asks_a_player_to_shake_each_impression_off(
     record = {"seq": 3, "kind": "roll", "die": 15, "bonus": 6, "penalty": 0, "dc": 19}
     window._impress.take_roll({**record, "degree": 1, "spec": spec.to_dict()})
     assert removed == [[("impaired", None)]]
-    assert run.closed and window._impress.lingering("s-nova") == []
+    assert run.closed
+
+
+def _sleep_ray(
+    window: GMWindow, data, monkeypatch, degree: int, *mods: str
+) -> tuple[str, ImpressParty]:
+    """The Mook fails a Sleep Ray's save (an Affliction, overcome by Will) by *degree*;
+    *mods* are the Affliction's extras and flaws."""
+    _thug, mook = _cast(window, data)
+    config = {
+        "resistance": "Fortitude",
+        "overcomeBy": "Will",
+        "degree1": "dazed",
+        "degree2": "stunned",
+        "degree3": "incapacitated",
+    }
+    effect = PowerEffectInstance(
+        "affliction", rank=7, config=config, extras=[ModifierSelection(m) for m in mods]
+    )
+    save = RollSpec(
+        label="Fortitude vs. 17",
+        dc=17,
+        kind="power-save",
+        trait_key="FORTITUDE",
+        ladder=effect_spec_ladder(effect, data, name="Sleep Ray"),
+    )
+    party = next(p for p in window.impress_parties()[1] if p.source == mook)
+    sent: list[RollSpec] = []
+    monkeypatch.setattr(window._roller, "roll_spec", lambda s, minion=False: sent.append(s) or True)
+    window._roll_as(save, party, AnswerContext(seq=3, source="Doc"))
+    (spec,) = sent
+    window._on_answer_back(
+        {
+            "seq": -7,
+            "label": spec.label,
+            "die": 3,
+            "dc": 17,
+            "degree": degree,
+            "spec": spec.to_dict(),
+        }
+    )
+    return mook, next(p for p in window.impress_parties()[1] if p.source == mook)
+
+
+def test_an_afflictions_stunned_is_overcome_not_rolled_off_with_stamina(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    """The bug #20b fixed: End turn offered an Affliction's Stunned the damage Stamina check."""
+    mook, party = _sleep_ray(window, data, monkeypatch, -2)
+    (stunned,) = window._npc_state[mook].character.conditions
+    assert stunned.condition_id == "stunned" and stunned.shake_off.name == "Sleep Ray"
+    seen = _rolling(monkeypatch, [1])
+    window._on_scene_action(party.ref, "end-turn")
+    ((line,),) = seen  # one check, not a Stamina recovery beside it
+    # At the Affliction's own DC, with the Will it is overcome by.
+    will = resistance_total(window._npc_state[mook].character, data, "WILL")
+    assert line[:2] == (will, 17)
+    assert window._npc_state[mook].character.conditions == []
+    assert "shakes off Sleep Ray" in window._notice_label.text()
+
+
+def test_an_affliction_at_its_third_degree_waits_a_minute(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    mook, party = _sleep_ray(window, data, monkeypatch, -3)
+    seen = _rolling(monkeypatch, [1])
+    assert window._impress.end_turn(party) is None
+    assert seen == [] and "once a minute" in window._notice_label.text()
+    assert window._npc_state[mook].character.conditions  # still on
+
+
+def test_a_progressive_affliction_goes_a_degree_deeper_on_a_failed_check(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    mook, party = _sleep_ray(window, data, monkeypatch, -1, "progressive")
+    _rolling(monkeypatch, [-1])
+    window._on_scene_action(party.ref, "end-turn")
+    (stunned,) = window._npc_state[mook].character.conditions
+    assert stunned.condition_id == "stunned" and stunned.shake_off.degree == 2
+    assert "is still Sleep Ray, now Stunned" in window._notice_label.text()
+    # And it is on the NPC's file, so the next End turn knows.
+    reloaded = library.load_character(window._npc_state[mook].path)
+    ((shake, _changes),) = held_shake_offs(reloaded)
+    assert shake.degree == 2
+
+
+def test_an_instant_recovery_affliction_clears_with_no_roll(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    mook, party = _sleep_ray(window, data, monkeypatch, -2, "instant_recovery")
+    seen = _rolling(monkeypatch, [1])
+    assert window._impress.end_turn(party) is None
+    assert seen == [] and window._npc_state[mook].character.conditions == []
+    assert "clears by itself" in window._notice_label.text()
+
+
+def test_a_players_failed_request_save_lands_on_them(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    """A save a player rolled off a request card (no run asked for it) lands as an aimed
+    one would: the rung, with the record of how it comes off."""
+    hero = Character()
+    player = ImpressParty("player:p1", "Ana", PARTY_PLAYER, "p1", hero)
+    monkeypatch.setattr(window, "_player_party", lambda pid: player if pid == "p1" else None)
+    landed: list = []
+    monkeypatch.setattr(
+        window,
+        "impress_apply",
+        lambda party, changes, shake=None: landed.append((party, changes, shake)) or True,
+    )
+    demoralized = data.impress.impression("demoralized")
+    spec = replace(
+        impress_resist_spec(data, demoralized, "Intimidation", source="Thug"),
+        trait_key="WILL",
+        kind="resistance",
+        dc=21,
+        dc_from_total=False,
+        action_id="act-req",
+    )
+    roll = {"kind": "roll", "player_id": "p1", "degree": -1, "dc": 21, "spec": spec.to_dict()}
+    window._on_player_save(roll)
+    ((party, changes, shake),) = landed
+    assert party is player and changes and shake.ref == "demoralized" and shake.dc == 21
+    assert shake.source == "Thug"
+    # A run that asked for it lands it itself; the GM's own seat, and an NPC answer, too.
+    landed.clear()
+    action_run._RESOLVED_HERE.add("act-run")
+    window._on_player_save({**roll, "spec": replace(spec, action_id="act-run").to_dict()})
+    window._on_player_save({**roll, "spec": replace(spec, actor="Mook").to_dict()})
+    window._on_player_save({**roll, "spec": replace(spec, own_attack=True).to_dict()})
+    assert landed == []
+
+
+def _kept_up(window: GMWindow, data, *mods: str):
+    """The Thug (on the board too) keeps a Sleep Ray with *mods* up on the Mook, who is
+    Dazed by it. The Thug's party, the Mook's file name, and the record."""
+    thug, mook = _cast(window, data)
+    window._set_in_scene(SCENE_NPC, thug, True)
+    effect = PowerEffectInstance(
+        "affliction",
+        rank=7,
+        config={
+            "resistance": "Fortitude",
+            "degree1": "dazed",
+            "degree2": "stunned",
+            "degree3": "incapacitated",
+        },
+        extras=[ModifierSelection(m) for m in mods],
+    )
+    window._npc_state[thug].character.powers.append(Power(name="Sleep Ray", effects=[effect]))
+    _sources, targets = window.impress_parties()
+    wielder = next(p for p in targets if p.source == thug)
+    ladder = effect_spec_ladder(effect, data, name="Sleep Ray")
+    shake = ladder_shake_off(ladder, 17, -1, trait="resistance:FORTITUDE", source=wielder.name)
+    target = next(p for p in targets if p.source == mook)
+    assert window.impress_apply(target, [("dazed", None)], shake)
+    return wielder, mook, shake
+
+
+def test_a_sustained_affliction_is_resisted_anew_as_its_wielder_keeps_it_up(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    wielder, mook, _shake = _kept_up(window, data, "sustained_affliction")
+    seen = _rolling(monkeypatch, [-2])
+    window._impress.end_turn(wielder)
+    ((line,),) = seen  # the Mook's new Fortitude save, at the original DC
+    assert line[1] == 17
+    (stunned,) = window._npc_state[mook].character.conditions
+    assert stunned.condition_id == "stunned" and stunned.shake_off.degree == 2
+    assert "keeps Sleep Ray up" in window._notice_label.text()
+
+
+def test_switched_off_a_maintained_instant_recovery_affliction_clears(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    wielder, mook, _shake = _kept_up(window, data, "sustained_affliction", "instant_recovery")
+    power = wielder.character.powers[-1]
+    power.effects[0].toggled_on = False
+    seen = _rolling(monkeypatch, [-3])
+    window._impress.end_turn(wielder)
+    assert seen == [] and window._npc_state[mook].character.conditions == []
+    assert "stops keeping Sleep Ray up" in window._notice_label.text()
+
+
+def test_a_cumulative_afflictions_new_use_adds_up(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    wielder, mook, shake = _kept_up(window, data, "cumulative")
+    target = next(p for p in window.impress_parties()[1] if p.source == mook)
+    delivered, landed = window.land_rung(target, [("dazed", None)], shake)
+    assert delivered and landed == (("stunned", None),)
+    (stunned,) = window._npc_state[mook].character.conditions
+    assert stunned.shake_off.degree == 2
+    # Without Cumulative, the same landing again is no worse than what is on.
+    plain = replace(shake, mods=(), degree=1)
+    assert window.land_rung(target, [("dazed", None)], plain) == (True, ())
+
+
+def test_what_shakes_an_impression_off_outlives_the_gms_app(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    """It is on the NPC's file, not in this window's memory: a reload still knows it."""
+    mook, _party = _demoralize(window, data, monkeypatch)
+    entry = window._npc_state[mook]
+    reloaded = library.load_character(entry.path)
+    ((shake, changes),) = held_shake_offs(reloaded)
+    assert shake.ref == "demoralized" and shake.dc == 20 and changes == (("impaired", None),)
 
 
 def test_the_impress_dialog_picks_targets_off_a_copy_of_the_scene(qapp, data) -> None:

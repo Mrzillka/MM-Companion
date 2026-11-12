@@ -58,8 +58,10 @@ resists as a group yet (see "Group rolls" below).
 
 ## Not done
 
-- **Group rolls for players.** Team attack, team check and group check are built for
-  NPC groups (see [the actions notes](actions.md#team-attack)). The rules modules
-  (`team_attack.py`, `group_checks.py`) take plain entries, so a players' team can use
-  them; what is missing is a way to gather players' rolls into one.
+- **Group rolls for players.** Team check and group check are built for NPC groups (see
+  [the actions notes](actions.md#team-attack)). A players' team *attack* has its own road
+  now — the GM's call to roll, which anyone joins ([the actions
+  notes](actions.md#a-call-to-roll-the-gms-team-attack-tile)) — and the same shape (a
+  call, entries gathered by its action id) would carry a players' team or group check;
+  `group_checks.py` takes plain entries already.
 - A second GM seat does not see the first one's groups (they are per GM).

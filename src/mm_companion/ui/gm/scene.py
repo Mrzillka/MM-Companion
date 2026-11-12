@@ -195,6 +195,16 @@ class GMSceneMixin:
         else:
             self._remove_condition(entry.source, condition_id, parameter)
 
+    def _clear_scene_temporary(self, ref: str) -> None:
+        """A scene card's "Clear temporary": the creature's own path, as for a chip."""
+        entry = self._scene_entry(ref)
+        if entry is None:
+            return
+        if entry.kind == SCENE_NPC:
+            self._clear_npc_temporary(entry.source)
+        else:
+            self._clear_player_temporary(entry.source)
+
     def _roll_scene_recovery(self, ref: str, condition_id: str, parameter: object) -> None:
         """A scene card's 🎲: roll an NPC's recovery check, or ask a player for theirs."""
         entry = self._scene_entry(ref)

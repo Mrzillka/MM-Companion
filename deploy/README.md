@@ -114,8 +114,9 @@ saying anything about TLS.
 loads its certificate once at startup — so
 `/etc/letsencrypt/renewal-hooks/deploy/mm-companion.sh` (installed from
 `certbot-deploy-hook.sh` by `deploy.sh`) re-applies the ACL that lets `mm` read
-the new key and restarts the relay. Verify the whole path without waiting for
-expiry:
+the new key, restarts the relay, and then restarts the hub (a relay restart drops
+every session's registration, and a hub older than 0.9.5 does not re-register
+for good). Verify the whole path without waiting for expiry:
 
 ```bash
 certbot renew --dry-run

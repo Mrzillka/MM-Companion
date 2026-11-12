@@ -28,6 +28,7 @@ from .area import (
     area_spread_label,
     effect_is_area,
 )
+from .conditions import ATTACK_CLOSE, ATTACK_RANGED
 from .costs import power_points_spent
 from .derived import effective_ability, resistance_total, skill_total
 from .powers_cost import (
@@ -1046,6 +1047,27 @@ def ranged_distance_ranks(
     return RangedDistance(base_rank=base_rank, rank=rank, multiplier=multiplier)
 
 
+def effect_attack_range(effect: PowerEffectInstance, game_data: GameData) -> str:
+    """Whether *effect* attacks at close range or ranged: :data:`~.conditions.ATTACK_CLOSE`,
+    :data:`~.conditions.ATTACK_RANGED`, or ``""`` for neither (Perception, Personal, Rank).
+
+    Read off the effect's *effective* Range — a Ranged extra on a Close Damage makes it a
+    ranged attack — matched against ``system.attack_ranges``, case-insensitively. What a
+    posture condition does to an attack (Prone, :func:`~.conditions.condition_attack_check_mod`)
+    turns on it.
+    """
+
+    reach = effective_effect_stats(effect, game_data).get("range", "").strip().casefold()
+    if not reach:
+        return ""
+    ranges = game_data.system.attack_ranges
+    if reach == ranges.close.strip().casefold():
+        return ATTACK_CLOSE
+    if reach == ranges.ranged.strip().casefold():
+        return ATTACK_RANGED
+    return ""
+
+
 def ranged_distance_increments(reach: RangedDistance, game_data: GameData, spec) -> str:
     """The reach's range increments — ``"short 150 feet / medium 300 feet / long 600 feet"``.
 
@@ -1305,6 +1327,13 @@ class EffectRollNumbers:
     #: "Effect vs. DC 10". ``None`` for an attack (the target's Defense) or an opposed
     #: check, whose number the roller's DC box supplies.
     check_dc: int | None = None
+    #: Whether the check row rolls the wielder's *attack* ("Attack vs. …") rather than
+    #: the effect's rank or a typed number — the one a maneuver's attack-check mod
+    #: (Defensive Attack's −X) reaches.
+    attack_check: bool = False
+    #: What :attr:`check_actor` is made of, as ``(name, amount)`` pairs — the roll's
+    #: hover breakdown (see ``rolls.RollSpec.parts``).
+    check_parts: tuple[tuple[str, int], ...] = ()
 
 
 #: An explicit DC written into a check phrase — ``"Effect vs. DC 10"``.
@@ -1381,13 +1410,21 @@ def _roll_numbers(
     # The rank an "Effect vs. …" check rolls is the one the effect *resolves* at: dialled,
     # and shaved by a biting hard cap the way the save DC beside it is.
     own_rank = max(0, effect_current_rank(effect, game_data, char) - rank_cut)
+    attack_key = game_data.system.trait_keys.attack
     if attack_bonus is not None:
         attack = attack_bonus
+        base_, _sep, focus = effect.attack_skill.partition("::spec::")
+        attack_parts = [(f"{base_} ({focus})" if focus else base_, attack_bonus)]
     elif char is not None:
-        attack = effective_ability(char, game_data, game_data.system.trait_keys.attack)
+        attack = effective_ability(char, game_data, attack_key)
+        found = next((a for a in game_data.abilities if a.key == attack_key), None)
+        attack_parts = [(found.name if found is not None else attack_key, attack)]
     else:
         attack = own_rank
+        attack_parts = [("Effect rank", own_rank)]
     attack -= attack_cut
+    if attack_cut:
+        attack_parts.append(("Power Level cap", -attack_cut))
     # A Dev-mode override that writes a DC down ("Will vs. 25", "DC 25") is that DC:
     # the save the footer rolls is the one the card reads, not the book's.
     typed_dc = _override_dc(effect)
@@ -1402,10 +1439,15 @@ def _roll_numbers(
     literal = _LITERAL_ACTOR.match(phrase)
     if literal:
         actor = int(literal.group(1))
+        actor_parts = [("Written-in bonus", actor)]
         if _override_value(effect, "check", "after") is not None:
             bonus = 0
+    elif phrase.startswith("Attack"):
+        actor, actor_parts = attack, attack_parts
     else:
-        actor = attack if phrase.startswith("Attack") else own_rank
+        actor, actor_parts = own_rank, [("Effect rank", own_rank)]
+    if bonus:
+        actor_parts = [*actor_parts, ("Accurate" if bonus > 0 else "Inaccurate", bonus)]
     stated = _CHECK_DC.search(phrase)
     check_dc = int(stated.group(1)) if stated else None
     if check_dc is None and _override_value(effect, "check", "after") is None:
@@ -1415,9 +1457,11 @@ def _roll_numbers(
     return EffectRollNumbers(
         attack=attack,
         check_actor=actor + bonus,
+        check_parts=tuple(actor_parts),
         dc=dc,
         drops_check=impact.drops_check,
         check_dc=check_dc,
+        attack_check=not literal and phrase.startswith("Attack"),
     )
 
 

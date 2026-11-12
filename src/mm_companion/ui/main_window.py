@@ -18,10 +18,12 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core import library, storage
 from mm_companion.core.character import Character
+from mm_companion.ui import loading
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.compact import CompactController
 from mm_companion.ui.connection_indicator import install_connection_indicator
 from mm_companion.ui.layout_undo import LayoutHistory, UndoRouter
+from mm_companion.ui.pinned_panel import attach_strip_menu
 from mm_companion.ui.toasts import notify_window
 from mm_companion.ui.undo import UndoController
 
@@ -47,6 +49,12 @@ SIMPLE_TEXT_ON = "Edit sheet"
 #: glyphs they replaced rendered small and faint on most fonts.
 UNDO_TEXT = "Undo"
 REDO_TEXT = "Redo"
+
+
+def opening_text(character: Character | None) -> str:
+    """What the loading screen says while a sheet for *character* is built."""
+    name = library.display_name(character) if character is not None else library.UNNAMED
+    return f"Opening {name}…" if name != library.UNNAMED else "Opening the character sheet…"
 
 
 class MainWindow(QMainWindow):
@@ -126,7 +134,15 @@ class MainWindow(QMainWindow):
         # The settings window, likewise kept referenced while open.
         self._settings_window: QWidget | None = None
 
-        self._sheet = CharacterSheet(character=character, exclude=exclude)
+        # A saved character opened to be played from (locked) goes straight to the
+        # simple sheet for a player who asked for that (Settings > General). Not an
+        # NPC: that is the GM's prep material, opened to be worked on.
+        opens_simple = locked and not npc and storage.simple_sheet_on_open()
+        # Shares of a loading screen over this build, if one is up (ui/loading): the
+        # blocks, then the lock (which rebuilds the card blocks), then the rest; and
+        # the simple sheet, as much again as the lock, when it opens into one.
+        with loading.part(0.4 if opens_simple else 0.6):
+            self._sheet = CharacterSheet(character=character, exclude=exclude)
         self._sheet.requestUnserved.connect(self.requestUnserved)
         # Opened from a GM card: its rows offer "Pin to GM card", and what they pin
         # is relayed back out to whoever opened this window.
@@ -171,17 +187,15 @@ class MainWindow(QMainWindow):
 
         # New characters open unlocked for editing; otherwise the sheet is a
         # read-only view.
-        self._sheet.set_locked(locked)
+        with loading.part(0.4 if opens_simple else 0.9):
+            self._sheet.set_locked(locked)
         # Track unsaved changes only after the initial seed/lock has settled.
         self._sheet.edited.connect(self._on_edited)
 
         # Restore the remembered window size and block arrangement, if any.
         self._restore_layout()
 
-        # A saved character opened to be played from (locked) goes straight to the
-        # simple sheet for a player who asked for that (Settings > General). Not an
-        # NPC: that is the GM's prep material, opened to be worked on.
-        if locked and not self._npc and storage.simple_sheet_on_open():
+        if opens_simple:
             self._sheet.set_simple(True)
 
         # A saved sheet opens read-only, which a first-time user reads as broken;
@@ -420,6 +434,9 @@ class MainWindow(QMainWindow):
             action.triggered.connect(
                 lambda _checked=False, t=descriptor.key: self._sheet.add_block_instance(t)
             )
+        # The strip's own menu, here as well as on a right-click of its divider: the
+        # pin icon that used to be the way in only shows while the strip is empty.
+        attach_strip_menu(self._view_menu.addMenu("Pinned Strip"), self._sheet.board.panel)
         self._view_menu.addAction("Reset Layout").triggered.connect(self._reset_layout)
         self._build_simple_view_actions()
         # Keep the View toggles in sync when a block is hidden/shown elsewhere
@@ -683,11 +700,15 @@ class MainWindow(QMainWindow):
         if not path:
             return
         character = library.load_character(Path(path))
-        self._show_child(self._new_child(character, Path(path)))
+        with loading.loading(self, opening_text(character)):
+            window = self._new_child(character, Path(path))
+        self._show_child(window)
 
     def _new(self) -> None:
         """Open a blank sheet in a new window."""
-        self._show_child(self._new_blank())
+        with loading.loading(self, opening_text(None)):
+            window = self._new_blank()
+        self._show_child(window)
 
     def _show_child(self, window: MainWindow) -> None:
         """Show a window opened from this one, keeping it referenced and announced."""

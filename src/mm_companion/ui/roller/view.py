@@ -4,16 +4,17 @@ what the sheet's Dice block and the GM's Rolls block put on screen.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import (
-    QGroupBox,
+    QLabel,
     QSplitter,
     QVBoxLayout,
     QWidget,
 )
 
 from mm_companion.core import storage
+from mm_companion.ui import theme
 from mm_companion.ui.dice_roller import (
     DiceRollerPanel,
 )
@@ -24,6 +25,24 @@ from mm_companion.ui.roll_history import (
 )
 from mm_companion.ui.roller.history import LocalRollHistory
 from mm_companion.ui.session_bridge import SessionBridge, live_session
+from mm_companion.ui.widgets import tinted_style
+
+
+def titled_box(title: str) -> tuple[QWidget, QVBoxLayout]:
+    """A history's holder: a small muted heading over the list, and no frame.
+
+    It used to be a group box, the third frame nested inside the block's own (after
+    the "Roll" and "Quick rolls" boxes). The list's scroll area already draws an edge
+    round the cards, so a heading is all the history needs.
+    """
+    box = QWidget()
+    layout = QVBoxLayout(box)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(int(theme.metric("space.xs")))
+    heading = QLabel(title)
+    heading.setStyleSheet(tinted_style("text.muted", bold=True))
+    layout.addWidget(heading)
+    return box, layout
 
 
 class DiceRollerView(ReflowBox, QWidget):
@@ -54,6 +73,11 @@ class DiceRollerView(ReflowBox, QWidget):
     arrangement: GM Mode passes its ``gm=True`` one.
     """
 
+    #: A team attack's call to roll was joined in the session history (the call's
+    #: spec) — for the host to arm its roller. A host-given history is the host's own
+    #: to connect.
+    teamJoinRequested = Signal(object)
+
     def __init__(
         self,
         parent: QWidget | None = None,
@@ -70,10 +94,8 @@ class DiceRollerView(ReflowBox, QWidget):
         self._given_history = history
         if history is None:
             self.panel.localRoll.connect(self._add_local_card)
-        # Held so the same object can be disconnected again; a fresh lambda per
-        # sync would leave the old one attached and stack up.
+        # The bridge whose end :meth:`_on_session_end` is watching for (see :meth:`_follow`).
         self._session_bridge: SessionBridge | None = None
-        self._on_session_end = lambda *_: self._sync_session()
 
         self._history_part = self._build_history_panel()
         # Connected only now that the histories exist for it to reach.
@@ -81,6 +103,13 @@ class DiceRollerView(ReflowBox, QWidget):
         self.panel.contentChanged.connect(self._on_panel_resized)
         self._splitter = QSplitter(Qt.Orientation.Vertical, self)
         self._splitter.setChildrenCollapsible(False)
+        # The handle is still there to drag, but drawn only under the pointer: at rest
+        # the style painted it as a dark band across the block, which read as a stray
+        # separator line above the history.
+        self._splitter.setStyleSheet(
+            "QSplitter::handle { background: transparent; }"
+            f" QSplitter::handle:hover {{ background: {theme.wash('accent.dice', 0.35)}; }}"
+        )
         for part in self.reflow_parts():
             self._splitter.addWidget(part)
         self._splitter.setStretchFactor(0, 0)  # the panel is sized by its content...
@@ -110,7 +139,11 @@ class DiceRollerView(ReflowBox, QWidget):
         self._settle.timeout.connect(self._redivide)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        # Air inside the block's frame, as a group box gives every other block's
+        # content: the roll controls used to get it from a "Roll" group box, which is
+        # gone (see :func:`titled_box`), and the space.sm they had after it left the
+        # labels and the lane's spin box against the frame's edge.
+        layout.setContentsMargins(*theme.box("card.margins"))
         layout.addWidget(self._splitter)
 
         self.init_reflow()
@@ -218,6 +251,19 @@ class DiceRollerView(ReflowBox, QWidget):
         """
         return self.panel.shape_locked and not self._lent
 
+    def row_minimum_width(self) -> int:
+        """What putting the history **beside** the roller needs: the roller at the width
+        it would like stacked, and the history at its minimum.
+
+        The base class sums the two minimums. The panel's has become small — its toolbar
+        wraps and its result word-wraps beside the die — so taken at that, a 370px strip
+        "fitted" a row, and the roller was squeezed to a third of it with the die cut in
+        half. A side-by-side arrangement is only worth having when the roller keeps its
+        own shape in it.
+        """
+        history = self._history_part.minimumSizeHint().width()
+        return self.panel.column_natural_width() + self.REFLOW_SPACING + history
+
     def sync_reflow(self) -> bool:
         """Re-run the width-driven reflow, unless the parts are out on loan.
 
@@ -293,8 +339,7 @@ class DiceRollerView(ReflowBox, QWidget):
         if self._given_history is not None:
             # One box, always shown: the host's history is already the right one for
             # whatever state the session is in, so there is nothing to swap between.
-            box = QGroupBox("Rolls")
-            box_layout = QVBoxLayout(box)
+            box, box_layout = titled_box("Rolls")
             box_layout.addWidget(self._given_history)
             self._given_history.saveToggled.connect(self.panel.toggle_quick_roll)
             self._given_history.rollFollowUp.connect(self.panel.roll_spec)
@@ -307,8 +352,7 @@ class DiceRollerView(ReflowBox, QWidget):
             outer.addWidget(box)
             return holder
 
-        self._local_box = QGroupBox("History")
-        local_layout = QVBoxLayout(self._local_box)
+        self._local_box, local_layout = titled_box("History")
         self._local_history = LocalRollHistory()
         self._local_history.saveToggled.connect(self.panel.toggle_quick_roll)
         # A chain button on a card puts the next roll back into the panel it came
@@ -317,11 +361,11 @@ class DiceRollerView(ReflowBox, QWidget):
         local_layout.addWidget(self._local_history)
         outer.addWidget(self._local_box)
 
-        self._session_box = QGroupBox("Session rolls")
-        session_layout = QVBoxLayout(self._session_box)
+        self._session_box, session_layout = titled_box("Session rolls")
         self._session_history = RollHistoryPanel()
         self._session_history.saveToggled.connect(self.panel.toggle_quick_roll)
         self._session_history.rollFollowUp.connect(self.panel.roll_spec)
+        self._session_history.teamJoinRequested.connect(self.teamJoinRequested)
         # Hold this app's own roll until its die stops tumbling; the roller cues
         # both the window and the release (see the given-history branch above).
         self._session_history.set_defer_own(True)
@@ -380,6 +424,19 @@ class DiceRollerView(ReflowBox, QWidget):
         if bridge is not None:
             for signal in (bridge.disconnected, bridge.stopped, bridge.kicked):
                 signal.connect(self._on_session_end)
+
+    def _on_session_end(self, *_args: object) -> None:
+        """The followed session ended: show the private history again.
+
+        A method and not a lambda kept on ``self``, and that is a crash fix. A lambda
+        that closes over ``self`` and is stored on it is a reference cycle, so a
+        dropped view outlived its last reference and waited for Python's cycle
+        collector — which runs on whichever thread is allocating at the time, often a
+        session socket thread. A widget destroyed off the GUI thread cannot stop its
+        timers, and the next ``processEvents`` fired one into freed memory (see
+        docs/notes/testing.md, "Qt objects must die on the GUI thread").
+        """
+        self._sync_session()
 
     # -- the local history ---------------------------------------------------
 
@@ -440,6 +497,8 @@ class DiceRollerView(ReflowBox, QWidget):
     def sync_dice_layout(self) -> None:
         """Re-read the layout preference — the Settings page just changed it."""
         self.set_layout(storage.dice_layout())
+        # The General page also says how the modifier is set (step buttons or a slider).
+        self.panel.sync_modifier_input()
 
     def set_layout(self, layout: str) -> None:
         """Take a chosen shape: this view's axis, and the panel's own arrangement.

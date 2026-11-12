@@ -60,6 +60,7 @@ class GMPlayersMixin:
                 card.openSheetRequested.connect(self._open_player_sheet)
                 card.applyConditionRequested.connect(self._apply_condition)
                 card.removeConditionRequested.connect(self._remove_condition)
+                card.clearTemporaryRequested.connect(self._clear_player_temporary)
                 card.recoveryRequested.connect(self._request_player_recovery)
                 card.setHeroPointsRequested.connect(self._set_hero_points)
                 card.removePlayerRequested.connect(self._remove_player)
@@ -161,16 +162,15 @@ class GMPlayersMixin:
         snapshot = self._snapshots.get(player_id)
         if not snapshot:
             return
-        from mm_companion.ui.main_window import MainWindow
+        from mm_companion.ui import loading
+        from mm_companion.ui.main_window import MainWindow, opening_text
 
         previous = self._player_windows.pop(player_id, None)
         if previous is not None:
             previous.close()
-        window = MainWindow(
-            character=self._character_from_snapshot(snapshot),
-            gm_view=True,
-            pin_target=True,
-        )
+        character = self._character_from_snapshot(snapshot)
+        with loading.loading(self, opening_text(character)):
+            window = MainWindow(character=character, gm_view=True, pin_target=True)
         card = self._cards.get(player_id)
         if card is not None:
             self._attach_pin_sheet(window, card)
@@ -233,8 +233,25 @@ class GMPlayersMixin:
 
     # -- fast-apply conditions ---------------------------------------------
 
-    def _apply_condition(self, player_id: str, condition_id: str, parameter: object) -> None:
-        self._send_condition("apply", player_id, condition_id, parameter)
+    def _apply_condition(
+        self, player_id: str, condition_id: str, parameter: object, amount: object = None
+    ) -> None:
+        self._send_condition("apply", player_id, condition_id, parameter, amount)
+
+    def _clear_player_temporary(self, player_id: str) -> None:
+        """Ask a player's app to take every temporary condition off their sheet.
+
+        Like a condition, only a request: their app clears it (and writes the line in
+        the history), and the card's chips go once the snapshot comes back.
+        """
+        who = self._player_name(player_id)
+        if not self._bridge.clear_temporary(player_id):
+            self._show_notice(
+                f"{who} is not connected, so their temporary conditions were not cleared.",
+                theme.color("tint.worse"),
+            )
+            return
+        self._show_notice(f"Cleared temporary conditions on {who}.", theme.color("accent"))
 
     def _remove_condition(self, player_id: str, condition_id: str, parameter: object) -> None:
         self._send_condition("remove", player_id, condition_id, parameter)
@@ -254,7 +271,12 @@ class GMPlayersMixin:
             )
 
     def _send_condition(
-        self, action: str, player_id: str, condition_id: str, parameter: object
+        self,
+        action: str,
+        player_id: str,
+        condition_id: str,
+        parameter: object,
+        amount: object = None,
     ) -> None:
         """Order one condition change on a player's live sheet.
 
@@ -265,10 +287,14 @@ class GMPlayersMixin:
         a command that quietly failed is visible rather than assumed.
         """
         subject = str(parameter) if parameter else None
-        name = self._condition_name(condition_id, subject)
+        size = amount if isinstance(amount, int) and not isinstance(amount, bool) else None
+        name = self._condition_name(condition_id, subject, size)
         who = self._player_name(player_id)
-        send = self._bridge.apply_condition if action == "apply" else self._bridge.remove_condition
-        if not send(player_id, condition_id, subject):
+        if action == "apply":
+            sent = self._bridge.apply_condition(player_id, condition_id, subject, amount=size)
+        else:
+            sent = self._bridge.remove_condition(player_id, condition_id, subject)
+        if not sent:
             self._show_notice(
                 f"{who} is not connected, so “{name}” was not sent.", theme.color("tint.worse")
             )
@@ -276,11 +302,14 @@ class GMPlayersMixin:
         verb = "Applied" if action == "apply" else "Removed"
         self._show_notice(f"{verb} “{name}” on {who}.", theme.color("accent"))
 
-    def _condition_name(self, condition_id: str, parameter: str | None) -> str:
+    def _condition_name(
+        self, condition_id: str, parameter: str | None, amount: int | None = None
+    ) -> str:
         """The condition as the GM picked it, named the way a chip names it."""
         record = next((c for c in self._data.conditions if c.id == condition_id), None)
         return condition_display_name(
-            AppliedCondition(condition_id=condition_id, parameter=parameter), record
+            AppliedCondition(condition_id=condition_id, parameter=parameter, amount=amount),
+            record,
         )
 
     def _player_name(self, player_id: str) -> str:

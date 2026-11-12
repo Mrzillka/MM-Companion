@@ -87,6 +87,50 @@ who installed weeks ago. When CI fails where local passes, compare
 `tls_cert` finds `openssl` on PATH or, on Windows, the copy Git for Windows ships,
 so the TLS tests run locally too.
 
+## Qt objects must die on the GUI thread
+
+From 2026-11-01 one CI job in about two died with `Segmentation fault` (exit 139) at
+the `app.processEvents()` in `_close_top_level_widgets`, every time right after one
+of the last roller tests in `tests/ui/session/test_session_player.py`. It never
+reproduced locally. The cause:
+
+1. `DiceRollerView` kept `self._on_session_end = lambda *_: self._sync_session()` —
+   a lambda over `self`, stored on `self`: a **reference cycle**. A test dropping its
+   view did not free it; it waited for Python's **cycle collector**.
+2. The collector runs on **whichever thread is allocating** when a threshold trips.
+   In a session test that is often the server's or the client's socket thread, busy
+   while `table`'s teardown stops them.
+3. Collecting a Python-owned Qt object runs its C++ destructor on that thread. A
+   `QObject` destroyed off its own thread cannot stop its timers (Qt prints
+   `QObject::~QObject: Timers cannot be stopped from another thread`), and
+   `player.stop()` had just started the view's 0 ms `_settle` timer through that very
+   lambda. So the timer stayed registered against freed memory, and the GUI
+   thread's next `processEvents()` — the teardown's — fired it into the freed memory.
+
+It needed the collector to run on a socket thread at exactly that moment, which is
+why it was intermittent. Linux CI hit it far more often than Windows, where the
+freed block was rarely reused in time. Running the collector on a worker thread by
+hand (`threading.Thread(target=gc.collect)`) reproduces the warning every time, and
+the access violation within a few tries.
+
+The fix has two parts:
+
+- The view watches the session end with a **method**, so a dropped view is freed
+  the moment it is dropped (`test_a_dropped_players_roller_is_freed_on_the_spot`).
+- **`ui/gc_guard`** switches off automatic cycle collection and makes the same
+  threshold decision on a GUI-thread timer. The app installs it in `__main__`, and
+  `tests/ui/conftest.py` installs it for the run and collects in
+  `_close_top_level_widgets`. Cycles through a Qt object are too ordinary
+  (`self._helper = Helper(self)`) to hunt one by one, and the live app runs the same
+  socket threads.
+
+**The rule:** never store a closure over `self` on `self` when a method would do.
+Nor a widget's **parent** on the widget: the parent's wrapper already keeps the child's,
+so the two hold each other. `ActionGridPopup` kept the Actions button it is a child of
+(2026-11), and its test died with an access violation once the cycle was dropped; it
+now keeps the button's on-screen rectangle instead. If
+`gc.isenabled()` is ever true in the app or the UI tests, the guard has been undone.
+
 ## Running only what a change affects
 
 The full suite takes about 16 minutes. The `affected-tests` skill

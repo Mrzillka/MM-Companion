@@ -4,6 +4,7 @@ requests with them, and the session's minion rules.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import replace
 
@@ -13,7 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.core import library, storage
-from mm_companion.core.character import AppliedCondition, Character
+from mm_companion.core.character import AppliedCondition, Character, ShakeOff
 from mm_companion.core.rules import (
     MinionRules,
     RollSpec,
@@ -22,38 +23,60 @@ from mm_companion.core.rules import (
     condition_changes,
     critical_answer,
     is_minion,
+    ladder_shake_off,
     localize_spec,
     minion_save_spec,
     resolve_rung,
     rung_caption,
+    trait_ref,
 )
 from mm_companion.core.session.model import (
     KIND_REQUEST,
+    KIND_ROLL,
 )
 from mm_companion.ui import theme
+from mm_companion.ui.action_grid import GridSection
+from mm_companion.ui.action_menu import combat_menu
+from mm_companion.ui.action_run import resolved_by_a_run
 from mm_companion.ui.action_ui import (
     TABLE_MOD_ID,
     TABLE_SESSION_KEY,
     session_minion_rules,
 )
-from mm_companion.ui.area import KIND_AREA_ATTACK
+from mm_companion.ui.area import AREA_ACTION, KIND_AREA_ATTACK
 from mm_companion.ui.gm.model import (
     ANSWERED_MARK,
     AS_WRITTEN_CAPTION,
     CRITICAL_MARK,
     NO_NPCS_TO_ANSWER,
+    SCENE_PLAYER,
     UNTRAINED_MARK,
     _Answering,
 )
+from mm_companion.ui.group_check import MODE_GROUP, MODE_TEAM
 from mm_companion.ui.impress import (
+    IMPRESS_ACTION,
     KIND_IMPRESS,
     PARTY_NPC,
+    PARTY_PLAYER,
     ImpressParty,
 )
 from mm_companion.ui.roll_history import AnswerContext
 from mm_companion.ui.scene_card import CARD_AREA, CARD_END_TURN, CARD_IMPRESS
 from mm_companion.ui.sections.conditions import condition_display_name
 from mm_companion.ui.undo import absorbing
+
+#: The Actions popup's Team attack tile: a call to roll anyone joins (ui/team_call.py).
+TEAM_ATTACK = "team_attack"
+#: The group tiles (``actions.json``), and the group window each opens.
+TEAM_CHECK = "team_check"
+GROUP_CHECK = "group_check"
+GROUP_ACTIONS = (TEAM_CHECK, GROUP_CHECK)
+
+#: Why the group tiles are greyed out on a board with no group.
+NO_NPC_GROUPS = (
+    "Make an NPC group first: drop one NPC card onto another, or make several with Quick NPC."
+)
 
 
 class GMRollsMixin:
@@ -98,7 +121,7 @@ class GMRollsMixin:
                 caption = rung_caption(crit, self._data) or "the worst outcome"
                 action = menu.addAction(
                     f"{party.name} — {CRITICAL_MARK} {caption}, no save",
-                    lambda p=party, r=crit: self._crit_minion(p, r, where),
+                    lambda p=party, r=crit: self._crit_minion(p, r, where, spec),
                 )
                 action.setToolTip("A critical hit on a minion lands its worst, unrolled.")
                 portrait = self._scene_board.portrait(party.ref)
@@ -188,10 +211,108 @@ class GMRollsMixin:
         rung = answer_rung(ladder, int(degree), entry.character, self._data, self.minion_rules())
         if rung is None:
             return
-        self._land_answer(party, rung, answering.where.source, roll.get("seq"))
+        rolled = RollSpec.from_dict(roll.get("spec"))
+        dc = roll.get("dc")
+        shake = ladder_shake_off(
+            ladder,
+            dc if isinstance(dc, int) and not isinstance(dc, bool) else answering.spec.dc,
+            int(degree),
+            trait=self._resisted_with(answering.spec, rolled),
+            source=answering.where.source,
+        )
+        self._land_answer(party, rung, answering.where.source, roll.get("seq"), shake)
 
-    def _land_answer(self, party: ImpressParty, rung, source: str, seq: object) -> None:
-        """Put *rung* on an NPC, say so, and hang a ↶ on the card *seq* names."""
+    def _on_player_save(self, roll: object) -> None:
+        """A player's save is back: land what it did on them, as an aimed one lands.
+
+        A save carrying a ladder that a player rolled off a request card (an Impress or
+        an area run as "request only") or off a chip under someone's attack: its rung is
+        resolved against their latest snapshot and sent to their sheet, with the record
+        of how it comes off — what the table would have done had it resolved the action.
+        Left alone: a roll an action run of this app asked for (that run lands it), one
+        the GM rolled as an NPC (:meth:`_apply_answer`), one an attacker rolled off their
+        own card for their target, and a ladder kind the GM's "Saves you roll for NPCs"
+        switches turned off.
+        """
+        if not isinstance(roll, dict) or roll.get("kind", KIND_ROLL) != KIND_ROLL:
+            return
+        degree = roll.get("degree")
+        if isinstance(degree, bool) or not isinstance(degree, int):
+            return
+        spec = RollSpec.from_dict(roll.get("spec"))
+        if spec is None or spec.ladder is None or spec.actor or spec.own_attack:
+            # An NPC's answer is _apply_answer's; an attacker rolling the save off their
+            # own card rolled it for someone else, who is not named.
+            return
+        if resolved_by_a_run(spec.action_id):
+            return
+        player_id = str(roll.get("player_id", "") or "")
+        if not player_id or player_id == self._bridge.own_player_id():
+            return
+        if not storage.gm_auto_apply().get(spec.ladder.kind, True):
+            return
+        party = self._player_party(player_id)
+        if party is None or party.character is None:
+            return
+        ladder = spec.ladder
+        rung = answer_rung(ladder, degree, party.character, self._data, self.minion_rules())
+        if rung is None:
+            return
+        # Resolved on a copy: the snapshot is the player's, and comes back changed.
+        changes = list(
+            resolve_rung(deepcopy(party.character), rung, self._data, source=ladder.source)
+        )
+        if not changes:
+            return
+        dc = roll.get("dc")
+        shake = ladder_shake_off(
+            ladder,
+            dc if isinstance(dc, int) and not isinstance(dc, bool) else spec.dc,
+            degree,
+            trait=trait_ref(self._data, spec.trait_key),
+            source=ladder.source,
+        )
+        delivered, landed = self.land_rung(party, changes, shake)
+        names = self._change_names(landed) if landed else "no worse than it was"
+        if delivered:
+            self._show_notice(f"{party.name}: {names}", theme.color("tint.worse"))
+        else:
+            self._show_notice(f"{party.name}: {names} (not delivered)", theme.color("tint.worse"))
+
+    def _player_party(self, player_id: str) -> ImpressParty | None:
+        """The player in *player_id*'s seat as an action party: their board card if they
+        have one, else their seat, read off their latest snapshot."""
+        _sources, targets = self.impress_parties()
+        party = next((p for p in targets if p.kind == PARTY_PLAYER and p.source == player_id), None)
+        if party is not None:
+            return party
+        snapshot = self._snapshots.get(player_id)
+        if not snapshot:
+            return None
+        return ImpressParty(
+            f"{SCENE_PLAYER}:{player_id}",
+            self._player_name(player_id),
+            PARTY_PLAYER,
+            player_id,
+            Character.from_dict(snapshot),
+        )
+
+    def _resisted_with(self, spec: RollSpec, rolled: RollSpec | None) -> str:
+        """The ``kind:key`` a save was rolled with — what overcoming it defaults to."""
+        key = spec.trait_key or (rolled.trait_key if rolled is not None else "")
+        return trait_ref(self._data, key)
+
+    def _land_answer(
+        self,
+        party: ImpressParty,
+        rung,
+        source: str,
+        seq: object,
+        shake: ShakeOff | None = None,
+    ) -> None:
+        """Put *rung* on an NPC, say so, and hang a ↶ on the card *seq* names.
+
+        *shake* is how what it lands comes off again (an Affliction's overcome check)."""
         entry = self._npc_state.get(party.source)
         if entry is None:
             return
@@ -199,11 +320,11 @@ class GMRollsMixin:
         changes = resolve_rung(entry.character, rung, self._data, source=source)
         if not changes:
             return
-        self.impress_apply(party, list(changes))
+        _delivered, landed = self.land_rung(party, list(changes), shake)
         added, removed = condition_changes(before, entry.character.conditions)
         if not added and not removed:
             return
-        names = self._change_names(changes)
+        names = self._change_names(landed or changes)
         self._show_notice(f"{party.name}: {names}", theme.color("tint.worse"))
         if isinstance(seq, int):
             self._history.set_undo(
@@ -212,7 +333,9 @@ class GMRollsMixin:
                 lambda: self._undo_answer(seq, party, added, removed, names),
             )
 
-    def _crit_minion(self, party: ImpressParty, rung, where: AnswerContext) -> None:
+    def _crit_minion(
+        self, party: ImpressParty, rung, where: AnswerContext, spec: RollSpec | None = None
+    ) -> None:
         """A critical hit on a minion: its worst, with no resistance check (PDF p197).
 
         Nothing is rolled, so the history gets a line saying what happened, and the
@@ -220,7 +343,16 @@ class GMRollsMixin:
         """
         caption = rung_caption(rung, self._data) or "the worst outcome"
         self._post_note(f"{party.name}: critical hit on a minion — {caption}, no save")
-        self._land_answer(party, rung, where.source, where.seq)
+        shake = None
+        if spec is not None:
+            shake = ladder_shake_off(
+                spec.ladder,
+                spec.dc,
+                -len(spec.ladder.rungs) if spec.ladder is not None else None,
+                trait=self._resisted_with(spec, None),
+                source=where.source,
+            )
+        self._land_answer(party, rung, where.source, where.seq, shake)
         if where.seq is not None:
             self._answered.setdefault(where.seq, set()).add(party.name)
 
@@ -250,11 +382,49 @@ class GMRollsMixin:
             for cid, parameter in changes
         )
 
+    def action_menu(self, own: Mapping[str, str | None]) -> list[GridSection]:
+        """The Actions popup's sections on the Rolls block's roller (see
+        :func:`~mm_companion.ui.action_menu.combat_menu`): the panel's own actions
+        (*own*: Reroll), Impress and Area, the group actions, which need a group, and
+        the combat actions an NPC takes (:meth:`combat_offered`)."""
+        offered = dict(own)
+        offered.update(self.combat_offered())
+        if self._data.impress.available:
+            offered[KIND_IMPRESS] = None
+        if self._data.area.available:
+            offered[KIND_AREA_ATTACK] = None
+        groups = None if self._npc_groups else NO_NPC_GROUPS
+        for key in GROUP_ACTIONS:
+            offered[key] = groups
+        offered[TEAM_ATTACK] = self._team_calls.reason()
+        return combat_menu(self._data, offered, gm=True, fallback=[IMPRESS_ACTION, AREA_ACTION])
+
     def _on_roller_action(self, kind: str) -> None:
+        if self._gm_combat_action(kind):
+            return
         if kind == KIND_IMPRESS:
             self._impress.open_new()
         elif kind == KIND_AREA_ATTACK:
             self._area.open_new()
+        elif kind == TEAM_ATTACK:
+            self._team_calls.open_new(self._aim_targets())
+        elif kind in GROUP_ACTIONS:
+            group_id = self._choose_group()
+            if group_id is None:
+                return
+            self._group_check(group_id, MODE_TEAM if kind == TEAM_CHECK else MODE_GROUP)
+
+    def _choose_group(self) -> str | None:
+        """Which NPC group acts: the only one there is, or the one picked off a menu of
+        them at the pointer (each with its member count)."""
+        groups = list(self._npc_groups)
+        if len(groups) <= 1:
+            return groups[0].id if groups else None
+        menu = QMenu(self)
+        for group in groups:
+            menu.addAction(f"{group.name} ({len(group.members)})").setData(group.id)
+        chosen = menu.exec(QCursor.pos())
+        return chosen.data() if chosen is not None else None
 
     def _on_scene_action(self, ref: str, action: str) -> None:
         """A creature's card on the board, right-clicked: end its turn, or have it act."""
@@ -344,6 +514,7 @@ class GMRollsMixin:
         """A pinned tile on an NPC's card: roll (or load) it as that creature rolls."""
         if not isinstance(spec, RollSpec):
             return
+        self._follow_actor(name)
         entry = self._npc_state.get(name)
         minion = self.rolls_as_minion(entry.character if entry is not None else None)
         if load:
@@ -352,7 +523,7 @@ class GMRollsMixin:
             self._roller.roll_spec(spec, minion=minion)
 
     def _request_roll(self, spec: object) -> None:
-        """Ask the table to roll something — the Request row's handler.
+        """Ask the table to roll something — the Ask to Roll form's handler.
 
         The twin of :meth:`~mm_companion.ui.sections.dice.DiceSection.request_roll`,
         and it has to be written out here for the reason

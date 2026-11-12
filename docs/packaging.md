@@ -8,7 +8,7 @@ Everything lives under `installer/`:
 
 | File | Purpose |
 | --- | --- |
-| `mm_companion.spec` | PyInstaller spec — freezes the app (bundles game data + `mm.ico`). |
+| `mm_companion.spec` | PyInstaller spec — freezes the app (bundles game data + `mm.ico`, stamps the Windows version resource). |
 | `mm_companion.iss` | Inno Setup script — the installer UI and logic. |
 | `build.ps1` | One command that runs PyInstaller (twice) then Inno Setup. |
 
@@ -212,6 +212,13 @@ your shorthand accordingly:
 | 0.11 | 0.1.1 |
 | 0.12 | 0.1.2 |
 | 0.2 | 0.2.0 |
+
+Nothing else carries the version by hand. On Windows the spec stamps both exes
+with a version resource (Properties ▸ Details: product name "MM-Companion", file
+and product version, the copyright line from `LICENSE`), built at freeze time from
+the `__version__` in the checkout's `__init__.py`; the installer gets the same from
+`/DAppVersion` through `VersionInfoVersion` and `VersionInfoProductName` in the
+`.iss`. SignPath requires both on every file it signs.
 
 The fixed `AppId` GUID in `mm_companion.iss` must **never** change — it is how
 the installer recognizes a prior installation across releases.

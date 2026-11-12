@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QResizeEvent
-from PySide6.QtWidgets import QLayout, QLayoutItem, QSizePolicy, QWidget
+from PySide6.QtWidgets import QFrame, QLayout, QLayoutItem, QSizePolicy, QWidget
 
 
 class FlowContainer(QWidget):
@@ -94,6 +94,25 @@ class FlowContainer(QWidget):
         return super().event(event)
 
 
+class FlowRule(QFrame):
+    """A thin upright rule for :meth:`FlowLayout.add_separator`, as tall as *beside*.
+
+    Sized by its hint, never fixed, so the flow can give it no room at all where a
+    line wraps around it. Its colour is the caller's (a stylesheet background).
+    """
+
+    def __init__(self, thickness: int, beside: QWidget, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._thickness = thickness
+        self._beside = beside
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        return QSize(self._thickness, self._beside.sizeHint().height())
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        return QSize(0, 0)
+
+
 class FlowLayout(QLayout):
     """Lays items out horizontally, wrapping to the next row when out of width."""
 
@@ -101,6 +120,26 @@ class FlowLayout(QLayout):
         super().__init__(parent)
         self.setSpacing(spacing)
         self._items: list[QLayoutItem] = []
+        self._separators: set[int] = set()  # id() of the separator items
+        self._justify = False
+
+    def set_justify(self, justify: bool) -> None:
+        """Whether each line's items share out the line's spare width between them, so
+        the lines run edge to edge (a justified row) rather than stopping short at the
+        left. Only widths change: the wrapping, and so the height, are the same. The last
+        of several lines grows no more than the one above it, as text justification
+        leaves its last line ragged."""
+        self._justify = bool(justify)
+        self.invalidate()
+
+    def add_separator(self, widget: QWidget) -> None:
+        """Add *widget* as a rule between its neighbours, drawn only between two items
+        on one line: where the line wraps around it, it gets no room and no size, so
+        no line starts or ends on a stray rule. Decided in the same pass as the
+        wrapping, from the width alone, so it adds no adaptive decision of its own.
+        """
+        self.addWidget(widget)
+        self._separators.add(id(self._items[-1]))
 
     # -- QLayout plumbing -------------------------------------------------
     def addItem(self, item: QLayoutItem) -> None:
@@ -118,6 +157,7 @@ class FlowLayout(QLayout):
     def takeAt(self, index: int) -> QLayoutItem | None:
         if 0 <= index < len(self._items):
             item = self._items.pop(index)
+            self._separators.discard(id(item))
             self._contents_changed()
             return item
         return None
@@ -181,19 +221,64 @@ class FlowLayout(QLayout):
         line_height = 0
         spacing = self.spacing()
 
-        for item in self._items:
+        right = effective.x() + effective.width()
+        # Each line's items, as (item, x, y, size, is a rule), placed once the line is
+        # done so a justified line can widen them first. A rule moves along with its
+        # neighbours but never widens.
+        line: list[tuple[QLayoutItem, int, int, QSize, bool]] = []
+        # What each item on the line above grew by, for a justified last line.
+        above: list[int | None] = [None]
+
+        def place(items: list[tuple[QLayoutItem, int, int, QSize, bool]], final: bool) -> None:
+            if test_only or not items:
+                return
+            growing = sum(1 for entry in items if not entry[4])
+            last = items[-1]
+            spare = right - (last[1] + last[3].width()) if self._justify and growing else 0
+            share, extra = divmod(max(0, spare), max(1, growing))
+            # The last of several lines grows no more than the line above did. Shared
+            # out in full, one pill left over on a line of its own stretched the whole
+            # width and read as the roller's main button.
+            if final and above[0] is not None and share >= above[0]:
+                share, extra = above[0], 0
+            above[0] = share
+            shift = grown = 0
+            for entry, left, top, size, rule in items:
+                grow = 0
+                if not rule:
+                    grow = share + (1 if grown < extra else 0)
+                    grown += 1
+                entry.setGeometry(QRect(QPoint(left + shift, top), size + QSize(grow, 0)))
+                shift += grow
+
+        for index, item in enumerate(self._items):
             hint = item.sizeHint()
+            if id(item) in self._separators:
+                after = self._items[index + 1] if index + 1 < len(self._items) else None
+                # Only between two items: not first on a line, and the next item must
+                # fit after it on this one.
+                between = (
+                    x > effective.x()
+                    and after is not None
+                    and x + hint.width() + spacing + after.sizeHint().width() <= right
+                )
+                if not between:
+                    if not test_only:
+                        item.setGeometry(QRect(QPoint(x, y), QSize(0, 0)))
+                    continue
             next_x = x + hint.width() + spacing
             # Against the edge itself, not ``right()``: that is the last pixel *inside*
             # the rect, so a row that fitted exactly used to wrap its last item.
             if next_x - spacing > effective.x() + effective.width() and line_height > 0:
+                place(line, final=False)
+                line = []
                 x = effective.x()
                 y = y + line_height + spacing
                 next_x = x + hint.width() + spacing
                 line_height = 0
-            if not test_only:
-                item.setGeometry(QRect(QPoint(x, y), hint))
+            line.append((item, x, y, hint, id(item) in self._separators))
             x = next_x
             line_height = max(line_height, hint.height())
+        place(line, final=True)
 
         return y + line_height - rect.y() + margins.bottom()

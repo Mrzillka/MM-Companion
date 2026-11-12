@@ -17,12 +17,13 @@ GM assumed.
 from __future__ import annotations
 
 import time
+import weakref
 
 import pytest
 from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMessageBox
 
 from mm_companion.core import library, storage
-from mm_companion.core.character import AdvantageSelection, Character
+from mm_companion.core.character import SHAKE_EFFECT, AdvantageSelection, Character, ShakeOff
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
 from mm_companion.core.rules import apply_condition
@@ -565,6 +566,28 @@ def test_the_gm_can_put_a_condition_on_a_players_sheet(qapp: QApplication, table
     assert [c["id"] for c in stored] == ["dazed"]
 
 
+def test_the_gm_can_size_a_maneuver_and_clear_it_again(qapp: QApplication, table) -> None:
+    """Protocol v20: the command carries an amount, and "Clear temporary" reaches the sheet."""
+    host, player = table
+    sheet, _pusher, receiver = joined_sheet(player)
+    player_id = player.client.player_id
+    host.server.apply_condition(player_id, "prone")
+    host.server.apply_condition(player_id, "all_out_attack", amount=3)
+
+    assert wait_for(qapp, lambda: receiver.applied == 2)
+    applied = sheet.character.conditions[1]
+    assert (applied.condition_id, applied.amount, applied.temporary) == (
+        "all_out_attack",
+        3,
+        True,
+    )
+
+    host.server.clear_temporary(player_id)
+
+    assert wait_for(qapp, lambda: receiver.applied == 3)
+    assert [c.condition_id for c in sheet.character.conditions] == ["prone"]
+
+
 def test_a_gm_applied_condition_bundles_like_a_local_one(qapp: QApplication, table) -> None:
     """The command goes through the same resolver, so an umbrella brings its members."""
     host, player = table
@@ -652,6 +675,23 @@ def test_the_gm_can_set_a_players_hero_points(qapp: QApplication, table) -> None
     )
 
 
+def test_how_a_condition_comes_off_rides_with_it_and_comes_back(qapp: QApplication, table) -> None:
+    """Protocol v20: an impression's or an Affliction's record lands on the sheet, and the
+    snapshot hands it back to the GM, whose End turn reads it there."""
+    host, player = table
+    sheet, _pusher, receiver = joined_sheet(player)
+    player_id = player.client.player_id
+    shake = ShakeOff(kind=SHAKE_EFFECT, name="Sleep Ray", dc=17, ref="affliction", degree=2)
+    host.server.apply_condition(player_id, "stunned", shake_off=shake.to_dict())
+
+    assert wait_for(qapp, lambda: receiver.applied == 1)
+    (stunned,) = sheet.character.conditions
+    assert stunned.shake_off == shake
+    assert wait_for(qapp, lambda: host.state.players[player_id].character.get("conditions"))
+    (stored,) = host.state.players[player_id].character["conditions"]
+    assert ShakeOff.from_dict(stored["shakeOff"]) == shake
+
+
 def test_a_command_naming_somebody_else_is_ignored(qapp: QApplication, table) -> None:
     _host, player = table
     sheet, _pusher, receiver = joined_sheet(player)
@@ -709,8 +749,7 @@ def test_a_players_roll_is_resolved_by_the_gm_and_shared(
     monkeypatch.setattr(dice_roller, "ROLL_DURATION_MS", 0)
     set_active_session(player)
     view = DiceRollerView()
-    view.panel._bonus_spin.setValue(7)
-    view.panel._dc_check.setChecked(True)
+    view.panel._modifier_spin.setValue(7)
     view.panel._dc_spin.setValue(12)
 
     view.panel._start_roll()
@@ -722,6 +761,25 @@ def test_a_players_roll_is_resolved_by_the_gm_and_shared(
     # The number on the player's screen is the server's, not one of its own.
     assert wait_for(qapp, lambda: str(recorded.total) in view.panel._readout.text())
     assert wait_for(qapp, lambda: len(view._session_history.cards()) == 1)
+
+
+def test_a_dropped_players_roller_is_freed_on_the_spot(qapp: QApplication, table) -> None:
+    """A roller nobody holds any more goes at once, on the GUI thread.
+
+    It used to keep a lambda over itself to watch the session end — a reference
+    cycle, so a dropped view waited for Python's cycle collector, which ran on a
+    socket thread. A widget destroyed there cannot stop its timers, and the next
+    ``processEvents`` fired one into freed memory: the teardown segfault that killed
+    one CI job in two (docs/notes/testing.md).
+    """
+    _host, player = table
+    set_active_session(player)
+    view = DiceRollerView()
+    gone = weakref.ref(view)
+
+    del view
+
+    assert gone() is None
 
 
 def test_a_players_roller_shows_the_gms_rolls_too(qapp: QApplication, table) -> None:

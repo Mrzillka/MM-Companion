@@ -78,7 +78,7 @@ from mm_companion.core.rules import (
 from mm_companion.core.rules import recovery_check as condition_recovery_check
 from mm_companion.ui import theme
 from mm_companion.ui.attack_targets import add_target_actions
-from mm_companion.ui.card_chips import _ConditionChip, start_card_drag
+from mm_companion.ui.card_chips import _ConditionChip, clear_temporary_button, start_card_drag
 from mm_companion.ui.card_summary import PortraitButton, character_summary_html
 from mm_companion.ui.damage_row import DamageRow
 from mm_companion.ui.defeat_look import apply_defeat_look, defeated_pixmap
@@ -87,6 +87,7 @@ from mm_companion.ui.pin_panel import PinPanel
 from mm_companion.ui.sections.conditions import (
     build_condition_menu,
     condition_display_name,
+    condition_tone_token,
     condition_tooltip,
 )
 from mm_companion.ui.widgets import discard_widget, help_markup, muted_style
@@ -151,9 +152,11 @@ class NPCCard(QFrame):
     removeRequested = Signal(str)
     #: The NPC's file name — delete the file for good.
     deleteRequested = Signal(str)
-    #: ``(file_name, condition_id, parameter)`` — put this condition on the NPC.
-    #: The parameter rides as ``object`` (it is ``str | None``).
-    applyConditionRequested = Signal(str, str, object)
+    #: ``(file_name, condition_id, parameter, amount)`` — put this condition on the
+    #: NPC. The parameter and the amount ride as ``object`` (each may be ``None``).
+    applyConditionRequested = Signal(str, str, object, object)
+    #: The NPC's file name — take every temporary condition off it.
+    clearTemporaryRequested = Signal(str)
     #: ``(file_name, condition_id, parameter)`` — take it off again.
     removeConditionRequested = Signal(str, str, object)
     #: ``(file_name, condition_id, parameter)`` — roll this condition's recovery check.
@@ -371,11 +374,18 @@ class NPCCard(QFrame):
         self._chips = FlowContainer()
         self._chip_flow = FlowLayout(self._chips, spacing=int(theme.metric("space.xs")))
         self._chip_flow.setContentsMargins(0, 0, 0, 0)
+        # "Clear temporary", on a line of its own under the chips (never in their flow,
+        # which is read as the list of conditions), shown only while one is temporary.
+        self._clear_temporary = clear_temporary_button(
+            lambda: self.clearTemporaryRequested.emit(self.name_key), compact=True
+        )
         if row:
             # A row's conditions read under its name, part of who it is right now.
             info.addWidget(self._chips)
+            info.addWidget(self._clear_temporary, alignment=Qt.AlignmentFlag.AlignLeft)
         else:
             layout.addWidget(self._chips)
+            layout.addWidget(self._clear_temporary, alignment=Qt.AlignmentFlag.AlignLeft)
 
         # The two ways to put something on this creature, side by side and in both
         # states: pick a condition by hand, or take a rung of the damage ladder.
@@ -664,8 +674,10 @@ class NPCCard(QFrame):
             record = self._conditions_by_id.get(applied.condition_id)
             chip = _ConditionChip(
                 condition_display_name(applied, record),
-                tooltip=condition_tooltip(applied, record, self._conditions_by_id),
+                tooltip=condition_tooltip(applied, record, self._conditions_by_id, self._data),
                 compact=self._collapsed,
+                tone=condition_tone_token(record),
+                temporary=applied.temporary,
             )
             chip.arm_removal(
                 lambda cid=applied.condition_id, param=applied.parameter: (
@@ -682,6 +694,7 @@ class NPCCard(QFrame):
                 )
             self._chip_flow.addWidget(chip)
         self._chips.setVisible(bool(self._character.conditions))
+        self._clear_temporary.setVisible(any(c.temporary for c in self._character.conditions))
         # What a damage button will do depends on what is already on the creature,
         # so the row's tooltips are re-derived whenever the conditions move.
         self._damage.refresh()
@@ -715,13 +728,19 @@ class NPCCard(QFrame):
         The dialog reads the NPC's own character for its "a specific advantage /
         power" choices, so the GM picks from what the NPC actually has.
         """
-        from mm_companion.ui.sections.condition_dialog import prompt_condition_parameter
+        from mm_companion.ui.sections.condition_dialog import (
+            prompt_condition_amount,
+            prompt_condition_parameter,
+        )
 
         go_ahead, parameter = prompt_condition_parameter(
             condition, self._data, self._character, self
         )
+        if not go_ahead:
+            return
+        go_ahead, amount = prompt_condition_amount(condition, self)
         if go_ahead:
-            self.applyConditionRequested.emit(self.name_key, condition.id, parameter)
+            self.applyConditionRequested.emit(self.name_key, condition.id, parameter, amount)
 
     # -- actions -----------------------------------------------------------
 

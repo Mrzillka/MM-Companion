@@ -46,13 +46,19 @@ from mm_companion.core.character import Character
 from mm_companion.core.data_loader import Condition, GameData
 from mm_companion.core.rules import can_recover
 from mm_companion.ui import theme
-from mm_companion.ui.card_chips import _ConditionChip, _SceneEye, start_card_drag
+from mm_companion.ui.card_chips import (
+    _ConditionChip,
+    _SceneEye,
+    clear_temporary_button,
+    start_card_drag,
+)
 from mm_companion.ui.card_summary import PORTRAIT_SIZE, PortraitButton, character_summary_html
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.pin_panel import install_pin_panel
 from mm_companion.ui.sections.conditions import (
     build_condition_menu,
     condition_display_name,
+    condition_tone_token,
     condition_tooltip,
 )
 from mm_companion.ui.sections.system_info import HeroPointsWidget
@@ -73,10 +79,12 @@ class PlayerCard(QFrame):
 
     #: The player's id — the GM asked to see their sheet.
     openSheetRequested = Signal(str)
-    #: ``(player_id, condition_id, parameter)`` — put this condition on that
-    #: player. The parameter rides as ``object`` because it is ``str | None`` and
-    #: a ``Signal(str)`` would flatten ``None`` into an empty string.
-    applyConditionRequested = Signal(str, str, object)
+    #: ``(player_id, condition_id, parameter, amount)`` — put this condition on that
+    #: player. The parameter and amount ride as ``object`` because each may be
+    #: ``None``, and a ``Signal(str)`` would flatten ``None`` into an empty string.
+    applyConditionRequested = Signal(str, str, object, object)
+    #: The player's id — ask their app to take every temporary condition off.
+    clearTemporaryRequested = Signal(str)
     #: ``(player_id, condition_id, parameter)`` — take it off again.
     removeConditionRequested = Signal(str, str, object)
     #: ``(player_id, condition_id, parameter)`` — ask the player to roll this
@@ -189,6 +197,11 @@ class PlayerCard(QFrame):
         self._chips = FlowContainer()
         self._chip_flow = FlowLayout(self._chips)
         layout.addWidget(self._chips)
+        # Shown only while the player has a temporary condition and can be commanded.
+        self._clear_temporary = clear_temporary_button(
+            lambda: self.clearTemporaryRequested.emit(self.player_id), compact=True
+        )
+        layout.addWidget(self._clear_temporary, alignment=Qt.AlignmentFlag.AlignLeft)
         layout.addStretch()
 
         self.pins = install_pin_panel(self, layout, data)
@@ -329,7 +342,9 @@ class PlayerCard(QFrame):
             record = self._conditions_by_id.get(applied.condition_id)
             chip = _ConditionChip(
                 condition_display_name(applied, record),
-                tooltip=condition_tooltip(applied, record, self._conditions_by_id),
+                tooltip=condition_tooltip(applied, record, self._conditions_by_id, self._data),
+                tone=condition_tone_token(record),
+                temporary=applied.temporary,
             )
             if self._targetable:
                 chip.arm_removal(
@@ -346,6 +361,9 @@ class PlayerCard(QFrame):
                     )
             self._chip_flow.addWidget(chip)
         self._chips.setVisible(bool(conditions))
+        self._clear_temporary.setVisible(
+            self._targetable and any(applied.temporary for applied in conditions)
+        )
 
     def condition_names(self) -> list[str]:
         """The chip captions, in order — the readable form of the card's state."""
@@ -369,12 +387,18 @@ class PlayerCard(QFrame):
         power" choices, so the GM picks from what that player actually has. A card
         with no snapshot yet falls back to a blank sheet rather than refusing.
         """
-        from mm_companion.ui.sections.condition_dialog import prompt_condition_parameter
+        from mm_companion.ui.sections.condition_dialog import (
+            prompt_condition_amount,
+            prompt_condition_parameter,
+        )
 
         subject = self._character or Character.new_default(self._data)
         go_ahead, parameter = prompt_condition_parameter(condition, self._data, subject, self)
+        if not go_ahead:
+            return
+        go_ahead, amount = prompt_condition_amount(condition, self)
         if go_ahead:
-            self.applyConditionRequested.emit(self.player_id, condition.id, parameter)
+            self.applyConditionRequested.emit(self.player_id, condition.id, parameter, amount)
 
     # -- removing the seat -------------------------------------------------
 

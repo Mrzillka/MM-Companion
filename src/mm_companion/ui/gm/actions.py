@@ -5,11 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from mm_companion.core import library
-from mm_companion.core.character import Character
+from mm_companion.core.character import Character, ShakeOff
 from mm_companion.core.rules import (
     RollSpec,
     apply_condition,
     decrement_condition,
+    merge_landing,
 )
 from mm_companion.ui.action_ui import (
     publish_table_rules,
@@ -73,25 +74,62 @@ class GMActionsMixin:
         sources += [party for party in targets if party.kind == PARTY_PLAYER]
         return sources, targets
 
-    def impress_apply(self, party: ImpressParty, changes: list[tuple[str, str | None]]) -> bool:
-        """Put an impression's conditions on one creature.
+    def land_rung(
+        self,
+        party: ImpressParty,
+        changes,
+        shake_off: ShakeOff | None = None,
+    ) -> tuple[bool, tuple[tuple[str, str | None], ...]]:
+        """Land a save's rung on one creature, counting the same Affliction already on it
+        (:func:`~mm_companion.core.rules.merge_landing`: the highest degree applies, or a
+        Cumulative one's degrees add up). Whether it was delivered, and what went on —
+        nothing when it is no worse than what is already there."""
+        landing = merge_landing(party.character, self._data, changes, shake_off)
+        if landing.remove:
+            self.action_remove(party, list(landing.remove))
+        if not landing.apply:
+            return True, ()
+        return self.impress_apply(party, list(landing.apply), landing.shake), landing.apply
+
+    def impress_apply(
+        self,
+        party: ImpressParty,
+        changes: list[tuple[str, str | None]],
+        shake_off: ShakeOff | None = None,
+    ) -> bool:
+        """Put an impression's (or a save's) conditions on one creature.
 
         An NPC's go straight onto its model, through the path every other condition
         change takes (its card, an open sheet, the file, the board). A player's go to
-        their app as commands, exactly as the GM's own "+" sends one.
+        their app as commands, exactly as the GM's own "+" sends one. *shake_off* goes
+        with each: how an impression's or an Affliction's conditions come off again, which
+        End turn reads back off the creature (its model, or the player's snapshot).
         """
         if party.kind == PARTY_NPC:
             entry = self._npc_state.get(party.source)
             if entry is None:
                 return False
             for condition_id, parameter in changes:
-                apply_condition(entry.character, condition_id, self._data, parameter=parameter)
-            self._after_npc_condition_change(entry, list(changes), applying=True)
+                apply_condition(
+                    entry.character,
+                    condition_id,
+                    self._data,
+                    parameter=parameter,
+                    shake_off=shake_off,
+                )
+            self._after_npc_condition_change(
+                entry, list(changes), applying=True, shake_off=shake_off
+            )
             return True
+        wire = shake_off.to_dict() if shake_off is not None else None
         delivered = True
         for condition_id, parameter in changes:
             delivered = (
-                bool(self._bridge.apply_condition(party.source, condition_id, parameter))
+                bool(
+                    self._bridge.apply_condition(
+                        party.source, condition_id, parameter, shake_off=wire
+                    )
+                )
                 and delivered
             )
         return delivered
@@ -198,6 +236,7 @@ class GMActionsMixin:
         spec, target = payload
         if not isinstance(spec, RollSpec) or not isinstance(target, SceneTarget):
             return
+        self._follow_actor(name)
         source = self._npc_party(name)
         self._attack.aim_own(source, spec, target.ref, target.name)
 
@@ -209,6 +248,7 @@ class GMActionsMixin:
         if not isinstance(spec, RollSpec) or not isinstance(target, SceneTarget):
             return
         name = self._npc_name_for_window(window)
+        self._follow_actor(name)
         if name:
             source = self._npc_party(name)
         else:
@@ -227,9 +267,13 @@ class GMActionsMixin:
         entry = self._npc_state[name]
         return ImpressParty(f"npc:{name}", entry.summary.name, PARTY_NPC, name, entry.character)
 
-    def area_roll_attack(self, spec: RollSpec, attacker: Character | None = None) -> None:
+    def area_roll_attack(
+        self, spec: RollSpec, attacker: Character | None = None, *, before=None
+    ) -> None:
         """Roll an NPC's attack against the primary on this window's roller.
 
-        A minion *attacker*'s natural 20 is no critical (PDF p25).
+        A minion *attacker*'s natural 20 is no critical (PDF p25). *before* is the
+        roller's (``roll_spec(before=)``): an aimed attack declares the spec the die is
+        made of, the GM's maneuvers on it.
         """
-        self._roller.roll_spec(spec, minion=self.rolls_as_minion(attacker))
+        self._roller.roll_spec(spec, minion=self.rolls_as_minion(attacker), before=before)

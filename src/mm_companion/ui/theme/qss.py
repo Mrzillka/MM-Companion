@@ -388,6 +388,9 @@ def _chrome_rules(theme: Theme) -> str:
             f" border: {focus_width}px solid transparent;"
             f" border-radius: {radius_field}px; }}\n"
             f"QToolButton:hover {{ background: {c('surface.card', block)}; }}\n"
+            # And disabled, for the menus' reason: a stated `color` is painted in
+            # every state, so the Actions popup's greyed-out tiles read as live.
+            f"QToolButton:disabled {{ color: {muted}; }}\n"
             f"QToolButton:checked {{ background: {rgba(c('accent'), 0.25)};"
             f" color: {text};"
             f" border-color: {c('accent')}; }}\n"

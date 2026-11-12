@@ -30,34 +30,65 @@ Two things about it are deliberately unlike its neighbours:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QGroupBox, QVBoxLayout, QWidget
 
 from mm_companion.core import library
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import GameData
+from mm_companion.core.data_loader.game_data import COMBAT_KIND_MANEUVER
 from mm_companion.core.rules import (
     AreaAttempt,
     ImpressAttempt,
     RollSpec,
+    action_reason,
+    area_choices,
     area_key_index,
     find_area_power,
     localize_spec,
     power_area_use,
+    reacting,
     recovery_succeeded,
     requested_roll_choices,
+    self_action,
+    targeted_action,
+    targeted_check_spec,
+    targeted_opposed_spec,
 )
 from mm_companion.core.session.protocol import sanitize_mod_payload
 from mm_companion.ui import theme
+from mm_companion.ui.action_grid import GridSection
+from mm_companion.ui.action_menu import (
+    NEEDS_A_TABLE,
+    NO_ALLY_AND_OPPONENT,
+    NO_AREAS,
+    NO_ATTACKS,
+    NO_ONE_TO_TARGET,
+    NO_OPPOSED_CHECK,
+    SKIP_TARGET,
+    choose_from_menu,
+    combat_menu,
+)
 from mm_companion.ui.action_ui import sets_up_own_actions
 from mm_companion.ui.area import KIND_AREA_ATTACK, AreaDialog
 from mm_companion.ui.attack_targets import (
     KIND_ATTACK,
+    KIND_TARGETED,
     AttackDeclaration,
     SceneTarget,
+    TargetedDeclaration,
     aimed_spec,
+    session_targets,
+    targeted_roll_spec,
+    targeted_table_title,
 )
 from mm_companion.ui.impress import IMPRESS_ACTION, KIND_IMPRESS, ImpressDialog, new_action_id
+from mm_companion.ui.roller.combat_runner import (
+    CombatActor,
+    CombatRunner,
+)
 from mm_companion.ui.roller.view import DiceRollerView
 from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.session_bridge import SessionBridge, live_session
@@ -83,6 +114,12 @@ class DiceSection(QGroupBox):
     #: ``use-spent`` for the Conditions and Powers blocks, for the reason
     #: :attr:`recovered` is: a roll is not an edit.
     useSpent = Signal(object)
+    #: ``((condition_id, amount), …)`` — an attack rolled with maneuvers on it leaves
+    #: these on the roller's own sheet (All-Out Attack's Defense penalty), hit or miss —
+    #: or ``(ConditionChange, …)`` from a self action (Defend, Drop Prone, Stand).
+    #: Raised on ``condition-requested`` for the Conditions block, for the reason
+    #: :attr:`recovered` is: a roll is not an edit.
+    conditionsRequested = Signal(object)
 
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -101,21 +138,65 @@ class DiceSection(QGroupBox):
         # Every spec that reaches the roller — from the bus, or from a follow-up chip
         # on a history card — passes through here on its way in.
         self.view.panel.set_localizer(self._localize)
-        # And the traits the Request row may ask the table for. Character-free on
+        # And the traits Ask to Roll may ask the table for. Character-free on
         # purpose: a request is answered on somebody else's sheet.
         self.view.panel.set_roll_choices(requested_roll_choices(self._data))
+        # The circumstance steps beside the modifier box come from the ruleset too.
+        self.view.panel.set_modifier_steps(self._data.system.circumstance_modifiers)
+        self.view.panel.set_dc_start(self._data.system.dc_start)
         self.view.panel.rollRequested.connect(self.request_roll)
         # A recovery check is settled when its result is in, on either path a roll
         # comes back by: the session's record, or the die this panel threw itself.
         self.view.panel.sessionRollRevealed.connect(self.settle_recovery)
         self.view.panel.localRoll.connect(self.settle_recovery)
-        # Actions against other characters, when the ruleset has any.
-        if data.impress.available:
-            self.view.panel.set_actions([IMPRESS_ACTION])
+        # The Actions popup: what this sheet runs, from the ruleset's menu.
+        self.view.panel.set_action_menu(self.action_menu)
         self.view.panel.actionRequested.connect(self.start_action)
+        # The maneuvers and self actions, always taken by this sheet's own character:
+        # the attack picker's list, what the lines do to a roll, and where what they
+        # leave behind lands (the Conditions block, over the bus).
+        self.combat = CombatRunner(
+            self._data,
+            self.view.panel,
+            note=lambda text: self.post_note(text),
+            parent=self,
+            actor=CombatActor(self._character, land=self.conditionsRequested.emit),
+        )
+        # A team attack's call to roll, joined in the session history: this sheet's
+        # next attack is its entry.
+        self.view.teamJoinRequested.connect(self.combat.join_team)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.view)
+
+    def action_menu(self, own: Mapping[str, str | None]) -> list[GridSection]:
+        """The Actions popup's sections, for the roller to open (see
+        :func:`~mm_companion.ui.action_menu.combat_menu`): the panel's own actions
+        (*own*: Reroll) plus what a player's sheet runs."""
+        offered = dict(own)
+        if self._data.impress.available:
+            offered[KIND_IMPRESS] = None
+        attacks = None if self.view.panel.attack_choices() else NO_ATTACKS
+        offered[KIND_ATTACK] = attacks
+        for action in self._data.combat.actions:
+            if action.kind == COMBAT_KIND_MANEUVER:
+                offered[action.id] = attacks
+            elif action.gm_runs:
+                offered[action.id] = action.gm_runs
+            elif self_action(self._data, action.id) is not None:
+                reason = action_reason(self._data, action, self._character)
+                # Block while Blocking picks the attack that blocks.
+                wants = action.needs_attack or reacting(action, self._character)
+                offered[action.id] = reason or (attacks if wants else None)
+            elif targeted_action(self._data, action.id) is not None:
+                offered[action.id] = self._targeted_reason(action) or (
+                    attacks if action.needs_attack else None
+                )
+        if self._data.area.available:
+            offered[KIND_AREA_ATTACK] = (
+                None if area_choices(self._character, self._data) else NO_AREAS
+            )
+        return combat_menu(self._data, offered, gm=False, fallback=[IMPRESS_ACTION])
 
     @property
     def panel(self):
@@ -132,7 +213,7 @@ class DiceSection(QGroupBox):
         """
         return localize_spec(spec, self._character, self._data)
 
-    def perform_roll(self, spec: object) -> None:
+    def perform_roll(self, spec: object, *, before=None) -> None:
         """Roll what another block asked for — the ``roll-requested`` topic's handler.
 
         Anything that isn't a :class:`~mm_companion.core.rules.RollSpec` is ignored
@@ -140,11 +221,21 @@ class DiceSection(QGroupBox):
         too, and a bad payload should cost a roll, not the sheet.
         """
         if isinstance(spec, RollSpec):
-            if self.view.panel.roll_spec(spec) and (spec.costs or spec.spends):
+            if self.view.panel.roll_spec(spec, before=before) and (spec.costs or spec.spends):
                 # The die thrown off a card *is* using the power, so what using it
                 # costs and counts lands now — once, here, and only for a die that was
                 # really thrown, never for a click the tumbling roller refused.
                 self.useSpent.emit(spec)
+
+    def start_maneuver(self, action_id: str):
+        """An attack maneuver's tile — see
+        :meth:`~mm_companion.ui.roller.combat_runner.CombatRunner.start_maneuver`."""
+        return self.combat.start_maneuver(action_id)
+
+    def start_self_action(self, action_id: str):
+        """A self action's tile — see
+        :meth:`~mm_companion.ui.roller.combat_runner.CombatRunner.start_self_action`."""
+        return self.combat.start_self_action(action_id)
 
     def aim_attack(self, payload: object) -> None:
         """Roll an attack *at* a creature on the Scene — ``attack-requested``'s handler.
@@ -171,15 +262,22 @@ class DiceSection(QGroupBox):
         name = library.display_name(self._character)
         action_id = new_action_id()
         aimed = aimed_spec(spec, action_id, target.name, name)
-        declaration = AttackDeclaration(action_id, target.ref, target.name, aimed, name)
-        if not bridge.send_action_request(KIND_ATTACK, action_id, declaration.to_dict()):
+
+        def declare(made_of: RollSpec | None) -> bool:
+            # What is declared is what is rolled: the maneuvers on the lane move the
+            # save the GM's app will ask for, so it must see the shifted spec.
+            declared = made_of if made_of is not None else aimed
+            declaration = AttackDeclaration(action_id, target.ref, target.name, declared, name)
+            if bridge.send_action_request(KIND_ATTACK, action_id, declaration.to_dict()):
+                return True
             notify_window(
                 self.window(),
                 "Could not reach the GM — the attack was not aimed.",
                 theme.color("tint.worse"),
             )
-            return
-        self.perform_roll(aimed)
+            return False
+
+        self.perform_roll(aimed, before=declare)
 
     def settle_recovery(self, roll: object) -> None:
         """A roll of this seat's is back: if it was a recovery check and it made it,
@@ -196,13 +294,22 @@ class DiceSection(QGroupBox):
         spec = roll.get("spec")
         if not isinstance(spec, RollSpec):
             spec = RollSpec.from_dict(spec)
-        if spec is None or not spec.recovers:
+        if spec is None or not (spec.recovers or spec.shakes_off):
             return
         if "result" in roll:
             result = roll.get("result")
             degree = getattr(result, "degree", None)
         else:
             degree = roll.get("degree")
+        if spec.shakes_off is not None:
+            # Recover's check against an impression or an Affliction: every condition
+            # carrying its record comes off.
+            if isinstance(degree, int) and degree >= 1:
+                self.recovered.emit(spec.shakes_off)
+            elif isinstance(degree, int):
+                # Failed: the Affliction's modifiers may still do something (Fatal).
+                self.recovered.emit((spec.shakes_off, False))
+            return
         if recovery_succeeded(self._data, spec, degree):
             self.recovered.emit((spec.recovers, spec.recovers_parameter or None))
 
@@ -252,7 +359,7 @@ class DiceSection(QGroupBox):
             self.view.add_local_note(text)
 
     def request_roll(self, spec: object) -> None:
-        """Ask the table to roll something — the Request row's handler.
+        """Ask the table to roll something — the Ask to Roll form's handler.
 
         Where it goes is the question :meth:`post_note` already answers, and the
         same answer: at a table it goes to the session, so the request lands in
@@ -270,7 +377,8 @@ class DiceSection(QGroupBox):
             self.view.add_local_request(spec)
 
     def start_action(self, kind: str) -> ImpressDialog | None:
-        """Run one of the Action row's actions — the Impress button's handler.
+        """Run an action picked off the roller's Actions popup: Impress, an Attack, an
+        Area (see :meth:`start_attack` and :meth:`start_area_tile` for those two).
 
         At a table the dialog only *declares* the impression: it goes to the GM, who
         sets the modifiers and rolls (see :mod:`mm_companion.ui.impress_gm`). A player
@@ -283,6 +391,17 @@ class DiceSection(QGroupBox):
         **Not modal**, for the reason the area dialog is not: targets are dragged in off
         the Scene block on this very window.
         """
+        if kind == KIND_ATTACK:
+            self.start_attack()
+            return None
+        if kind == KIND_AREA_ATTACK:
+            self.start_area_tile()
+            return None
+        if targeted_action(self._data, kind) is not None:
+            self.start_targeted(kind)
+            return None
+        if self.combat.start(kind):
+            return None
         if kind != KIND_IMPRESS:
             return None
         bridge = live_session()
@@ -307,6 +426,150 @@ class DiceSection(QGroupBox):
         self._impress_dialog = dialog
         dialog.show()
         return dialog
+
+    def start_attack(self) -> None:
+        """The Attack tile: pick an attack, then — at a table — optionally its target.
+
+        The target menu's first line is :data:`~mm_companion.ui.action_menu.SKIP_TARGET`.
+        A target rolls the attack *at* it, as a right-click on the attack line does
+        (:meth:`aim_attack`: declared to the GM, who judges the hit). Skipping, or
+        having no one to aim at, loads the attack onto the chip instead, and the DC box
+        stands for the Defense: set it and click the die. An attack rolled with neither
+        is written up with a warning (``dice_roller.NO_DC_WARNING``) — but it still rolls.
+        """
+        panel = self.view.panel
+        spec = panel.choose_attack()
+        if spec is None:
+            return
+        targets = session_targets(live_session())
+        if targets:
+            captions = [SKIP_TARGET] + [
+                f"{t.name} (minion)" if t.minion else t.name for t in targets
+            ]
+            index = choose_from_menu(self, captions, panel.menu_point())
+            if index is None:
+                return
+            if index > 0:
+                self.aim_attack((spec, targets[index - 1]))
+                return
+        panel.load_spec(spec)
+
+    def _targeted_reason(self, action) -> str | None:
+        """Why a targeted action's tile is greyed on a sheet: no table to take it at,
+        nobody (Aid: not both an ally and an opponent) on the Scene, or a condition it
+        needs (Escape: Restrained or Bound)."""
+        reason = action_reason(self._data, action, self._character)
+        if reason:
+            return reason
+        targets = session_targets(live_session())
+        if targets is None:
+            return NEEDS_A_TABLE
+        if action.targeted is not None and action.targeted.ally and len(targets) < 2:
+            return NO_ALLY_AND_OPPONENT
+        return None if targets else NO_ONE_TO_TARGET
+
+    def start_targeted(self, action_id: str) -> bool:
+        """A targeted action's tile — Aid, Feint, Trick, Grab, Trip, Disarm, Smash, Escape
+        (see :mod:`~mm_companion.ui.targeted_gm`): against whom off the Scene (Aid: the
+        ally, then the opponent; Escape: the grabber), which way, and — when it uses an
+        attack — which attack. The action is declared to the GM (``KIND_TARGETED``) from
+        the roll itself, and the check rolled here; the GM accepts it and resolves the
+        rest, asking for the opposed check of a Grab, Trip or Disarm once it has hit
+        (worked out here, and carried in the declaration). Whether it went."""
+        action = targeted_action(self._data, action_id)
+        bridge = live_session()
+        targets = session_targets(bridge)
+        if action is None or action.targeted is None or bridge is None or not targets:
+            return False
+        if self._targeted_reason(action) or self.view.panel.rolling:
+            return False
+        panel = self.view.panel
+        point = panel.menu_point()
+        ally = None
+        if action.targeted.ally:
+            index = choose_from_menu(self, [f"Aid {t.name}" for t in targets], point)
+            if index is None:
+                return False
+            ally = targets[index]
+            targets = [t for t in targets if t.ref != ally.ref]
+        caption = "… against {}" if ally is not None else "{}"
+        index = choose_from_menu(
+            self,
+            [caption.format(f"{t.name} (minion)" if t.minion else t.name) for t in targets],
+            point,
+        )
+        if index is None:
+            return False
+        target = targets[index]
+        option = ""
+        if action.options:
+            index = choose_from_menu(self, [o.name for o in action.options], point)
+            if index is None:
+                return False
+            option = action.options[index].id
+        attack = None
+        if action.targeted.uses_attack:
+            attack = panel.choose_attack()
+            if attack is None:
+                return False
+        check = targeted_check_spec(self._data, action, option, self._character, attack)
+        if check is None:
+            return False
+        opposed = targeted_opposed_spec(self._data, action, option, self._character, attack)
+        if action.targeted.opposed is not None and opposed is None:
+            notify_window(
+                self.window(),
+                NO_OPPOSED_CHECK.format(action.name.lower()),
+                theme.color("text.muted.rich"),
+            )
+            return False
+        name = library.display_name(self._character)
+        action_id = new_action_id()
+        title = targeted_table_title(
+            action.name, name, target.name, ally.name if ally is not None else ""
+        )
+        spec = targeted_roll_spec(check, action_id, title, name)
+        declaration = TargetedDeclaration(
+            action_id,
+            action.id,
+            target.ref,
+            target.name,
+            spec,
+            name,
+            option,
+            ally.ref if ally is not None else "",
+            ally.name if ally is not None else "",
+            opposed,
+        )
+
+        def declare(_made_of: RollSpec | None) -> bool:
+            if bridge.send_action_request(KIND_TARGETED, action_id, declaration.to_dict()):
+                return True
+            notify_window(
+                self.window(),
+                f"Could not reach the GM — the {action.name.lower()} was not sent.",
+                theme.color("tint.worse"),
+            )
+            return False
+
+        self.perform_roll(spec, before=declare)
+        return True
+
+    def start_area_tile(self) -> AreaDialog | None:
+        """The Area tile: the area this sheet's cards offer — straight away when there
+        is one, off a menu when there are several — opened as the card's area line
+        would (:meth:`start_area`)."""
+        choices = area_choices(self._character, self._data)
+        if not choices:
+            return None
+        index = 0
+        if len(choices) > 1:
+            index = choose_from_menu(
+                self, [c.caption for c in choices], self.view.panel.menu_point()
+            )
+            if index is None:
+                return None
+        return self.start_area(choices[index].spec.trait_key)
 
     def _forget_impress(self, dialog: ImpressDialog) -> None:
         if self._impress_dialog is dialog:
@@ -452,6 +715,11 @@ class DiceSection(QGroupBox):
         if attack is not None:
             self.view.panel.roll_spec(attack)
         notify_window(self.window(), "Area attack sent to the GM.", theme.color("tint.better"))
+
+    def refresh_limits(self) -> None:
+        """The character changed: the lane's maneuver sliders work their caps out again
+        (a Growth that moved Defense moves All-Out Attack's maximum)."""
+        self.view.panel.relimit_lines()
 
     def sync_session(self) -> None:
         """Re-check whether there is a session, and show the matching history.

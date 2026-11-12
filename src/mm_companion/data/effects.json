@@ -205,6 +205,23 @@
       "resistanceDcBase": 10,
       "resistanceOutcomes": {
         "note": "Affliction's rungs are the conditions the player picked when building the power, so each degree reads its own config field rather than a fixed list.",
+        "_overcome": "Overcoming an Affliction (PDF p109): a new resistance check against the effect's DC at the end of each of the target's turns, made with the overcomeBy resistance when one is chosen and the resisting one otherwise; one success removes every condition it put on. From the third degree the check is made once a minute instead.",
+        "_overcomeModifiers": "What the Affliction's own modifiers do to overcoming it (PDF p110-111): Progressive adds a degree on each failed overcome check (to the third at most); Increasing Difficulty raises the DC by 1 for each check after the initial resistance check, Decreasing Difficulty lowers it by 1 for each overcome check after the first; Prolonged moves the check to the end of each scene; Instant Recovery clears the conditions with no check where the first one would come, for an Instant Affliction; Fatal puts Dying on a target that fails an overcome check at the third degree. Cumulative adds a new use's degrees to those already on (without it only the highest applies, p109); Concentration and Sustained subject everyone it is on to it anew, with no attack, each turn the wielder maintains it, and a maintained Instant Recovery one clears when the wielder stops.",
+        "overcome": {
+          "configKey": "overcomeBy",
+          "eachMinuteFromDegree": 3,
+          "modifiers": {
+            "progressive": { "worsens": true },
+            "increasing_difficulty": { "dcPerCheck": 1, "fromInitial": true },
+            "decreasing_difficulty": { "dcPerCheck": -1 },
+            "prolonged": { "cadence": "scene" },
+            "instant_recovery": { "cadence": "clears", "duration": "Instant", "whenStopped": true },
+            "fatal": { "applies": "dying", "failFromDegree": 3 },
+            "cumulative": { "addsDegrees": true },
+            "concentration_affliction": { "reapplies": true },
+            "sustained_affliction": { "reapplies": true }
+          }
+        },
         "degrees": [
           { "configKey": "degree1", "scopeKey": "scope" },
           { "configKey": "degree2", "scopeKey": "scope" },
@@ -393,7 +410,9 @@
           "note": "unless the target's Toughness is Hardened, Impervious or Impenetrable against this attack"
         },
         "_parameters": "A rung may also carry parameters: a condition id -> the parameter it is applied with ({source} is whoever imposed it), for a condition that needs one, as Frightened does.",
-        "_escalates": "What a rung applies *instead* when the target already carries the named condition, chained: a second failure at this rung on an Incapacitated target reads incapacitated -> dying, a third dying -> dead. The book's rule, as data rather than prose.",
+        "_escalates": "What a rung applies *instead* when the target already carries the named condition, chained: a target already Dazed takes Stunned in its place. An escalation for a condition the rung does not name lands *on top of* the rung when the target already carries it.",
+        "_failureEscalates": "Escalations every failure rung inherits (never the success rung): 'if an Incapacitated character fails a Damage resistance check, their condition becomes Dying; if a Dying character fails by any degree, they are Dead' (PDF p118, p199). Chained, so each failed check walks the target one step further.",
+        "failureEscalates": { "incapacitated": "dying", "dying": "dead" },
         "degrees": [
           {
             "conditions": ["hit", "dazed"],
@@ -403,7 +422,6 @@
           { "conditions": ["hit", "stunned", "staggered"] },
           {
             "conditions": ["hit", "staggered", "incapacitated"],
-            "escalates": { "incapacitated": "dying", "dying": "dead" },
             "note": "further failed checks escalate to Dying, then Dead"
           }
         ]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 from PySide6.QtCore import QEvent, QPoint, Qt, Signal
 from PySide6.QtGui import QEnterEvent, QMouseEvent
@@ -17,11 +17,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from mm_companion.core.rules import KIND_AREA, PinRef, RollSpec, targetable_attack
+from mm_companion.core.rules import KIND_AREA, PinRef, RollSpec, TemporaryMark, targetable_attack
 from mm_companion.ui import theme
 from mm_companion.ui.attack_targets import add_target_actions, targets_for
 from mm_companion.ui.cards.card import card_ancestors_of, hand_back_highlight
 from mm_companion.ui.sections.stat_table import PinMenuState
+from mm_companion.ui.stat_mark import StatMark
 from mm_companion.ui.widgets import tinted_style
 
 
@@ -176,6 +177,10 @@ class RollsFooter(QWidget):
     The **area line** (:data:`~mm_companion.core.rules.KIND_AREA`) is drawn like a roll
     but is not one: clicking it raises :attr:`areaRequested` with the build's id, never
     :attr:`rollRequested`, so nothing that throws dice is ever handed it.
+
+    *marks* are the wielder's :func:`~mm_companion.core.rules.temporary_marks`: a line
+    whose spec folds one of them in (:attr:`~mm_companion.core.rules.RollSpec.marks` —
+    an attack check under a Defensive Attack) wears that stat's dot after its text.
     """
 
     rollRequested = Signal(object)  # RollSpec
@@ -194,11 +199,13 @@ class RollsFooter(QWidget):
         pins: PinMenuState | None = None,
         pin_ref: Callable[[int], PinRef] | None = None,
         simple: bool = False,
+        marks: Mapping[str, TemporaryMark] | None = None,
     ) -> None:
         super().__init__(parent)
         self._pins = pins or PinMenuState()
         self._pin_ref = pin_ref
         self._simple = simple
+        self._marks = dict(marks or {})
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         # Enough of a gap that two neighbouring lines' borders read as two targets
@@ -262,6 +269,7 @@ class RollsFooter(QWidget):
 
         if self._simple:
             self._simple_text(line, spec)
+            self._add_mark(line, spec)
             return row
 
         label = QLabel(spec.label)
@@ -269,7 +277,25 @@ class RollsFooter(QWidget):
         label.setToolTip(spec.hint)
         label.setStyleSheet(tinted_style("accent.dice", bold=False))  # calm blue for dice info
         line.addWidget(label, stretch=1)
+        self._add_mark(line, spec)
         return row
+
+    def _add_mark(self, line: QHBoxLayout, spec: RollSpec) -> None:
+        """The dot of the first temporary mark this line's number folds in, if any.
+
+        Only on a line that has one: a footer is rebuilt whenever a condition moves,
+        so there is no row to hold steady for a dot that may come later.
+        """
+        mark = next((self._marks[k] for k in spec.marks if k in self._marks), None)
+        if mark is None:
+            return
+        dot = StatMark()
+        line.addWidget(dot, alignment=Qt.AlignmentFlag.AlignVCenter)
+        dot.set_mark(mark)
+
+    def marked_lines(self) -> list[str]:
+        """The tones of the dots on this footer's lines, in order — what a test reads."""
+        return [dot.tone for dot in self.findChildren(StatMark) if dot.tone]
 
     @staticmethod
     def _simple_text(line: QHBoxLayout, spec: RollSpec) -> None:

@@ -46,9 +46,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mm_companion.core import diagnostics
 from mm_companion.core.rules import stable_build
 from mm_companion.ui import layout_tree as lt
-from mm_companion.ui import theme
+from mm_companion.ui import loading, theme
 from mm_companion.ui.block_frame import InnerScroll
 from mm_companion.ui.blocks.base import instance_template
 from mm_companion.ui.blocks.bus import NOTIFICATIONS
@@ -90,6 +91,19 @@ class _BoxScroll(InnerScroll):
             return super().sizeHint()
         frame = 2 * self.frameWidth()
         return widget.sizeHint() + QSize(frame, frame)
+
+    def hold(self, widget: QWidget) -> None:
+        super().hold(widget)
+        self.updateGeometry()
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: ANN001, N802 - Qt override
+        # The hint above is the content's, but the box's layout caches it until this
+        # scroll says it moved — which a scroll area never does when what it holds
+        # changes. Stale, the strip opened at the width the roller had *before* it was
+        # lent here, and cut the right of it off (see SimpleSheet._strip_need).
+        if watched is self.widget() and event.type() == QEvent.Type.LayoutRequest:
+            self.updateGeometry()
+        return super().eventFilter(watched, event)
 
 
 class SimpleBox(QFrame):
@@ -396,6 +410,10 @@ class SimpleSheet(QWidget):
 
     #: The arrangement was rebuilt — tests and the print path wait on it.
     rebuilt = Signal()
+    #: A rebuild while the page was up failed and the page has stood itself down,
+    #: every borrowed section given back. The sheet answers by showing the edit page
+    #: again; the error is in the errors log.
+    failed = Signal()
 
     def __init__(self, sheet, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -424,6 +442,10 @@ class SimpleSheet(QWidget):
         self._strip.setFrameShape(QFrame.Shape.NoFrame)
         self._strip.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._strip.setWidget(self._strip_page)
+        # What the strip's boxes ask for settles a turn or two after they are built (a
+        # borrowed section's layout catching up), so the strip is sized again as it
+        # does — until the player drags the divider (see _apply_strip_extent).
+        self._strip_page.installEventFilter(self)
 
         self._splitter = _StripSplitter(self._apply_strip_extent)
         self._splitter.setChildrenCollapsible(False)
@@ -504,18 +526,39 @@ class SimpleSheet(QWidget):
         return standard_layout(keys)
 
     def activate(self) -> None:
-        """Borrow, build and show. Idempotent."""
+        """Borrow, build and show. Idempotent, and all or nothing.
+
+        A build that raises part way has already borrowed some sections out of their
+        frames; left there, they are blocks missing from the edit page with nothing
+        to show them on this one. So a failed build gives everything back and stands
+        down before the error goes on to the caller, which keeps the edit page up.
+        """
         if self._active:
             return
         self._active = True
         self._hide_windows()
-        self._build()
+        try:
+            self._build()
+        except Exception:
+            self._stand_down()
+            raise
 
     def deactivate(self) -> None:
-        """Give every borrowed section back and tear the page down. Idempotent."""
+        """Give every borrowed section back and tear the page down. Idempotent.
+
+        Never raises. It is the way *back* to the edit page, and a section that
+        could not be returned must not keep the rest of the sheet from coming home
+        with it — see :meth:`_teardown`.
+        """
         if not self._active:
             return
-        self._teardown()
+        self._stand_down()
+
+    def _stand_down(self) -> None:
+        try:
+            self._teardown()
+        except Exception:  # noqa: BLE001 - see deactivate
+            diagnostics.log_exception("Leaving the simple sheet failed")
         self._active = False
         self._show_windows()
 
@@ -527,22 +570,33 @@ class SimpleSheet(QWidget):
         # and borrowing it again rebuilt the power cards twice for a change of preset.
         # Whatever the new arrangement no longer shows goes home afterwards.
         held = self._teardown(give_back=False)
-        self._hide_windows()
-        self._build()
+        try:
+            self._hide_windows()
+            self._build()
+        except Exception:  # noqa: BLE001 - a timer callback has no caller to tell
+            diagnostics.log_exception("Rebuilding the simple sheet failed")
+            self._stand_down()
+            for key, section in held.items():
+                self._give_back(key, section)
+            self.failed.emit()
+            return
         for key, section in held.items():
-            if key not in self._borrowed and shiboken6.isValid(section):
-                self._return_section(key, section)
+            if key not in self._borrowed:
+                self._give_back(key, section)
 
     def _build(self) -> None:
         model = self.compute_layout()
         # A read of the build from end to end, so the rules layer may work it out once
         # (see core.rules.build_cache) — the only write inside, an array normalized
         # by the Powers block's redraw, invalidates the scope itself.
+        keys = list(model.keys())
+        loading.expect(len(keys))
         with stable_build():
-            for key in model.keys():
+            for key in keys:
                 box = self._make_box(key)
                 if box is not None:
                     self._boxes[key] = box
+                loading.step()
         # A block with nothing to show — a portrait never loaded, a character with no
         # gear — gives its room to its neighbours rather than standing there empty.
         model = without_keys(model, set(model.keys()) - set(self._boxes))
@@ -559,17 +613,18 @@ class SimpleSheet(QWidget):
         held them cannot take them down too.
         """
         held: dict[str, QWidget] = {}
-        for key, box in list(self._boxes.items()):
-            if key not in self._borrowed:
-                continue
-            section = self._borrowed[key]
+        # Every borrowed section, boxed or not: a build that failed between lending
+        # a section and boxing it has one with no box, and it still has to go home.
+        for key, section in list(self._borrowed.items()):
             # A block destroyed while the page was up (a Notes copy removed) took its
             # frame and section with it; there is nothing left to give back.
             if not (shiboken6.isValid(section) and key in self._sheet.block_keys()):
                 continue
-            box.release_body()
+            box = self._boxes.get(key)
+            if box is not None:
+                box.release_body()
             if give_back:
-                self._return_section(key, section)
+                self._give_back(key, section)
             else:
                 section.setParent(self)
                 held[key] = section
@@ -621,6 +676,23 @@ class SimpleSheet(QWidget):
         dress_borrowed(section, False)
         self._sheet.block_frame(key).take_back_section()
 
+    def _give_back(self, key: str, section: QWidget) -> None:
+        """Return one borrowed section, whatever happens to the others.
+
+        Each one on its own: a section whose frame has gone (a Notes copy removed
+        while the page was up) or whose undressing raises must not leave every
+        section after it stranded on a page that is being torn down.
+        """
+        if not (shiboken6.isValid(section) and key in self._sheet.block_keys()):
+            return
+        try:
+            self._return_section(key, section)
+        except Exception:  # noqa: BLE001 - see the docstring
+            diagnostics.log_exception(f"Giving the {key} block back failed")
+            frame = self._sheet.block_frame(key)
+            if frame.is_lent():
+                frame.take_back_section()
+
     def _place_strip(self, model: SimpleLayout) -> None:
         """Put the strip on the edge the layout names, at the width it asks for.
 
@@ -665,9 +737,12 @@ class SimpleSheet(QWidget):
         if total <= 0:
             return
         first = self._splitter.indexOf(self._strip) == 0
+        extent = self._strip_extent
+        if not vertical:
+            extent = max(extent, self._strip_need())
         # On a narrow window the page is what the player is reading; the roller
         # reflows into what is left.
-        strip = min(self._strip_extent, round(total * STRIP_SHARE))
+        strip = min(extent, round(total * STRIP_SHARE))
         sizes = [strip, total - strip] if first else [total - strip, strip]
         if self._splitter.sizes() != sizes:
             self._placing = True
@@ -675,6 +750,30 @@ class SimpleSheet(QWidget):
                 self._splitter.setSizes(sizes)
             finally:
                 self._placing = False
+
+    def _strip_need(self) -> int:
+        """How wide the strip's content asks to be: its widest box, and the page's margins.
+
+        The roller's Roll group cannot reflow narrower than its slider-and-field rows,
+        and a strip opened at a flat :data:`DEFAULT_STRIP_EXTENT` cut the right of it
+        off. Read from size hints — a preference, not a minimum, so a divider dragged
+        narrower still wins — which are the same before the window is laid out as
+        after.
+        """
+        page = self._strip_page
+        widest = max(
+            (box.sizeHint().width() for box in self._boxes.values() if page.isAncestorOf(box)),
+            default=0,
+        )
+        if widest <= 0:
+            return 0
+        margins = page.layout().contentsMargins()
+        return widest + margins.left() + margins.right() + 2 * self._strip.frameWidth()
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: ANN001, N802 - Qt override
+        if watched is self._strip_page and event.type() == QEvent.Type.LayoutRequest:
+            self._apply_strip_extent()
+        return super().eventFilter(watched, event)
 
     def _on_splitter_moved(self, _pos: int, _index: int) -> None:
         if not self._placing:

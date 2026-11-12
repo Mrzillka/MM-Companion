@@ -503,18 +503,18 @@ def test_the_check_bonus_lands_in_the_roller(
     sheet = CharacterSheet(data, char)
     monkeypatch.setattr("mm_companion.ui.sections.system_info.ExtraEffortDialog", _AcceptedDialog)
     panel = sheet.dice.panel
-    assert panel._bonus_spin.value() == 0
+    assert panel._modifier_spin.value() == 0
 
     assert sheet.system_info.use_extra_effort(extra_effort_use(data, "bonus"))
-    assert panel._bonus_spin.value() == 2
+    assert panel._modifier_spin.value() == 2
     # Added, never replacing: a circumstance bonus the player already dialled in is
     # theirs, and taking it away would charge fatigue to *lose* two points.
     assert sheet.system_info.use_extra_effort(extra_effort_use(data, "bonus"))
-    assert panel._bonus_spin.value() == 4
+    assert panel._modifier_spin.value() == 4
 
     # Every other use leaves the sliders alone.
     assert sheet.system_info.use_extra_effort(extra_effort_use(data, "action"))
-    assert panel._bonus_spin.value() == 4
+    assert panel._modifier_spin.value() == 4
 
 
 def test_the_check_bonus_is_the_rulesets_number_and_doubles(qapp: QApplication) -> None:
@@ -541,7 +541,7 @@ def test_the_dice_block_ignores_a_bonus_payload_it_cannot_use(qapp: QApplication
     # sheet. ``True`` is an int in Python and is not one here.
     for payload in ("2", None, 0, -3, True, 1.5):
         sheet.dice.add_bonus(payload)
-    assert panel._bonus_spin.value() == 0
+    assert panel._modifier_spin.value() == 0
 
 
 def test_the_system_block_says_what_extra_effort_is_holding_up(

@@ -31,6 +31,7 @@ from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QApplication, QSplitter, QSplitterHandle, QWidget
 
 from mm_companion.ui import theme
+from mm_companion.ui.paint import painting
 
 
 def snap_to_detent(position: int, targets: Sequence[int], strength: int) -> int:
@@ -204,6 +205,35 @@ class GridHandle(QSplitterHandle):
             return
         super().mouseReleaseEvent(event)
 
+    def abandon(self) -> None:
+        """Stop a drag that will get no release: keep the sizes, close nothing.
+
+        A release that never arrives — the window went compact under the drag, or
+        a view switch hid the page — must not leave the handle believing it is
+        still held, or the next release it does see (a click, much later) would
+        close whatever the old drag had warned about.
+        """
+        if not self._dragging:
+            return
+        self._dragging = False
+        self._engaged = False
+        self.update()
+        self._ask("clear_detent_marks")
+        self._ask("cancel_collapse")
+
+    def contextMenuEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        """Offer the splitter's menu for this divider, if it has one."""
+        menu = getattr(self.splitter(), "handle_menu", None)
+        if callable(menu):
+            menu(self._index, event.globalPos())
+            event.accept()
+            return
+        super().contextMenuEvent(event)
+
+    def hideEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        self.abandon()  # a hidden handle gets no release
+        super().hideEvent(event)
+
     def _ask(self, method: str, *args: object) -> None:
         """Call *method* on the splitter, if it has one.
 
@@ -229,13 +259,14 @@ class GridHandle(QSplitterHandle):
 
     def paintEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
         del event
-        paint_divider(
-            self,
-            QPainter(self),
-            self._hovered,
-            self._dragging,
-            horizontal=self.orientation() == Qt.Orientation.Horizontal,
-        )
+        with painting(self) as painter:
+            paint_divider(
+                self,
+                painter,
+                self._hovered,
+                self._dragging,
+                horizontal=self.orientation() == Qt.Orientation.Horizontal,
+            )
 
 
 def handle_thickness() -> int:

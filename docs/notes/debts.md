@@ -7,6 +7,71 @@ touching the area rather than after.
 
 Take one off this list by doing it, and delete its entry in the same commit.
 
+## Before release
+
+Work kept for the stable **1.0 release**. Ordinary releases go out without it; pick
+it up when 1.0 is being planned (see [the road to 1.0](road-to-1.0.md)).
+
+### Sign the Windows installer through SignPath Foundation
+
+The installer is unsigned, so SmartScreen warns the first time someone runs it. The
+chosen route (2026-11-11) is the **SignPath Foundation**, which signs open-source
+projects for free. The alternatives were Azure Trusted Signing (about $10 a month,
+identity check, only some countries) and a classic certificate (about $200–400 a
+year, with the key on a hardware token, which is awkward in CI). The terms below were
+read at <https://signpath.org/terms> on 2026-11-11, when the page was marked as a
+draft, so read them again before applying.
+
+Signing does not remove the warning at once. SmartScreen builds trust in a
+signature as people download it, so the warning fades over the first releases.
+
+**What we accept by choosing it.** The certificate belongs to SignPath, so Windows
+shows **"SignPath Foundation"** as the publisher, not us. Every signing request needs
+a manual approval in SignPath, so a release waits for that click. Only builds made by
+GitHub Actions can be signed, so installers built locally by the `build-installer`
+skill stay unsigned. SignPath may pause the signing or revoke the certificate without
+notice if it thinks a rule was broken, and it decides applications at its own
+discretion, with no appeal.
+
+**Ask SignPath first.** Two things could stop the application, so settle them before
+doing the repo work:
+
+- **The game data's licence.** The terms require "an OSI-approved Open Source license
+  … for all components". The code is MIT and PySide6/Qt are LGPL, which is fine, but
+  `src/mm_companion/data/` is Open Game Content under the **OGL 1.0a**, which is not an
+  OSI licence, and it ships inside the installer. The terms say nothing about content
+  that is not code, so ask whether it is acceptable.
+- **Reputation.** For programs (not libraries) SignPath wants "a certain verifiable
+  reputation". A project with a handful of users may be told to come back later. Apply
+  early if the 1.0 installer must be signed at launch; otherwise apply once the launch
+  has brought users.
+
+The terms say nothing about which countries are eligible. SignPath is based in
+Austria, so ask in the same message if that could matter.
+
+**Then the repo work:**
+
+1. **A "Code signing policy" section.** The words "Code signing policy" must appear
+   on the home page and the download page: the README, and the release notes the
+   `make-release` skill writes into `docs/releases/`. The section states "Free code
+   signing provided by SignPath.io, certificate by SignPath Foundation", lists the
+   roles (authors, reviewers, approvers, which today are all the maintainer) and links
+   the privacy policy, [`PRIVACY.md`](../../PRIVACY.md).
+2. **Two-factor login** on both the GitHub account and the SignPath account; the terms
+   require it for every team member.
+3. **Sign in `release.yml`.** Split the Windows job so signing happens in two places:
+   build with PyInstaller, then send `MM-Companion.exe` and the portable exe to SignPath
+   (its GitHub action), and wait for the approval. Wrap the signed files with ISCC and
+   send the finished installer for signing too, then upload it. Inno Setup's `SignTool`
+   directive would also sign the uninstaller, but only if signing can run on the build
+   machine. Give the waits a timeout long enough for a manual approval.
+
+Already satisfied: the installer comes with an uninstaller, the releases are built
+from the public repo by CI, and the app does not change system settings.
+
+**Later, optional:** once the installer is signed, the updater could check its
+signature on the downloaded installer as well as the SHA-256 it checks today.
+
 ## The Powers and Equipment cards should be restated, not rebuilt
 
 `PowersSection._rebuild_list` and `EquipmentSection._rebuild_cards` still destroy
@@ -80,31 +145,129 @@ Minions are in (see [the minions notes](minions.md)). These rules about them are
   card against the rolled total, minions included. The routine DC (and the better of the
   two, as a resolved Impress uses) wants the request card to know who is a minion.
 
-## End of turn does one thing so far
+## End of turn: what is left
 
-A creature's card on the GM's board has an **End turn** item. It gives every
-impression the GM's table put on that creature a new resistance check against its
-original DC (the book's "overcoming impressions"), and rolls every condition whose
-`recoveryCheck` is made at the end of a turn (Dazed, Stunned). It is the seam the rest
+A creature's card on the GM's board has an **End turn** item. It resists every
+impression and overcomes every Affliction on that creature again against the original
+DC, read off the `ShakeOff` each condition carries (see [the conditions
+notes](conditions-and-damage.md)), and rolls every condition whose own `recoveryCheck`
+is made at the end of a turn (a damage-caused Dazed or Stunned). It is the seam the rest
 of the turn economy should hang off:
 
-- **Other end-of-turn checks.** An Affliction is overcome with its `overcomeBy`
-  resistance against its own DC; Suffocation forces a Fortitude check each turn.
-- **It does not know why a condition is on.** Dazed and Stunned are rolled off with
-  DC 10 Stamina because their record says so, and the record means a *damage-caused*
-  one (`recoveryCheck.condition`). One an impression put on is recognised and shaken
-  off as the impression instead; one an Affliction put on is not, and End turn offers
-  it the Stamina check as well. The fix is the per-condition record below: written
-  when an impression or an Affliction lands a condition, it says how that condition is
-  shaken off, and a condition with none is the damage-caused one.
-- **What it remembers lives in the GM's app.** The impressions to shake off are kept in
-  memory by `ImpressController` (`_lingering`), keyed by scene ref, from impressions the
-  table *resolved* — a request-only one, or a condition put on by hand, is not
-  remembered. Restarting the GM's app forgets them. The debt's earlier note suggested a
-  per-condition record on `AppliedCondition`, written by `targeting.apply_rung`, which
-  would survive a restart and travel with a player's sheet.
+- **Suffocation** forces a Fortitude check each turn; nothing rolls it. The book gives
+  it twice and they disagree (PDF p214: DC 10 +1 a round, Incapacitated then Dying;
+  the glossary, p227: DC 11, one degree of Dazed → Stunned → Incapacitated per failure).
+- **A third-degree or Prolonged Affliction** is overcome once a minute (PDF p109) or at
+  the end of each scene (Prolonged, p110). End turn names it and rolls nothing: there is
+  no clock, so the GM rolls it by hand when the time is up, or the bearer takes Recover.
+  An Instant Recovery one at the third degree waits for that minute as well.
+- **Increasing Difficulty's cap** is not applied: once the DC passes the bearer's
+  resistance + 20 it stops rising and only a natural 20 makes it (p110).
+- **Limited Degree's empty degree** lands nothing, so it writes no record either, though
+  the book has the Affliction still running on it (p111).
+- **A maintained Affliction re-subjects only those it is still on.** The book has the
+  wielder's every maintaining turn subject the target anew, whether or not they shook
+  it off (p110); the app finds its targets by the records on them, so once one has
+  overcome it the wielder's End turn passes them by. It is re-applied by hand.
+- **"Still maintained" is the power card's on/off switch**, found by the power's name
+  (`maintained_by`). A power whose card has no switch is kept up until its conditions
+  come off; one renamed, or not on the wielder's sheet (an area's "power name" that is
+  not a power), is named in a notice and left to the GM.
+- **Cumulative and Increasing Difficulty**: the checks against new uses do not count
+  toward the DC, only failed overcome checks do.
+- **A condition put on by hand carries no record**, so a Dazed or Stunned put there
+  still gets the damage Stamina check. A save the GM rolls "as written" (nobody's
+  number) lands nowhere.
+- **A chip with a record shows no 🎲.** Shaking one off is End turn's, or Recover's
+  (the Actions grid), not the chip's.
 - **There is no turn tracker.** The GM ends each creature's turn by hand; initiative
   order is on the board, but nothing walks it.
+
+## Aid, Feint and Trick: what is left
+
+Built in phase 8 of the combat maneuvers (see [the actions notes](actions.md#aid-feint-and-trick)).
+
+- **Off the air they are greyed.** With no session there is no Scene to pick the target
+  off and no GM to resolve it. An offline version would roll the check and leave a
+  "Resist Feint vs. DC" request card, as an offline Impress does.
+- **The opposing conditions count in aimed attacks only.** An unaimed attack (the DC
+  box standing for the Defense), an area's primary and a team attack's entries neither
+  count nor spend them; the bearer takes them off by hand.
+- **They are matched by name.** The parameter is the name the GM's board showed when
+  the action landed; renaming a creature (or a namesake's number shifting) leaves one
+  that never matches.
+- **Feint's "corresponding" attack bonus.** The target resists with the better of both
+  combat skills, since the feinter's check (a skill roll) does not record whether it was
+  the close or the ranged one; only a power's attack check carries `attack_range`.
+
+## Grab, Trip, Disarm, Smash, Escape and Block: what is left
+
+Built in phase 9 of the combat maneuvers (see [the actions
+notes](actions.md#grab-trip-disarm-smash-and-escape)).
+
+- **Off the air they are greyed**, as Aid, Feint and Trick are (Block is not: it is a
+  self action).
+- **Only the first hold.** Improving a hold with a later Grab (cumulative degrees, no
+  attack check; a failed one frees the target), the size rules (a target three sizes
+  smaller; one too big for more than a partial hold), and carrying, squeezing,
+  throwing or wielding a held creature are the GM's to run by hand.
+- **The advantages are not read.** Improved Grab, Improved Hold (−5 to Escape),
+  Improved Trip, Improved Disarm and Improved Smash change nothing yet.
+- **"Close" is not checked.** A Grab, a Trip or a Block may be made with any attack the
+  picker offers. A power's attack spec now records its range (`RollSpec.attack_range`),
+  but nothing refuses a ranged one.
+- **Two holds share one bundle.** Holding (Ana) and Holding (Bo) give Hindered and
+  Vulnerable the same provenance, so letting go of one takes both bundles' members.
+- **The GM's judge does not block.** A Blocking creature's block is rolled by hand with
+  the attacker's result in the DC box (the user's call, 2026-11-09).
+- **Narrated outcomes stay narrated.** A disarmed item, a smashed object's Damage and a
+  trip's extra distance are said in the history; nothing tracks them.
+
+## Combat maneuvers: what is left overall
+
+The feature as a whole (`docs/plans/combat-maneuvers.md`; the two sections above hold
+the targeted actions' own). Each of these was seen and left on purpose.
+
+- **No turn clock.** Temporary conditions last "until the start of your next turn", and
+  the player or the GM takes them off with **Clear temporary**. End turn does not clear
+  them (the user's call: they end at the *start* of the creature's next turn). A turn
+  tracker would clear a creature's temporaries as its turn starts.
+- **A prone target's ±5 counts only where the opposing conditions do.** The prone
+  attacker's own −5 on a close attack is in the roll `power_rolls` builds; the target's
+  +5 close / −5 ranged is added by the GM's judge (`opposing_effects(attack_range=…)`)
+  to an aimed attack and a targeted action's attack only. An unaimed attack (the DC box
+  standing for the Defense), an area's primary and a team attack's entries leave it to
+  the table, as the entry above says of the opposing conditions.
+- **Recover works "once per conflict scene"** says its tooltip; nothing counts it.
+- **Aim's "lost if your next standard action is not that attack"** is not tracked. The
+  line stays (greyed) through a roll that is not an attack, and the player drops it with
+  its ✕.
+- **Accurate and Power** change only the attack being made. By the book they last until
+  the start of the next turn, which matters only for a second attack in one turn.
+- **Every line grows the roller** by a row: the empty lane takes no room (the user's
+  call, 2026-11-09; the Actions button moved to the toolbar above the lane on
+  2026-11-10, so it no longer moves). Accepted.
+- **No dot on the System block.** Nothing temporary moves Initiative or Speed yet; add
+  a `StatMark` there when something does.
+
+## Every source of a reroll should spend what it costs
+
+The roller's **Reroll** (the Actions popup's Dice section, `Ctrl+Shift+R`) throws the
+last roll again with the lucky die (`core.dice.reroll_d20`: 1–10 counts 10 more) and
+spends nothing. A reroll at the table always has a source, and each source has a price
+the app already tracks somewhere else: a **Hero Point** (the dots on Power Level &
+System), the **Luck** advantage's per-adventure uses, **Determination** and the other
+`usesPerAdventurePerRank` advantages' pips, and the powers that grant one. Today the
+player clicks Reroll and then spends the point or the pip by hand, which is two places
+to remember and one to forget.
+
+The user's call (2026-11-10, the roller polish review): do **not** make Reroll mean
+"spend a Hero Point" — that is only one of the sources. The work is to wire them all:
+Reroll asks which source pays (offering only the ones with something left), spends it,
+and says so in the history the way spending a hero point already writes a note. The
+sources belong in game data (which advantage or power grants a reroll, and what it
+costs), not in Python. A faster "reroll with a Hero Point" link beside a fresh result
+was proposed and set aside until this exists.
 
 ## PySide6 is capped below 6.12, and 6.11.3 is excluded
 

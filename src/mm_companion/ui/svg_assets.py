@@ -1,4 +1,4 @@
-"""The bundled SVG artwork — the d20 and the hero-point pips — as pixmaps.
+"""The bundled SVG artwork — the d20, the hero-point pips and the action icons — as pixmaps.
 
 The files live under ``ui/assets/`` (UI assets, not OGL game content) and are read
 via :mod:`importlib.resources` so they resolve when the app is installed as a
@@ -17,8 +17,10 @@ from functools import lru_cache
 from importlib.resources import as_file, files
 
 from PySide6.QtCore import QRectF, QSize, QSizeF, Qt
-from PySide6.QtGui import QPainter, QPixmap
+from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
+
+from mm_companion.ui.paint import painting
 
 RESOURCE_PACKAGE = "mm_companion.ui"
 
@@ -67,9 +69,8 @@ def svg_pixmap(resource: str, size: QSize, ratio: float = 1.0) -> QPixmap:
     pixmap.fill(Qt.GlobalColor.transparent)
     with as_file(files(RESOURCE_PACKAGE).joinpath(resource)) as path:
         renderer = QSvgRenderer(str(path))
-        painter = QPainter(pixmap)
-        renderer.render(painter, _fitted(renderer.viewBoxF().size(), pixels))
-        painter.end()
+        with painting(pixmap) as painter:
+            renderer.render(painter, _fitted(renderer.viewBoxF().size(), pixels))
     pixmap.setDevicePixelRatio(ratio)
     return pixmap
 
@@ -83,6 +84,51 @@ def _fitted(drawing: QSizeF, bounds: QSize) -> QRectF:
         size.width(),
         size.height(),
     )
+
+
+#: Where the Actions popup's drawings live, one ``<key>.svg`` per icon key.
+ACTION_ICON_DIR = "assets/actions"
+#: What an action whose icon key the app does not ship (a mod's) is drawn with.
+GENERIC_ACTION_ICON = "generic"
+
+
+def _is_icon_key(key: str) -> bool:
+    """A key that can only ever name a file in :data:`ACTION_ICON_DIR`.
+
+    The key comes from game data a mod may write, so it is held to plain lowercase
+    words — never a path the renderer could be pointed along.
+    """
+    return bool(key) and all(c.isascii() and (c.isalnum() or c in "_-") for c in key)
+
+
+@lru_cache(maxsize=128)
+def action_icon_resource(key: str) -> str:
+    """The drawing for an action's icon *key*, or the generic one when there is none."""
+    if _is_icon_key(key):
+        resource = f"{ACTION_ICON_DIR}/{key}.svg"
+        if files(RESOURCE_PACKAGE).joinpath(resource).is_file():
+            return resource
+    return f"{ACTION_ICON_DIR}/{GENERIC_ACTION_ICON}.svg"
+
+
+@lru_cache(maxsize=256)
+def tinted_svg_pixmap(resource: str, size: QSize, ratio: float, color: str) -> QPixmap:
+    """A single-colour drawing rendered like :func:`svg_pixmap`, then painted *color*.
+
+    The line art is drawn in one colour, so its alpha is the shape: filling over it
+    with ``SourceIn`` recolours every stroke and leaves the rest transparent. That is
+    what lets a theme colour reach an icon without a file per preset.
+    """
+    pixmap = QPixmap(svg_pixmap(resource, size, ratio))
+    with painting(pixmap) as painter:
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+        painter.fillRect(pixmap.rect(), QColor(color))
+    return pixmap
+
+
+def action_icon_pixmap(key: str, size: int, ratio: float, color: str) -> QPixmap:
+    """An action's icon, *size* logical pixels square, in *color*."""
+    return tinted_svg_pixmap(action_icon_resource(key), QSize(size, size), ratio, color)
 
 
 def hero_point_pixmap(

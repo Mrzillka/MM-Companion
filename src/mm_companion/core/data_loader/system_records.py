@@ -96,6 +96,9 @@ class TraitKeys:
     toughness: str = "TOUGHNESS"
     fortitude: str = "FORTITUDE"
     will: str = "WILL"
+    #: Not a trait on the sheet but the attack check an attack rolls — what a
+    #: condition's ``amountMods`` names to move it (Defensive Attack's −X).
+    attack_check: str = "attack_check"
 
 
 @dataclass(frozen=True)
@@ -376,6 +379,21 @@ class DefeatSystem:
 
 
 @dataclass(frozen=True)
+class AttackRanges:
+    """Which effective Range values make an attack a close or a ranged one
+    (``system.json``'s ``attackRanges``).
+
+    A posture condition's ``attackMods`` key off this (Prone: a penalty on the
+    bearer's own close attacks, a bonus to close and a penalty to ranged attacks
+    against them). Compared case-insensitively against an effect's effective
+    ``range``; an attack at any other range (Perception, Rank) is neither.
+    """
+
+    close: str = "Close"
+    ranged: str = "Ranged"
+
+
+@dataclass(frozen=True)
 class SystemRules:
     """System-level rule references (from ``system.json``).
 
@@ -390,6 +408,11 @@ class SystemRules:
     #: natural 1 that still hits gives the *target* on their resistance check.
     critical_effect_bonus: int = 5
     critical_miss_resistance_bonus: int = 5
+    #: The common circumstance modifiers (PDF p17), smallest first: the roller's step
+    #: buttons offer each one as a bonus and as a penalty.
+    circumstance_modifiers: tuple[int, ...] = (1, 5)
+    #: Where the roller's first DC step lands from "not set".
+    dc_start: int = 10
     trait_keys: TraitKeys = field(default_factory=TraitKeys)
     paired_caps: tuple[PairedCap, ...] = ()
     unscoped_scope_values: tuple[str, ...] = ("All checks",)
@@ -415,6 +438,8 @@ class SystemRules:
     minions: MinionSystem = field(default_factory=MinionSystem)
     #: The conditions that take a creature out of the fight (see :class:`DefeatSystem`).
     defeat: DefeatSystem = field(default_factory=DefeatSystem)
+    #: Which ranges are close and ranged attacks (see :class:`AttackRanges`).
+    attack_ranges: AttackRanges = field(default_factory=AttackRanges)
     #: How several attacks combine into one (see :class:`TeamAttackRules`).
     team_attack: TeamAttackRules = field(default_factory=TeamAttackRules)
     #: Team and group checks (see :class:`GroupCheckRules`).

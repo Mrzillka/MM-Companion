@@ -11,7 +11,7 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   page is no use mid-fight, so it starts in the strip. There is no standalone roller
   window any more (no `Tools` menu, no launcher button): `ui/dice_roller.py` offers
   `DiceRollerPanel` (the roll controls — GM Mode embeds one with `hidden_option=True`;
-  its shape, Request row and quick rolls are mixins in `ui/roller/`, while the rolling
+  its shape, Ask to Roll form and quick rolls are mixins in `ui/roller/`, while the rolling
   stays in `dice_roller.py`, where the test suite patches `roll_d20`), and `ui/roller/`
   holds `LocalRollHistory` (the private list of one's own rolls, in `history.py`) and
   `DiceRollerView` (a panel plus **whichever history is right** — the private one
@@ -30,6 +30,317 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   after the block was built, so `CharacterSheet.sync_session()` fans a duck-typed
   `sync_session` out to the blocks and `attach_player_session` calls it at both ends of
   a session.
+- **The panel's layout** (reworked 2026-11-10, the user's call after a UI/UX review;
+  the controls were reworked again by "The two-row pass" below): from the top, the chip slot; **Modifier** — one snug signed box with the
+  circumstance steps either side (`−5 −2 [+0] +2 +5`); one **toolbar** — the DC box,
+  **Take 10**, **Actions ▾** — in a `FlowContainer` that wraps when narrow; the action
+  lane; then the die with its result **beside** it; then the quick-roll pills; then the
+  history under a plain heading. What it replaced, and why:
+  - **No group boxes.** "Roll", "Quick rolls" and "History" were three frames nested in
+    the block's own. The view pads its contents by `space.sm` instead (the Roll box used
+    to supply that), and a history is `view.titled_box` — a muted bold heading over the
+    list, whose scroll area already draws an edge round the cards.
+  - **The steps are data**: `system.circumstanceModifiers` (`[1, 5]` since the play-test
+    pass below; it was `[2, 5]`, PDF p17's minor and
+    major), parsed to `SystemRules.circumstance_modifiers` and pushed in by the host with
+    `set_modifier_steps` beside `set_roll_choices` — the panel reads no game data. A step
+    **adds** (`add_bonus`), so +2 twice is +4. They replaced a −30..+30 slider, which is
+    no way to hit +2; the box keeps the full ±30.
+  - **The DC is one box where 0 (`—`) is no DC** (`dc()` / `set_dc()`). It was a checkbox
+    beside a box that sat greyed at 15 while unticked. Nobody grades against DC 0.
+  - **Take 10 is a button** (`take_ten`) that makes the check *now* as a routine one —
+    whatever is loaded, at the modifier and DC set — rather than a checkbox that changed
+    what the next click of the die did. `_routine_next` carries it for that one roll and
+    is cleared by the result *and* by `_abandon_roll` (with no box ticked, nothing would
+    show a stuck flag). It no longer combines with an aimed attack's roll; it did not
+    need to, since the GM's app counts a routine result against a minion by itself
+    (`routine_total`, see [the minions notes](minions.md)).
+  - **The result sits beside the die** (`_arrange_die`), which is smaller (`die.size`
+    120, `size.dice-face` 28): the 160px die with three lines under it was the tallest
+    thing in the strip. Compact mode stacks them again, beside the quick rolls. The
+    readout no longer repeats the loaded trait (`Rolling Athletics — click the die.`):
+    the chip names it and the ring on the die says it is armed, so it just says
+    `IDLE_PROMPT`, muted (`text.muted.rich` — a palette role means nothing in HTML).
+  - **Beside the die, the reflow counts the die part at its preferred width**
+    (`RollerShapeMixin.row_minimum_width`). The readout word-wraps, so its own minimum is
+    a word, and taken at that the slimmer panel "fitted" a row in the 360px strip with
+    the result squeezed to a sliver. A column still narrows as far as it likes.
+  - **And the view counts the panel at its stacked preferred width**
+    (`DiceRollerView.row_minimum_width` → `column_natural_width`) before putting the
+    history beside it, for the same reason one level up: summing the two minimums put
+    the history beside a 114px roller in a 370px strip, with the die cut in half.
+  - **Compact stacks the result under the die only while there are pills beside it**
+    (`sync_die_arrangement`, re-run by `_rebuild_quick_strip`). Alone in the row, the
+    die part takes the row and keeps the result beside it.
+  - **A change of readout re-divides the view** (`_readout_changed`, from
+    `_update_readout` and `_abandon_roll`), and invalidates the layouts between the
+    readout and the panel *first*. Qt passes that invalidation up one level per turn of
+    the event loop, so the view's re-division read the panel's old height and kept it:
+    the unjudged-attack warning, several lines long, was cut off with the bottom of the
+    die (the user's report, 2026-11-10, Compact in the strip).
+    `test_a_long_result_is_never_cut_off` fails if either of the last two is undone.
+  - **The Actions button stays put**: it is on the toolbar *above* the lane, so a pick
+    that adds a line no longer moves it out from under the pointer.
+  - **Ask to Roll is a form off the Actions popup** (see "Asking the table to roll").
+  - **Quick rolls are pills** that are hidden altogether while there are none; the empty
+    private history says how to fill them (`LOCAL_EMPTY_TEXT`). See the quick rolls
+    bullet below.
+  - The bottom strip used to clip the die below the window (a column of four in a short
+    strip); the slimmer panel makes the one row of four, and no longer needs fixing on
+    its own.
+- **The polish pass** (2026-11-10, the user's call after a second review):
+  - **A pill says what it rolls and at what** (`quick_label`): "Perception +7", and an
+    unnamed one "d20 +2" (`PLAIN_CHIP`). It used to show the name *or* the numbers.
+    `_QuickRollButton.sizeHint` is the caption plus `space.sm` + `focus.width` either
+    side: the platform asked ~30px more, which made a short pill a slab.
+  - **The die glows with how the roll went** for `OUTCOME_GLOW_MS` (`outcome_token`,
+    `_glow_outcome`): green or red when graded, `dice.critical` (gold, a colour token
+    of its own) on a natural 20 and red on a natural 1, DC or not. Routine checks and a
+    lucky re-roll's lifted die never glow as naturals. The glow outranks the armed ring
+    while it lasts and is put out when the next roll starts. A graded **total** wears
+    the same tint in the readout.
+  - **A result never breaks inside a phrase** (`degree_html`): "Failure (2 degrees)"
+    and "— Nat 20!" are each a `white-space:nowrap` span, so a narrow card wraps the
+    whole grade to its own line instead of "Failure (2" over "degrees)". Spans rather
+    than `&nbsp;`, which changed the words for anything searching the text (a test
+    looking for "Nat 20" was the first to notice). `degree_label` stays plain text.
+  - **A maneuver line says what its slider trades** (`maneuver_trade`, the lane's
+    `describe`): "+3 attack, −3 Defense", muted and elided under the slider.
+  - **Keyboard**: `Ctrl+R` rolls (as a click of the die would), `Ctrl+Shift+R`
+    rerolls, `Ctrl+T` takes 10 — `WindowShortcut`s on the panel, so they work with the
+    pointer on the sheet and go away with the Dice block.
+  - **The DC box says "none"** (`DC_NONE`; "not set", muted, since the play-test pass)
+    rather than "—", and a set DC is drawn as a
+    tinted **capsule** round the label and box (`#dcPair`, `_mark_dc`). Tinting the
+    text alone was tried and read as a disabled field; the capsule is the frame's, not
+    the spin box's (theme rule 4), and its border is there transparent at rest so it
+    costs no pixels to appear.
+  - **A card's ✕ shows only under the pointer** (`show_on_hover`, revealed by the
+    card's enter/leave), flat, its room kept so the heading never re-wraps — the pills'
+    bargain. It is the GM's on a shared card and everyone's on a private one.
+  - **A card knows when it was made** (`stamp_card`): its time is the card's tooltip,
+    and a card `GAP_SECONDS` (10 min) or more after the one below it opens with a
+    muted "⋯ 25 min later" (or the date across a day). The line is *inside* the newer
+    card, never a widget between two, so striking, trimming and replaying cannot strand
+    one. Session cards read the record's `timestamp`; private ones are stamped now.
+  - **In a row, the quick rolls go under the controls** (`_place_quick_rolls`, into the
+    settings grid's `QUICK_ROW`): a row is two columns — controls, die — not three. In a
+    short wide bottom strip the third column was an empty slab beside a pill or two,
+    width the history now gets. `row_minimum_width` / `row_natural_width` count the
+    controls column as the wider of the two, whichever layout holds the pills, so the
+    reflow decides the same either way. Compact takes them out first.
+- **The justified pass** (2026-11-10, the user's calls on a third review; tests in
+  `tests/ui/dice/test_roller_justified.py` and `tests/core/test_roll_parts.py`):
+  - **A halo, not a ring** (`_apply_die_style`). The armed ring and the outcome glow were
+    a rounded square with a tinted fill round the die button, and after a failed roll the
+    strip showed a red square that read as an error tile. Now the button is drawn bare in
+    every state (no border, no fill, hover included) and a `QGraphicsDropShadowEffect` at
+    no offset glows the drawing's own silhouette: the outcome at full strength, a loaded
+    trait in `accent.dice`, the pointer over an idle die faintly (an event filter on the
+    button). Its spread is the `die.halo` token. `halo_token()` says what is lit. The
+    effect paints into the `die.padding` chrome and beyond, so it moves nothing.
+  - **The result line is the die, the net bonus or penalty, and the total**:
+    `19 + 4 = 23` (`roll_working`), `7 − 2 = 5`, `take 10 + 3 = 13`, and just `18` when
+    nothing was added. The history cards, the readout beside the die and the GM's
+    attack and action cards (`attack_gm.roll_text`) all say it this way. It replaced
+    `23 (d20 19 +4)`, which read as dice notation.
+  - **Everything else is on hover** (`roll_breakdown`, `breakdown_lines`): the die (or
+    the take-10, the kept die of two, a lucky reroll), each part of the loaded trait's
+    modifier, then the modifier box as **Circumstance** (as **Modifier** when nothing was
+    loaded), the total and how it went against the DC. On the readout and on every
+    card's number line, one's own and everyone else's. The parts come from the spec:
+    `RollSpec.parts`, below.
+  - **`RollSpec.parts`** — what a spec's modifier is made of, `(name, amount)` pairs:
+    "Strength" 4, "Athletics ranks" 5, "Impaired" −2, "All-Out Attack" +3. Core builds
+    them where it builds the number (the trait rolls; `skill_parts`, `resistance_parts`;
+    a power's attack check off `EffectRollNumbers.check_parts`; the conditions overlay's
+    new `ConditionEffect.labels`), and whatever *shifts* a spec does it through
+    `add_part` (maneuvers one line each, targeted and self actions, a team join, the
+    attacker's natural 1, `localize_spec` filling in the target's trait). **`spec_parts`
+    always adds up**: a spec whose parts fell behind gets an `OTHER_PART` line, and one
+    with none is one line named for itself. On the wire (protocol v20, still unreleased:
+    `sanitize_spec` keeps up to `MAX_SPEC_PARTS`), so every seat's hover is the same.
+    Left out of equality, as `marks` is.
+  - **Justified controls on one label column.** "Modifier" and "DC" share the settings
+    grid's first column, so both rows start their controls at the same x, and each row's
+    controls (`_stretch_across`, equal stretch) share out the whole width — they used to
+    huddle at the left with a slab of nothing beside them. The toolbar is one `QHBoxLayout`
+    now, not a wrapping flow: it is no wider than the modifier's row. **The DC capsule**
+    can no longer wrap the label and the box in one frame (they are in different
+    columns), so `#dcPair` is a frame *behind* them, created first and `lower()`ed, kept
+    on their united rectangle by `_place_dc_capsule` from an event filter (move/resize of
+    the label, the box, the toolbar). Both labels sit `_capsule_inset()` in from the
+    column's edge: the capsule cannot reach past the panel's, and was clipped there in
+    the bottom strip.
+  - **More air in the block**: the view's margins are `card.margins`, not `space.sm`;
+    the labels and the lane's spin box sat against the frame.
+  - **Pills share their line** (`FlowLayout.set_justify`; the last line only as much as
+    the one above, since the UX pass below: each line's spare width shared
+    between its items; widths only, so the wrapping and the height are what they were) —
+    which needs the chip's horizontal policy to be `Preferred`, since a layout clamps a
+    `Maximum` item to its hint. The caption is centred, and the `×` **floats** over the
+    pill's right end on hover (a child of the chip, outside its layout, `_place_remove`)
+    rather than keeping its room while hidden, which left every caption off-centre.
+  - **Plain rolls have no title.** A private card with nothing loaded was headed `d20` in
+    the accent colour, which read as a link; its number line says it was a d20.
+  - **The chip just names the roll** (`CHIP_PREFIX` is the 🎲 alone): "Rolling: Blast:
+    Attack +7" had two colons, and the halo says it is armed.
+  - **↻ Reroll under the result** (`_reroll_button`, `_sync_reroll_button`): shown only
+    under a result Reroll can throw again — not under the prompt, an unanswered session
+    roll, a tumbling die or a take-10. The Actions popup's tile was the only way to it.
+  - **The splitter handle** between the controls and the history is transparent at rest
+    and tinted under the pointer: the style drew it as a dark band, a stray separator.
+  - **The Actions popup**: sections sharing a row (a shelf) are whole tile columns wide
+    (`_section_columns`, the title's width counted) with the tiles' own gap between them,
+    so their tiles stand in the columns of a full row and each title sits over its own
+    tiles — "Dice" used to sit over the gap a column short of Reroll. And a section whose
+    tiles are **all** greyed says once, under its title, the reason most of them share
+    (`section_note`, `GridSection.note`): "This character has no attack to make." over
+    the maneuvers, Surprise Attack being greyed for a reason of its own. A section with
+    a note keeps a row to itself.
+- **The play-test pass** (2026-11-10, the user's list after a session; tests in
+  `tests/ui/dice/test_roller_feedback.py`):
+  - **±1 and ±5 steps** (`circumstanceModifiers: [1, 5]`): 1 is the unit that adds up
+    to anything a click at a time.
+  - **Or a slider** (Settings ▸ General ▸ Modifier, `storage.modifier_input()`, buttons by
+    default): `MODIFIER_SLIDER_MIN..MAX` = −10..+20, lopsided on the user's word. Both
+    inputs are always built and the setting shows one (`_apply_modifier_input`), so a
+    Save switches it live through `sync_dice_layout` → `sync_modifier_input`. The box
+    keeps ±30; a number past the slider's reach parks it at its end.
+  - **An unset DC reads "not set", muted** (`DC_NONE`, `_mark_dc`): "none" in the text
+    colour read as a value, or a bug. `color` only on the spin box (theme rule 4).
+  - **The DC capsule's foot was clipped**: it stands `space.xs` proud of its box and,
+    with the lane empty, the toolbar is the settings grid's last row. The grid has that
+    much bottom margin now.
+  - **The Actions button closes its popup.** Qt replays the press that closes a popup to
+    the widget under it, so the click closed the popup and opened it again.
+    `ActionGridPopup.mousePressEvent` sets `WA_NoMouseReplay` for a press on its anchor
+    only; elsewhere (the die) the press still lands.
+  - **A pill never widens the roller**: `_QuickRollButton` hints at most
+    `column.quick-roll-max`, its minimum is an ellipsis, and it elides to its width
+    (whole caption in the tooltip, `full_text()`).
+  - **A pill saved off a maneuvered attack re-arms its lines** (the user's pick over
+    "save the plain attack"). `_start_roll` remembers a **recipe** for every roll with
+    lines on it — the loaded spec, the `(key, value)` lines, the modifier box — keyed by
+    the roll's quick-roll key (`remember_recipe`, the last `RECIPE_MEMORY`). A star that
+    saves that roll stores the recipe on the entry (`spec`, `lines`, `circumstance`); a
+    label the server cut short (`MAX_LABEL_CHARS`) still finds it by prefix. A click
+    (`_apply_recipe`) clears the lane, loads the attack (fresh off `attack_choices` when
+    `same_attack` finds it, else as saved), and asks the host to put each line back:
+    `set_line_rearm`, which `CombatRunner.rearm` answers (a maneuver at its value, as far
+    as its cap allows; a self action's line; never a team line). Then it rolls, so the
+    conditions land again. Quick rolls are global settings, so a recipe pill on another
+    character rolls the saved attack against that character's Defense.
+  - **A maneuver line at 0 rides on nothing** (`ActionLine.idle`, `applies`): greyed, its
+    trade line says so (`ZERO_NOTE`), `active_lines` leaves it out (so no All-Out −0
+    condition), and it leaves the lane after `ZERO_GRACE_MS` unless raised again. A line
+    greyed for want of room (maximum 0) is not idle and stays, as before.
+  - **The caps follow the character.** The Dice block subscribes to `build-`, `facts-`,
+    `enhancements-`, `derived-` and `condition-changed` → `refresh_limits` →
+    `relimit_lines` (still publishing nothing). `_start_roll` re-limits too, which covers
+    the GM's roller, whose NPCs are not on a bus. The user's case: Growth moved Defense
+    and All-Out's maximum stayed put.
+  - **The slider says why its range is short**: `maneuver_limit` now gives a `reason`
+    whenever a cap other than `maxShift` binds ("Your Defense is +3, and it cannot go
+    below +0."), shown on the slider and box (`cap_reason`).
+  - **The no-DC warning is a flag**: `NO_DC_SHORT` ("⚠ No DC") in its own label under
+    the result, `NO_DC_WARNING` its tooltip (`warning_text()`).
+  - **Natural 20s and 1s** (`roll_history.natural_kind` / `roll_natural`: a graded roll
+    trusts `critical`, an ungraded one its die unless routine or a lucky re-roll):
+    `dice.critical` / the new `dice.fumble` token for the halo; a burst over the die
+    (`ui/roller/flourish.py`'s `DieBurst`: rays and sparks, or a breaking ring of
+    shards), the halo pulsing (20) or the die shaking (1); a 20's numeral in gold; a
+    "★ NATURAL 20 ★" banner in the readout. A history card gets a gold or crimson edge and
+    wash (`mark_natural`), its number line a "★ Nat 20" badge when ungraded (graded, the
+    "— Nat 20!" phrase is bold in that colour), and a toast's edge the same colour.
+    Crimson & Gold's `dice.critical` was inherited from Classic and nearly matched its
+    own `accent.dice`, the armed halo: it is a brighter yellow there now.
+- **The UX pass** (2026-11-11, the user took all nine points of a fresh-eyes review;
+  tests in `tests/ui/dice/test_roller_preview.py`):
+  - **The readout previews the roll** (`staged_preview`): beside an idle die, what a
+    click rolls now — `d20 + 1 vs DC 15`, `best of 2d20 + 4` for Aim — bold over the
+    muted `IDLE_PROMPT`, the loaded spec with the lane's lines applied (`with_lines`)
+    plus the modifier box; its hover is `staged_breakdown`, the rolled card's table
+    without a die. Nothing for a plain d20 with nothing set. The chip still names the
+    trait at its own number ("Attack +0"); the preview is the only place the +1 that
+    the −2 box and All-Out's +3 came to was ever shown before the throw.
+  - **When the preview replaces a result**: the player moving the modifier, the DC or
+    the lane (`_inputs_edited`, also from `start_action_line` and `_on_lane_changed`)
+    trades the result beside the die for the preview — they are setting up the next
+    roll, and the result is in the history, the same reasoning `load_spec` already
+    used. **Never** for what a landing roll clears itself: `_wind_down` (the shared
+    end of `_finish_roll` and `_reveal_session_roll`) holds `_winding_down` around
+    `_settle_spec` / `_spend_extras`, which zero the box, drop the lines and empty a
+    spec's DC — without it every roll's number vanished the instant it landed. A line's
+    value moving (`ActionLane.edited`, which a limit pulled down after a condition also
+    fires) only refreshes a preview already showing (`_refresh_preview`).
+  - **The modifier and the DC read as fields.** The steps are flat `QToolButton`s
+    (`autoRaise`, lit on hover by the theme's tool-button rule), the box takes twice a
+    step's share and reads `+0` at rest (`SignedSpinBox.set_zero_text`); five equal
+    boxes made the one field look like a sixth button. The DC box is left-aligned like
+    every other field in the app and takes twice the share of Take 10 and Actions: a
+    centred muted "not set" between two buttons its own size read as a greyed button.
+  - **A lone last pill keeps its size** (`FlowLayout`'s justify): the last of several
+    lines grows no more than the line above did. Shared out in full, one leftover pill
+    spanned the block and read as the main Roll button.
+  - **A recipe pill is captioned short** (`recipe_caption`): "Rumbling +15 · Accurate,
+    All-Out" from "Rumbling: Attack +15 vs. Defense (Accurate Attack +5, All-Out Attack
+    +5)" — elided, the long name lost the part that tells two pills apart. The tooltip
+    keeps the whole name; a name not in that shape (a renamed pill) stays whole.
+  - **No DC twice** (`label_names_dc`): a save is named "Toughness vs. 18", so the
+    readout, the card's number line and the preview leave out their "vs DC 18" when the
+    name has it. The hover breakdown still says it.
+  - **The "·" before a grade goes with the grade** (`degree_html(lead=…)`): it is inside
+    the grade's first `nowrap` span, so a wrap starts the next line "· Failure (2
+    degrees)" instead of leaving "21 vs DC 12 ·" with a dot hanging off it.
+  - **No ↻ Reroll under a natural 20** (`_shown_natural`, `_sync_reroll_button`). Reroll
+    is still on the Actions popup and `Ctrl+Shift+R`.
+  - **A card's ☆ and ✕ are one text line tall** (`fit_to_text_line`, padding 0), so
+    heading_row's top alignment puts their glyph level with the first line; at a
+    button's own height they sat a few pixels off, up or down by platform.
+- **The two-row pass** (2026-11-11, the user's layout; tests in
+  `tests/ui/dice/test_roll_controls.py`). It supersedes the "one toolbar" above:
+  ```
+  Modifier  [−5][−1] [ +0 ] [+1][+5]   Actions ▾
+  DC        [−5][−1] [ —  ] [+1][+5]   Take 10
+  All-Out Attack  +3 attack, −3 Def…  [−][3][+] ✕
+  ```
+  - **One grid, `ui/roller/controls.py`'s `RollControls`**, so the DC box sits under the
+    modifier box, every step under its twin, and the two buttons share a right edge. The
+    panel owns the widgets and their signals; `RollControls` only places them
+    (`_place`, which re-adds every widget to its cell — nothing is reparented).
+  - **Narrow, the buttons drop to a row of their own** under the DC row (Take 10 left,
+    Actions right). It is a `ReflowBox` with a `@no_reentry` sync and reports the narrow
+    shape as its minimum; its `sizeHint` is the wide shape, a preference, so the view
+    offers the width. `set_steps` and `set_slider` re-run the sync themselves: what the
+    wide shape needs moves then, and no resize comes to say so (the steps arrive after
+    the block has its width — the first build sat narrow in the strip for that reason).
+  - **The right-hand strip has about 300px for it at a 1400px window**, and the wide
+    shape plus the 24px dead-band only just fits. So: the steps' minimum is their
+    caption plus `space.xs` a side (the platform's tool-button hint was 34px), the
+    buttons' is their caption plus the style's real chrome (`_caption_width`, measured
+    off a long caption so the 80px push-button floor is not counted — caption-plus-air
+    clipped "Actions" in compact mode), no extra gap before the buttons (boxed beside
+    flat tells them apart), and a `space.xs` label gap. A bigger font tips it into the
+    three-row shape, which is the design, not a bug.
+  - **The lane is under both rows**, so neither button nor the DC moves when a pick puts
+    a line on it (the Actions-button bug's reasoning, applied to Take 10).
+  - **The DC has the modifier's steps** (`circumstanceModifiers`), always — even with the
+    slider chosen: DCs are exact numbers the GM announces, and a slider is no way to hit
+    17. **Up from "not set" lands on `system.dcStart`** (10, Average, PDF p17), not 1;
+    down past the bottom is "not set" again (the box's 0). Its box is centred now, the
+    modifier box's twin: the left alignment of the UX pass was for a box between two
+    buttons its own size, which it no longer is.
+  - **The DC capsule covers the whole DC row**, label to last step. It belongs to
+    `RollControls` (`capsule`, `place_capsule`, which watches the row's widgets), and the
+    grid keeps `space.xs` of margin right and below so it is never clipped.
+  - **The slider setting covers the action lines too.** With steps a configurable line is
+    one line — name, the trade muted and elided (whole on hover), `[−] [3] [+]`, `✕` —
+    the `+` greyed at the cap with the cap's reason on hover, which is what the slider's
+    reach used to show. With the slider it is the old two-line look, the trade under it
+    (`ActionLine.set_input`, `ActionLane.set_input`). The `✕` is at the end of every line
+    now. In slider mode the modifier's slider takes the penalty steps' columns and its
+    box the rest, so the box still starts where the DC box does.
 - **Deferral is a window, not a flag, and that was a bug first.** The shared history
   holds one's *own* roll back so the card lands as the die settles rather than the
   instant the server answers. Only the roller's `sessionRollRevealed` lets a held roll
@@ -66,7 +377,7 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   The bridge's event callbacks run on socket threads, so all four roll signals go
   through the internal `_feed` signal to reach the GUI thread, where the timer lives.
   Tests turn it off (`_peer_rolls_land_at_once` in `tests/ui/conftest.py`).
-- **The readout under the die does not decide the die's width.** A word-wrapped
+- **The readout beside the die does not decide the die part's width.** A word-wrapped
   `QLabel` prefers a width worked out from its text, and beside the quick rolls
   (compact) or in a row the die part takes exactly its preferred width — so every roll
   slid the die sideways and re-wrapped the text, worst with a long session label.
@@ -75,7 +386,7 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   markup and fonts, so it follows the theme and never the roll.
 - **A card is as narrow as its longest word, and widens only when it has room.** Every
   roll button on a card is a `WrappingButton` (`roll_button`), and the small buttons
-  (☆, Show, ↶, ✕, the private card's −) sit beside the card's first line
+  (☆, Show, ↶, ✕) sit beside the card's first line
   (`heading_row`), not down its side. There they take width only from the name line,
   which wraps, and every line below gets the card's whole width. Down the side they
   made the card that wide all the way down. "Show" is only as wide as its word
@@ -98,6 +409,13 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   die roll"* (`kind == KIND_ROLL`) rather than *"is this not a note"*: a request has
   no die either, and `RollRecord.from_dict` back-fills `KIND_ROLL` for a log line
   written before any of this, so the test is safe on replayed history.
+- **Quick rolls** are pills (`_QuickChip`): the caption is a flat `QToolButton` — a
+  push button asks for the platform's default width, which made every pill a slab —
+  that rolls on a click and **drags** to reorder once the pointer passes the drag
+  distance (it used to need a `⠿` grip), and a `×` floating over the pill's end while
+  the pointer is over it (see "The justified pass"; right-click ▸ Remove does the
+  same). The whole part is hidden while the strip is empty. A private history card's
+  remove button is `✕` like every other card's (a `−` read as "collapse").
 - **Quick rolls** are capped at `MAX_QUICK_ROLLS` (6). The cap is a layout constraint,
   not a preference: the strip shares the block with the controls and the die, so an
   unbounded chip list ratchets the block — and the pinned strip holding it — ever
@@ -175,6 +493,10 @@ The block's minimum is *exactly* its content — no more, and no less — and th
 history is the one thing inside it that scrolls. Four separate things make that true,
 and the bug that motivated them was a single click: loading a stat into the roller
 shows the spec chip, the panel grows ~50px, and the strip answered with a scrollbar.
+(The chip no longer grows the panel at all: it sits in `_chip_slot`, a `QStackedWidget`
+that shows a dashed empty outline, `#specSlot`, with a muted `CHIP_SLOT_HINT` in it,
+until something is loaded, and is as tall as the chip either way. `contentChanged` still
+fires for the readout beside the die, and for the action lane, which *does* grow.)
 - **The panel says when it changed size** (`contentChanged`, above). Without it the
   splitter kept handing the panel its old share *plus* the chip.
 - **The history is the elastic part**, and its two heights are deliberately different
@@ -436,6 +758,16 @@ mini strip, `Esc`, or that same button leaves.
 - `ANIMATION_MS` is a class attribute so `tests/conftest.py` can zero it, exactly as it
   does `PowersSection.TRANSITION_MS`; a window that is not on screen jumps rather than
   eases, so a test asserts on the resting state without an event loop.
+- **Either direction is all or nothing.** Entering hides the sheet and the menu bar
+  before the mini page exists, so a failure part way used to leave a window with
+  nothing in it. `enter` runs the shrink (`_shrink`) inside a `try`; a failure is
+  logged and `_undo_enter` puts the frame, the size and the full window back. Leaving
+  and undoing share `_restore_full_window`, which runs each step on its own
+  (`_attempt`) — a roller that will not re-seat is logged and the menu bar and the
+  sheet come back regardless. `_shrink` forgets the last visit's geometry and
+  maximized flag before it measures, so an undo never restores stale ones. And
+  `enter` asks the surface to `end_gestures()` first: a hand still on a divider is
+  about to lose the page it was dragging on (see [the sheet notes](sheet-and-blocks.md#the-page-never-stays-broken-matters-when-touching-_relayout-or-any-gesture)).
 
 ## Rolling from the sheet (matters when touching the roller or a stat block)
 
@@ -444,7 +776,7 @@ the Initiative readout to load it into the roller's chip, **double-click** to th
 it; click a line of a power card's dice footer to roll it outright. The same rule as
 everywhere applies — *the widget never computes the number*.
 
-One click loading rather than rolling is what makes the sliders and the DC box
+One click loading rather than rolling is what makes the modifier and the DC box
 usable: you name the trait, then set the situational extras, then throw. A
 double-click necessarily fires the single click first, and that is left alone rather
 than deferred by the double-click interval — rolling loads the same spec anyway, so
@@ -473,14 +805,22 @@ had their look. Three things fall out of it:
   it, as the caption for slider values that stayed set — but the sliders are now spent
   by the roll (below), so a chip left standing would be naming numbers that are gone.
 
-**And the sliders are spent by the roll.** Bonus and Penalty are a circumstance of
+**And the modifier is spent by the roll.** It is **one signed box** (−30..+30,
+`MODIFIER_LIMIT`; a snug, arrowless `SignedSpinBox`, `+3` / `-3`, between its
+circumstance steps) — it used to be two sliders, a Bonus and a Penalty, then one
+two-way slider. It is a circumstance of
 *one* check — cover against this attack, Extra Effort's "+2 on a single check" — yet a
-value left in a slider used to ride along on every roll after it, unnoticed.
-`_spend_extras` zeroes both beside each `_settle_spec`, i.e. at the end of both paths
-that produce a number and **not** in `_abandon_roll`, for the same reason the chip
-survives there. While either holds anything, `_mark_extras` tints its label and spin
-box (`tint.better` / `tint.worse`, bold) so a pending charge is as visible as a loaded
-trait. Only `color` and weight go on the spin box — a `border`, `padding` or
+value left in it used to ride along on every roll after it, unnoticed.
+`_spend_extras` zeroes it (and drops the action lines the roll used, below) beside each
+`_settle_spec`, i.e. at the end of both paths that produce a number and **not** in
+`_abandon_roll`, for the same reason the chip survives there. While it holds anything,
+`_mark_extras` tints its label and spin box (`tint.better` above 0, `tint.worse` below)
+so a pending charge is as visible as a loaded trait. **Colour only, never bold:** bold
+text is wider, so the label and the box grew, and the roller with them, each time the
+value left 0 (`test_the_roller_does_not_widen_when_the_bonus_leaves_zero`). The wire and the history
+still speak a non-negative bonus/penalty **pair**, split from the net in
+`_roll_parameters`; a quick roll's identity (`quick_roll_key`) is read by that net, so a
+chip saved as "+4 and −1" before the change is the same chip as the +3 it now loads. Only `color` goes on the spin box — a `border`, `padding` or
 `background` there trips rule 4 of the theme notes. Note what this did to tests that
 call `_start_roll()` and then `_finish_roll()` under a zero `ROLL_DURATION_MS`: the
 first call already finishes the roll, so that pair is *two* rolls, and the second now
@@ -489,16 +829,15 @@ has no bonus — call one or the other.
 The other half of the same guard is that a loaded chip is **loud** — an `accent.dice`
 fill inside an `accent.dice` border (`#specChip`, scoped to the object name, since a
 bare rule on a widget reaches the `✕` button inside it), a caption worded as a state
-(`🎲 Rolling: Athletics +9`), a matching ring on the die (`_apply_die_style`, drawn
-inside the button's existing `die.padding` so its fixed size never moves and
-`contentChanged` is not dragged in for a highlight), and a readout that says
-`Rolling Athletics — click the die.` in place of the resting prompt. `_showing_result`
+(`🎲 Athletics +9` — it said "Rolling:" until the halo took that over), a matching
+halo on the die (`_apply_die_style`, see "The justified pass"; it costs no layout, so
+`contentChanged` is not dragged in for a highlight), and the resting prompt beside it. `_showing_result`
 is what keeps that prompt from eating a number: `load_spec` writes it whenever a spec
 is loaded, but on a *clear* only while the readout is not holding a result — and
 clearing is precisely what `_settle_spec` does one line after the roll wrote one there.
 
 The chip is **one line, always**: its caption is an `ElidingLabel` (the whole caption,
-and the spec's hint, in the tooltip; the readout under the die names the trait in
+and the spec's hint, in the tooltip; the chip's tooltip names the trait in
 full) and its vertical policy is `Maximum`. It used to word-wrap, and a wrapped label
 asks for its second line only through height-for-width, which nothing above the Roll
 box passes on — so a long trait in a narrow strip got one line's height for two and was
@@ -514,7 +853,7 @@ drawn squashed, and a tall compact window stretched it the other way.
 - Two things a spec deliberately does *not* know, because this character's sheet
   cannot see them: an attack's **DC** (the target's Defense — `dc` stays `None` and
   the roller's DC box supplies it) and a save's **modifier** (the target's
-  resistance — `modifier` is 0 and the Bonus slider supplies it).
+  resistance — `modifier` is 0 and the modifier box supplies it).
 - `power_rolls` replaced the card footer's prose-only `roll_lines`, which built
   strings like `"8 vs. Defense"` and threw the numbers away. It reads them from
   `powers_terms.effect_roll_numbers` (`check_actor`/`dc`/`attack`, factored out of
@@ -556,7 +895,7 @@ drawn squashed, and a tall compact window stretched it the other way.
   arrived through `roll_spec` is let go once the die settles (above). The sliders always
   **add on top** (`net = spec.modifier + bonus − penalty`, split back into a
   non-negative pair for the wire) rather than being overwritten — they are the
-  situational extras, and a trait bonus can exceed their 0-20 range anyway.
+  situational extras, and a trait bonus can exceed their ±20 range anyway.
 - Every such roll now travels **named**: `RollRequest.label` has existed end to end
   since the session layer landed and nothing filled it; `_request_session_roll`
   passes `spec.label`, so the table sees *what* was rolled. A named quick-roll chip
@@ -586,12 +925,21 @@ drawn squashed, and a tall compact window stretched it the other way.
   `system.critical_miss_resistance_bonus` on their check (a bonus to them, not a cut
   to the DC — same arithmetic, honest description). The reason is written into the
   follow-up's label, so a DC box reading 23 where the card said 18 explains itself.
-- **Auto-fill.** A save spec carries `trait_key`, so clicking the chip on someone
-  else's card rolls with *your own* resistance already in (`localize_spec`, installed
-  on the panel via `set_localizer` — one seam, so the bus path and the chip path both
-  get it; GM Mode's roller has no sheet and installs none). Off on your **own** card:
-  you are not the target of your own attack, and `chain_widgets(localize=False)` drops
-  the trait key rather than presenting a confident wrong number.
+- **Auto-fill.** A save spec carries `trait_key`, so clicking the chip on a card rolls
+  with *your own* resistance already in (`localize_spec`, installed on the panel via
+  `set_localizer` — one seam, so the bus path and the chip path both get it; GM Mode's
+  roller has no sheet and installs none). **On your own card too** (the user's call,
+  2026-11-11): `chain_widgets(own=True)` hands the save through `own_attack_save`, which
+  keeps the trait key and sets `RollSpec.own_attack`. The roll is filled in with this
+  sheet's numbers, and the result carries a ⚠ whose hover reads "You resisted your own
+  attack" — under the die (`OWN_ATTACK_SHORT`, sharing the "⚠ No DC" spot through
+  `_result_flag`) and by the card's ☆ (`own_attack_mark`; "Resisted their own attack"
+  on someone else's screen). The flag is on the wire (v20, unreleased). It used to drop
+  the trait key on one's own card instead, on the grounds that you are not the target
+  of your own attack — but then the button rolled a bare d20, which read as the app
+  forgetting the roller's Toughness; and testing a character, or running both sides, is
+  exactly when that button gets clicked. A roller with no sheet (the GM's) clears the
+  flag, since nobody's numbers went in.
   `localize_spec` reads the key **together with `kind`**, so it answers an ability, a
   resistance, a skill or initiative — a bare key is ambiguous, a mod may call an
   ability and a skill the same thing, and an *empty* kind still means a resistance
@@ -628,8 +976,8 @@ drawn squashed, and a tall compact window stretched it the other way.
 
 ## Asking the table to roll (matters when touching the roller or the session log)
 
-The roller's **Request** row — a trait combo, a bare DC spin box, an "Ask" button —
-puts a roll in *everyone's* history for somebody else to make. The chain, run
+The roller's **Ask to Roll** form — a trait combo, a bare DC spin box, an "Ask"
+button — puts a roll in *everyone's* history for somebody else to make. The chain, run
 backwards: the save chip exists because an attack landed, and there was no way to
 ask for a check nobody had provoked.
 
@@ -646,20 +994,26 @@ ask for a check nobody had provoked.
   character, so there is nothing honest to localize on anyone else's sheet). Labels
   are full names rather than `pin_label`'s chip abbreviations: these are read in a
   combo and in a sentence, where `AWE` is a riddle.
+- **It is a popup, not a row** (`RollerRequestsMixin._build_request_form`, a
+  `Qt.Popup` `QFrame` child of the panel, built once so it remembers the last trait).
+  It used to be a row of the roller, always on screen: three greyed controls on the
+  busiest part of the panel for a verb used a few times a session. The Actions popup's
+  **Ask** tile (`ACTION_REQUEST`, the panel's own like Reroll, in `combat.menu`'s Dice
+  section) opens it with `open_request(at)` — on the next turn, once the Actions popup
+  has closed, since two popups open at once fight over which one a click closes.
+  `request_reason()` greys the tile (`NO_REQUEST_TRAITS`) when the host gave no traits.
+  Ask emits and hides the form.
 - **The panel is handed the answer, not the data** — `set_roll_choices(groups)`
-  beside `set_localizer`, and the row **hides itself** (emitting `contentChanged`,
-  which is not optional — see "The Dice block's height") when a host supplies none.
+  beside `set_localizer`.
   It emits `rollRequested` and neither sends nor rolls: where a request goes is the
   question `post_note` already answers, so `DiceSection.request_roll` is that method
   written twice — session first, private history off the air. The GM window answers
   for itself, because it owns its history and the view's fallback stands down there.
-- **The DC box is a plain spin box where 0 means no DC.** The Difficulty Class row
-  above it needs a checkbox because the panel has to tell "no DC" from "DC 0" for a
-  roll it *grades*; nobody asks for a roll against DC 0. It is also **arrowless**:
-  the theme reserves ~50px for the arrows the platform style draws, which took 148px
-  of a 210px cell and clipped the trait name to "Trai".
-- **The button is on every card, including the asker's**, and this is the one place
-  the `chain_widgets(localize=False)` rule is deliberately reversed — you *are* a
+- **The DC box is a plain spin box where 0 means no DC**, shown as `—`
+  (`setSpecialValueText`) — the same rule as the roller's own DC box now. It is also
+  **arrowless**: the theme reserves ~50px for the arrows the platform style draws.
+- **The button is on every card, including the asker's**, filled in from the asker's
+  sheet like anyone's — and, unlike a save on one's own card, with no ⚠: you *are* a
   target of your own request. Hence `request_widgets`, a sibling rather than a reuse:
   `chain_widgets` asks a rolled spec what it *provoked* and needs a `follow_up` and a
   passing degree, while a request **is** the roll, sitting in the log waiting.
@@ -680,7 +1034,11 @@ of NPCs — often fewer. Two answers, and they are independent.
   histories build their number line from the one function — `LocalRollHistory`'s
   `RollCard` converts its roll with `roller.history.local_record` first — so the private
   and the shared card cannot drift apart again.
-- **Every new entry pops up in a corner of the screen** (`ui/toasts.py`,
+- **Every new entry pops up in a corner of the screen** — but only while the app is
+  behind something else (`toasts.app_focused()`; the user's call, 2026-11-10: with the
+  app in front the history is on screen anyway). An entry skipped that way is still
+  marked seen, so a second history cannot announce it once the focus goes. Tests stand
+  in for `app_focused` (the `live_toasts` fixture). (`ui/toasts.py`,
   `RollToaster`): a frameless, always-on-top window that never takes focus, stacking
   away from the corner the user chose, fading after `DWELL_MS`, and held — the whole
   stack, as Telegram Desktop does it — while the pointer is over any of them. Clicking
@@ -706,17 +1064,242 @@ of NPCs — often fewer. Two answers, and they are independent.
   makes would pop a real window on the developer's desktop; `tests/ui/dice/test_toasts.py`
   lifts it for its own.
 
-## The Action row
+## The Actions button
 
-Under the Request row, an **Action** row: **Reroll** first, then the actions taken
-against other characters — Impress — once a host calls `set_actions` with
-`(key, caption, tooltip)` triples. The row used to hide until then; Reroll is always
-there, so it no longer does. The actions only *report* (`actionRequested(key)`): running an action
-needs a dialog, a character and perhaps a session, none of which the panel has. The
-Dice block and the GM's Rolls block both offer Impress here, which is what puts the
-player's button and the GM's in the same place. See [the actions notes](actions.md),
-which also cover the two `RollSpec` additions the action brought (`KIND_BEST_OF` and
-`dc_from_total`).
+On the toolbar, after the DC box and Take 10 — **above** the action lane, so it never
+moves when a pick puts a line there — the **Actions ▾** button (the old Action row of
+push buttons — Reroll, Impress, Area — is gone). It opens the **Actions popup**
+(`ui/action_grid.py`, see [the UI utilities notes](ui-utilities.md)): titled sections of
+square icon tiles, built from `actions.json`'s `combat` block by
+`ui/action_menu.combat_menu`. The panel reads no game data, so the **host builds the
+sections**: `DiceRollerPanel.set_action_menu(build)` takes a callable that is handed the
+panel's **own** actions (`own_actions()`: Reroll, mapped to `None` or the reason it can't
+run) and returns the sections. It is called at every opening, not once, because what is
+available moves (a roll comes back, the GM forms an NPC group).
+
+- **What a host offers** is a map of action id → `None` (it runs) or a reason (greyed,
+  the reason in the tooltip). An id the host does not mention is greyed with
+  `NOT_BUILT` — the actions later phases of the combat maneuvers plan wire up. `gmOnly`
+  actions are left off a player's popup entirely.
+- The sheet's Dice block (`DiceSection.action_menu`) offers Impress, **Attack** and
+  **Area** (each greyed with `NO_ATTACKS` / `NO_AREAS` on a sheet with nothing to use).
+  The GM's Rolls block
+  (`GMRollsMixin.action_menu`) offers Impress, Area, **Team check / Group check**
+  (`GROUP_ACTIONS`), which need a group: greyed with `NO_NPC_GROUPS` until there is one,
+  and a pick asks which group off a plain `QMenu` (skipped when there is only one), then
+  opens the same window the group card's menu does. **Team attack** is the call to roll
+  (`ui/team_call.py`), greyed off the air or with nobody on the Scene; the NPC-group
+  window is on the group's ☰ menu only.
+- **Reroll and Ask are the panel's own**: picking Reroll calls `reroll()`, Ask opens
+  the Ask to Roll form; neither is reported.
+  Every other pick goes out on `actionRequested(key)`, which is what the hosts' Impress
+  and Area handlers always listened to. `can_reroll` replaces the old button's enabled
+  state as the thing a test reads.
+- A ruleset with no `combat.menu` falls back to one section of the host's own
+  `(key, caption, tooltip)` triples (`IMPRESS_ACTION`, `AREA_ACTION`) plus Reroll,
+  and Ask when it is offered.
+- Building the popup is wrapped: a bad menu (a mod's data) is logged
+  (`log_exception`) and costs the popup, never the panel.
+- The button is in `_input_widgets`, so it is disabled while the die tumbles (the old
+  Impress button was not; Reroll was).
+- The run-mm-companion driver shoots it: `driver.py actions-popup` /
+  `actions-popup-gm` (each also writes `<target>-window.png`), and `request-form` for
+  the Ask to Roll form.
+
+See [the actions notes](actions.md), which also cover the two `RollSpec` additions the
+action brought (`KIND_BEST_OF` and `dc_from_total`).
+
+### The attack picker, and the Attack and Area tiles
+
+- **The picker** is a plain `QMenu` of the character's attacks: `core.rules.
+  attack_choices` (every roll line the wielder makes that forces a save —
+  `targetable_attack` — off the very lines the power and gear cards draw, so the menu
+  and the cards agree; an area power's card has an attack line too, for its primary).
+  The panel reads no game data, so the host hands it in: `set_attack_choices(callable)`,
+  read at each opening. `choose_attack()` returns the spec picked; it loads nothing.
+  Every chooser opened off the popup goes through `action_menu.choose_from_menu`, the
+  one `QMenu` a test stands in for (`action_menu.QMenu`), at `panel.menu_point()`:
+  **on the tile just picked, over the still-open popup** (`ActionGridPopup.
+  follow_up_point`), like a submenu — closing the popup first and opening a small menu
+  under the button read as the popup vanishing. Outside a pick, under the button.
+  **A picked attack's label is its caption** ("Blast: Attack +8 vs. Defense"): off its
+  card, a bare "Attack +8 vs. Defense" on the chip and in the history could be any of
+  the character's attacks. A card's own 🎲 keeps the card's label, under the power's
+  name already. `same_attack` compares labels, so the same attack loaded once off its
+  card and once off the picker counts as two (the lane resets its values).
+- **The Attack tile** (`DiceSection.start_attack`): the picker, then — when the Scene
+  has someone to aim at — a target menu whose first line is `SKIP_TARGET`. A target
+  goes the aimed-attack road (`aim_attack`: declared to the GM, rolled at once).
+  Skipping, or nobody to aim at, **loads** the attack onto the chip: the DC box is the
+  Defense. An unaimed attack rolled with no DC is flagged `NO_DC_SHORT` under the result,
+  `NO_DC_WARNING` on hover (`_unjudged_attack`) — on any attack, a card's 🎲 included —
+  and still rolls.
+- **The Area tile** (`DiceSection.start_area_tile`): `core.rules.area_choices` (the
+  cards' area lines, whose `trait_key` is the area key) — the only one opens at once,
+  several are offered on a menu — then `start_area`, as the card's area line does.
+
+### The action lane
+
+Under the toolbar, `ui/roller/action_lane.py`: an `ActionLane` of `ActionLine`s, one per
+action riding on the next roll — its name (in the line's `tone`), a `✕`, then a slider
+and spin over `0..X_max` (*configurable*) or a fixed caption. The panel's way in is
+`start_action_line(key, name, limit=…, fixed=…, needs_attack=…)`; re-picking an action
+replaces its line.
+
+- **It takes no room when empty**: the lane hides. It used to hold one line's height
+  open (a hidden placeholder line with `retainSizeWhenHidden`) so the first action never
+  resized the roller, but the blank row read as a gap, so **every line grows the roller a
+  row** (`contentChanged` covers it). The Actions button rode under the last line for a
+  while (2026-11-09) and moved away from the pointer with each pick; it is on the toolbar
+  above the lane now (2026-11-10). A fixed line is as
+  tall as a spin box (measured off one, then discarded), so every kind of line is the
+  same height.
+- **The limit is the host's**: `limit(spec) -> (maximum, reason)`, the loaded attack in.
+  The panel only decides whether the loaded spec *is* an attack (`loaded_attack`).
+- **A line that needs an attack** with none loaded opens the picker first and loads
+  what is picked (dismissing it calls the action off). `load_spec` re-binds every line:
+  no attack → greyed with `NEEDS_ATTACK`, kept in place; a **different** attack →
+  the limit is worked out again and the value **reset to the maximum**; the same one
+  (`core.rules.same_attack`: the aimed copy of a line counts as the line) keeps what
+  the player set, pulled down only if it no longer fits. A maximum of 0 greys the line
+  with the limit's reason.
+- **Lines limit each other.** A limit may read the other lines (the maneuvers' caps are
+  on the combined shifts), so whenever a value moves, or a line comes or goes, the lane
+  re-limits the others (`ActionLine.relimit`): ranges follow, and a value past its new
+  maximum is **pulled down, never pushed up** — that is what keeps two lines from
+  chasing each other. Passes repeat **until one moves no value**: a pull-down does not
+  only loosen the others — Accurate pulled down takes away the attack bonus Power Attack
+  was spending, so Power must drop too, which can knock on to All-Out. Two fixed passes
+  used to stop short of that and could leave the attack bonus below 0 (attack +3,
+  Defense 3: Defensive, Power, All-Out 5, re-pick Power, Defense to 1). Values only
+  fall, so the loop ends; the last pass leaves every range matching its cap. A line is
+  marked available **before** its value is set, since the other lines read only the
+  lines that apply — a fresh line still greyed was left out of their limits. The lane's
+  `_settling` flag stops a pass from starting another.
+  `tests/ui/dice/test_lane_settles.py` fuzzes the four maneuvers on one lane.
+- **Spent by the roll**: `_start_roll` notes the lines that applied (`_rolled_lines`,
+  `(key, value)` pairs, and `lines` on the roll Reroll throws again); `_spend_extras`
+  removes them and raises **`linesRolled`** with them — the host's cue to land what they
+  leave behind. A greyed line did not apply and stays; an abandoned roll keeps them and
+  raises nothing; a reroll uses the last roll's, leaves the current ones alone and
+  raises nothing. `active_lines()` is `(key, value)` for the ones that apply.
+- **What the lines do to the roll is the host's**: `set_line_shift(shift)`,
+  `shift(spec, lines) -> spec`. `_start_roll` applies it once (`with_lines`) and the
+  roll is **made of** that spec (`_flight`, read by `_roll_parameters`, `_roll_label` and
+  `_rolled_spec` through `_made_of`); the chip keeps the loaded one, so the lines can be
+  set again for the next throw. A failing shift is logged and the roll goes unshifted.
+- **`roll_spec(spec, before=…)`**: *before* is handed the spec the roll will be made of
+  just before the die goes, and `False` from it calls the roll off (the chip goes back
+  to what it held, through `load_spec(..., localize=False)` — the localizer must not
+  run twice). It is how an aimed attack declares exactly what it rolls.
+
+### The attack maneuvers (Accurate, All-Out, Defensive, Power)
+
+The sheet's Dice block offers the four tiles whenever it has an attack (`NO_ATTACKS`
+otherwise). A tile is `DiceSection.start_maneuver(id)`: a line whose limit is
+`core.rules.maneuver_limit` (the other lines' values in), tinted by the tone of the
+condition it leaves (All-Out red, Defensive green, the others green). The shift is
+`core.rules.apply_maneuvers`: the attack modifier moves (the label is restated:
+`Attack +9 vs. Defense (All-Out Attack +3)`), and the effect-rank shift moves every save
+it provokes — the DC (and the number in its label), the ladder's `rank` that Impervious
+is measured against, and the local-only `RollSpec.effect_rank` the caps read. On
+`linesRolled`, `core.rules.lasting_conditions` goes out on the bus's
+**`condition-requested`** topic and the Conditions block's `take_conditions` puts each on
+**temporary** with its amount (re-applying replaces it: one All-Out a turn). The rules
+and the caps are in [the actions notes](actions.md#combat-maneuvers).
+
+### The self actions (Aim, Block, Charge, Defend, Recover, Drop Prone, Stand, Finishing, Catch)
+
+`DiceSection.start_self_action(id)`, read off the record's `CombatEffect` by
+`core/rules/self_actions.py` (no action is named in code). An action with `options` asks
+which first, on the plain `choose_from_menu` (Charge / Slam / Slam at full speed; Stand by
+Acrobatics, by speed rank, or slowly; Finishing with or without intent to kill). Then one
+of three things:
+
+- **A `line`**: a *fixed* lane line keyed `action/option` (`line_key`; a Slam replaces a
+  plain Charge, since both are the one action). A fixed line takes a `fits(spec) -> reason`
+  (`core.rules.line_fit`): Aim on an attack with no attack check, or a Slam on one that is
+  not Damage, greys out with the reason, as a maneuver's 0 maximum does. The panel's shift
+  is now `core.rules.apply_actions` — the maneuvers and these lines together, named once in
+  the label (`… (All-Out Attack +3, Charge)`). Charge moves the modifier; Finishing sets
+  `dc = 10` and `critical_hit` (on the wire: `follow_up_for_result` and the GM's
+  `judge_attack(critical_hit=)` treat any hit as a critical) and, to kill, rewrites the
+  damage ladder from the third failure to Dead; a Slam moves the Damage save to
+  `max(rank + 1, speed rank)` (+1 at full speed) and sets **`RollSpec.then`**: the
+  slammer's own save at the halved rank (Resistance, p130), filled in for this sheet.
+  **`then` and `roll_twice` are local only** (`compare=False`, never in `to_dict`).
+- **`roll_twice`** (Aim) is read by the panel (`_twice`, the last roll's on a reroll):
+  locally two dice, the higher kept; in a session the request's **`twice`** and the
+  server rolls both. The dropped one is `other_die` on the roll (the record's too), shown
+  struck through in the readout and the history headline.
+- **`then`** is loaded onto the chip once the roll has settled (`_spend_extras`, with
+  `localize=False` — it is already this sheet's number); never for a reroll or an
+  abandoned roll.
+- **Conditions at once** (Defend, Drop Prone, Stand slowly, Recover's +2): a tuple of
+  `ConditionChange` on `conditionsRequested` (`condition-requested`), which
+  `take_conditions` now takes beside the maneuvers' `(id, amount)` pairs, plus a history
+  line (`self_action_note`) through `post_note`.
+- **A `check`** (Catch's Agility, Stand's Acrobatics or speed rank) is loaded onto the
+  chip at its DC (`check_spec`, `localize=False`). Its `clears` rides as
+  `RollSpec.recovers`, so a made Stand check takes Prone off through the ordinary
+  recovery road (`settle_recovery` → `recovery-requested` → `apply_recovery`).
+
+Recover also offers what it may shed (`recover_choices`): a recovery check for the most
+severe of its `recovery.from` list on the creature that offers one (rolled at once), a
+step down the fatigue ladder, or `RECOVER_DEFENSE_ONLY`; with nothing to shed there is no
+menu. "Once per scene" is in its tooltip, not enforced. `requires` (any one of a list)
+/ `refusedBy` grey Stand (not Prone), Escape (neither Restrained nor Bound) and Drop
+Prone (already Prone); `gmRuns` greys a player's Surprise Attack (the GM grants it,
+below).
+
+**Block** (phase 9) is a self action with a `reaction`. Taken while not Blocking it does
+its own effect: the green, temporary, stacking **Blocking** chip, and a history line.
+Taken again while Blocking it is a block (`CombatRunner._react`): the attack picker, then
+`core.rules.reaction_spec` — the attack's bare check (`bare_attack_check`: no save, no
+marks, so the maneuvers stay off it), the record's `step` (−2) for each block already
+made, and **no DC**: the attacker's result goes in the DC box by hand (the user's call —
+the GM's judge does not block for anyone). It is **loaded**, not thrown, and the chip's
+count goes up by one (`reaction_changes`), so "Blocking ×2" means one block made. The
+start of the next turn ("Clear temporary") resets it. Readying needs no attack, but a
+block does: while Blocking, a creature with no attack sees the tile greyed with
+`NO_ATTACKS` (the GM's chooser greys it too, `_actor_reason` reading `reacting`).
+
+### One runner for both rollers (`ui/roller/combat_runner.py`)
+
+The maneuvers and self actions are not the Dice block's own code: they are
+`CombatRunner`, built on a panel with a `note` callable and a parent for its menus. It
+wires the panel's attack choices, line shift and `linesRolled` itself. Everything that
+depends on **who acts** is a `CombatActor`: the `character` (whose attacks, caps, speed
+and conditions are read), a `name` and `key` (`""` on a player's sheet: its rolls carry no
+name, as before), `minion`, `land(requests)` (the `condition-requested` payload) and
+`throw(spec, load)` (a check the action rolls or loads; `None` = the panel plainly).
+
+- **The sheet** (`DiceSection.combat`) has one actor for good, landing on the bus.
+- **The GM** (`ui/gm/combat.py`) changes actor per pick: a tile asks which NPC acts
+  (`_choose_actor` — portraits, groups, "(minion)", greyed with the reason when it
+  can't; one NPC asks nothing), then `act_as(actor)`. A named actor's specs are `own`ed
+  ("Thug: …", `actor="Thug"`), so the history heads "Thug (GM)". `land` goes through
+  `GMWindow._land_npc_requests` (the model, then the open sheet's `take_conditions`, so the
+  temporary flag survives the replay); `throw` holds a check that sheds a condition
+  (Stand's) as the chip's 🎲 does (`_recovering`).
+- **A different actor drops the lane's lines** (`act_as`), and so does a roll off another
+  NPC's card or sheet (`_follow_actor`): a line's limit reads its actor's numbers.
+- **`ensure_attack`**: a loaded attack that is not the actor's own (`spec.actor` differs —
+  one loaded off a card) makes the picker ask again.
+- **The GM's Attack tile**: NPC, its attack, then the target (`SKIP_TARGET` first; the
+  GM's own Scene less the NPC) → `AttackController.aim_own`, which declares the spec the
+  die is made of (`area_roll_attack(before=)`), so the lane's maneuvers move the save.
+- **Surprise Attack** (`_grant`, the GM's only): anyone on the Scene, then the record's
+  options (vulnerable / defenseless, `temporary: true` in data) → an NPC's model, or a
+  player's sheet as `ApplyCondition(temporary=True)`; a line in the history.
+- **A team attack's call to roll** (`join_team`, see [the actions
+  notes](actions.md#a-call-to-roll-the-gms-team-attack-tile)): Join puts a fixed
+  `TEAM_LINE` on the lane (the picker first when the actor has no attack loaded) and holds
+  the call as `team_call`. `shift` stamps the next attack with `team_join_spec` **before**
+  `apply_actions`, so the maneuvers ride on the entry; `land_lasting` forgets the call once
+  the line is spent. Joining again replaces the line. A reroll re-throws the stamped spec,
+  so it is still the entry; a line left armed does not stamp a reroll of an earlier roll
+  (Reroll never reads the lane).
 
 ## Reroll
 
@@ -737,10 +1320,3 @@ the **server** rolls it (`RollRequest.reroll`, protocol v12) and stamps `reroll`
 record itself — a client's label is not evidence, and every seat should see which dice
 were lucky. `reroll_label` adds "(reroll)" wherever a roll is named. It spends nothing —
 no Hero Point, no Luck rank — which is the player's to mark.
-
-## The Request row sits on the grid
-
-The trait combo is in the sliders' column and the DC box with its "Ask" in the spin
-boxes' column, cell for cell. It used to span both columns as one free-running line,
-which lined up with nothing above it. The DC box shows `—` for 0 (`setSpecialValueText`):
-0 means "no DC" here, and a bare `0` read as a DC of nothing.

@@ -29,7 +29,7 @@ from .appliers import (
     split_trait_key,
 )
 from .build_cache import build_scoped
-from .conditions import ConditionEffect, condition_scope_penalty
+from .conditions import ConditionEffect, condition_scope_penalty, resistance_condition_effect
 from .runtime import equipment_contributions, power_contributions
 from .size import size_contributions
 
@@ -725,6 +725,21 @@ def defense_class(char: Character, game_data: GameData, key: str | None = None) 
     if key is None:
         key = game_data.system.trait_keys.defense
     return game_data.system.defense_dc_base + resistance_total(char, game_data, key)
+
+
+def defense_class_in_play(char: Character, game_data: GameData) -> int:
+    """The Defense Class with the conditions on *char* applied — what an attack must beat now.
+
+    :func:`defense_class` is the build's number; this is the same ``base + Defense``
+    over the Defense row's condition overlay (Vulnerable halves it, All-Out Attack −3
+    lowers it, Defending +2 raises it), read the way the Resistances table shows it.
+    """
+
+    key = game_data.system.trait_keys.defense
+    total = resistance_total(char, game_data, key)
+    effect = resistance_condition_effect(char, game_data, key)
+    shown = effect.apply(total) if effect.active else total
+    return game_data.system.defense_dc_base + shown
 
 
 def initiative_ability(char: Character, game_data: GameData) -> str:

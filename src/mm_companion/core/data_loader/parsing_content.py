@@ -4,15 +4,32 @@ typed records.
 
 from __future__ import annotations
 
-from ..components import APPLY_BONUS, Integration, TraitBoost
+import dataclasses
+
+from ..components import APPLY_BONUS, TONE_HINDRANCE, Integration, TraitBoost
 from .game_data import (
     ActionModifier,
     AreaCover,
     AreaEvasion,
     AreaRules,
+    CombatAction,
+    CombatCheck,
+    CombatEffect,
+    CombatMenuSection,
+    CombatOption,
+    CombatRules,
+    ConditionChange,
+    DegreeOutcome,
     Impression,
     ImpressRules,
+    KillRule,
+    ManeuverLimits,
+    OpposedStage,
+    ReactionRule,
+    RecoveryRule,
     ResistOptions,
+    SlamRules,
+    TargetedRules,
 )
 from .parsing_rules import (
     _extras,
@@ -29,6 +46,8 @@ from .power_records import (
     EffectReach,
     Measure,
     Modifier,
+    Overcome,
+    OvercomeModifier,
     PowerConfiguration,
     RepeatableColumn,
     ResistanceGrant,
@@ -42,6 +61,7 @@ from .system_records import (
 from .traits import (
     Ability,
     Advantage,
+    AmountMod,
     AttackMods,
     Characteristic,
     Condition,
@@ -50,6 +70,7 @@ from .traits import (
     Debilitation,
     DefenseMod,
     Field,
+    OpposingRule,
     ParameterSpec,
     RandomActionRow,
     RecoveryCheck,
@@ -306,6 +327,24 @@ def _parse_recovery_check(raw: dict | None) -> RecoveryCheck | None:
     )
 
 
+def _parse_amount_mods(raw) -> tuple[AmountMod, ...]:
+    """A condition's ``amountMods``: ``{trait, sign, parameter?}`` entries, sign ±1."""
+
+    mods = []
+    for entry in raw or ():
+        if not isinstance(entry, dict) or not entry.get("trait"):
+            continue
+        sign = -1 if int(entry.get("sign", 1) or 1) < 0 else 1
+        mods.append(
+            AmountMod(
+                trait=str(entry["trait"]),
+                sign=sign,
+                parameter=str(entry.get("parameter", "") or ""),
+            )
+        )
+    return tuple(mods)
+
+
 def _parse_condition(c: dict) -> Condition:
     return Condition(
         name=c["name"],
@@ -334,6 +373,25 @@ def _parse_condition(c: dict) -> Condition:
             for r in c.get("randomTable", ())
         ),
         trait_lost=bool(c.get("traitLost", False)),
+        tone=str(c.get("tone") or TONE_HINDRANCE),
+        amount_mods=_parse_amount_mods(c.get("amountMods")),
+        default_amount=(int(c["defaultAmount"]) if c.get("defaultAmount") is not None else None),
+        max_amount=(int(c["maxAmount"]) if c.get("maxAmount") is not None else None),
+        temporary=bool(c.get("temporary", False)),
+        opposing=_parse_opposing(c.get("opposing")),
+    )
+
+
+def _parse_opposing(raw) -> OpposingRule | None:
+    """A condition's ``opposing`` block (see :class:`OpposingRule`)."""
+
+    if not isinstance(raw, dict):
+        return None
+    return OpposingRule(
+        attack=_optional_int(raw.get("attack")) or 0,
+        defense=_optional_int(raw.get("defense")) or 0,
+        defense_as=str(raw.get("defenseAs", "") or ""),
+        spent_by=str(raw.get("spentBy", "") or ""),
     )
 
 
@@ -496,14 +554,35 @@ def _parse_resistance_outcomes(raw: object) -> tuple[ResistanceOutcome, ...]:
     Accepts the ladder either as a bare list of rungs or wrapped in an object with a
     ``degrees`` list, so a mod can hang its own documentation — and its ``success``
     rung — off the same block.
+
+    The wrapped form may also carry ``failureEscalates``: escalations every *failure*
+    rung inherits, for a rule that holds whatever the degree ("a Dying character who
+    fails by any degree is Dead"). They are folded into each rung's own
+    :attr:`~.ResistanceOutcome.escalates` here — after the rung's own pairs, which win
+    on a shared source — so every reader of a rung (the resolver, a spec on the wire,
+    the minion cap) sees one list. The ``success`` rung never inherits them.
     """
 
+    inherited: tuple[tuple[str, str], ...] = ()
     if isinstance(raw, dict):
+        shared = raw.get("failureEscalates", {})
+        if isinstance(shared, dict):
+            inherited = tuple((str(k), str(v)) for k, v in shared.items())
         raw = raw.get("degrees", ())
     if not isinstance(raw, list):
         return ()
     rungs = (_parse_outcome_rung(entry) for entry in raw)
-    return tuple(rung for rung in rungs if rung is not None)
+    return tuple(_inherit(rung, inherited) for rung in rungs if rung is not None)
+
+
+def _inherit(rung: ResistanceOutcome, inherited: tuple[tuple[str, str], ...]) -> ResistanceOutcome:
+    """*rung* with the ladder's ``failureEscalates`` appended to its own escalations."""
+
+    own = {before for before, _ in rung.escalates}
+    extra = tuple(pair for pair in inherited if pair[0] not in own)
+    if not extra:
+        return rung
+    return dataclasses.replace(rung, escalates=rung.escalates + extra)
 
 
 def _parse_resistance_success(raw: object) -> ResistanceOutcome | None:
@@ -512,6 +591,47 @@ def _parse_resistance_success(raw: object) -> ResistanceOutcome | None:
     if not isinstance(raw, dict):
         return None
     return _parse_outcome_rung(raw.get("success"))
+
+
+def _parse_overcome(raw: object) -> Overcome | None:
+    """The ``overcome`` block of a ``resistanceOutcomes`` object, if it has one."""
+
+    block = raw.get("overcome") if isinstance(raw, dict) else None
+    if not isinstance(block, dict):
+        return None
+    minute = block.get("eachMinuteFromDegree", 0)
+    mods = block.get("modifiers")
+    return Overcome(
+        config_key=str(block.get("configKey", "") or ""),
+        each_minute_from=minute if isinstance(minute, int) and minute > 0 else 0,
+        modifiers=tuple(
+            _parse_overcome_modifier(key, value)
+            for key, value in (mods.items() if isinstance(mods, dict) else ())
+            if isinstance(value, dict) and not key.startswith("_")
+        ),
+    )
+
+
+def _parse_overcome_modifier(modifier_id: str, raw: dict) -> OvercomeModifier:
+    """One entry of an ``overcome`` block's ``modifiers`` map."""
+
+    def number(key: str) -> int:
+        value = raw.get(key, 0)
+        return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+    return OvercomeModifier(
+        id=modifier_id,
+        worsens=raw.get("worsens") is True,
+        dc_per_check=number("dcPerCheck"),
+        from_initial=raw.get("fromInitial") is True,
+        cadence=str(raw.get("cadence", "") or ""),
+        duration=str(raw.get("duration", "") or ""),
+        applies=str(raw.get("applies", "") or ""),
+        fail_from_degree=max(0, number("failFromDegree")),
+        adds_degrees=raw.get("addsDegrees") is True,
+        reapplies=raw.get("reapplies") is True,
+        when_stopped=raw.get("whenStopped") is True,
+    )
 
 
 def _parse_action_modifier(raw: dict) -> ActionModifier:
@@ -604,6 +724,239 @@ def _parse_area(raw: dict) -> AreaRules:
     )
 
 
+def _optional_int(value: object) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
+
+
+def _parse_condition_changes(raw: object, *, remove: bool = False) -> tuple:
+    """``applies`` (``[{condition, amount?, temporary?}]``) or ``removes`` (``[id]``)."""
+
+    changes = []
+    for entry in raw if isinstance(raw, list) else ():
+        if isinstance(entry, str) and entry:
+            changes.append(ConditionChange(entry, remove=remove))
+        elif isinstance(entry, dict) and entry.get("condition"):
+            temporary = entry.get("temporary")
+            changes.append(
+                ConditionChange(
+                    str(entry["condition"]),
+                    amount=_optional_int(entry.get("amount")),
+                    temporary=temporary if isinstance(temporary, bool) else None,
+                    remove=remove,
+                    on=str(entry.get("on", "") or ""),
+                    against=str(entry.get("against", "") or ""),
+                )
+            )
+    return tuple(changes)
+
+
+def _parse_degree_outcomes(raw: object) -> tuple[DegreeOutcome, ...]:
+    """A targeted action's ``wins`` / ``losses`` ladder, shallowest rung first."""
+
+    rungs = [
+        DegreeOutcome(
+            max(1, _optional_int(r.get("degrees")) or 1),
+            _parse_condition_changes(r.get("applies"))
+            + _parse_condition_changes(r.get("removes"), remove=True),
+            str(r.get("text", "") or ""),
+        )
+        for r in (raw if isinstance(raw, list) else ())
+        if isinstance(r, dict)
+    ]
+    return tuple(sorted(rungs, key=lambda r: r.degrees))
+
+
+def _parse_check(raw: object) -> CombatCheck | None:
+    if isinstance(raw, dict) and raw.get("kind"):
+        return CombatCheck(
+            str(raw["kind"]), str(raw.get("trait", "")), _optional_int(raw.get("dc"))
+        )
+    return None
+
+
+def _parse_checks(raw: object) -> tuple[CombatCheck, ...]:
+    """A targeted action's ``check``: ``"attack"`` (the attack picked), one
+    ``{kind, trait}``, or a list of them (the actor rolls the best)."""
+
+    if isinstance(raw, str) and raw:
+        return (CombatCheck(raw),)
+    entries = raw if isinstance(raw, list) else [raw]
+    found = []
+    for entry in entries:
+        check = CombatCheck(entry) if isinstance(entry, str) and entry else _parse_check(entry)
+        if check is not None:
+            found.append(check)
+    return tuple(found)
+
+
+def _parse_resist(raw: object) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (str(r["kind"]), str(r.get("trait", "")))
+        for r in (raw if isinstance(raw, list) else ())
+        if isinstance(r, dict) and r.get("kind")
+    )
+
+
+def _parse_targeted(raw: object) -> TargetedRules | None:
+    """A targeted action's ``targeted`` block (see :class:`TargetedRules`). Its ``dc`` is
+    a number, ``"defense"`` (the target's Defense), or ``{base, kind, trait}`` (a base
+    plus one of the target's traits)."""
+
+    if not isinstance(raw, dict):
+        return None
+    dc = raw.get("dc")
+    opposed = raw.get("opposed")
+    dc_from = None
+    if isinstance(dc, dict) and dc.get("kind"):
+        dc_from = CombatCheck(
+            str(dc["kind"]), str(dc.get("trait", "")), _optional_int(dc.get("base")) or 0
+        )
+    return TargetedRules(
+        checks=_parse_checks(raw.get("check")),
+        dc=_optional_int(dc),
+        vs_defense=dc == "defense",
+        dc_from=dc_from,
+        resist=_parse_resist(raw.get("resist")),
+        opposed=(
+            OpposedStage(_parse_checks(opposed.get("check")), _parse_resist(opposed.get("resist")))
+            if isinstance(opposed, dict)
+            else None
+        ),
+        ally=bool(raw.get("ally", False)),
+    )
+
+
+def _parse_combat_effect(raw: dict) -> CombatEffect:
+    """The effect fields a combat action or one of its options carries."""
+
+    check = raw.get("check")
+    kill = raw.get("kill")
+    return CombatEffect(
+        line=str(raw.get("line", "")),
+        tone=str(raw.get("tone", "")),
+        attack_modifier=_optional_int(raw.get("attackModifier")) or 0,
+        roll_twice=bool(raw.get("rollTwice", False)),
+        dc=_optional_int(raw.get("dc")),
+        critical_hit=bool(raw.get("criticalHit", False)),
+        slam=bool(raw.get("slam", False)),
+        full_speed=bool(raw.get("fullSpeed", False)),
+        kill=(
+            KillRule(int(kill.get("degrees", 3)), str(kill.get("condition", "")))
+            if isinstance(kill, dict) and kill.get("condition")
+            else None
+        ),
+        applies=_parse_condition_changes(raw.get("applies"))
+        + _parse_condition_changes(raw.get("removes"), remove=True),
+        check=_parse_check(check),
+        clears=str(raw.get("clears", "")),
+        wins=_parse_degree_outcomes(raw.get("wins")),
+        losses=_parse_degree_outcomes(raw.get("losses")),
+    )
+
+
+def _parse_combat_action(raw: dict) -> CombatAction:
+    slam = raw.get("slamRules")
+    recovery = raw.get("recovery")
+    reaction = raw.get("reaction")
+    return CombatAction(
+        id=str(raw.get("id", "")),
+        name=str(raw.get("name", raw.get("id", ""))),
+        caption=str(raw.get("caption", "")),
+        icon=str(raw.get("icon", "")),
+        tooltip=str(raw.get("tooltip", "")),
+        kind=str(raw.get("kind", "self")),
+        needs_attack=bool(raw.get("needsAttack", False)),
+        gm_only=bool(raw.get("gmOnly", False)),
+        bonus=str(raw.get("bonus", "")),
+        penalty=str(raw.get("penalty", "")),
+        lasting=str(raw.get("lasting", "")),
+        effect=_parse_combat_effect(raw),
+        options=tuple(
+            CombatOption(
+                id=str(o["id"]),
+                name=str(o.get("name", o["id"])),
+                tooltip=str(o.get("tooltip", "")),
+                effect=_parse_combat_effect(o),
+            )
+            for o in raw.get("options", ())
+            if isinstance(o, dict) and o.get("id")
+        ),
+        requires=_parse_requires(raw.get("requires")),
+        refused_by=str(raw.get("refusedBy", "")),
+        gm_runs=str(raw.get("gmRuns", "")),
+        slam=(
+            SlamRules(
+                rank_bonus=int(slam.get("rankBonus", 1)),
+                full_speed_bonus=int(slam.get("fullSpeedBonus", 1)),
+                self_resistance=str(slam.get("selfResistance", "")),
+                halve_self=bool(slam.get("halveSelf", True)),
+            )
+            if isinstance(slam, dict)
+            else None
+        ),
+        recovery=(
+            RecoveryRule(
+                conditions=tuple(str(c) for c in recovery.get("from", ()) if isinstance(c, str)),
+                fatigue=bool(recovery.get("fatigue", False)),
+            )
+            if isinstance(recovery, dict)
+            else None
+        ),
+        targeted=_parse_targeted(raw.get("targeted")),
+        reaction=(
+            ReactionRule(
+                condition=str(reaction["condition"]),
+                step=_optional_int(reaction.get("step")) or 0,
+                line=str(reaction.get("line", "")),
+            )
+            if isinstance(reaction, dict) and reaction.get("condition")
+            else None
+        ),
+    )
+
+
+def _parse_requires(raw: object) -> tuple[str, ...]:
+    """``requires``: one condition id, or a list of them (any one will do)."""
+
+    if isinstance(raw, str):
+        return (raw,) if raw else ()
+    return tuple(str(r) for r in raw if isinstance(r, str) and r) if isinstance(raw, list) else ()
+
+
+def _parse_combat(raw: dict) -> CombatRules:
+    """Parse ``actions.json``'s ``combat`` block (see :class:`CombatRules`)."""
+
+    block = raw.get("combat")
+    if not isinstance(block, dict):
+        return CombatRules()
+    limits = block.get("limits")
+    if not isinstance(limits, dict):
+        limits = {}
+    return CombatRules(
+        menu=tuple(
+            CombatMenuSection(
+                id=str(s["id"]),
+                title=str(s.get("title", s["id"])),
+                items=tuple(str(i) for i in s.get("items", ()) if isinstance(i, str)),
+            )
+            for s in block.get("menu", ())
+            if isinstance(s, dict) and s.get("id")
+        ),
+        actions=tuple(
+            _parse_combat_action(a)
+            for a in block.get("actions", ())
+            if isinstance(a, dict) and a.get("id")
+        ),
+        limits=ManeuverLimits(
+            max_shift=int(limits.get("maxShift", 5)),
+            floor=int(limits.get("floor", 0)),
+            double_cap=bool(limits.get("doubleCap", True)),
+        ),
+    )
+
+
 def _parse_base_cost_by(raw: dict | None) -> BaseCostBy | None:
     """Parse an effect's ``baseCostBy`` block, or ``None`` when it has none.
 
@@ -668,6 +1021,7 @@ def _parse_effect(e: dict, ranged_distance: RangeDistance | None = None) -> Effe
         resistance_vs_check=bool(e.get("resistanceVsCheck", False)),
         resistance_outcomes=_parse_resistance_outcomes(e.get("resistanceOutcomes")),
         resistance_success=_parse_resistance_success(e.get("resistanceOutcomes")),
+        overcome=_parse_overcome(e.get("resistanceOutcomes")),
         check_dc=_check_dc(e.get("checkOutcomes")),
         success_removes=_success_removes(e.get("checkOutcomes")),
         implicit_modifiers=tuple(e.get("implicitModifiers", ())),

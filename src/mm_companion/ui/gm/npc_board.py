@@ -30,7 +30,7 @@ from mm_companion.core.session import store
 from mm_companion.core.session.model import (
     KIND_NOTE,
 )
-from mm_companion.ui import npc_icons, theme
+from mm_companion.ui import loading, npc_icons, theme
 from mm_companion.ui.blocks.bus import (
     AREA_REQUESTED,
     ATTACK_REQUESTED,
@@ -47,6 +47,7 @@ from mm_companion.ui.gm.model import (
     _npc_key,
     _NpcEntry,
 )
+from mm_companion.ui.main_window import opening_text
 from mm_companion.ui.npc_card import NPCCard
 from mm_companion.ui.npc_group import GROUP_KIND, NPCGroupCard
 from mm_companion.ui.npc_quick_dialog import QuickNPCDialog
@@ -189,6 +190,7 @@ class GMNpcBoardMixin:
         card.deleteRequested.connect(self._delete_npc)
         card.applyConditionRequested.connect(self._apply_npc_condition)
         card.removeConditionRequested.connect(self._remove_npc_condition)
+        card.clearTemporaryRequested.connect(self._clear_npc_temporary)
         card.recoveryRequested.connect(self._roll_npc_recovery)
         card.sceneToggled.connect(lambda n, on: self._set_in_scene(SCENE_NPC, n, on))
         card.copyRequested.connect(self._copy_npc)
@@ -274,7 +276,9 @@ class GMNpcBoardMixin:
 
     def _create_npc(self) -> None:
         """Write a new NPC: an editable, simplified sheet that saves into the cast."""
-        self._track_npc_window(NPCWindow(locked=False))
+        with loading.loading(self, opening_text(None)):
+            window = NPCWindow(locked=False)
+        self._track_npc_window(window)
 
     def _quick_npc(self) -> None:
         """Build a mook from a Power Level and a preset and put it straight in the cast.
@@ -403,7 +407,11 @@ class GMNpcBoardMixin:
         if existing is not None:
             resurface(existing)
             return
-        window = self._take_spare_npc(library.load_character(path), path)
+        character = library.load_character(path)
+        # A spare sheet is handed the creature in a moment; building one fresh is
+        # most of a second, behind a loading screen over this window (ui/loading).
+        with loading.loading(self, opening_text(character)):
+            window = self._take_spare_npc(character, path)
         if entry.card is not None:
             self._attach_pin_sheet(window, entry.card)
         self._track_npc_window(window)
@@ -525,6 +533,7 @@ class GMNpcBoardMixin:
                 self._roller.roll_spec(payload)
         elif topic == ROLL_REQUESTED and isinstance(payload, RollSpec):
             # Rolled as the sheet's creature, so a minion's natural 20 is no critical.
+            self._follow_actor(self._npc_name_for_window(window))
             sheet = window.sheet.character if window is not None else None
             self._roller.roll_spec(payload, minion=self.rolls_as_minion(sheet))
         elif topic == ATTACK_REQUESTED and window is not None:
@@ -534,6 +543,7 @@ class GMNpcBoardMixin:
             # Not a die: the NPC uses a power on an area, and the GM picks who is in it.
             self._start_npc_area(window, payload)
         elif topic == LOAD_REQUESTED and isinstance(payload, RollSpec):
+            self._follow_actor(self._npc_name_for_window(window))
             sheet = window.sheet.character if window is not None else None
             self._roller.load_spec(payload, minion=self.rolls_as_minion(sheet))
         elif topic == BONUS_REQUESTED and type(payload) is int and payload > 0:

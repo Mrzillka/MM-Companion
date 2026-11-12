@@ -38,7 +38,12 @@ A creature that is down or dead fades on every board. Any attack can be **aimed*
 right-click it, pick a creature off the Scene, and the GM accepts it and the app judges
 the hit and lands the save (see [the actions notes](docs/notes/actions.md#aimed-attacks)).
 A group can make a **team attack** (members combine their attacks on one target), a
-**team check** or a **group check**.
+**team check** or a **group check**. The roller's **Actions** button opens a grid of the
+**combat maneuvers and actions** (All-Out Attack, Aim, Grab, Feint, Block, …): a maneuver
+rides on the next attack from a lane under the roller's toolbar, what outlasts the
+roll lands as a red or green **temporary condition** with a dot beside each stat it
+moves, and the actions taken against someone are judged by the GM's app as an aimed
+attack is (see [the actions notes](docs/notes/actions.md#combat-maneuvers)).
 
 ## Commands
 
@@ -123,6 +128,7 @@ several of them are the only record of a bug that shaped it.
 | [The mod pipeline](docs/notes/mods.md) | data loading, startup, or a `register_*` seam |
 | [Testing](docs/notes/testing.md) | adding a test file, a `conftest.py`, or changing how tests run |
 | [Accepted debts](docs/notes/debts.md) | picking up agreed work that is not done yet |
+| [The road to 1.0](docs/notes/road-to-1.0.md) | planning what to do next, or anything for the public launch |
 
 Alongside them, `docs/` holds the longer-form documents the notes refer back to:
 the rules design (`mm-core-mechanics`, `mm-skills-design`, `mm-advantages-design`,
@@ -151,8 +157,10 @@ notes file that owns it.
 - **Go through the shared UI layer** rather than reinventing it: the `ui/widgets.py`
   factories, `guard_wheel`, `set_widget_locked` (locking is *not*
   `setEnabled(False)`), a `FlowLayout` hosted in a `FlowContainer`,
-  `DropFeedback`/`DropIndicator` for drag targets, `discard_widget` to shed a child
-  and `rebuilding` around a redraw that sheds several. Any section with editable
+  `DropFeedback`/`DropIndicator` for drag targets, `discard_widget` to shed a child,
+  `rebuilding` around a redraw that sheds several, and `loading.loading` around a
+  build the user waits on (opening a window), or `loading.fade_through` for a view
+  switch. Any section with editable
   widgets exposes `set_locked` and is wired into `CharacterSheet.set_locked`.
 - **A widget must never be visible while it has no parent.** A parentless widget *is*
   a top-level window, so showing one flashes a real window on screen and is slow to
@@ -183,6 +191,13 @@ notes file that owns it.
   so the decision would be reading a width it had itself just set. State the
   narrowest arrangement you know how to reach and put the content-shaped number in
   `sizeHint`, which is a preference and may be content-shaped.
+- **A failure must never leave the window blank, and must never be silent.** The
+  installed app has no console. A rebuild or view switch that can raise is caught,
+  repaired back to something on screen, and written down with
+  `core.diagnostics.log_exception` (it lands in `logs/errors.log`); open a `QPainter`
+  only through `ui.paint.painting`. See [the sheet
+  notes](docs/notes/sheet-and-blocks.md) and [the workspace
+  notes](docs/notes/workspace-and-files.md).
 - **Read a setting through its accessor in `core.storage`**, never off
   `load_settings()`: that returns the settings file *verbatim* and does not merge
   `DEFAULT_SETTINGS`, so any key added after a workspace was created reads back as
@@ -202,6 +217,11 @@ notes file that owns it.
   asking: it renders pages as images at ~2k tokens each. The book informs what a
   mechanic does and is never transcribed into `data/` or `docs/` (see Licensing
   boundary).
+- **A rules question that `docs/` does not settle goes to the `mm-rules` agent**
+  (`.claude/agents/mm-rules.md`). It checks the book and online sources, cites
+  pages, separates RAW from interpretation and house rule, tells editions apart,
+  and reports where the app's data disagrees with the book. Ask it before building
+  a mechanic on a rule you have not verified.
 
 ## Licensing boundary (matters when adding game data)
 

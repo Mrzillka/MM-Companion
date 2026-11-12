@@ -175,6 +175,7 @@ class SessionHub:
         # was not up yet, typically. The janitor keeps trying them; see
         # :meth:`_repair`.
         self._unhosted: set[str] = set()
+        self._rehost_lock = threading.Lock()
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -332,6 +333,8 @@ class SessionHub:
         """
         with self._lock:
             entry = self._entries.get(session_id)
+        if entry is None and session_id in self._unhosted:
+            entry = self._waiting_entry(session_id, gm_token, operator=operator)
         if entry is None:
             raise UnknownSessionError("that session is not on this server")
         if operator:
@@ -509,22 +512,62 @@ class SessionHub:
             if not self._running:
                 return
             try:
-                entry = self._host(store.load_session(session_id, self.workspace))
+                self._rehost(session_id)
+            except OSError:
+                continue  # still no relay; next pass
+
+    def _rehost(self, session_id: str) -> _Entry | None:
+        """Host *session_id*, which could not get on the relay at boot, if it now can.
+
+        The entry, or ``None`` when it is not waiting any more (unreadable, or the hub
+        stopped meanwhile). Raises :class:`OSError` while the relay still refuses it.
+        Serialized, because the janitor and a GM asking after the session
+        (:meth:`_owned`) may both try at once, and two would host it twice.
+        """
+        with self._rehost_lock:
+            if session_id not in self._unhosted:
+                with self._lock:
+                    return self._entries.get(session_id)
+            try:
+                state = store.load_session(session_id, self.workspace)
             except store.SessionStoreError as exc:
                 log.warning("could not host session %s: %s", session_id, exc)
                 self._unhosted.discard(session_id)  # unreadable: retrying will not help
-                continue
-            except OSError:
-                continue  # still no relay; next pass
+                return None
+            entry = self._host(state)
             self._unhosted.discard(session_id)
-            if not self._running:
-                # ``stop`` ran while we were dialling and has already shut the
-                # sessions it knew about; this one it could not have seen.
-                with self._lock:
-                    self._entries.pop(session_id, None)
-                entry.server.stop()
-                return
-            log.info("session %s is hosted", session_id)
+        if not self._running:
+            # ``stop`` ran while we were dialling and has already shut the
+            # sessions it knew about; this one it could not have seen.
+            with self._lock:
+                self._entries.pop(session_id, None)
+            entry.server.stop()
+            return None
+        log.info("session %s is hosted", session_id)
+        return entry
+
+    def _waiting_entry(self, session_id: str, gm_token: str, *, operator: bool) -> _Entry | None:
+        """A session still waiting to get back on the relay, hosted now for a caller
+        who may touch it — ``None`` for anyone else, as for an unknown id.
+
+        Without this, a GM who reached the hub in the moments between the relay coming
+        back and the janitor's next pass was told their session was gone, and their app
+        forgot its gm token for good. While the relay still refuses it, the answer is
+        an error that is not "gone", so the app keeps the session.
+        """
+        if not operator:
+            try:
+                state = store.load_session(session_id, self.workspace)
+            except store.SessionStoreError:
+                return None
+            if not gm_token or not tokens_match(gm_token, state.gm_token):
+                return None
+        try:
+            return self._rehost(session_id)
+        except OSError as exc:
+            raise HubError(
+                "that session is still getting back on the server; try again in a minute"
+            ) from exc
 
     # -- the control channel -----------------------------------------------
 

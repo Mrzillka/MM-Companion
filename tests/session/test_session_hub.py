@@ -631,6 +631,42 @@ def test_a_session_whose_relay_was_down_at_boot_is_hosted_once_it_is_up(hub, mon
     player.close()
 
 
+def test_a_gm_asking_after_a_session_still_off_the_relay_is_not_told_it_is_gone(hub) -> None:
+    """``{}`` makes the GM's app forget the session's gm token for good."""
+    first, _ = hub()
+    entry = first.create("Friday Game")
+    first.stop()
+    transports = LoopbackTransports()
+    transports.down.add(entry["id"])
+    resumed, _ = hub(transports=transports)
+
+    with pytest.raises(HubError) as refused:
+        resumed.status(entry["id"], entry["gm_token"])
+    assert not isinstance(refused.value, UnknownSessionError)
+    # A caller without the token learns nothing more than about an unknown id.
+    assert resumed.status(entry["id"], "not-the-token") == {}
+
+
+def test_a_gm_asking_after_the_relay_is_back_gets_the_session_before_the_janitor(hub) -> None:
+    first, _ = hub()
+    entry = first.create("Friday Game")
+    first.stop()
+    transports = LoopbackTransports()
+    transports.down.add(entry["id"])
+    resumed, _ = hub(transports=transports)
+    assert resumed.session_ids() == []
+
+    transports.down.clear()  # the relay is up; the janitor's next pass is 30 s off
+    live = resumed.status(entry["id"], entry["gm_token"])
+
+    assert live["id"] == entry["id"]
+    assert resumed.session_ids() == [entry["id"]]
+    resumed._repair([])  # noqa: SLF001 - the janitor's pass does not host it twice
+    assert resumed.session_ids() == [entry["id"]]
+    player = join(transports, entry)
+    player.close()
+
+
 def test_a_session_whose_retry_window_ran_out_is_tried_again(hub, monkeypatch) -> None:
     """The relay restarting for a certificate renewal, and staying down too long."""
     monkeypatch.setattr(server_mod, "RECONNECT_DELAYS", (0.01,))

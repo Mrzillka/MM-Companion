@@ -61,6 +61,7 @@ from mm_companion.core.rules import (
     area_shake_off,
     area_stage_rank,
     area_title,
+    landed_caption,
     minion_save_spec,
     power_area_use,
     power_area_uses,
@@ -113,6 +114,12 @@ class AreaHost(Protocol):
 
     def minion_rules(self) -> MinionRules:
         """The minion rules the open session plays by."""
+
+    def land_rung(
+        self, party: ImpressParty, changes: list, shake_off: ShakeOff | None = None
+    ) -> tuple[bool, tuple]:
+        """Land a save's rung, counting the same Affliction already on the creature:
+        whether it was delivered, and what went on."""
 
     def action_remove(self, party: ImpressParty, changes: list[tuple[str, str | None]]) -> bool:
         """Take conditions off one party; ``False`` if that could not be delivered."""
@@ -948,9 +955,12 @@ class AreaController(QObject):
             mods=effect.overcome_mods,
             source=source,
         )
-        if changes and not self._host.impress_apply(target.party, changes, shake):
+        if not changes:
+            return caption
+        delivered, landed = self._host.land_rung(target.party, changes, shake)
+        if not delivered:
             return f"{caption} (not delivered)"
-        return caption
+        return landed_caption(self._data, caption, changes, landed)
 
     def _cell(self, declared: _Declared, target: AreaTarget, cell: str) -> None:
         resolving = declared.resolving

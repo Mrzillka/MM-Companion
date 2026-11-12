@@ -20,7 +20,11 @@ The Affliction's own modifiers change overcoming it (p110-111), and the effect's
 ``overcome`` block in the data says how (:class:`~..data_loader.OvercomeModifier`): the
 record keeps the ids of the instance's (``mods``) and how many checks it has failed
 (``checks``). :func:`shake_off_cadence` says when its check comes, :func:`shake_off_dc`
-at what DC, and :func:`shake_off_failed` what a failed one does.
+at what DC, and :func:`shake_off_failed` what a failed one does. A new use landing
+on a creature it is already on goes through :func:`merge_landing` (Cumulative adds the
+degrees, otherwise the highest applies), and a maintained one (Concentration, Sustained)
+is resisted anew each turn its wielder keeps it up (:func:`maintained_by`,
+:func:`reapply_roll`, :func:`reapplied_landing`).
 """
 
 from __future__ import annotations
@@ -63,6 +67,16 @@ __all__ = [
     "ShakeFailure",
     "shake_off_failed",
     "shake_off_made",
+    "Landing",
+    "merge_landing",
+    "landed_caption",
+    "same_effect",
+    "shake_off_maintained",
+    "maintained_by",
+    "shake_off_stopped",
+    "reapply_roll",
+    "reapply_request",
+    "reapplied_landing",
     "shake_off_failed_on",
     "same_origin",
     "shake_off_recover_spec",
@@ -147,6 +161,7 @@ def ladder_shake_off(
         degree=failures,
         mods=ladder.mods,
         rungs=tuple(rung.conditions for rung in ladder.rungs) if ladder.mods else (),
+        save=trait if ladder.mods else "",
     )
 
 
@@ -239,7 +254,8 @@ def shake_off_cadence(game_data: GameData, shake: ShakeOff) -> str:
         return CADENCE_SCENE
     if rule.each_minute_from and shake.degree >= rule.each_minute_from:
         return CADENCE_MINUTE
-    if CADENCE_CLEARS in cadences:
+    if CADENCE_CLEARS in cadences and not shake_off_maintained(game_data, shake):
+        # A maintained one's Instant Recovery waits for its wielder to stop instead.
         return CADENCE_CLEARS
     return CADENCE_TURN
 
@@ -343,6 +359,168 @@ def shake_off_roll(char: Character, game_data: GameData, shake: ShakeOff) -> Rol
         kind=choice.kind,
         dc=shake_off_dc(game_data, shake),
     )
+
+
+# -- a new use on a creature it is already on (PDF p109-110) ------------------------
+
+
+def same_effect(a: ShakeOff, b: ShakeOff) -> bool:
+    """Whether two records are the same power's, from the same wielder — whatever
+    degree each landed at."""
+    return (a.kind, a.ref, a.name, a.source) == (b.kind, b.ref, b.name, b.source)
+
+
+@dataclass(frozen=True)
+class Landing:
+    """What a rung landing does once what is already on is counted (:func:`merge_landing`).
+
+    ``remove`` comes off first (the old degree's conditions), then ``apply`` goes on
+    carrying ``shake``. Both empty: it is no worse than what is already there.
+    """
+
+    remove: tuple[tuple[str, str | None], ...] = ()
+    apply: tuple[tuple[str, str | None], ...] = ()
+    shake: ShakeOff | None = None
+
+
+def merge_landing(
+    char: Character | None,
+    game_data: GameData,
+    changes,
+    shake: ShakeOff | None,
+) -> Landing:
+    """A rung of an Affliction landing on *char*, counting the same power already on it.
+
+    Afflictions do not stack: only the highest degree applies (p109), so a new use that
+    lands no deeper than the one already on changes nothing, and a deeper one replaces
+    it. A Cumulative one (``addsDegrees``) adds its degrees to those already on instead,
+    to the last rung at most (p110). Anything else — an impression, a first landing, a
+    rung with no record — lands as it is.
+    """
+
+    changes = tuple(changes)
+    if char is None or shake is None or shake.kind != SHAKE_EFFECT:
+        return Landing(apply=changes, shake=shake)
+    held = next(((s, c) for s, c in held_shake_offs(char) if same_effect(s, shake)), None)
+    if held is None:
+        return Landing(apply=changes, shake=shake)
+    old, old_changes = held
+    rungs = shake.rungs or old.rungs
+    if any(m.adds_degrees for m in _mods(game_data, shake)):
+        degree = old.degree + shake.degree
+        if rungs:
+            degree = min(degree, len(rungs))
+    else:
+        degree = max(old.degree, shake.degree)
+    if degree <= old.degree:
+        return Landing()
+    if degree != shake.degree and rungs:
+        changes = tuple((cid, None) for cid in rungs[degree - 1])
+    return Landing(
+        remove=old_changes,
+        apply=changes,
+        shake=replace(shake, degree=degree, checks=old.checks),
+    )
+
+
+def landed_caption(game_data: GameData, caption: str, changes, landed) -> str:
+    """A landed rung's *caption*, saying so when what went on (*landed*) is not what
+    the rung itself puts on (*changes*): no worse than it was, or a degree it added up
+    to."""
+
+    changes, landed = tuple(changes), tuple(landed)
+    if landed == changes:
+        return caption
+    if not landed:
+        return f"{caption} — no worse than it was"
+    catalog = game_data.condition_catalog()
+    names = ", ".join((catalog[cid].name if cid in catalog else cid) for cid, _parameter in landed)
+    return f"{caption} — adds up to {names}"
+
+
+# -- maintained: Concentration and Sustained (p110) ----------------------------------
+
+
+def shake_off_maintained(game_data: GameData, shake: ShakeOff) -> bool:
+    """Whether *shake*'s Affliction is maintained — resisted anew each turn its wielder
+    keeps it up (``reapplies``: Concentration, Sustained)."""
+    return any(m.reapplies for m in _mods(game_data, shake))
+
+
+def maintained_by(wielder: Character | None, shake: ShakeOff) -> bool | None:
+    """Whether *wielder* still maintains *shake*'s power: its power of that name is
+    switched on (the card's on/off). ``None`` when there is no telling — no sheet, or no
+    power by that name."""
+
+    if wielder is None:
+        return None
+    power = next((p for p in wielder.powers if p.name == shake.name), None)
+    if power is None:
+        return None
+    return bool(
+        power.activated
+        and power.item_present
+        and all(e.toggled_on and not e.suppressed for e in power.effects)
+    )
+
+
+def shake_off_stopped(game_data: GameData, shake: ShakeOff) -> tuple[bool, ShakeOff]:
+    """Its wielder stopped maintaining *shake*: whether its conditions clear now (a
+    maintained Instant Recovery, ``whenStopped``), and the record from now on — no
+    longer maintained, so overcome as an unmaintained one is."""
+
+    mods = _mods(game_data, shake)
+    clears = any(m.when_stopped for m in mods)
+    dropped = {m.id for m in mods if m.reapplies or m.when_stopped}
+    return clears, replace(shake, mods=tuple(m for m in shake.mods if m not in dropped))
+
+
+def _save_ref(shake: ShakeOff) -> str:
+    return shake.save or shake.trait
+
+
+def reapply_roll(char: Character, game_data: GameData, shake: ShakeOff) -> RollSpec | None:
+    """The new resistance check *char* (an NPC the GM rolls for) makes against a
+    maintained *shake* — its save, at the original DC — or ``None`` if nothing names it."""
+
+    choice = _choice(char, game_data, _save_ref(shake))
+    if choice is None:
+        return None
+    return RollSpec(
+        label=f"{choice.label} — resisting {shake.name} again",
+        modifier=choice.modifier,
+        kind=choice.kind,
+        dc=shake.dc,
+    )
+
+
+def reapply_request(shake: ShakeOff) -> RollSpec | None:
+    """:func:`reapply_roll` as a character-free request, for a player to roll."""
+
+    kind, _, key = _save_ref(shake).partition(":")
+    if not kind or not key:
+        return None
+    return RollSpec(
+        label=f"Resist {shake.name} again",
+        kind=kind,
+        trait_key=key,
+        dc=shake.dc,
+        hint="Its wielder keeps it up: fail and it lands again, as a new use.",
+    )
+
+
+def reapplied_landing(
+    char: Character | None, game_data: GameData, shake: ShakeOff, degree: int | None
+) -> Landing:
+    """What a new resistance check of *degree* against a maintained *shake* lands: the
+    rung its failures reach, as a new use (:func:`merge_landing`), or nothing if made."""
+
+    failures = failure_degrees(degree)
+    if not failures or not shake.rungs:
+        return Landing()
+    failures = min(failures, len(shake.rungs))
+    changes = tuple((cid, None) for cid in shake.rungs[failures - 1])
+    return merge_landing(char, game_data, changes, replace(shake, degree=failures, checks=0))
 
 
 def shake_off_recover_spec(

@@ -59,6 +59,7 @@ from mm_companion.core.rules import (
     is_choice_key,
     judge_attack,
     ladder_shake_off,
+    landed_caption,
     localize_spec,
     minion_save_spec,
     opposing_effects,
@@ -146,6 +147,10 @@ class AttackHost(Protocol):
     def roller_adjustment(self) -> int: ...
 
     def combat_land(self, party: ImpressParty, changes: tuple) -> bool: ...
+
+    def land_rung(
+        self, party: ImpressParty, changes: list, shake_off: ShakeOff | None = None
+    ) -> tuple[bool, tuple]: ...
 
 
 @dataclass
@@ -549,9 +554,12 @@ class AttackController(QObject):
         character = deepcopy(target.character) if target.character is not None else Character()
         changes = list(resolve_rung(character, rung, self._data, source=aimed.source.name))
         caption = rung_caption(rung, self._data)
-        if changes and not self._host.impress_apply(target, changes, shake):
+        if not changes:
+            return caption
+        delivered, landed = self._host.land_rung(target, changes, shake)
+        if not delivered:
             return f"{caption} (not delivered)"
-        return caption
+        return landed_caption(self._data, caption, changes, landed)
 
     # -- several saves: the window ------------------------------------------------------
 

@@ -22,7 +22,7 @@ from mm_companion.core import library, storage
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import ActionModifier
 from mm_companion.core.dice import CheckResult, GroupResult
-from mm_companion.core.powers import ModifierSelection, PowerEffectInstance
+from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
 from mm_companion.core.rules import (
     KIND_BEST_OF,
     KIND_IMPRESS,
@@ -36,6 +36,7 @@ from mm_companion.core.rules import (
     held_shake_offs,
     impress_resist_spec,
     impression_shake_off,
+    ladder_shake_off,
     resistance_total,
 )
 from mm_companion.core.session import client as client_mod
@@ -1171,6 +1172,71 @@ def test_a_players_failed_request_save_lands_on_them(
     window._on_player_save({**roll, "spec": replace(spec, actor="Mook").to_dict()})
     window._on_player_save({**roll, "spec": replace(spec, own_attack=True).to_dict()})
     assert landed == []
+
+
+def _kept_up(window: GMWindow, data, *mods: str):
+    """The Thug (on the board too) keeps a Sleep Ray with *mods* up on the Mook, who is
+    Dazed by it. The Thug's party, the Mook's file name, and the record."""
+    thug, mook = _cast(window, data)
+    window._set_in_scene(SCENE_NPC, thug, True)
+    effect = PowerEffectInstance(
+        "affliction",
+        rank=7,
+        config={
+            "resistance": "Fortitude",
+            "degree1": "dazed",
+            "degree2": "stunned",
+            "degree3": "incapacitated",
+        },
+        extras=[ModifierSelection(m) for m in mods],
+    )
+    window._npc_state[thug].character.powers.append(Power(name="Sleep Ray", effects=[effect]))
+    _sources, targets = window.impress_parties()
+    wielder = next(p for p in targets if p.source == thug)
+    ladder = effect_spec_ladder(effect, data, name="Sleep Ray")
+    shake = ladder_shake_off(ladder, 17, -1, trait="resistance:FORTITUDE", source=wielder.name)
+    target = next(p for p in targets if p.source == mook)
+    assert window.impress_apply(target, [("dazed", None)], shake)
+    return wielder, mook, shake
+
+
+def test_a_sustained_affliction_is_resisted_anew_as_its_wielder_keeps_it_up(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    wielder, mook, _shake = _kept_up(window, data, "sustained_affliction")
+    seen = _rolling(monkeypatch, [-2])
+    window._impress.end_turn(wielder)
+    ((line,),) = seen  # the Mook's new Fortitude save, at the original DC
+    assert line[1] == 17
+    (stunned,) = window._npc_state[mook].character.conditions
+    assert stunned.condition_id == "stunned" and stunned.shake_off.degree == 2
+    assert "keeps Sleep Ray up" in window._notice_label.text()
+
+
+def test_switched_off_a_maintained_instant_recovery_affliction_clears(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    wielder, mook, _shake = _kept_up(window, data, "sustained_affliction", "instant_recovery")
+    power = wielder.character.powers[-1]
+    power.effects[0].toggled_on = False
+    seen = _rolling(monkeypatch, [-3])
+    window._impress.end_turn(wielder)
+    assert seen == [] and window._npc_state[mook].character.conditions == []
+    assert "stops keeping Sleep Ray up" in window._notice_label.text()
+
+
+def test_a_cumulative_afflictions_new_use_adds_up(
+    qapp, window: GMWindow, data, monkeypatch
+) -> None:
+    wielder, mook, shake = _kept_up(window, data, "cumulative")
+    target = next(p for p in window.impress_parties()[1] if p.source == mook)
+    delivered, landed = window.land_rung(target, [("dazed", None)], shake)
+    assert delivered and landed == (("stunned", None),)
+    (stunned,) = window._npc_state[mook].character.conditions
+    assert stunned.shake_off.degree == 2
+    # Without Cumulative, the same landing again is no worse than what is on.
+    plain = replace(shake, mods=(), degree=1)
+    assert window.land_rung(target, [("dazed", None)], plain) == (True, ())
 
 
 def test_what_shakes_an_impression_off_outlives_the_gms_app(

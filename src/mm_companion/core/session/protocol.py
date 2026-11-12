@@ -160,7 +160,8 @@ from typing import ClassVar
 #: the record's ``mods``, ``checks`` and ``rungs`` (the Affliction's modifiers that
 #: change overcoming it), the ladder's ``mods``, ``skill`` and ``source`` (an impression's
 #: request card writes the same record), and a spec's ``shakes_off``: the record a
-#: Recover check takes off when it is made.
+#: Recover check takes off when it is made. And the record's ``save``: the trait a
+#: maintained Affliction's new use is resisted with.
 PROTOCOL_VERSION = 20
 
 #: Hard cap on one encoded message, including its trailing newline. A character
@@ -1217,7 +1218,7 @@ MAX_ACTION_ID = 64
 
 
 #: The shake-off record's text keys, and its numbers' bound.
-_SHAKE_TEXT_KEYS = ("kind", "name", "ref", "trait", "skill", "source")
+_SHAKE_TEXT_KEYS = ("kind", "name", "ref", "trait", "skill", "source", "save")
 MAX_SHAKE_NUMBER = 999
 
 

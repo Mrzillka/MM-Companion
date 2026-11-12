@@ -628,6 +628,9 @@ def _parse_overcome_modifier(modifier_id: str, raw: dict) -> OvercomeModifier:
         duration=str(raw.get("duration", "") or ""),
         applies=str(raw.get("applies", "") or ""),
         fail_from_degree=max(0, number("failFromDegree")),
+        adds_degrees=raw.get("addsDegrees") is True,
+        reapplies=raw.get("reapplies") is True,
+        when_stopped=raw.get("whenStopped") is True,
     )
 
 

@@ -163,11 +163,18 @@ of the turn economy should hang off:
   An Instant Recovery one at the third degree waits for that minute as well.
 - **Increasing Difficulty's cap** is not applied: once the DC passes the bearer's
   resistance + 20 it stops rising and only a natural 20 makes it (p110).
-- **The modifiers that change *applying* it** are not read: Cumulative (new uses add
-  their degrees), Concentration and Sustained (a new Affliction each turn it is
-  maintained, no attack), and Instant Recovery on one of those (clears when the user
-  stops). Limited Degree's empty degree lands nothing, so it writes no record either,
-  though the book has the Affliction still running on it (p111).
+- **Limited Degree's empty degree** lands nothing, so it writes no record either, though
+  the book has the Affliction still running on it (p111).
+- **A maintained Affliction re-subjects only those it is still on.** The book has the
+  wielder's every maintaining turn subject the target anew, whether or not they shook
+  it off (p110); the app finds its targets by the records on them, so once one has
+  overcome it the wielder's End turn passes them by. It is re-applied by hand.
+- **"Still maintained" is the power card's on/off switch**, found by the power's name
+  (`maintained_by`). A power whose card has no switch is kept up until its conditions
+  come off; one renamed, or not on the wielder's sheet (an area's "power name" that is
+  not a power), is named in a notice and left to the GM.
+- **Cumulative and Increasing Difficulty**: the checks against new uses do not count
+  toward the DC, only failed overcome checks do.
 - **A condition put on by hand carries no record**, so a Dazed or Stunned put there
   still gets the damage Stamina check. A save the GM rolls "as written" (nobody's
   number) lands nowhere.

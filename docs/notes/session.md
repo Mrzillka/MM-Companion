@@ -781,7 +781,8 @@ The shape:
   each degree's condition ids) cross as short id lists and a bounded count; the ladder
   also keeps `mods`, `skill` and `source` (a request-only Impress writes the same
   record), and a spec's `shakes_off` (Recover's check: the record a made one takes off)
-  goes through `sanitize_shake_off` too.
+  goes through `sanitize_shake_off` too. The record's `save` is the trait a maintained
+  Affliction's new use is resisted with.
 - **A join code is version 2, and a public-server session's is 24 characters.**
   Version 1 spelled the relay URL out byte by byte and came to 130 characters for
   a session on the hub. `discovery.encode_join_code` now packs every field as

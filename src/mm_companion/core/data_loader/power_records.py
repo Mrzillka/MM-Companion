@@ -369,8 +369,13 @@ class OvercomeModifier:
     per check after the initial resistance check with ``from_initial`` (Increasing
     Difficulty, +1). ``cadence``: when the check comes instead of each turn's end
     (:data:`CADENCE_SCENE`, :data:`CADENCE_CLEARS`), only for an instance of
-    ``duration`` when one is named. ``applies``: the condition a failed check puts on
-    from the ``fail_from_degree`` degree (Fatal's Dying).
+    ``duration`` when one is named — or, with ``when_stopped``, for one that is
+    maintained, whose conditions clear when it stops instead (Instant Recovery on a
+    Sustained Affliction). ``applies``: the condition a failed check puts on from the
+    ``fail_from_degree`` degree (Fatal's Dying). ``adds_degrees``: a new use's degrees
+    add to those already on (Cumulative; without it only the highest applies).
+    ``reapplies``: each turn the wielder maintains it, everyone it is on resists it
+    anew, with no attack (Concentration, Sustained).
     """
 
     id: str
@@ -381,6 +386,9 @@ class OvercomeModifier:
     duration: str = ""
     applies: str = ""
     fail_from_degree: int = 0
+    adds_degrees: bool = False
+    reapplies: bool = False
+    when_stopped: bool = False
 
 
 @dataclass(frozen=True)

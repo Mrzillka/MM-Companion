@@ -272,8 +272,9 @@ class GMRollsMixin:
             trait=trait_ref(self._data, spec.trait_key),
             source=ladder.source,
         )
-        names = self._change_names(changes)
-        if self.impress_apply(party, changes, shake):
+        delivered, landed = self.land_rung(party, changes, shake)
+        names = self._change_names(landed) if landed else "no worse than it was"
+        if delivered:
             self._show_notice(f"{party.name}: {names}", theme.color("tint.worse"))
         else:
             self._show_notice(f"{party.name}: {names} (not delivered)", theme.color("tint.worse"))
@@ -319,11 +320,11 @@ class GMRollsMixin:
         changes = resolve_rung(entry.character, rung, self._data, source=source)
         if not changes:
             return
-        self.impress_apply(party, list(changes), shake)
+        _delivered, landed = self.land_rung(party, list(changes), shake)
         added, removed = condition_changes(before, entry.character.conditions)
         if not added and not removed:
             return
-        names = self._change_names(changes)
+        names = self._change_names(landed or changes)
         self._show_notice(f"{party.name}: {names}", theme.color("tint.worse"))
         if isinstance(seq, int):
             self._history.set_undo(

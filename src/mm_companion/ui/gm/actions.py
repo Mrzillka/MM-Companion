@@ -10,6 +10,7 @@ from mm_companion.core.rules import (
     RollSpec,
     apply_condition,
     decrement_condition,
+    merge_landing,
 )
 from mm_companion.ui.action_ui import (
     publish_table_rules,
@@ -72,6 +73,23 @@ class GMActionsMixin:
             sources.append(ImpressParty(ref, shown, PARTY_NPC, name, npc.character))
         sources += [party for party in targets if party.kind == PARTY_PLAYER]
         return sources, targets
+
+    def land_rung(
+        self,
+        party: ImpressParty,
+        changes,
+        shake_off: ShakeOff | None = None,
+    ) -> tuple[bool, tuple[tuple[str, str | None], ...]]:
+        """Land a save's rung on one creature, counting the same Affliction already on it
+        (:func:`~mm_companion.core.rules.merge_landing`: the highest degree applies, or a
+        Cumulative one's degrees add up). Whether it was delivered, and what went on —
+        nothing when it is no worse than what is already there."""
+        landing = merge_landing(party.character, self._data, changes, shake_off)
+        if landing.remove:
+            self.action_remove(party, list(landing.remove))
+        if not landing.apply:
+            return True, ()
+        return self.impress_apply(party, list(landing.apply), landing.shake), landing.apply
 
     def impress_apply(
         self,

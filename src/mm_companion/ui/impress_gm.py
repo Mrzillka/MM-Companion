@@ -60,7 +60,11 @@ from mm_companion.core.rules import (
     impress_spec,
     impression_outcomes,
     impression_shake_off,
+    maintained_by,
     minion_save_spec,
+    reapplied_landing,
+    reapply_request,
+    reapply_roll,
     recovery_request,
     recovery_roll,
     recovery_succeeded,
@@ -70,8 +74,10 @@ from mm_companion.core.rules import (
     shake_off_cadence,
     shake_off_choice,
     shake_off_failed,
+    shake_off_maintained,
     shake_off_request,
     shake_off_roll,
+    shake_off_stopped,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.action_run import ActionRun, group_line, total_of
@@ -203,6 +209,16 @@ class _Held:
     off with every condition in ``changes``.
     """
 
+    shake: ShakeOff
+    changes: list[tuple[str, str | None]]
+
+
+@dataclass
+class _Reapply:
+    """A maintained Affliction (Concentration, Sustained) of the creature whose turn
+    ended, on one creature on the board: resisted anew as its wielder keeps it up."""
+
+    target: ImpressParty
     shake: ShakeOff
     changes: list[tuple[str, str | None]]
 
@@ -736,7 +752,13 @@ class ImpressController(QObject):
         An NPC's rolls are one server-rolled group. A player is asked for each shake-off
         in turn, and gets a request in the history for each recovery check, which their
         own app settles.
+
+        First, each Affliction *party* maintains (Concentration, Sustained) is resisted
+        anew by everyone it is on, as a new use with no attack (PDF p110) — in a table of
+        its own (:meth:`keep_up`).
         """
+        maintained = self.maintained(party)
+        self.keep_up(party, maintained)
         held = self.held(party)
         cadence = {id(h): shake_off_cadence(self._data, h.shake) for h in held}
         due = [h for h in held if cadence[id(h)] == CADENCE_TURN]
@@ -758,7 +780,7 @@ class ImpressController(QObject):
                 theme.color("tint.better"),
             )
         if not due and not recoveries:
-            if not waiting and not cleared:
+            if not waiting and not cleared and not maintained:
                 self._host.impress_notice(
                     f"{party.name}'s turn ends — nothing to shake off.", theme.color("accent")
                 )
@@ -804,6 +826,168 @@ class ImpressController(QObject):
             return run
         run.roll_group(lines, about, lambda pairs, r=run: self._shaken(r, party, pairs))
         return run
+
+    # -- maintained Afflictions ---------------------------------------------------------
+
+    def maintained(self, party: ImpressParty) -> list[_Reapply]:
+        """Every maintained Affliction of *party*'s on a creature on the board — by the
+        record each one's conditions carry, which names who put it on."""
+        _sources, targets = self._host.impress_parties()
+        out: list[_Reapply] = []
+        for target in targets:
+            if target.character is None:
+                continue
+            for shake, changes in held_shake_offs(target.character):
+                if shake.source == party.name and shake_off_maintained(self._data, shake):
+                    out.append(_Reapply(target, shake, list(changes)))
+        return out
+
+    def keep_up(self, party: ImpressParty, items: list[_Reapply] | None = None) -> ActionRun | None:
+        """*party*'s turn ended: everyone its maintained Afflictions are on resists anew.
+
+        Kept up while the power of that name on *party*'s sheet is switched on
+        (:func:`maintained_by`); switched off, it stops — a maintained Instant Recovery
+        one clears, any other is overcome as an unmaintained one from then on. An NPC's
+        new checks are one server-rolled group, a player is asked for each. A failure
+        lands as a new use (:func:`reapplied_landing`: the highest degree, or added up
+        for a Cumulative one). ``None`` when nothing was rolled. *items* are
+        :meth:`maintained`'s, when the caller has them already.
+        """
+        rolled: list[_Reapply] = []
+        asked: list[_Reapply] = []
+        for item in self.maintained(party) if items is None else items:
+            name, target = item.shake.name, item.target
+            state = maintained_by(party.character, item.shake)
+            if state is None:
+                self._host.impress_notice(
+                    f"{party.name}: no power called {name} on the sheet — whether it is"
+                    f" still kept up on {target.name} is yours to roll by hand.",
+                    theme.color("tint.worse"),
+                )
+            elif not state:
+                clears, record = shake_off_stopped(self._data, item.shake)
+                if clears:
+                    self._host.action_remove(target, item.changes)
+                    said = f"{target.name} is free of it"
+                else:
+                    self._host.impress_apply(target, item.changes, record)
+                    said = f"{target.name} overcomes it as usual from now on"
+                self._host.impress_notice(
+                    f"{party.name} stops keeping {name} up: {said}.",
+                    theme.color("tint.better"),
+                )
+            elif target.kind == PARTY_PLAYER:
+                asked.append(item)
+            else:
+                rolled.append(item)
+        if not rolled and not asked:
+            return None
+        run = ActionRun(
+            self._data,
+            self._bridge,
+            self._host,
+            new_action_id(),
+            title=f"{party.name}: keeps powers up",
+            asker="The GM",
+            parent=self,
+        )
+        self._turn_runs = [r for r in self._turn_runs if not r.closed]
+        self._turn_runs.append(run)
+        lines = []
+        about: list[object] = []
+        for item in rolled:
+            spec = reapply_roll(item.target.character or Character(), self._data, item.shake)
+            if spec is None:
+                self._host.impress_notice(
+                    f"{item.target.name}: nothing on the sheet to resist {item.shake.name}"
+                    " with — roll it by hand.",
+                    theme.color("tint.worse"),
+                )
+                continue
+            lines.append(group_line(item.target.name, spec, title=run.title, dc=spec.dc))
+            about.append(item)
+        parts = [bool(lines), bool(asked)]
+
+        def part_done() -> None:
+            parts.pop()
+            if not parts:
+                run.close()
+
+        if lines:
+            run.roll_group(
+                lines, about, lambda pairs: (self._reapplied(run, party, pairs), part_done())
+            )
+        else:
+            parts.pop()
+        if asked:
+            self._ask_reapply(run, party, asked, part_done)
+        elif not parts:
+            run.close()
+        return run
+
+    def _ask_reapply(self, run: ActionRun, party: ImpressParty, queue, done) -> None:
+        """Ask the next player under one of *party*'s maintained Afflictions to resist it
+        anew; the rest wait their turn (one ask per player at a time)."""
+        if not queue:
+            done()
+            return
+        item = queue.pop(0)
+        spec = reapply_request(item.shake)
+        if spec is None:
+            self._host.impress_notice(
+                f"{item.target.name}: nothing to resist {item.shake.name} with — roll it by hand.",
+                theme.color("tint.worse"),
+            )
+            self._ask_reapply(run, party, queue, done)
+            return
+        spec = replace(spec, targets=(item.target.name,), action_id=run.action_id, title=run.title)
+
+        def finish(about, record) -> None:
+            self._reapplied(run, party, [(about, record)])
+            self._ask_reapply(run, party, queue, done)
+
+        if not run.ask(item.target, spec, item, finish):
+            self._host.impress_notice(
+                f"Could not ask {item.target.name} to resist {item.shake.name}.",
+                theme.color("tint.worse"),
+            )
+            done()
+
+    def _reapplied(self, run: ActionRun, party: ImpressParty, pairs) -> None:
+        """New checks against *party*'s maintained Afflictions are in: land the failures."""
+        catalog = self._data.condition_catalog()
+        said: list[str] = []
+        for item, record in pairs:
+            if not isinstance(item, _Reapply):
+                continue
+            name, target = item.shake.name, item.target
+            degree = record.get("degree")
+            degree = int(degree) if isinstance(degree, int) else None
+            landing = reapplied_landing(target.character, self._data, item.shake, degree)
+            if degree is not None and degree > 0:
+                said.append(f"{target.name} resists it")
+                continue
+            if not landing.apply:
+                said.append(f"{target.name} fails, no worse than before")
+                continue
+            if landing.remove:
+                self._host.action_remove(target, list(landing.remove))
+            delivered = self._host.impress_apply(target, list(landing.apply), landing.shake)
+            names = ", ".join(
+                condition_display_name(AppliedCondition(cid), catalog.get(cid))
+                for cid, _parameter in landing.apply
+            )
+            said.append(
+                f"{target.name} fails — {names}" + ("" if delivered else " (not delivered)")
+            )
+            if target.kind == PARTY_PLAYER and delivered:
+                run.tell(target, f"{party.name}'s {name} lands again: {names}.")
+        if said:
+            name = pairs[0][0].shake.name if isinstance(pairs[0][0], _Reapply) else ""
+            self._host.impress_notice(
+                f"{party.name} keeps {name} up: " + "; ".join(said) + ".",
+                theme.color("accent"),
+            )
 
     def _turn_recoveries(self, party: ImpressParty) -> list[_TurnRecovery]:
         """The recovery checks *party*'s turn's end rolls.

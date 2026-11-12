@@ -123,6 +123,8 @@ class ShakeOff:
     block in the data says the meaning of; ``checks`` how many overcome checks it has
     failed so far (Increasing Difficulty counts them); ``rungs`` the condition ids each
     degree lands, kept only for a modifier that worsens it a degree on a failure.
+    ``save`` is the ``kind:key`` its save was resisted with, kept for a new use of a
+    maintained one (Concentration, Sustained), which is resisted, not overcome.
     """
 
     kind: str
@@ -136,10 +138,11 @@ class ShakeOff:
     mods: tuple[str, ...] = ()
     checks: int = 0
     rungs: tuple[tuple[str, ...], ...] = ()
+    save: str = ""
 
     def to_dict(self) -> dict:
         data: dict = {"kind": self.kind, "name": self.name, "dc": self.dc}
-        for key in ("ref", "trait", "skill", "source"):
+        for key in ("ref", "trait", "skill", "source", "save"):
             value = getattr(self, key)
             if value:
                 data[key] = value
@@ -163,7 +166,7 @@ class ShakeOff:
             return None
         if isinstance(dc, bool) or not isinstance(dc, int):
             return None
-        text = {key: raw.get(key, "") for key in ("ref", "trait", "skill", "source")}
+        text = {key: raw.get(key, "") for key in ("ref", "trait", "skill", "source", "save")}
         if not all(isinstance(value, str) for value in text.values()):
             return None
         return cls(

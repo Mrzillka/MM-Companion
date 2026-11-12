@@ -25,6 +25,7 @@ from mm_companion.core.rules import (
     CADENCE_SCENE,
     CADENCE_TURN,
     LADDER_EFFECT,
+    Landing,
     RollSpec,
     ShakeFailure,
     SpecLadder,
@@ -37,8 +38,13 @@ from mm_companion.core.rules import (
     impress_resist_spec,
     impression_shake_off,
     ladder_shake_off,
+    maintained_by,
+    merge_landing,
     overcome_mods,
     power_rolls,
+    reapplied_landing,
+    reapply_request,
+    reapply_roll,
     recover_choices,
     recovery_request,
     self_action,
@@ -49,8 +55,10 @@ from mm_companion.core.rules import (
     shake_off_failed_on,
     shake_off_hint,
     shake_off_made,
+    shake_off_maintained,
     shake_off_request,
     shake_off_roll,
+    shake_off_stopped,
 )
 
 AFFLICTION = {
@@ -251,12 +259,13 @@ def test_the_ladder_carries_the_modifiers_that_change_overcoming(data) -> None:
     ladder = effect_spec_ladder(_with("progressive", "contagious_affliction"), data)
     assert ladder.mods == ("progressive",)  # Contagious changes nothing about it
     assert SpecLadder.from_dict(ladder.to_dict()) == ladder
-    # Instant Recovery only for an Instant Affliction: a Sustained one clears when it stops.
+    # Instant Recovery for an Instant Affliction, or a maintained one (it clears when the
+    # wielder stops).
     assert overcome_mods(_with("instant_recovery"), None, data) == ()
     base = next(e for e in data.effects if e.id == "affliction")
     assert overcome_mods(_with("instant_recovery"), base, data) == ("instant_recovery",)
     sustained = _with("instant_recovery", "sustained_affliction")
-    assert overcome_mods(sustained, base, data) == ()
+    assert overcome_mods(sustained, base, data) == ("instant_recovery", "sustained_affliction")
 
 
 def test_progressive_goes_a_degree_deeper_on_a_failed_check(data) -> None:
@@ -361,3 +370,94 @@ def test_a_failed_recover_check_runs_the_modifiers_on_the_sheet(data) -> None:
     assert stunned.condition_id == "stunned" and stunned.shake_off.degree == 2
     # Nothing carrying it: nothing to do.
     assert not shake_off_failed_on(Character(), data, dazed)
+
+
+# -- Cumulative: a new use on a creature it is already on (p109-110) -----------------------
+
+
+def _landed(data, *mod_ids: str, degree: int) -> tuple[Character, ShakeOff]:
+    char = Character()
+    shake = _held(data, *mod_ids, degree=degree)
+    for condition_id in shake.rungs[degree - 1] if shake.rungs else ("dazed",):
+        apply_condition(char, condition_id, data, shake_off=shake)
+    return char, shake
+
+
+def test_without_cumulative_only_the_highest_degree_applies(data) -> None:
+    char, old = _landed(data, "progressive", degree=2)
+    again = _held(data, "progressive", degree=1)
+    assert merge_landing(char, data, [("dazed", None)], again) == Landing()
+    deeper = _held(data, "progressive", degree=3)
+    landing = merge_landing(char, data, [("incapacitated", None)], deeper)
+    assert landing.remove == (("stunned", None),)
+    assert landing.apply == (("incapacitated", None),) and landing.shake.degree == 3
+
+
+def test_a_cumulative_one_adds_its_degrees(data) -> None:
+    char, old = _landed(data, "cumulative", degree=1)
+    again = _held(data, "cumulative", degree=1)
+    landing = merge_landing(char, data, [("dazed", None)], again)
+    assert landing.remove == (("dazed", None),)
+    assert landing.apply == (("stunned", None),) and landing.shake.degree == 2
+    # Up to the last rung, and no further.
+    char3, _ = _landed(data, "cumulative", degree=3)
+    assert merge_landing(char3, data, [("dazed", None)], again) == Landing()
+
+
+def test_a_first_landing_or_another_power_lands_as_it_is(data) -> None:
+    changes = [("dazed", None)]
+    first = _held(data, "cumulative", degree=1)
+    assert merge_landing(Character(), data, changes, first).apply == tuple(changes)
+    char, _ = _landed(data, "cumulative", degree=1)
+    other = replace(first, name="Other Ray")
+    assert merge_landing(char, data, changes, other).remove == ()
+
+
+# -- Concentration and Sustained: maintained (p110) ----------------------------------------
+
+
+def test_a_maintained_one_is_resisted_anew_with_its_save(data) -> None:
+    ladder = effect_spec_ladder(_with("sustained_affliction"), data, name="Sleep Ray")
+    shake = ladder_shake_off(ladder, 17, -1, trait="resistance:FORTITUDE")
+    assert shake_off_maintained(data, shake) and shake.save == "resistance:FORTITUDE"
+    npc = Character()
+    npc.resistances["FORTITUDE"] = 2
+    spec = reapply_roll(npc, data, shake)
+    assert spec.dc == 17 and "again" in spec.label
+    asked = reapply_request(shake)
+    assert asked.kind == "resistance" and asked.trait_key == "FORTITUDE" and asked.dc == 17
+    # Failed by two: the second rung, as a new use (no deeper than what is on: nothing).
+    char = Character()
+    apply_condition(char, "dazed", data, shake_off=shake)
+    landing = reapplied_landing(char, data, shake, -2)
+    assert landing.apply == (("stunned", None),) and landing.remove == (("dazed", None),)
+    assert reapplied_landing(char, data, shake, -1) == Landing()
+    assert reapplied_landing(char, data, shake, 1) == Landing()
+
+
+def test_whether_its_wielder_still_maintains_it(data) -> None:
+    shake = _sleep()
+    wielder = Character()
+    assert maintained_by(None, shake) is None
+    assert maintained_by(wielder, shake) is None  # no power by that name
+    power = Power(name="Sleep Ray", effects=[_with("sustained_affliction")])
+    wielder.powers.append(power)
+    assert maintained_by(wielder, shake) is True
+    power.effects[0].toggled_on = False
+    assert maintained_by(wielder, shake) is False
+
+
+def test_when_its_wielder_stops(data) -> None:
+    ladder = effect_spec_ladder(
+        _with("sustained_affliction", "instant_recovery"), data, name="Sleep Ray"
+    )
+    shake = ladder_shake_off(ladder, 17, -1)
+    # Maintained, its Instant Recovery waits for the wielder to stop.
+    assert shake_off_cadence(data, shake) == CADENCE_TURN
+    clears, after = shake_off_stopped(data, shake)
+    assert clears and after.mods == ()
+    plain = ladder_shake_off(
+        effect_spec_ladder(_with("sustained_affliction"), data, name="Sleep Ray"), 17, -1
+    )
+    clears, after = shake_off_stopped(data, plain)
+    assert not clears and not shake_off_maintained(data, after)

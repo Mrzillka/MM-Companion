@@ -405,8 +405,11 @@ def test_a_records_modifiers_count_and_rungs_cross_in_shape() -> None:
             "mods": ["progressive", 7, "", "x" * 5000],
             "checks": 2,
             "rungs": [["dazed"], ["stunned", None], "junk"],
+            "save": "resistance:FORTITUDE",
         }
     )
+
+    assert kept["save"] == "resistance:FORTITUDE"
 
     assert kept["mods"] == ["progressive", "x" * protocol.MAX_SPEC_TEXT]
     assert kept["checks"] == 2

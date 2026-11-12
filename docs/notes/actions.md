@@ -542,6 +542,26 @@ A trait roll clicked in the GM's history — a request card, or a save chip unde
   replaces the conditions with the next degree's (the record keeps each degree's ids
   in `rungs` for it), Fatal puts Dying on at the third degree, and the record with its
   new count and degree is written back onto the conditions.
+- **A new use on a creature already under it** (PDF p109–110) goes through
+  `merge_landing`, by way of `GMWindow.land_rung` — every place a save's rung lands (an
+  NPC's answer, a player's request save, an aimed attack, an area). Afflictions do not
+  stack: only the highest degree applies, so one no deeper than what is on changes
+  nothing ("no worse than it was"), and a deeper one replaces it. A **Cumulative** one
+  (`addsDegrees`) adds its degrees to those on instead, to the last rung ("adds up to
+  Stunned"). The same power from the same wielder is matched by `same_effect` (kind,
+  effect, power name, source), whatever its DC or degree.
+- **Concentration and Sustained** (`reapplies`): each turn the wielder keeps it up,
+  everyone it is on resists it anew, with no attack (p110). The wielder's End turn
+  does it first (`ImpressController.keep_up`), in a table of its own ("Thug: keeps
+  powers up"): it finds the targets by the records on the board's creatures that name
+  the wielder as their source (`maintained`), rolls an NPC's new save at the original
+  DC with the trait the record keeps for it (`ShakeOff.save`, `reapply_roll`) and asks
+  a player (`reapply_request`). A failure lands as a new use (`reapplied_landing`).
+  Whether it is still kept up is the wielder's power card's on/off switch, by name
+  (`maintained_by`); switched off, it stops (`shake_off_stopped`) — a maintained
+  Instant Recovery one (`whenStopped`) clears, any other loses its maintained
+  modifiers and is overcome as usual. The target's own End turn still overcomes it as
+  any other.
 - **Recover** (the Actions grid) offers a new check against each record on the actor
   too (PDF p206: `shake_off_recover_spec`, at any cadence, so it is how a third-degree
   Affliction is checked before its minute is up). The spec carries the record
@@ -918,8 +938,8 @@ stages through a real hosted session.
 These are in [the debts](debts.md):
 
 - End turn's other checks (Suffocation), the clock a third-degree or Prolonged
-  Affliction waits on, Increasing Difficulty's cap, and the modifiers that change
-  applying an Affliction (Cumulative, Concentration, Sustained);
+  Affliction waits on, Increasing Difficulty's cap, and a maintained Affliction
+  re-subjecting a target that has shaken it off;
 - the area pieces left out: a Hero Point inside the table, and Nullify and Move Object
   areas;
 - the targeted actions off the air, and the opposing conditions in anything but an

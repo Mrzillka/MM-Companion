@@ -825,18 +825,21 @@ def overcome_mods(
 ) -> tuple[str, ...]:
     """The ids of *effect*'s modifiers its base effect's ``overcome`` block says change
     overcoming it — one tied to a duration only when the instance has that duration
-    (Instant Recovery clears an Instant Affliction by itself)."""
+    (Instant Recovery clears an Instant Affliction by itself), or, for one that also
+    counts ``when_stopped``, when the instance is maintained (a Sustained Affliction's
+    Instant Recovery clears when the wielder stops)."""
 
     rule = base_effect.overcome if base_effect is not None else None
     if rule is None or not rule.modifiers:
         return ()
     attached = {m.modifier_id for m in (*effect.extras, *effect.flaws)}
+    maintained = any(m.reapplies and m.id in attached for m in rule.modifiers)
     duration = ""
     out = []
     for mod in rule.modifiers:
         if mod.id not in attached:
             continue
-        if mod.duration:
+        if mod.duration and not (mod.when_stopped and maintained):
             duration = duration or effective_effect_stats(effect, game_data).get("duration", "")
             if duration != mod.duration:
                 continue

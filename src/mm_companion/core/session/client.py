@@ -94,6 +94,7 @@ from .protocol import (
     SetScenePortrait,
     SetSessionName,
     Welcome,
+    sanitize_shake_off,
     sanitize_snapshot,
 )
 
@@ -505,6 +506,7 @@ class SessionClient:
         *,
         amount: int | None = None,
         temporary: bool = False,
+        shake_off: dict | None = None,
     ):
         """Put a condition on one player's live sheet."""
         return self.send(
@@ -514,6 +516,7 @@ class SessionClient:
                 parameter=parameter,
                 amount=amount,
                 temporary=temporary,
+                shake_off=shake_off,
             )
         )
 
@@ -819,7 +822,9 @@ class SessionClient:
                 {"player_id": message.player_id, "character": dict(message.character)},
             )
         elif isinstance(message, ApplyCondition):
-            self._emit(EVENT_APPLY_CONDITION, message.to_dict())
+            payload = message.to_dict()
+            payload["shake_off"] = sanitize_shake_off(message.shake_off)
+            self._emit(EVENT_APPLY_CONDITION, payload)
         elif isinstance(message, RemoveCondition):
             self._emit(EVENT_REMOVE_CONDITION, message.to_dict())
         elif isinstance(message, ClearTemporary):

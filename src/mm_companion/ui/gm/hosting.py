@@ -87,6 +87,8 @@ class GMHostingMixin:
         # How a player's initiative reaches the board. No message of its own: a
         # roll already carries the spec that says what it was.
         self._bridge.rollAdded.connect(self._on_roll_added)
+        # A player's save off a request card or a chip: what it did lands on them.
+        self._bridge.rollAdded.connect(self._on_player_save)
         self._bridge.playerJoined.connect(self._on_player_joined)
         self._bridge.refused.connect(self._on_refused)
         self._bridge.error.connect(self._on_error)

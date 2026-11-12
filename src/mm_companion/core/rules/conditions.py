@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
-from ..character import AppliedCondition, Character
+from ..character import AppliedCondition, Character, ShakeOff
 from ..components import (
     MECH_CHECK_PENALTY,
     MECH_DEBILITATE_TRAIT,
@@ -113,6 +113,7 @@ def _add_or_stack(
     provenance: str | None,
     amount: int | None = None,
     temporary: bool = False,
+    shake_off: ShakeOff | None = None,
 ) -> None:
     """Add one flattened condition, or bump its ``count`` if it stacks (§5).
 
@@ -121,7 +122,9 @@ def _add_or_stack(
     id + parameter is otherwise left alone (idempotent), except that a new *amount*
     replaces its old one — one All-Out Attack a turn, at the size last chosen — and it
     stays temporary only if both the old instance and the new one are: a lasting
-    Vulnerable is not shortened by a feint's.
+    Vulnerable is not shortened by a feint's. The same goes for *shake_off*: one
+    already there for another reason (damage, a hand) keeps coming off that way, and a
+    record replaces an older record only while both are records.
     """
 
     _remove_superseded(character, catalog, condition, parameter)
@@ -132,6 +135,8 @@ def _add_or_stack(
             if amount is not None:
                 applied.amount = amount
             applied.temporary = applied.temporary and temporary
+            if applied.shake_off is not None:
+                applied.shake_off = shake_off
             return
     character.conditions.append(
         AppliedCondition(
@@ -141,6 +146,7 @@ def _add_or_stack(
             provenance=provenance,
             amount=amount,
             temporary=temporary,
+            shake_off=shake_off if provenance is None else None,
         )
     )
 
@@ -154,6 +160,7 @@ def apply_condition(
     provenance: str | None = None,
     amount: int | None = None,
     temporary: bool = False,
+    shake_off: ShakeOff | None = None,
 ) -> None:
     """Apply a condition to a character, expanding bundles and cascades (§3, §7).
 
@@ -165,7 +172,9 @@ def apply_condition(
     *amount* sizes a condition whose record moves traits by one (``amountMods``); left
     out, it is the record's ``defaultAmount`` (Defending's +2). *temporary* marks the
     instance — and everything it bundles — as lasting until the start of the bearer's
-    next turn; a record flagged ``temporary`` is always applied so.
+    next turn; a record flagged ``temporary`` is always applied so. *shake_off* says how
+    it comes off when an impression or an effect put it on (only the condition itself
+    carries it: its members leave with it).
     """
 
     catalog = game_data.condition_catalog()
@@ -175,7 +184,9 @@ def apply_condition(
     temporary = temporary or condition.temporary
     if amount is None:
         amount = condition.default_amount
-    _add_or_stack(character, catalog, condition, parameter, provenance, amount, temporary)
+    _add_or_stack(
+        character, catalog, condition, parameter, provenance, amount, temporary, shake_off
+    )
     member_provenance = provenance or condition_id
     for member_id in expand_includes(condition, catalog):
         member = catalog.get(member_id)

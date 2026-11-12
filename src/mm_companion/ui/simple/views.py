@@ -840,7 +840,7 @@ class ConditionsView(_View):
         return (
             condition_display_name(applied, record),
             applied.provenance is not None,
-            condition_tooltip(applied, record, catalog),
+            condition_tooltip(applied, record, catalog, self._data),
             random,
             (roll(applied) or None) if random and roll is not None else None,
             self._funnel("roll_recovery") is not None

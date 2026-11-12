@@ -333,6 +333,65 @@ class Measure:
 
 
 @dataclass(frozen=True)
+class Overcome:
+    """How the conditions an effect's resistance ladder lands are shaken off.
+
+    The ``overcome`` block of ``resistanceOutcomes`` (an Affliction's, PDF p109): a new
+    resistance check against the effect's own DC as each of the target's turns ends,
+    and one success removes every condition the effect put on. ``config_key`` names
+    the instance field holding the resistance it is overcome with, when that differs
+    from the one it was resisted with ("" or an empty field: the same one).
+    ``each_minute_from`` is the degree of failure from which the check comes once a
+    minute instead of every turn (0: never). ``modifiers`` are the instance modifiers
+    that change overcoming it (its ``modifiers`` map, by modifier id).
+    """
+
+    config_key: str = ""
+    each_minute_from: int = 0
+    modifiers: tuple[OvercomeModifier, ...] = ()
+
+    def modifier(self, modifier_id: str) -> OvercomeModifier | None:
+        return next((m for m in self.modifiers if m.id == modifier_id), None)
+
+
+#: When an overcome check comes (:attr:`OvercomeModifier.cadence`): at the end of each
+#: scene (Prolonged), or never — the conditions clear by themselves (Instant Recovery).
+CADENCE_SCENE = "scene"
+CADENCE_CLEARS = "clears"
+
+
+@dataclass(frozen=True)
+class OvercomeModifier:
+    """What one modifier on an effect instance does to overcoming its conditions.
+
+    ``worsens``: a failed check adds a degree (Progressive). ``dc_per_check``: the DC
+    moves this much per overcome check after the first (Decreasing Difficulty, −1), or
+    per check after the initial resistance check with ``from_initial`` (Increasing
+    Difficulty, +1). ``cadence``: when the check comes instead of each turn's end
+    (:data:`CADENCE_SCENE`, :data:`CADENCE_CLEARS`), only for an instance of
+    ``duration`` when one is named — or, with ``when_stopped``, for one that is
+    maintained, whose conditions clear when it stops instead (Instant Recovery on a
+    Sustained Affliction). ``applies``: the condition a failed check puts on from the
+    ``fail_from_degree`` degree (Fatal's Dying). ``adds_degrees``: a new use's degrees
+    add to those already on (Cumulative; without it only the highest applies).
+    ``reapplies``: each turn the wielder maintains it, everyone it is on resists it
+    anew, with no attack (Concentration, Sustained).
+    """
+
+    id: str
+    worsens: bool = False
+    dc_per_check: int = 0
+    from_initial: bool = False
+    cadence: str = ""
+    duration: str = ""
+    applies: str = ""
+    fail_from_degree: int = 0
+    adds_degrees: bool = False
+    reapplies: bool = False
+    when_stopped: bool = False
+
+
+@dataclass(frozen=True)
 class ResistanceOutcome:
     """One rung of an effect's degree-of-failure ladder (``resistanceOutcomes``).
 
@@ -619,6 +678,10 @@ class Effect:
     #: What *making* the check still costs the target, for the effects where that is
     #: not nothing (Damage's Hit). ``None`` where a made save really is a clean escape.
     resistance_success: ResistanceOutcome | None = None
+    #: How the conditions that ladder lands come off again (an Affliction's overcome
+    #: check). ``None`` for an effect whose conditions recover as their records say —
+    #: Damage's Dazed and Stunned.
+    overcome: Overcome | None = None
     #: The DC of the effect's own check, for an effect that is *checked* rather than
     #: resisted (Healing's DC 10). ``None`` for every other effect.
     check_dc: int | None = None

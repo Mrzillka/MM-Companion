@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from mm_companion.core import library
-from mm_companion.core.character import AppliedCondition
+from mm_companion.core.character import AppliedCondition, ShakeOff
 from mm_companion.core.rules import (
     apply_condition,
     apply_condition_requests,
@@ -16,10 +16,13 @@ from mm_companion.core.rules import (
     damage_step_summary,
     damage_steps,
     decrement_condition,
+    held_shake_offs,
     minion_step,
     recovery_request,
     recovery_roll,
     recovery_succeeded,
+    same_origin,
+    shake_off_made,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.gm.model import (
@@ -27,6 +30,8 @@ from mm_companion.ui.gm.model import (
     _NpcEntry,
     _Recovering,
 )
+from mm_companion.ui.impress import PARTY_NPC, ImpressParty
+from mm_companion.ui.impress_gm import land_shake_failure
 from mm_companion.ui.sections.conditions import matching_condition
 from mm_companion.ui.undo import absorbing
 
@@ -159,6 +164,37 @@ class GMNpcConditionsMixin:
         if entry is None:
             return
         who = pending.spec.actor or entry.summary.name
+        shake = pending.spec.shakes_off
+        if shake is not None:
+            # Recover's check against an impression or an Affliction (PDF p206).
+            degree = roll.get("degree")
+            if not isinstance(degree, int) or degree < 1:
+                # A failed one does what the Affliction's modifiers say (Fatal's Dying…).
+                held = next(
+                    (
+                        (s, changes)
+                        for s, changes in held_shake_offs(entry.character)
+                        if same_origin(s, shake)
+                    ),
+                    None,
+                )
+                said = f"is still {shake.name}"
+                if held is not None:
+                    party = ImpressParty(
+                        f"{SCENE_NPC}:{pending.source}",
+                        who,
+                        PARTY_NPC,
+                        pending.source,
+                        entry.character,
+                    )
+                    said = land_shake_failure(self, self._data, party, held[0], held[1])
+                self._show_notice(f"{who} {said}.", theme.color("text.muted.rich"))
+                return
+            removed = shake_off_made(entry.character, shake)
+            if removed:
+                self._after_npc_condition_change(entry, removed, applying=False)
+            self._show_notice(f"{who} shakes off {shake.name}.", theme.color("tint.better"))
+            return
         condition = self._change_names(
             [(pending.spec.recovers, pending.spec.recovers_parameter or None)]
         )
@@ -257,6 +293,7 @@ class GMNpcConditionsMixin:
         amount: int | None = None,
         clearing: bool = False,
         requests: tuple = (),
+        shake_off: ShakeOff | None = None,
     ) -> None:
         """Restate the NPC's card and persist one or more condition changes.
 
@@ -269,7 +306,8 @@ class GMNpcConditionsMixin:
         *amount* rides along with an applied condition that has one; *clearing*
         replays a "Clear temporary" (with no *changes*) rather than ids; *requests*
         replays a combat action's ``condition-requested`` payload (temporary flags and
-        amounts kept) through the open sheet's ``take_conditions``.
+        amounts kept) through the open sheet's ``take_conditions``; *shake_off* rides
+        along with applied ones, so the open sheet keeps how they come off.
         """
         window = self._window_for(entry.path)
         section = getattr(window.sheet, "conditions", None) if window is not None else None
@@ -287,7 +325,9 @@ class GMNpcConditionsMixin:
                     section.take_conditions(requests)
                 for condition_id, parameter in changes:
                     if applying:
-                        section.apply_condition_by_id(condition_id, parameter, amount=amount)
+                        section.apply_condition_by_id(
+                            condition_id, parameter, amount=amount, shake_off=shake_off
+                        )
                     else:
                         section.remove_condition_by_id(condition_id, parameter)
         else:

@@ -46,6 +46,8 @@ from .power_records import (
     EffectReach,
     Measure,
     Modifier,
+    Overcome,
+    OvercomeModifier,
     PowerConfiguration,
     RepeatableColumn,
     ResistanceGrant,
@@ -591,6 +593,47 @@ def _parse_resistance_success(raw: object) -> ResistanceOutcome | None:
     return _parse_outcome_rung(raw.get("success"))
 
 
+def _parse_overcome(raw: object) -> Overcome | None:
+    """The ``overcome`` block of a ``resistanceOutcomes`` object, if it has one."""
+
+    block = raw.get("overcome") if isinstance(raw, dict) else None
+    if not isinstance(block, dict):
+        return None
+    minute = block.get("eachMinuteFromDegree", 0)
+    mods = block.get("modifiers")
+    return Overcome(
+        config_key=str(block.get("configKey", "") or ""),
+        each_minute_from=minute if isinstance(minute, int) and minute > 0 else 0,
+        modifiers=tuple(
+            _parse_overcome_modifier(key, value)
+            for key, value in (mods.items() if isinstance(mods, dict) else ())
+            if isinstance(value, dict) and not key.startswith("_")
+        ),
+    )
+
+
+def _parse_overcome_modifier(modifier_id: str, raw: dict) -> OvercomeModifier:
+    """One entry of an ``overcome`` block's ``modifiers`` map."""
+
+    def number(key: str) -> int:
+        value = raw.get(key, 0)
+        return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+    return OvercomeModifier(
+        id=modifier_id,
+        worsens=raw.get("worsens") is True,
+        dc_per_check=number("dcPerCheck"),
+        from_initial=raw.get("fromInitial") is True,
+        cadence=str(raw.get("cadence", "") or ""),
+        duration=str(raw.get("duration", "") or ""),
+        applies=str(raw.get("applies", "") or ""),
+        fail_from_degree=max(0, number("failFromDegree")),
+        adds_degrees=raw.get("addsDegrees") is True,
+        reapplies=raw.get("reapplies") is True,
+        when_stopped=raw.get("whenStopped") is True,
+    )
+
+
 def _parse_action_modifier(raw: dict) -> ActionModifier:
     kind = str(raw.get("kind", "toggle"))
     return ActionModifier(
@@ -978,6 +1021,7 @@ def _parse_effect(e: dict, ranged_distance: RangeDistance | None = None) -> Effe
         resistance_vs_check=bool(e.get("resistanceVsCheck", False)),
         resistance_outcomes=_parse_resistance_outcomes(e.get("resistanceOutcomes")),
         resistance_success=_parse_resistance_success(e.get("resistanceOutcomes")),
+        overcome=_parse_overcome(e.get("resistanceOutcomes")),
         check_dc=_check_dc(e.get("checkOutcomes")),
         success_removes=_success_removes(e.get("checkOutcomes")),
         implicit_modifiers=tuple(e.get("implicitModifiers", ())),

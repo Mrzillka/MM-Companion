@@ -39,7 +39,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from mm_companion.core.character import Character
+from mm_companion.core.character import Character, ShakeOff
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.dice import ROUTINE_DIE
 from mm_companion.core.rules import (
@@ -58,6 +58,8 @@ from mm_companion.core.rules import (
     follow_ups_for_result,
     is_choice_key,
     judge_attack,
+    ladder_shake_off,
+    landed_caption,
     localize_spec,
     minion_save_spec,
     opposing_effects,
@@ -68,6 +70,7 @@ from mm_companion.core.rules import (
     rung_caption,
     team_incompatibility,
     team_save_spec,
+    trait_ref,
     trait_roll_for,
 )
 from mm_companion.ui import theme
@@ -77,6 +80,9 @@ from mm_companion.ui.attack_targets import KIND_ATTACK, AttackDeclaration, aimed
 from mm_companion.ui.impress import PARTY_NPC, PARTY_PLAYER, ImpressParty, new_action_id
 from mm_companion.ui.roll_history import ROUTINE_WORD, ActionCard
 from mm_companion.ui.widgets import guard_wheel, make_signed_spin_box
+
+#: A degree past any ladder's last rung: what a critical hit on a minion lands at.
+WORST_DEGREE = -99
 
 ACCEPT_CAPTION = "Accept"
 DECLINE_CAPTION = "Decline"
@@ -124,7 +130,9 @@ class AttackHost(Protocol):
 
     def impress_parties(self) -> tuple[list[ImpressParty], list[ImpressParty]]: ...
 
-    def impress_apply(self, party: ImpressParty, changes: list) -> bool: ...
+    def impress_apply(
+        self, party: ImpressParty, changes: list, shake_off: ShakeOff | None = None
+    ) -> bool: ...
 
     def impress_notice(self, text: str, colour: str) -> None: ...
 
@@ -139,6 +147,10 @@ class AttackHost(Protocol):
     def roller_adjustment(self) -> int: ...
 
     def combat_land(self, party: ImpressParty, changes: tuple) -> bool: ...
+
+    def land_rung(
+        self, party: ImpressParty, changes: list, shake_off: ShakeOff | None = None
+    ) -> tuple[bool, tuple]: ...
 
 
 @dataclass
@@ -435,7 +447,8 @@ class AttackController(QObject):
             if rung is None:
                 captions.append("unaffected")
                 continue
-            captions.append(self._land(aimed, target, rung))
+            shake = self._shake(aimed, save, save.dc, WORST_DEGREE, save.trait_key)
+            captions.append(self._land(aimed, target, rung, shake))
         said = [c for c in captions if c]
         aimed.said.append("no save — " + ("; ".join(said) if said else "nothing lands"))
         self._finish(aimed, "; ".join(aimed.said))
@@ -458,8 +471,10 @@ class AttackController(QObject):
         """Roll the NPC's saves through the server as one group, then land each."""
         lines = []
         about = []
+        keys: dict[int, str] = {}
         rules = self._host.minion_rules()
         for save, key, adjust in chosen:
+            keys[id(save)] = key or save.trait_key
             spec = self._save_spec(target, save, key, adjust)
             lines.append(
                 group_line(
@@ -477,7 +492,10 @@ class AttackController(QObject):
                 if save.ladder is None or degree is None:
                     continue
                 rung = answer_rung(save.ladder, int(degree), target.character, self._data, rules)
-                caption = self._land(aimed, target, rung) if rung is not None else ""
+                caption = ""
+                if rung is not None:
+                    shake = self._shake(aimed, save, record.get("dc"), degree, keys.get(id(save)))
+                    caption = self._land(aimed, target, rung, shake)
                 aimed.said.append(f"{save_text(save, record)}: {caption or 'resisted'}")
             self._finish(aimed, "; ".join(aimed.said))
 
@@ -499,7 +517,10 @@ class AttackController(QObject):
             if save.ladder is not None and degree is not None:
                 rung = answer_rung(save.ladder, int(degree), target.character, self._data, rules)
                 if rung is not None:
-                    caption = self._land(aimed, target, rung)
+                    resisted = RollSpec.from_dict(record.get("spec"))
+                    key = resisted.trait_key if resisted is not None else save.trait_key
+                    shake = self._shake(aimed, save, record.get("dc"), degree, key)
+                    caption = self._land(aimed, target, rung, shake)
             aimed.said.append(f"{save_text(save, record)}: {caption or 'resisted'}")
             if caption:
                 aimed.run.tell(target, f"{aimed.declaration.spec.label}: {caption}")
@@ -511,14 +532,34 @@ class AttackController(QObject):
         if aimed.card is not None:
             aimed.card.set_status(f"Waiting for {target.name}'s save…", button=ACCEPT_CAPTION)
 
-    def _land(self, aimed: _Aimed, target: ImpressParty, rung) -> str:
+    def _shake(
+        self, aimed: _Aimed, save: RollSpec, dc: object, degree: object, key: str | None
+    ) -> ShakeOff | None:
+        """How the conditions a failed *save* lands come off (an Affliction's), or None.
+
+        *key* is the trait the target resisted with, the overcome check's default.
+        """
+        return ladder_shake_off(
+            save.ladder,
+            dc if isinstance(dc, int) and not isinstance(dc, bool) else save.dc,
+            int(degree) if isinstance(degree, int) else None,
+            trait=trait_ref(self._data, key or ""),
+            source=aimed.source.name,
+        )
+
+    def _land(
+        self, aimed: _Aimed, target: ImpressParty, rung, shake: ShakeOff | None = None
+    ) -> str:
         """Put *rung* on *target*; what it did, in words."""
         character = deepcopy(target.character) if target.character is not None else Character()
         changes = list(resolve_rung(character, rung, self._data, source=aimed.source.name))
         caption = rung_caption(rung, self._data)
-        if changes and not self._host.impress_apply(target, changes):
+        if not changes:
+            return caption
+        delivered, landed = self._host.land_rung(target, changes, shake)
+        if not delivered:
             return f"{caption} (not delivered)"
-        return caption
+        return landed_caption(self._data, caption, changes, landed)
 
     # -- several saves: the window ------------------------------------------------------
 

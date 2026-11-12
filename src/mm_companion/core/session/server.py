@@ -764,6 +764,7 @@ class SessionServer:
         *,
         amount: int | None = None,
         temporary: bool = False,
+        shake_off: dict | None = None,
     ) -> bool:
         """Tell one player's client to put a condition on their live sheet."""
         return self.send_to(
@@ -774,6 +775,7 @@ class SessionServer:
                 parameter=parameter,
                 amount=amount,
                 temporary=temporary,
+                shake_off=shake_off,
             ),
         )
 

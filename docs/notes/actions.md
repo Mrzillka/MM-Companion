@@ -457,6 +457,15 @@ The second action on this layer, following the 4e rules (Area Effect extra, PDF 
   adjustment for share their cards. Off the air the dialog leaves the same two.
 - Each card carries the action id, so the answers fill the action's table.
 - The GM answers these cards as an NPC — see *Answering a history roll as an NPC*, below.
+- **A player's answer lands too.** A save a player rolls off a request card or a chip
+  (one no `ActionRun` of the GM's asked for: `action_run.resolved_by_a_run`) is put on
+  them by the GM's window when it comes back (`GMWindow._on_player_save`): the rung
+  resolved against their snapshot and sent to their sheet with its `ShakeOff`, as an
+  aimed one is, under the same "Saves you roll for NPCs" switches. An impression's
+  ladder names the impression, its skill and the impresser (`SpecLadder.effect`,
+  `skill`, `source`), so a request-only Impress writes the same record a resolved one
+  does. A save an attacker rolled off their own card (`own_attack`) is left alone: it
+  was rolled for someone it does not name.
 
 ### Area Healing
 
@@ -512,14 +521,60 @@ A trait roll clicked in the GM's history — a request card, or a save chip unde
 ## End of turn
 
 - A creature's card on the GM's board offers **End turn**. It does two things. First,
-  every impression the table resolved onto that creature (`ImpressController._lingering`,
-  remembered as each rung lands, with its DC and how the target resisted) is resisted
-  again **against the original DC** — the server rolls an NPC's, a player is asked for
-  each in turn (`Shake off Demoralized`). One that is made comes off; one that is
-  failed stays. An impression whose conditions are already gone is forgotten unrolled.
-- Second, every condition on it whose `recoveryCheck` cadence is `end_of_turn` (Dazed,
-  Stunned — `end_of_turn_recoveries`) is rolled off, unless an impression put it there:
-  that one is shaken off as the impression, at its DC, and not rolled twice. An NPC's
+  every impression and every Affliction on that creature is resisted again **against
+  the original DC** — read off the creature's own conditions (`held_shake_offs`: the
+  `ShakeOff` each one's rung wrote, see [the conditions
+  notes](conditions-and-damage.md)), so it is the NPC's model or the player's latest
+  snapshot that says what is on them, and a GM restart forgets nothing. The server
+  rolls an NPC's (`shake_off_roll`), a player is asked for each in turn (`Shake off
+  Demoralized`, `Shake off Sleep Ray`). One that is made comes off with every condition
+  it put on; one that is failed stays. An impression is resisted with what the GM chose
+  then, or the creature's best option; an Affliction with its "Overcome by" resistance,
+  or the one it was resisted with. An Affliction at its third degree is overcome once a
+  minute, not as a turn ends (the effect's `overcome.eachMinuteFromDegree`), and a
+  Prolonged one at the end of each scene: End turn names it and rolls nothing
+  (`shake_off_cadence`). An Instant Recovery one clears with no roll.
+- **The Affliction's modifiers** (PDF p110–111) ride on the record (`ShakeOff.mods`, the
+  instance's ids the effect's `overcome.modifiers` names, written by `overcome_mods`).
+  The check is at `shake_off_dc` (Increasing Difficulty +1 for each check after the
+  initial save, Decreasing Difficulty −1 for each after the first, counted in
+  `ShakeOff.checks`), and a failed one does what `shake_off_failed` says: Progressive
+  replaces the conditions with the next degree's (the record keeps each degree's ids
+  in `rungs` for it), Fatal puts Dying on at the third degree, and the record with its
+  new count and degree is written back onto the conditions.
+- **A new use on a creature already under it** (PDF p109–110) goes through
+  `merge_landing`, by way of `GMWindow.land_rung` — every place a save's rung lands (an
+  NPC's answer, a player's request save, an aimed attack, an area). Afflictions do not
+  stack: only the highest degree applies, so one no deeper than what is on changes
+  nothing ("no worse than it was"), and a deeper one replaces it. A **Cumulative** one
+  (`addsDegrees`) adds its degrees to those on instead, to the last rung ("adds up to
+  Stunned"). The same power from the same wielder is matched by `same_effect` (kind,
+  effect, power name, source), whatever its DC or degree.
+- **Concentration and Sustained** (`reapplies`): each turn the wielder keeps it up,
+  everyone it is on resists it anew, with no attack (p110). The wielder's End turn
+  does it first (`ImpressController.keep_up`), in a table of its own ("Thug: keeps
+  powers up"): it finds the targets by the records on the board's creatures that name
+  the wielder as their source (`maintained`), rolls an NPC's new save at the original
+  DC with the trait the record keeps for it (`ShakeOff.save`, `reapply_roll`) and asks
+  a player (`reapply_request`). A failure lands as a new use (`reapplied_landing`).
+  Whether it is still kept up is the wielder's power card's on/off switch, by name
+  (`maintained_by`); switched off, it stops (`shake_off_stopped`) — a maintained
+  Instant Recovery one (`whenStopped`) clears, any other loses its maintained
+  modifiers and is overcome as usual. The target's own End turn still overcomes it as
+  any other.
+- **Recover** (the Actions grid) offers a new check against each record on the actor
+  too (PDF p206: `shake_off_recover_spec`, at any cadence, so it is how a third-degree
+  Affliction is checked before its minute is up). The spec carries the record
+  (`RollSpec.shakes_off`); a made one takes off everything carrying it
+  (`shake_off_made`) — on a player's sheet through `DiceSection.settle_recovery`, on an
+  NPC through `_on_recovery_back`. A failed one runs the modifiers as End turn's does
+  (`shake_off_failed_on` on the player's own sheet, `land_shake_failure` on an NPC):
+  at the third degree, where End turn rolls nothing, it is the only check Fatal's Dying
+  can come from.
+- Second, every condition on it whose `recoveryCheck` cadence is `end_of_turn` (a
+  damage-caused Dazed or Stunned — `end_of_turn_recoveries`) is rolled off. One an
+  impression or an Affliction put on is not offered (`can_recover`): it comes off with
+  what put it there, and is not rolled twice. An NPC's
   checks are lines of the same server-rolled group, and a made one sheds through the
   path the chip's 🎲 takes (`GMWindow._shed_npc_recovery`). A player gets the same
   request card the chip's 🎲 sends, and their own app settles it.
@@ -882,9 +937,9 @@ stages through a real hosted session.
 
 These are in [the debts](debts.md):
 
-- End turn's other checks (Affliction overcome, Suffocation), knowing *why* a Dazed or
-  Stunned is on (only a damage-caused one is rolled off with Stamina), and a memory of
-  impressions that outlives the GM's app;
+- End turn's other checks (Suffocation), the clock a third-degree or Prolonged
+  Affliction waits on, Increasing Difficulty's cap, and a maintained Affliction
+  re-subjecting a target that has shaken it off;
 - the area pieces left out: a Hero Point inside the table, and Nullify and Move Object
   areas;
 - the targeted actions off the air, and the opposing conditions in anything but an

@@ -60,6 +60,7 @@ from .maneuvers import (
 from .movement import speed_lines
 from .recovery import can_recover, recovery_roll
 from .rolls import LADDER_DAMAGE, RollSpec, ability_roll, add_part, localize_spec, skill_roll
+from .shaking import held_shake_offs, shake_off_recover_spec
 from .targeted import bare_attack_check
 
 __all__ = [
@@ -472,8 +473,9 @@ def recover_choices(
     character: Character, game_data: GameData, action: CombatAction
 ) -> list[RecoverChoice]:
     """What *action*'s recovery may do for *character* now (p204): a recovery check for
-    the most severe of its listed conditions that offers one, and one step down the
-    fatigue ladder from the most severe fatigue condition."""
+    the most severe of its listed conditions that offers one, one step down the fatigue
+    ladder from the most severe fatigue condition, and a new resistance check against
+    each impression or Affliction on it (p206: :func:`~.shaking.shake_off_recover_spec`)."""
     rule = action.recovery
     if rule is None:
         return []
@@ -508,6 +510,10 @@ def recover_choices(
                 changes.append(ConditionChange(ladder[top - 1]))
                 caption += f" (to {_condition_name(game_data, ladder[top - 1])})"
             choices.append(RecoverChoice(caption, changes=tuple(changes)))
+    for shake, _changes in held_shake_offs(character):
+        spec = shake_off_recover_spec(character, game_data, shake)
+        if spec is not None:
+            choices.append(RecoverChoice(f"{spec.label} vs DC {spec.dc}", spec=spec))
     return choices
 
 

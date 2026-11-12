@@ -117,6 +117,28 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   the GM's **End turn**, which rolls every `end_of_turn` check on the creature (see [the
   actions notes](actions.md#end-of-turn)). Who applies the
   result is whoever owns the creature — see [the session notes](session.md).
+- **A condition remembers how it comes off** (`AppliedCondition.shake_off`, a
+  `ShakeOff`; `core/rules/shaking.py`). The record's `recoveryCheck` is the
+  *damage-caused* condition's: Dazed and Stunned by Damage roll DC 10 Stamina at the end
+  of each turn (PDF p26–27), but the same conditions from an impression are resisted
+  again at the original DC (p201), and from an Affliction overcome with a new check at
+  its own DC, one success removing all it put on (p109). So whoever lands such a rung
+  writes the record on each condition it applies — `impression_shake_off` (the Impress
+  controller) and `ladder_shake_off` / `area_shake_off` (an NPC's answered save, an
+  aimed attack, an area) — and `can_recover` refuses a condition carrying one, so no
+  chip or End turn offers it the Stamina check. Only the directly applied condition
+  carries it (its members leave with it), and a condition already on for another reason
+  keeps coming off that way: re-applying one keeps a record only while the old instance
+  had one too (`_add_or_stack`), as `temporary` does. Which effects are overcome is data:
+  a `resistanceOutcomes` block's `overcome` (`Overcome`, read into `SpecLadder.effect` /
+  `overcome` / `name`). Before this the impressions lived in the GM's app
+  (`ImpressController._lingering`) and were lost on a restart; now they are on the NPC's
+  file, and on a player's sheet, which the GM reads back in their snapshot. The record
+  also carries the Affliction's modifiers that change overcoming it, its failed-check
+  count and each degree's conditions (`mods`, `checks`, `rungs` — see [the actions
+  notes](actions.md#end-of-turn)). A chip
+  carrying one has no 🎲, so its tooltip says how it comes off instead of the record's
+  own recovery (`shake_off_hint`, through `condition_tooltip(…, data)`).
 - **Some conditions have an amount, and some are temporary** (combat maneuvers). An
   `AppliedCondition` may carry `amount` (All-Out Attack −3) and `temporary` (it lasts
   until the start of the bearer's next turn); both stay out of a save at their defaults,

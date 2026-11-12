@@ -145,29 +145,41 @@ Minions are in (see [the minions notes](minions.md)). These rules about them are
   card against the rolled total, minions included. The routine DC (and the better of the
   two, as a resolved Impress uses) wants the request card to know who is a minion.
 
-## End of turn does one thing so far
+## End of turn: what is left
 
-A creature's card on the GM's board has an **End turn** item. It gives every
-impression the GM's table put on that creature a new resistance check against its
-original DC (the book's "overcoming impressions"), and rolls every condition whose
-`recoveryCheck` is made at the end of a turn (Dazed, Stunned). It is the seam the rest
+A creature's card on the GM's board has an **End turn** item. It resists every
+impression and overcomes every Affliction on that creature again against the original
+DC, read off the `ShakeOff` each condition carries (see [the conditions
+notes](conditions-and-damage.md)), and rolls every condition whose own `recoveryCheck`
+is made at the end of a turn (a damage-caused Dazed or Stunned). It is the seam the rest
 of the turn economy should hang off:
 
-- **Other end-of-turn checks.** An Affliction is overcome with its `overcomeBy`
-  resistance against its own DC; Suffocation forces a Fortitude check each turn.
-- **It does not know why a condition is on.** Dazed and Stunned are rolled off with
-  DC 10 Stamina because their record says so, and the record means a *damage-caused*
-  one (`recoveryCheck.condition`). One an impression put on is recognised and shaken
-  off as the impression instead; one an Affliction put on is not, and End turn offers
-  it the Stamina check as well. The fix is the per-condition record below: written
-  when an impression or an Affliction lands a condition, it says how that condition is
-  shaken off, and a condition with none is the damage-caused one.
-- **What it remembers lives in the GM's app.** The impressions to shake off are kept in
-  memory by `ImpressController` (`_lingering`), keyed by scene ref, from impressions the
-  table *resolved* — a request-only one, or a condition put on by hand, is not
-  remembered. Restarting the GM's app forgets them. The debt's earlier note suggested a
-  per-condition record on `AppliedCondition`, written by `targeting.apply_rung`, which
-  would survive a restart and travel with a player's sheet.
+- **Suffocation** forces a Fortitude check each turn; nothing rolls it. The book gives
+  it twice and they disagree (PDF p214: DC 10 +1 a round, Incapacitated then Dying;
+  the glossary, p227: DC 11, one degree of Dazed → Stunned → Incapacitated per failure).
+- **A third-degree or Prolonged Affliction** is overcome once a minute (PDF p109) or at
+  the end of each scene (Prolonged, p110). End turn names it and rolls nothing: there is
+  no clock, so the GM rolls it by hand when the time is up, or the bearer takes Recover.
+  An Instant Recovery one at the third degree waits for that minute as well.
+- **Increasing Difficulty's cap** is not applied: once the DC passes the bearer's
+  resistance + 20 it stops rising and only a natural 20 makes it (p110).
+- **Limited Degree's empty degree** lands nothing, so it writes no record either, though
+  the book has the Affliction still running on it (p111).
+- **A maintained Affliction re-subjects only those it is still on.** The book has the
+  wielder's every maintaining turn subject the target anew, whether or not they shook
+  it off (p110); the app finds its targets by the records on them, so once one has
+  overcome it the wielder's End turn passes them by. It is re-applied by hand.
+- **"Still maintained" is the power card's on/off switch**, found by the power's name
+  (`maintained_by`). A power whose card has no switch is kept up until its conditions
+  come off; one renamed, or not on the wielder's sheet (an area's "power name" that is
+  not a power), is named in a notice and left to the GM.
+- **Cumulative and Increasing Difficulty**: the checks against new uses do not count
+  toward the DC, only failed overcome checks do.
+- **A condition put on by hand carries no record**, so a Dazed or Stunned put there
+  still gets the damage Stamina check. A save the GM rolls "as written" (nobody's
+  number) lands nowhere.
+- **A chip with a record shows no 🎲.** Shaking one off is End turn's, or Recover's
+  (the Actions grid), not the chip's.
 - **There is no turn tracker.** The GM ends each creature's turn by hand; initiative
   order is on the board, but nothing walks it.
 
@@ -226,7 +238,7 @@ the targeted actions' own). Each of these was seen and left on purpose.
   to an aimed attack and a targeted action's attack only. An unaimed attack (the DC box
   standing for the Defense), an area's primary and a team attack's entries leave it to
   the table, as the entry above says of the opposing conditions.
-- **Recover works "once per scene"** says its tooltip; nothing counts it.
+- **Recover works "once per conflict scene"** says its tooltip; nothing counts it.
 - **Aim's "lost if your next standard action is not that attack"** is not tracked. The
   line stays (greyed) through a roll that is not an attack, and the player drops it with
   its ✕.

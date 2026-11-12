@@ -153,7 +153,15 @@ from typing import ClassVar
 #: makes every hit of it a critical (Finishing Attack). And a spec's ``parts`` — what
 #: its modifier is made of, ``[[name, amount], …]`` — so every seat's history can show
 #: how a roll's number was reached on hover. And a spec's ``own_attack``: a save its
-#: attacker rolled off their own card, which every seat's card marks with a ⚠.
+#: attacker rolled off their own card, which every seat's card marks with a ⚠. And
+#: :class:`ApplyCondition`'s ``shake_off``: how a condition an impression or an
+#: Affliction put on a player comes off again, kept on their sheet (and so in the
+#: snapshot the GM's End turn reads), plus the ladder's ``overcome`` and ``name``. And
+#: the record's ``mods``, ``checks`` and ``rungs`` (the Affliction's modifiers that
+#: change overcoming it), the ladder's ``mods``, ``skill`` and ``source`` (an impression's
+#: request card writes the same record), and a spec's ``shakes_off``: the record a
+#: Recover check takes off when it is made. And the record's ``save``: the trait a
+#: maintained Affliction's new use is resisted with.
 PROTOCOL_VERSION = 20
 
 #: Hard cap on one encoded message, including its trailing newline. A character
@@ -886,6 +894,9 @@ class ApplyCondition(Message):
     amount: int | None = None
     #: Lasts only until the start of the player's next turn (v20).
     temporary: bool = False
+    #: How it comes off, for one an impression or an effect put on (v20): a
+    #: ``ShakeOff`` record, checked by :func:`sanitize_shake_off` on the way in.
+    shake_off: dict | None = None
 
 
 @_register
@@ -1100,6 +1111,9 @@ def sanitize_spec(raw: object, _depth: int = 0) -> dict | None:
     ladder = _sanitize_ladder(raw.get("ladder"))
     if ladder is not None:
         spec["ladder"] = ladder
+    shake = sanitize_shake_off(raw.get("shakes_off"))
+    if shake is not None:
+        spec["shakes_off"] = shake
     follow_up = sanitize_spec(raw.get("follow_up"), _depth + 1)
     if follow_up is not None:
         spec["follow_up"] = follow_up
@@ -1178,13 +1192,65 @@ def _sanitize_ladder(raw: object) -> dict | None:
         value = raw.get(key)
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
             ladder[key] = min(value, MAX_LADDER_RANK)
+    # How what it lands comes off again (an Affliction's overcome check), and what
+    # the table calls it: plain short text.
+    for key in ("overcome", "effect", "name", "skill", "source"):
+        value = raw.get(key)
+        if isinstance(value, str) and value:
+            ladder[key] = value[:MAX_SPEC_TEXT]
+    mods = _short_texts(raw.get("mods"))
+    if mods:
+        ladder["mods"] = mods
     return ladder
+
+
+def _short_texts(raw: object) -> list[str]:
+    """A list of short ids (modifier or condition ids), capped in count and length."""
+    if not isinstance(raw, list):
+        return []
+    return [v[:MAX_SPEC_TEXT] for v in raw[:MAX_RUNG_ITEMS] if isinstance(v, str) and v]
 
 
 #: Bounds on a group roll and on an action's identifiers. A group is aimed at the
 #: creatures on a scene, so it never needs more lines than a scene has entries.
 MAX_GROUP_LINES = 24
 MAX_ACTION_ID = 64
+
+
+#: The shake-off record's text keys, and its numbers' bound.
+_SHAKE_TEXT_KEYS = ("kind", "name", "ref", "trait", "skill", "source", "save")
+MAX_SHAKE_NUMBER = 999
+
+
+def sanitize_shake_off(raw: object) -> dict | None:
+    """An :class:`ApplyCondition`'s ``shake_off``, checked into shape — or ``None``.
+
+    Structural only: short text keys, bounded counts, and short lists of ids. What it
+    means is the rules' (``ShakeOff`` on the character model).
+    """
+    if not isinstance(raw, dict):
+        return None
+    kept: dict = {}
+    for key in _SHAKE_TEXT_KEYS:
+        value = raw.get(key)
+        if isinstance(value, str) and value:
+            kept[key] = value[:MAX_SPEC_TEXT]
+    mods = _short_texts(raw.get("mods"))
+    if mods:
+        kept["mods"] = mods
+    rungs = raw.get("rungs")
+    if isinstance(rungs, list):
+        kept_rungs = [_short_texts(r) for r in rungs[:MAX_SPEC_OUTCOMES]]
+        if any(kept_rungs):
+            kept["rungs"] = kept_rungs
+    for key in ("dc", "degree", "checks"):
+        value = raw.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            kept[key] = max(0, min(value, MAX_SHAKE_NUMBER))
+    if not kept.get("kind") or "dc" not in kept:
+        return None
+    kept.setdefault("name", "")
+    return kept
 
 
 def sanitize_action_id(raw: object) -> str:

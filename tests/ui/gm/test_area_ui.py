@@ -364,7 +364,7 @@ def test_a_player_in_the_area_is_asked_rather_than_rolled_for(
     monkeypatch.setattr(
         window,
         "impress_apply",
-        lambda party, changes: applied.append((party.name, changes)) or True,
+        lambda party, changes, shake_off=None: applied.append((party.name, changes)) or True,
     )
 
     use = power_area_use(burst(), source.character, data)
@@ -407,7 +407,7 @@ def test_the_gm_can_roll_for_a_player_who_does_not_answer(
     source, targets = _parties(data)
     monkeypatch.setattr(window, "impress_parties", lambda: ([source], targets))
     Asked(window, monkeypatch)
-    monkeypatch.setattr(window, "impress_apply", lambda party, changes: True)
+    monkeypatch.setattr(window, "impress_apply", lambda party, changes, shake_off=None: True)
     monkeypatch.setattr(action_run, "resolve_group", stages([1]))
     use = power_area_use(burst(), source.character, data)
     window._area.declare("p1", AreaAttempt("act", use, targets=("s2",)).to_dict())
@@ -536,7 +536,9 @@ def test_a_hosted_npc_affliction_lands_its_conditions(qapp, window: GMWindow, da
     mook = targets[1]
     window.impress_parties = lambda: ([source], targets)
     applied: list = []
-    window.impress_apply = lambda party, changes: applied.append((party.name, changes)) or True
+    window.impress_apply = (
+        lambda party, changes, shake_off=None: applied.append((party.name, changes)) or True
+    )
     use = power_area_use(haze, source.character, data)
     # The GM's own seat goes through the server's sanitizer too, so this is the wire.
     window.bridge.send_action_request(
@@ -661,7 +663,7 @@ def test_a_players_cover_and_adjustment_reach_their_request(
     source, targets = _parties(data)
     monkeypatch.setattr(window, "impress_parties", lambda: ([source], targets))
     asked = Asked(window, monkeypatch)
-    monkeypatch.setattr(window, "impress_apply", lambda party, changes: True)
+    monkeypatch.setattr(window, "impress_apply", lambda party, changes, shake_off=None: True)
     use = power_area_use(burst(), source.character, data)
     window._area.declare("p1", AreaAttempt("act", use, targets=("s2",)).to_dict())
     area = window._area.open("act")
@@ -921,7 +923,7 @@ def test_a_reroll_before_resolving_replaces_the_attack_and_after_changes_nothing
     assert area._attack == (2, 2) and not area.hit()
     window._area.take_roll({**attack, "seq": 10, "die": 19, "reroll": True})
     assert area._attack == (19, 19) and "(rerolled)" in area._attack_note.text()
-    monkeypatch.setattr(window, "impress_apply", lambda party, changes: True)
+    monkeypatch.setattr(window, "impress_apply", lambda party, changes, shake_off=None: True)
     monkeypatch.setattr(action_run, "resolve_group", stages([-1], [-1]))
     area._resolve.click()
     window._area.take_roll({**attack, "seq": 11, "die": 1, "reroll": True})
@@ -1028,7 +1030,7 @@ def test_a_heavy_weapons_hit_primary_resists_the_whole_rank(
         return fake(lines, **kwargs)
 
     monkeypatch.setattr(action_run, "resolve_group", spy)
-    monkeypatch.setattr(window, "impress_apply", lambda party, changes: True)
+    monkeypatch.setattr(window, "impress_apply", lambda party, changes, shake_off=None: True)
     area = window._area.start_for_npc(thug_sheet, item.build, thug_path.name)
     mook_ref = next(r.party.ref for r in area._rows if r.party.source == mook.name)
     for row in area._rows:

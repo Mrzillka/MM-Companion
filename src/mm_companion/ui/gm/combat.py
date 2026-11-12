@@ -187,13 +187,14 @@ class GMCombatMixin:
         🎲 holds it, so the result takes the condition off this NPC."""
         entry = self._npc_state.get(key)
         minion = self.rolls_as_minion(entry.character if entry is not None else None)
-        if spec.recovers:
+        held = bool(spec.recovers or spec.shakes_off)
+        if held:
             # Set first, as _roll_npc_recovery does: a roll can come back before
             # roll_spec returns.
             self._recovering = _Recovering(key, spec)
         if load:
             self._roller.load_spec(spec, minion=minion, localize=False)
-        elif not self._roller.roll_spec(spec, minion=minion) and spec.recovers:
+        elif not self._roller.roll_spec(spec, minion=minion) and held:
             self._recovering = None
 
     def _follow_actor(self, key: str) -> None:

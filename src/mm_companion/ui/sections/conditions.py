@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from mm_companion.core.character import AppliedCondition, Character
+from mm_companion.core.character import AppliedCondition, Character, ShakeOff
 from mm_companion.core.components import MECH_RANDOM_ACTION, TONE_BENEFIT
 from mm_companion.core.data_loader import Condition, GameData
 from mm_companion.core.rules import (
@@ -51,6 +51,9 @@ from mm_companion.core.rules import (
     recovery_hint,
     recovery_roll,
     roll_confused_action,
+    shake_off_failed_on,
+    shake_off_hint,
+    shake_off_made,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
@@ -197,11 +200,13 @@ def condition_tooltip(
     applied: AppliedCondition,
     record: Condition | None,
     conditions_by_id: dict[str, Condition],
+    data: GameData | None = None,
 ) -> str:
     """The hover hint for one applied condition: origin, effect, and recovery.
 
     Module-level because a condition reads the same wherever it is shown — this
-    block's chips and the GM window's player cards both hint through here.
+    block's chips and the GM window's player cards both hint through here. Given
+    *data*, one an impression or an Affliction put on says how it comes off instead.
     """
     if record is None:
         return ""
@@ -215,7 +220,11 @@ def condition_tooltip(
     parts = [heading]
     if record.effect:
         parts.append(html.escape(record.effect))
-    if record.recovery and record.recovery != "n/a":
+    if applied.shake_off is not None and data is not None:
+        # Put on by an impression or an Affliction: it comes off with what put it there,
+        # not by the damage-caused condition's recovery the record describes.
+        parts.append(f"<i>Recovery:</i> {html.escape(shake_off_hint(data, applied.shake_off))}")
+    elif record.recovery and record.recovery != "n/a":
         parts.append(f"<i>Recovery:</i> {html.escape(record.recovery)}")
     if applied.temporary:
         parts.append(f"<i>{html.escape(TEMPORARY_HINT)}</i>")
@@ -340,6 +349,7 @@ class ConditionsSection(QGroupBox):
         *,
         amount: int | None = None,
         temporary: bool = False,
+        shake_off: ShakeOff | None = None,
     ) -> bool:
         """Apply a condition by id, with no menu and no prompt.
 
@@ -347,7 +357,8 @@ class ConditionsSection(QGroupBox):
         condition the GM sends bundles, supersedes and stacks through the same
         resolver a locally applied one does — and marks the sheet dirty the same
         way. *amount* and *temporary* are the resolver's (All-Out Attack −3, a
-        feint's temporary Vulnerable). Returns whether the id was one the catalog
+        feint's temporary Vulnerable), and so is *shake_off* (how one an impression or
+        an Affliction put on comes off). Returns whether the id was one the catalog
         knows.
         """
         if condition_id not in self._conditions_by_id:
@@ -359,6 +370,7 @@ class ConditionsSection(QGroupBox):
             parameter=parameter,
             amount=amount,
             temporary=temporary,
+            shake_off=shake_off,
         )
         self._render_conditions()
         self._emit_conditions_changed()
@@ -455,7 +467,27 @@ class ConditionsSection(QGroupBox):
         *payload* is ``(condition_id, parameter)``. Sheds one instance of it (a Hit
         stack loses one) or turns it into what it becomes (Dying stabilising), through
         the core resolver. A condition that has gone meanwhile is left alone.
+
+        A :class:`~mm_companion.core.character.ShakeOff` instead is Recover's made check
+        against an impression or an Affliction: everything carrying it comes off; and
+        ``(ShakeOff, False)`` a failed one, which does what its modifiers say.
         """
+        if isinstance(payload, ShakeOff):
+            if shake_off_made(self._character, payload):
+                self._render_conditions()
+                self._emit_conditions_changed()
+            return
+        if (
+            isinstance(payload, tuple)
+            and len(payload) == 2
+            and isinstance(payload[0], ShakeOff)
+            and payload[1] is False
+        ):
+            # A failed one: what the Affliction's modifiers make of it (Fatal's Dying…).
+            if shake_off_failed_on(self._character, self._data, payload[0]):
+                self._render_conditions()
+                self._emit_conditions_changed()
+            return
         if not isinstance(payload, tuple) or len(payload) != 2:
             return
         condition_id, parameter = payload
@@ -664,7 +696,7 @@ class ConditionsSection(QGroupBox):
         return condition_display_name(applied, record)
 
     def _condition_tooltip(self, applied: AppliedCondition, record: Condition | None) -> str:
-        return condition_tooltip(applied, record, self._conditions_by_id)
+        return condition_tooltip(applied, record, self._conditions_by_id, self._data)
 
     def set_locked(self, locked: bool) -> None:
         """No-op: conditions stay editable in either view mode — they change

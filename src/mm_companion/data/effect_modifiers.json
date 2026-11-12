@@ -42,7 +42,7 @@
           "costFormula": "+1 point per rank",
           "costValue": 1,
           "flat": false,
-          "description": "Repeated failed resistance checks stack toward a worse degree."
+          "description": "Failed resistance checks against new uses of the Affliction add up their degrees; failing a check to overcome it does not."
         },
         {
           "id": "empowering",
@@ -68,8 +68,8 @@
           "costFormula": "+1 point per rank",
           "costValue": 1,
           "flat": false,
-          "noteTemplate": "Fatal: a target reduced to the 3rd degree is also Dying",
-          "description": "The Affliction can kill — a target overcome to the third degree also gains the Dying condition."
+          "noteTemplate": "Fatal: a target at the 3rd degree who fails a check to overcome it is also Dying",
+          "description": "The Affliction can kill — a target at the third degree who fails a check to overcome it also gains the Dying condition."
         },
         {
           "id": "increasing_difficulty",

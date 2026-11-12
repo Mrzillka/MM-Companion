@@ -36,13 +36,14 @@ from typing import Protocol
 from PySide6.QtCore import QObject
 from PySide6.QtWidgets import QWidget
 
-from mm_companion.core.character import Character
+from mm_companion.core.character import Character, ShakeOff
 from mm_companion.core.data_loader import GameData
 from mm_companion.core.powers import Power
 from mm_companion.core.rules import (
     AREA_MODE_REQUEST,
     BOOK_MINION_RULES,
     KIND_POWER_CHECK,
+    KIND_POWER_SAVE,
     AreaAttempt,
     AreaEffect,
     MinionRules,
@@ -57,8 +58,10 @@ from mm_companion.core.rules import (
     area_npc_save_specs,
     area_primary_rank,
     area_request_specs,
+    area_shake_off,
     area_stage_rank,
     area_title,
+    landed_caption,
     minion_save_spec,
     power_area_use,
     power_area_uses,
@@ -85,8 +88,15 @@ class AreaHost(Protocol):
     def impress_parties(self) -> tuple[list[ImpressParty], list[ImpressParty]]:
         """``(who may act, who may be targeted)`` as the board stands now."""
 
-    def impress_apply(self, party: ImpressParty, changes: list[tuple[str, str | None]]) -> bool:
-        """Put conditions on one party; ``False`` if they could not be delivered."""
+    def impress_apply(
+        self,
+        party: ImpressParty,
+        changes: list[tuple[str, str | None]],
+        shake_off: ShakeOff | None = None,
+    ) -> bool:
+        """Put conditions on one party; ``False`` if they could not be delivered.
+
+        *shake_off* is how they come off again (an impression's, an Affliction's)."""
 
     def impress_show_offline(self, record: dict) -> None:
         """Show one roll made off the air in the GM's history."""
@@ -104,6 +114,12 @@ class AreaHost(Protocol):
 
     def minion_rules(self) -> MinionRules:
         """The minion rules the open session plays by."""
+
+    def land_rung(
+        self, party: ImpressParty, changes: list, shake_off: ShakeOff | None = None
+    ) -> tuple[bool, tuple]:
+        """Land a save's rung, counting the same Affliction already on the creature:
+        whether it was delivered, and what went on."""
 
     def action_remove(self, party: ImpressParty, changes: list[tuple[str, str | None]]) -> bool:
         """Take conditions off one party; ``False`` if that could not be delivered."""
@@ -925,9 +941,26 @@ class AreaController(QObject):
             resolve_rung(character, rung, self._data, source=source, config=effect.config)
         )
         caption = rung_caption(rung, self._data, effect.config)
-        if changes and not self._host.impress_apply(target.party, changes):
+        # The trait the creature saved with: the area's own resistance, unless it was
+        # a choice of two (best-of, worst-of), which the record leaves to the bearer.
+        plain = effect.resistance_kind == KIND_POWER_SAVE
+        shake = area_shake_off(
+            effect.effect_id,
+            effect.config,
+            self._data,
+            dc if isinstance(dc, int) else None,
+            WORST_DEGREE if crit else degree,
+            name=declared.attempt.use.power_name,
+            resisted_with=effect.resistance if plain else "",
+            mods=effect.overcome_mods,
+            source=source,
+        )
+        if not changes:
+            return caption
+        delivered, landed = self._host.land_rung(target.party, changes, shake)
+        if not delivered:
             return f"{caption} (not delivered)"
-        return caption
+        return landed_caption(self._data, caption, changes, landed)
 
     def _cell(self, declared: _Declared, target: AreaTarget, cell: str) -> None:
         resolving = declared.resolving

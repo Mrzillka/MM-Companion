@@ -32,13 +32,6 @@ fixed by one per-condition record on `AppliedCondition`, written by
 bump (the user is fine with that). Details are in [the debts file](debts.md#end-of-turn-does-one-thing-so-far).
 Rules mistakes are what M&M players will spot first.
 
-### Combat maneuvers
-
-All-out Attack, Defensive Attack, Power Attack, Accurate Attack and the rest, on the
-sheet, trading bonuses as the rules allow. They come up every round at a real table,
-and missing them is the gap players will notice most. Listed in the README's
-"Future plans".
-
 ### Screenshots in the README
 
 The README has no images at all. Add one GIF of the Power Constructor (dragging an

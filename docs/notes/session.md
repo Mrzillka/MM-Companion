@@ -57,7 +57,11 @@ The shape:
   `SessionHub._repair`, run on every janitor pass, calls `reconnect()` on any
   session parked at `unreachable`. It also re-hosts sessions that failed to
   register at boot because the relay was not listening yet; those used to be
-  skipped until the next restart.
+  skipped until the next restart. A GM asking after one of those before the
+  janitor's pass (`SessionHub._waiting_entry`, from `_owned`) has it hosted on the
+  spot, or gets an error that is *not* "gone" while the relay still refuses it:
+  answering `{}` made the GM's app forget the session's gm token for good.
+  `_rehost` is serialized so the janitor and that request never host it twice.
 - **`relisten` is emphatically not `stop` then `start`, and that is the whole
   design.** `stop` says goodbye to every peer first
   (`Kicked(REASON_SESSION_CLOSED)`) precisely so a client can tell a deliberate end

@@ -9,7 +9,7 @@ from mm_companion.core.dice import roll_d20
 from mm_companion.core.rules import (
     KIND_INITIATIVE,
     RollSpec,
-    can_recover,
+    condition_check_offered,
     initiative_modifier,
     requested_roll_choices,
 )
@@ -229,7 +229,7 @@ class GMSceneMixin:
         if character is None:
             return False
         applied = matching_condition(character, condition_id, parameter or None)
-        return applied is not None and can_recover(character, self._data, applied)
+        return applied is not None and condition_check_offered(character, self._data, applied)
 
     def _remove_from_scene(self, ref: str) -> None:
         """Take one entry off the board, by ref (a scene card's right-click)."""

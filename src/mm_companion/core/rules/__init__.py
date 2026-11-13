@@ -92,4 +92,5 @@ from .targeting import *  # noqa: F401,F403
 from .team_attack import *  # noqa: F401,F403
 from .team_call import *  # noqa: F401,F403
 from .trait_rates import *  # noqa: F401,F403
+from .turns import *  # noqa: F401,F403
 from .validation import *  # noqa: F401,F403

@@ -25,12 +25,34 @@ KINDS = {
 
 def test_the_menu_names_only_actions_it_defines() -> None:
     combat = load_game_data().combat
-    assert [s.title for s in combat.menu] == ["Attack Maneuvers", "Actions", "Area & Group", "Dice"]
+    assert [s.title for s in combat.menu] == [
+        "Attack Maneuvers",
+        "Dice",
+        "Actions",
+        "More Maneuvers",
+        "More Dice",
+        "More Actions",
+        "Group",
+    ]
     defined = {a.id for a in combat.actions}
     listed = [i for s in combat.menu for i in s.items]
     assert set(listed) <= defined
     # Each action is on the menu exactly once.
     assert len(listed) == len(set(listed)) == len(defined)
+
+
+def test_the_menu_opens_on_the_few_and_keeps_the_rest_behind_show_more() -> None:
+    # The user's grouping (2026-11-13): four maneuvers, Ask and Reroll, then the six
+    # actions reached for every round; everything else is behind "Show more".
+    combat = load_game_data().combat
+    shown = [s.items for s in combat.menu if not s.more]
+    assert shown == [
+        ("accurate_attack", "all_out_attack", "defensive_attack", "power_attack"),
+        ("request", "reroll"),
+        ("attack", "aim", "defend", "grab", "impress", "area"),
+    ]
+    more = {i for s in combat.menu if s.more for i in s.items}
+    assert {"finishing_attack", "surprise_attack", "take_ten", "recover"} <= more
 
 
 def test_every_action_is_named_drawn_and_explained() -> None:

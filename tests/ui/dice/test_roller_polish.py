@@ -297,21 +297,25 @@ def test_a_card_after_a_pause_says_how_long_it_had_been(qapp: QApplication) -> N
     assert _gap_lines(newest) == ["⋯ 28 min later"]
     assert _gap_lines(middle) == [] and _gap_lines(oldest) == []
     local = (start + timedelta(minutes=30)).astimezone()
-    assert newest.toolTip() == f"{local:%H:%M}"
+    # Its time closes its hover, under how it was rolled (2026-11-13).
+    assert newest.toolTip().endswith(f"{local:%H:%M}</span></qt>")
+    assert "Total" in newest.toolTip()
 
 
 def test_a_record_with_no_time_is_left_unstamped(qapp: QApplication) -> None:
     panel = RollHistoryPanel()
     panel.add_roll(_record(1))
     (card,) = panel.cards()
-    assert card.when is None and card.toolTip() == "" and _gap_lines(card) == []
+    assert card.when is None and _gap_lines(card) == []
+    # How it was rolled, and no time line after it.
+    assert "Total" in card.toolTip() and "<br>" not in card.toolTip()
 
 
 def test_a_private_roll_carries_its_time(qapp: QApplication, instant_die) -> None:
     view = DiceRollerView()
     view.panel._start_roll()
     (card,) = view._local_history.cards()
-    assert card.when is not None and card.toolTip() == f"{card.when:%H:%M}"
+    assert card.when is not None and card.toolTip().endswith(f"{card.when:%H:%M}</span></qt>")
 
 
 # -- in a row, the quick rolls go under the controls -----------------------------------

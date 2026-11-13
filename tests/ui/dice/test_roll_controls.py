@@ -1,7 +1,8 @@
-"""The roller's two rows of controls (the user's layout, 2026-11-11).
+"""The roller's rows of controls (the user's layouts, 2026-11-11 and 2026-11-13).
 
-    Modifier  [−5][−1] [ +0 ] [+1][+5]   Actions ▾
-    DC        [−5][−1] [ —  ] [+1][+5]   Take 10
+    Modifier  [−5][−1] [ +0 ] [+1][+5]
+    DC        [−5][−1] [ —  ] [+1][+5]
+              [       Actions ▾       ]
     (the action lane, one line per maneuver)
 
 See ``mm_companion.ui.roller.controls`` and "The two-row pass" in the dice notes.
@@ -41,50 +42,35 @@ def _view(qapp: QApplication, width: int = 380) -> DiceRollerView:
 # -- the two rows -----------------------------------------------------------------------
 
 
-def test_narrow_the_buttons_drop_to_a_row_of_their_own(qapp: QApplication) -> None:
-    # 480: the panel stacked over its history, the controls the full width.
+def test_actions_stays_under_the_rows_at_any_width(qapp: QApplication) -> None:
     view = _view(qapp, 480)
     panel = view.panel
     controls = panel._controls
-    assert controls.wide
-    wide_minimum = controls.minimumSizeHint().width()
-
-    # Narrower than the rows and the buttons beside them: the buttons go under the DC.
-    _settled(qapp, view, controls.row_minimum_width() - 40)
-    assert not controls.wide
-    under = _top(panel._dc_spin, panel) + panel._dc_spin.height()
-    assert _top(panel._routine_button, panel) >= under
-    assert _top(panel._actions_button, panel) == _top(panel._routine_button, panel)
-    # Take 10 on the left, Actions on the right, where it was.
-    assert _left(panel._routine_button, panel) < _left(panel._actions_button, panel)
-    # The minimum is the narrow shape's whichever is showing: never an adaptive one.
-    assert controls.minimumSizeHint().width() == wide_minimum
-
-    # Nothing in the narrow shape is squeezed under its own minimum.
-    for widget in (panel._modifier_label, panel._dc_spin, *panel._step_buttons):
-        assert widget.width() >= (widget.minimumWidth() or widget.minimumSizeHint().width())
-
-    # And back, once there is the room again.
-    _settled(qapp, view, 480)
-    assert controls.wide
+    minimum = controls.minimumSizeHint().width()
+    for width in (480, 300, 200):
+        _settled(qapp, view, width)
+        under = _top(panel._dc_spin, panel) + panel._dc_spin.height()
+        assert _top(panel._actions_button, panel) >= under
+        # The minimum is the tight shape's whichever is showing: never an adaptive one.
+        assert controls.minimumSizeHint().width() == minimum
 
 
-def test_the_controls_ask_for_the_wide_shape(qapp: QApplication) -> None:
-    # A preference, so the roller is offered the width to have the buttons beside.
+def test_the_controls_ask_for_the_full_steps(qapp: QApplication) -> None:
+    # A preference, so the roller is offered the width to have every step showing.
     view = _view(qapp, 480)
     controls = view.panel._controls
-    assert controls.sizeHint().width() >= controls.row_natural_width()
+    assert controls.sizeHint().width() >= controls.natural_width()
 
 
-def test_the_lane_grows_under_both_rows(qapp: QApplication) -> None:
-    # Neither button nor the DC moves when a pick puts a line on the lane.
+def test_the_lane_grows_under_the_actions_button(qapp: QApplication) -> None:
+    # Neither the button nor the DC moves when a pick puts a line on the lane.
     view = _view(qapp)
     panel = view.panel
-    before = {w: _top(w, panel) for w in (panel._routine_button, panel._dc_spin)}
+    before = {w: _top(w, panel) for w in (panel._actions_button, panel._dc_spin)}
     panel.start_action_line("charge", "Charge", fixed="-2 attack")
     qapp.processEvents()
     assert {w: _top(w, panel) for w in before} == before
-    assert _top(panel._lane, panel) > _top(panel._routine_button, panel)
+    assert _top(panel._lane, panel) > _top(panel._actions_button, panel)
 
 
 def test_in_slider_mode_the_modifier_box_still_lines_up_with_the_dc_box(
@@ -96,8 +82,9 @@ def test_in_slider_mode_the_modifier_box_still_lines_up_with_the_dc_box(
     _settled(qapp, view, 380)
     assert panel._modifier_slider.isVisible()
     assert not any(step.isVisible() for step in panel._step_buttons)
-    # The DC keeps its steps: a slider is no way to hit DC 17.
-    assert all(step.isVisible() for step in panel._dc_step_buttons)
+    # The DC has a slider too (the user's call, 2026-11-13); its box takes a typed 17.
+    assert panel._dc_slider.isVisible()
+    assert not any(step.isVisible() for step in panel._dc_step_buttons)
     assert _left(panel._modifier_spin, panel) == _left(panel._dc_spin, panel)
     assert _left(panel._modifier_slider, panel) < _left(panel._modifier_spin, panel)
 

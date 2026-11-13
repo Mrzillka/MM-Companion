@@ -286,6 +286,12 @@ DEFAULT_SETTINGS: dict[str, object] = {
     # How the roller's modifier is set: step buttons either side of its box, or a
     # slider beside it (the user's call, 2026-11-10: buttons by default).
     "modifier_input": MODIFIER_INPUT_BUTTONS,
+    # Whether the roller's modifier is two rows, Bonus and Penalty, as it was before
+    # the combat-maneuvers rework (the user's call, 2026-11-13: one row by default).
+    "modifier_split": False,
+    # Whether the roller's Actions popup shows the sections behind its "Show more" box
+    # (the user's call, 2026-11-13: remembered, and off until it is ticked).
+    "actions_show_more": False,
     # Whether a roll, a note or a request landing in the history also pops up as a
     # small always-on-top notification in a corner of the screen, and which corner.
     # A history in a pinned strip shows three or four cards at a time; the
@@ -736,6 +742,28 @@ def modifier_input() -> str:
 def set_modifier_input(style: str) -> None:
     """Choose how the roller's modifier row is set; an unknown value means buttons."""
     update_settings(modifier_input=style if style in MODIFIER_INPUTS else MODIFIER_INPUT_BUTTONS)
+
+
+def modifier_split() -> bool:
+    """Whether the roller shows Bonus and Penalty rows instead of one Modifier row;
+    ``False`` when unset (a workspace older than the key reads ``None``)."""
+    return bool(load_settings().get("modifier_split", False))
+
+
+def set_modifier_split(split: bool) -> None:
+    """Choose Bonus and Penalty rows (``True``) or the one Modifier row."""
+    update_settings(modifier_split=bool(split))
+
+
+def actions_show_more() -> bool:
+    """Whether the Actions popup opens with its **Show more** sections showing;
+    ``False`` when unset (a workspace older than the key reads ``None``)."""
+    return bool(load_settings().get("actions_show_more", False))
+
+
+def set_actions_show_more(shown: bool) -> None:
+    """Remember the Actions popup's **Show more** box."""
+    update_settings(actions_show_more=bool(shown))
 
 
 def roll_notifications() -> bool:

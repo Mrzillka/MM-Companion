@@ -43,6 +43,7 @@ from mm_companion.ui.blocks.bus import (
     PIN_REQUESTED,
     RECOVERY_REQUESTED,
     ROLL_REQUESTED,
+    ROLLS_REQUESTED,
     UNPIN_REQUESTED,
     USE_SPENT,
 )
@@ -268,8 +269,13 @@ _BASE_BLOCKS = [
         {CONDITION_CHANGED: "reseed"},
         # A recovery check off a chip's 🎲 is rolled by whoever serves rolls, and
         # comes back here as the condition to shed once the roller has seen it made.
-        # ... and "Clear temporary" says in the history what it took off.
-        {"rollRequested": (ROLL_REQUESTED,), "noteRequested": (NOTE_REQUESTED,)},
+        # ... and "Clear temporary" says in the history what it took off. End turn's
+        # checks go to the roller as a batch, thrown one after another.
+        {
+            "rollRequested": (ROLL_REQUESTED,),
+            "rollsRequested": (ROLLS_REQUESTED,),
+            "noteRequested": (NOTE_REQUESTED,),
+        },
         {
             RECOVERY_REQUESTED: "recover_condition",
             USE_SPENT: "take_use_costs",
@@ -458,6 +464,7 @@ _BASE_BLOCKS = [
         },
         {
             ROLL_REQUESTED: "perform_roll",
+            ROLLS_REQUESTED: "perform_rolls",
             LOAD_REQUESTED: "load_roll",
             AREA_REQUESTED: "start_area",
             ATTACK_REQUESTED: "aim_attack",

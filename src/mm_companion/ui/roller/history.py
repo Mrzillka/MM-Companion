@@ -97,6 +97,10 @@ class RollCard(QFrame):
     #: :func:`~mm_companion.ui.roll_history.chain_widgets`.
     rollFollowUp = Signal(object)
 
+    def hover_text(self) -> str:
+        """How the roll was made (:func:`~mm_companion.ui.roll_history.roll_breakdown`)."""
+        return roll_breakdown(self._record)
+
     def __init__(
         self,
         *,
@@ -145,7 +149,8 @@ class RollCard(QFrame):
         title = QLabel(headline)
         title.setTextFormat(Qt.TextFormat.RichText)
         title.setWordWrap(True)
-        title.setToolTip(roll_breakdown(record))
+        # On the whole card, with its time (refresh_card_tooltip, via stamp_card).
+        self._record = record
         # The star and the ✕ sit beside the first line, as on the shared history's
         # card (see heading_row), so the chain's buttons below get the card's width.
         buttons = heading_row(info, title)

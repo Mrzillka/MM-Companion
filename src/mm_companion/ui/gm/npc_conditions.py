@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from mm_companion.core import library
-from mm_companion.core.character import AppliedCondition, ShakeOff
+from mm_companion.core.character import AppliedCondition, Character, ShakeOff
 from mm_companion.core.rules import (
     apply_condition,
     apply_condition_requests,
@@ -13,13 +13,13 @@ from mm_companion.core.rules import (
     apply_recovery,
     clear_temporary,
     clear_temporary_note,
+    condition_check,
+    condition_check_request,
     damage_step_summary,
     damage_steps,
     decrement_condition,
     held_shake_offs,
     minion_step,
-    recovery_request,
-    recovery_roll,
     recovery_succeeded,
     same_origin,
     shake_off_made,
@@ -123,7 +123,9 @@ class GMNpcConditionsMixin:
         )
         if applied is None:
             return
-        spec = recovery_roll(entry.character, self._data, applied)
+        # Its recovery check, or the shake-off against what put it on: a made one of
+        # those comes back through the same _on_recovery_back (its spec's shakes_off).
+        spec = condition_check(entry.character, self._data, applied)
         if spec is None:
             return
         who = self._npc_display_name(name)
@@ -248,7 +250,17 @@ class GMNpcConditionsMixin:
         :meth:`~mm_companion.ui.sections.dice.DiceSection.settle_recovery`).
         """
         subject = str(parameter) if parameter else None
-        spec = recovery_request(self._data, AppliedCondition(condition_id, subject))
+        # Read off the GM's latest view of their sheet: a condition an impression or an
+        # Affliction put on is shaken off by resisting it again, not by its recovery
+        # check, and the request carries the record so their app takes it all off.
+        snapshot = self._snapshots.get(player_id)
+        character = Character.from_dict(snapshot) if snapshot else None
+        applied = (
+            matching_condition(character, condition_id, subject) if character is not None else None
+        )
+        if applied is None:
+            applied = AppliedCondition(condition_id, subject)
+        spec = condition_check_request(character, self._data, applied)
         if spec is None:
             return
         name = self._player_name(player_id)

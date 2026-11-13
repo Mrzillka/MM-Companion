@@ -78,8 +78,8 @@ def test_the_readout_and_the_card_carry_the_breakdown(qapp: QApplication, instan
     panel._start_roll()
     assert "Strength" in panel._readout.toolTip() and "Circumstance" in panel._readout.toolTip()
     (card,) = view._local_history.cards()
-    tips = [label.toolTip() for label in card.findChildren(dice_roller.QLabel)]
-    assert any("Strength" in tip for tip in tips)
+    # On the whole card, not one line of it (2026-11-13).
+    assert "Strength" in card.toolTip() and "Circumstance" in card.toolTip()
 
 
 def test_a_plain_roll_card_has_no_title(qapp: QApplication, instant_die) -> None:
@@ -129,10 +129,11 @@ def test_the_controls_share_one_label_column_and_the_whole_width(qapp: QApplicat
     assert _left(first_step, part) == _left(first_dc_step, part)
     assert _left(panel._modifier_spin, part) == _left(panel._dc_spin, part)
     assert panel._modifier_spin.width() == panel._dc_spin.width()
-    # ...and the buttons share the right edge rather than stopping short.
+    # ...and Actions reaches the right edge rather than stopping short.
     pad = 4  # the capsule's room
     assert part.width() - _right(panel._actions_button, part) <= pad + 2
-    assert _right(panel._actions_button, part) == _right(panel._routine_button, part)
+    last_step = max(panel._dc_step_buttons, key=lambda b: _right(b, part))
+    assert _right(panel._actions_button, part) == _right(last_step, part)
 
 
 def test_the_dc_capsule_stays_inside_the_panel(qapp: QApplication) -> None:

@@ -175,7 +175,13 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   all of its content) and `fit_to_screen` caps the window at 85% of the screen, so a
   whole scene of targets scrolls rather than running off the bottom. The two dialogs
   open at least `DIALOG_CHARS` wide, so the area's summary is not wrapped into three
-  lines in a dialog sized to its widest combo.
+  lines in a dialog sized to its widest combo. **The GM's window opens as wide as its
+  table would be with every scene creature in** (`ActionWindow._widest_width`: the rows
+  that are out are shown for the measurement and hidden again, inside the first show),
+  so putting someone in from the Scene never makes the table wider than the window
+  (the user's report, 2026-11-13). And `regrow` refreshes the scrolled body's layout
+  before measuring (`refresh_layouts`, shared with `fit_to_screen`): without it the hint
+  was from before the row went in, and the window never grew.
 - **The windows show numbers; the rules sit behind a "?".** How an Impress or an area
   resolves, what the modes mean, how a creature is put in the table — each is a
   `HelpButton` (the dialogs' and the GM window's by the buttons, the table's in its
@@ -581,6 +587,11 @@ A trait roll clicked in the GM's history — a request card, or a save chip unde
 - The rolls land in their own table (`"<name>: end of turn"`) and the outcome on the
   notice. What it does not do yet is in the debts.
 
+- **A player can end their own turn too** (2026-11-13): the Conditions block's End turn
+  makes the same split on their own sheet and rolls the checks there (see [the
+  conditions notes](conditions-and-damage.md)). And every chip with a record has its own
+  🎲, which rolls one check against it at any time, outside Recover.
+
 ## One table per group (Impress too)
 
 `RollHistoryPanel` draws every record carrying a `group` as **one** `GroupTableCard`:
@@ -789,6 +800,12 @@ back, Roll enabled again. A result that wraps onto more lines grows the window
 The roller's Actions popup (see [the roller notes](dice-and-rolling.md#the-actions-button))
 offers the combat maneuvers and actions out of `actions.json`'s `combat` block. The
 plan they are built to, phase by phase, is `docs/plans/combat-maneuvers.md`.
+
+**The menu's grouping is the user's** (2026-11-13): Attack Maneuvers (Accurate,
+All-Out, Defensive, Power), Dice (Ask, Reroll), Actions (Attack, Aim, Defend, Grab,
+Impress, Area) — and, behind the popup's **Show more** box (`"more": true` on a
+`combat.menu` section, remembered by the app), More Maneuvers, More Dice (Take 10),
+More Actions and the GM's Group. See [the roller notes](dice-and-rolling.md#the-actions-button).
 
 **Every tile has a road.** A host maps each action it runs to `None` or the reason it
 can't run now (`combat_menu`'s *offered*); one it never mentions is greyed `NOT_BUILT`,

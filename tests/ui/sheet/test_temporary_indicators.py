@@ -52,7 +52,7 @@ def _defense(sheet: CharacterSheet):
 
 
 def _clear_button(sheet: CharacterSheet) -> QToolButton:
-    return sheet.conditions._clear_temporary_button
+    return sheet.conditions._start_turn_button
 
 
 # -- dots ---------------------------------------------------------------------------------
@@ -133,19 +133,18 @@ def test_a_benefit_chip_is_drawn_in_the_benefit_tint(qapp, sheet) -> None:
     assert theme.color("tint.better") in chip.styleSheet()
 
 
-# -- Clear temporary ----------------------------------------------------------------------
+# -- Start turn (it was "Clear temporary") -------------------------------------------------
 
 
-def test_clear_temporary_shows_only_while_something_is_temporary(qapp, sheet) -> None:
+def test_start_turn_is_always_there(qapp, sheet) -> None:
+    """It was a "Clear temporary" shown only while something was temporary; a turn's
+    button is pressed every turn (the user's call, 2026-11-13)."""
     sheet.show()
-    _apply(qapp, sheet, "prone")
-    assert not _clear_button(sheet).isVisibleTo(sheet.conditions)
-
-    _apply(qapp, sheet, "all_out_attack", amount=2)
     assert _clear_button(sheet).isVisibleTo(sheet.conditions)
+    assert sheet.conditions._end_turn_button.isVisibleTo(sheet.conditions)
 
 
-def test_clear_temporary_takes_only_the_temporary_ones_and_says_so(qapp, sheet) -> None:
+def test_start_turn_takes_only_the_temporary_ones_and_says_so(qapp, sheet) -> None:
     notes: list[str] = []
     sheet.conditions.noteRequested.connect(notes.append)
     _apply(qapp, sheet, "prone")
@@ -156,8 +155,9 @@ def test_clear_temporary_takes_only_the_temporary_ones_and_says_so(qapp, sheet) 
     _settle(qapp, sheet)
 
     assert [c.condition_id for c in sheet.character.conditions] == ["prone"]
-    assert notes == ["temporary conditions cleared: All-Out Attack -2, Defending +2"]
-    assert not _clear_button(sheet).isVisibleTo(sheet.conditions)
+    assert notes == [
+        "starts their turn — temporary conditions cleared: All-Out Attack -2, Defending +2"
+    ]
 
 
 def test_the_plus_menu_asks_how_big_an_all_out_attack_is(qapp, sheet, data, monkeypatch) -> None:
@@ -211,16 +211,15 @@ def test_the_simple_sheets_defense_box_wears_the_dot(qapp, sheet) -> None:
     assert view.boxes["DODGE"].mark.tone == ""
 
 
-def test_the_simple_sheet_clears_temporary_too(qapp, sheet) -> None:
+def test_the_simple_sheet_starts_a_turn_too(qapp, sheet) -> None:
     _simple(qapp, sheet)
     view = sheet.simple_sheet.findChildren(ConditionsView)[0]
     _apply(qapp, sheet, "all_out_attack", amount=1)
     view.refresh()
-    assert view.clear_button.isVisibleTo(view)
+    assert view.start_button.isVisibleTo(view) and view.end_button.isVisibleTo(view)
 
-    view.clear_button.click()
+    view.start_button.click()
     _settle(qapp, sheet)
     view.refresh()
 
     assert sheet.character.conditions == []
-    assert not view.clear_button.isVisibleTo(view)

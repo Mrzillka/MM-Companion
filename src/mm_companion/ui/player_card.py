@@ -44,7 +44,7 @@ from PySide6.QtWidgets import (
 from mm_companion.core import library
 from mm_companion.core.character import Character
 from mm_companion.core.data_loader import Condition, GameData
-from mm_companion.core.rules import can_recover
+from mm_companion.core.rules import condition_check_hint, condition_check_offered
 from mm_companion.ui import theme
 from mm_companion.ui.card_chips import (
     _ConditionChip,
@@ -352,12 +352,13 @@ class PlayerCard(QFrame):
                         self.removeConditionRequested.emit(self.player_id, cid, param)
                     )
                 )
-                if can_recover(self._character, self._data, applied):
+                if condition_check_offered(self._character, self._data, applied):
                     chip.arm_recovery(
                         lambda cid=applied.condition_id, param=applied.parameter: (
                             self.recoveryRequested.emit(self.player_id, cid, param)
                         ),
-                        "Ask them to roll the recovery check — a success takes this off.",
+                        f"{condition_check_hint(self._data, applied)} Click to ask them"
+                        " to roll it.",
                     )
             self._chip_flow.addWidget(chip)
         self._chips.setVisible(bool(conditions))

@@ -35,25 +35,27 @@ from mm_companion.core.character import AppliedCondition, Character, ShakeOff
 from mm_companion.core.components import MECH_RANDOM_ACTION, TONE_BENEFIT
 from mm_companion.core.data_loader import Condition, GameData
 from mm_companion.core.rules import (
+    TurnEnd,
     applied_condition_name,
     apply_condition,
     apply_condition_requests,
     apply_damage_step,
     apply_recovery,
     apply_use_costs,
-    can_recover,
     clear_temporary,
     clear_temporary_note,
+    condition_check,
+    condition_check_hint,
+    condition_check_offered,
     damage_steps,
     decrement_condition,
     has_temporary,
-    recovery_check,
-    recovery_hint,
-    recovery_roll,
     roll_confused_action,
     shake_off_failed_on,
     shake_off_hint,
     shake_off_made,
+    turn_end,
+    waiting_text,
 )
 from mm_companion.ui import theme
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
@@ -186,7 +188,7 @@ def condition_tone_token(record: Condition | None) -> str:
 
 
 #: The tooltip line a temporary condition's chip carries.
-TEMPORARY_HINT = "Temporary: it ends at the start of the next turn (Clear temporary)."
+TEMPORARY_HINT = "Temporary: it ends at the start of the next turn (Start turn)."
 #: What "Clear temporary" says about itself, on the sheet and on every GM card.
 CLEAR_TEMPORARY_TEXT = "Clear temporary"
 CLEAR_TEMPORARY_TIP = (
@@ -194,6 +196,23 @@ CLEAR_TEMPORARY_TIP = (
 )
 #: The glyph on a temporary chip that takes just that one off.
 DISMISS_GLYPH = "✕"
+
+#: The turn's two buttons on a sheet's Conditions (the user's call, 2026-11-13). There
+#: is no turn clock, so the player says when their turn starts and ends, and what comes
+#: off then comes off — shaking a condition off is no action (see core.rules.turns).
+START_TURN_TEXT = "Start turn"
+START_TURN_TIP = (
+    "Your turn starts: take off every temporary condition — they last until the start "
+    "of your next turn."
+)
+END_TURN_TEXT = "End turn"
+END_TURN_TIP = (
+    "Your turn ends: roll every check that shakes a condition off as a turn ends — an "
+    "impression or an Affliction resisted again, a Dazed or Stunned from damage — one "
+    "after another; what clears with no roll comes off."
+)
+#: The history's line when a turn's end has nothing to shake off.
+NOTHING_TO_SHAKE = "ends their turn — nothing to shake off"
 
 
 def condition_tooltip(
@@ -250,6 +269,8 @@ class ConditionsSection(QGroupBox):
     rollRequested = Signal(object)
     #: A line for the roll history — what a "Clear temporary" took off.
     noteRequested = Signal(str)
+    #: Several ``RollSpec``s, rolled one after another — End turn's checks.
+    rollsRequested = Signal(object)
 
     def __init__(self, data: GameData, character: Character, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -276,14 +297,20 @@ class ConditionsSection(QGroupBox):
         self._add_condition_button.clicked.connect(self._show_condition_menu)
         header.addWidget(self._add_condition_button)
         header.addStretch()
-        # Shown only while something temporary is on: there is no turn clock, so the
-        # player clears them by hand at the start of their turn.
-        self._clear_temporary_button = QToolButton()
-        self._clear_temporary_button.setText(CLEAR_TEMPORARY_TEXT)
-        self._clear_temporary_button.setToolTip(CLEAR_TEMPORARY_TIP)
-        self._clear_temporary_button.clicked.connect(self.clear_temporary_conditions)
-        header.addWidget(self._clear_temporary_button)
-        self._clear_temporary_button.hide()
+        # The turn's two buttons. There is no turn clock, so the player says when: what
+        # lasts until the start of the turn comes off at Start turn (it was a "Clear
+        # temporary" shown only while something was), and what is shaken off as a turn
+        # ends is rolled at End turn.
+        self._start_turn_button = QToolButton()
+        self._start_turn_button.setText(START_TURN_TEXT)
+        self._start_turn_button.setToolTip(START_TURN_TIP)
+        self._start_turn_button.clicked.connect(lambda _=False: self.start_turn())
+        header.addWidget(self._start_turn_button)
+        self._end_turn_button = QToolButton()
+        self._end_turn_button.setText(END_TURN_TEXT)
+        self._end_turn_button.setToolTip(END_TURN_TIP)
+        self._end_turn_button.clicked.connect(lambda _=False: self.end_turn())
+        header.addWidget(self._end_turn_button)
         outer.addLayout(header)
 
         # One titled sub-group of chips per category (General / Damage / …), each with
@@ -399,6 +426,54 @@ class ConditionsSection(QGroupBox):
         """Whether "Clear temporary" would take anything off."""
         return has_temporary(self._character)
 
+    def start_turn(self) -> bool:
+        """The turn starts: take off what lasts until then — the temporary conditions,
+        with a line in the history. Returns whether anything came off."""
+        removed = clear_temporary(self._character)
+        if not removed:
+            self.noteRequested.emit("starts their turn")
+            return False
+        self._render_conditions()
+        self._emit_conditions_changed()
+        text = clear_temporary_note(removed, self._data)
+        self.noteRequested.emit(f"starts their turn — {text}" if text else "starts their turn")
+        return True
+
+    def end_turn(self) -> TurnEnd:
+        """The turn ends: shake off what a turn's end shakes off
+        (:func:`~mm_companion.core.rules.turn_end`).
+
+        What clears with no roll (an Instant Recovery Affliction) comes off now; each
+        check is handed to the roller, which throws them one after another, and a made
+        one comes back on ``recovery-requested`` like a chip's 🎲. A check that is not
+        the turn's (once a minute, once a scene) is only named in the history.
+        """
+        plan = turn_end(self._character, self._data)
+        lines: list[str] = []
+        changed = False
+        for shake in plan.clears:
+            if shake_off_made(self._character, shake):
+                changed = True
+                lines.append(f"{shake.name} clears by itself.")
+        lines += [waiting_text(name, cadence) for name, cadence in plan.waiting]
+        if plan.unrolled:
+            lines.append(
+                f"Nothing on the sheet to resist {', '.join(plan.unrolled)} with — roll it by hand."
+            )
+        if changed:
+            self._render_conditions()
+            self._emit_conditions_changed()
+        if plan.checks:
+            count = len(plan.checks)
+            lines.insert(0, f"rolling {count} check{'s' if count != 1 else ''} to shake off.")
+        if not lines:
+            self.noteRequested.emit(NOTHING_TO_SHAKE)
+        else:
+            self.noteRequested.emit(f"ends their turn: {' '.join(lines)}")
+        if plan.checks:
+            self.rollsRequested.emit(plan.checks)
+        return plan
+
     def remove_condition_by_id(self, condition_id: str, parameter: str | None = None) -> bool:
         """Shed one instance of a condition by id; the twin of
         :meth:`apply_condition_by_id`.
@@ -450,12 +525,14 @@ class ConditionsSection(QGroupBox):
         return True
 
     def roll_recovery(self, applied: AppliedCondition) -> bool:
-        """Ask for *applied*'s recovery check to be rolled — the chip's 🎲.
+        """Ask for *applied*'s check to be rolled — the chip's 🎲: its recovery check, or
+        the shake-off against what put it on (an impression, an Affliction).
 
         Only asks: the roller throws it, and what a made check sheds comes back
-        through :meth:`recover_condition`. Returns whether there was a check to ask for.
+        through :meth:`recover_condition`. It is no Recover action: shaking a condition
+        off can happen several times a round. Returns whether there was a check.
         """
-        spec = recovery_roll(self._character, self._data, applied)
+        spec = condition_check(self._character, self._data, applied)
         if spec is None:
             return False
         self.rollRequested.emit(spec)
@@ -582,7 +659,6 @@ class ConditionsSection(QGroupBox):
         for category, (head, rule, container) in self._category_sections.items():
             for widget in (head, rule, container):
                 widget.setVisible(category in used)
-        self._clear_temporary_button.setVisible(has_temporary(self._character))
         self._refit_containers()
 
     def _refit_containers(self) -> None:
@@ -652,16 +728,13 @@ class ConditionsSection(QGroupBox):
         # recovery check: the roll goes to the roller, and a made one takes the
         # condition off again. Off the record's ``recoveryCheck``, so rest-only ones
         # (Fatigued) and bundled members (they go with their umbrella) get none.
-        if can_recover(self._character, self._data, applied):
-            check = recovery_check(record)
+        # And one an impression or an Affliction put on gets a die for resisting it
+        # again — the same die, a different check (core.rules.condition_check).
+        if condition_check_offered(self._character, self._data, applied):
             recover_button = QToolButton()
             recover_button.setText("🎲")
             recover_button.setAutoRaise(True)
-            recover_button.setToolTip(
-                f"{recovery_hint(check)} — click to roll it; a success takes this off."
-                if check is not None
-                else "Roll the recovery check"
-            )
+            recover_button.setToolTip(condition_check_hint(self._data, applied))
             recover_button.clicked.connect(lambda checked=False, a=applied: self.roll_recovery(a))
             chip_layout.addWidget(recover_button)
 

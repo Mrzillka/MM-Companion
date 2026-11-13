@@ -29,9 +29,10 @@ The two numbers are data, in `system.json`'s `minions` block: `impressBonus` (5)
 
 - **Full automation, plus take-10 on the roller.** The roller's **Take 10** is for any
   check, not only checks against minions, and it is **one-shot**. It was a box that
-  unticked after each roll; since 2026-11-10 it is a button that makes the check at once
-  (see [the dice notes](dice-and-rolling.md)), so nobody takes 10 against a villain by
-  accident. A routine
+  unticked after each roll; since 2026-11-10 it makes the check at once — a button
+  beside the DC until 2026-11-13, a tile behind the Actions popup's **Show more** (and
+  `Ctrl+T`) since (see [the dice notes](dice-and-rolling.md)) — so nobody takes 10
+  against a villain by accident. A routine
   roll travels as `RollRequest.routine`, the server sets the die to `ROUTINE_DIE`
   (never natural), the history reads "routine 10", and it cannot be rerolled.
 - **Players see a badge** on a minion's scene card (protocol v18's scene `minion` key).

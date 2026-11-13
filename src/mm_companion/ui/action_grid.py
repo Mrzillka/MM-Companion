@@ -24,6 +24,12 @@ side, so a one-tile "Dice" section costs no row of its own. The popup is sized a
 placed by :meth:`ActionGridPopup.show_under`: under the anchor, scrolling when the room
 below is short, and above it only when there is more room there.
 
+**Show more.** A section marked :attr:`GridSection.more` sits under a small **Show more**
+box and shows only while it is ticked; the caller says how it starts and hears it change
+(:attr:`ActionGridPopup.moreToggled`), and keeps the choice. Ticking it re-sizes and
+re-places the popup where it is. The popup is as wide either way — its columns are
+counted over every section — so the tiles do not move under the pointer.
+
 A disabled tile keeps its tooltip, which is where the caller says *why* it is disabled.
 The popup is always created **with a parent** (its anchor): a parentless widget is a
 top-level window of its own, and showing one is the flash the sheet tests watch for.
@@ -39,6 +45,7 @@ from PySide6.QtCore import QPoint, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QFont, QFontMetrics, QIcon, QKeyEvent, QPalette
 from PySide6.QtWidgets import (
     QAbstractButton,
+    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -52,6 +59,9 @@ from mm_companion.ui import theme
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.svg_assets import action_icon_pixmap
 from mm_companion.ui.widgets import BOLD_STYLE, ElidingLabel, muted_style
+
+#: The box over the sections marked ``more``.
+SHOW_MORE = "Show more"
 
 
 @dataclass(frozen=True)
@@ -73,11 +83,13 @@ class GridItem:
 @dataclass(frozen=True)
 class GridSection:
     """A titled run of tiles, and a *note* — a muted line under the title, for what the
-    whole section is waiting on (every tile greyed for the one reason)."""
+    whole section is waiting on (every tile greyed for the one reason). A section with
+    *more* set is shown only while the popup's **Show more** box is ticked."""
 
     title: str
     items: tuple[GridItem, ...] = ()
     note: str = ""
+    more: bool = False
 
 
 class GridTile(QToolButton):
@@ -130,8 +142,12 @@ class ActionGridPopup(QFrame):
 
     #: A tile was picked: its :attr:`GridItem.key`. The popup has closed by then.
     picked = Signal(str)
+    #: The **Show more** box was ticked (``True``) or cleared.
+    moreToggled = Signal(bool)  # noqa: N815 - Qt signal naming
 
-    def __init__(self, sections: Sequence[GridSection], parent: QWidget) -> None:
+    def __init__(
+        self, sections: Sequence[GridSection], parent: QWidget, *, more_shown: bool = False
+    ) -> None:
         super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
         self.setObjectName("actionGrid")
         self.setFrameShape(QFrame.Shape.StyledPanel)
@@ -164,47 +180,118 @@ class ActionGridPopup(QFrame):
         #: child, and holding the button back made a reference cycle that crashed Qt
         #: when it was collected (``docs/notes/testing.md``).
         self._anchor_rect: QRect | None = None
+        #: The anchor's screen's available geometry, from :meth:`show_under`.
+        self._available = QRect()
         live = [s for s in sections if s.items]
         self._columns = max((len(s.items) for s in live), default=1)
         #: The muted "why it is all greyed" lines under section titles.
         self._notes: list[ElidingLabel] = []
-        for shelf in self._shelve(live):
-            if len(shelf) == 1:
-                title, flow = self._section(shelf[0], flowing=True)
-                column.addWidget(title)
-                if shelf[0].note:
-                    note = ElidingLabel(shelf[0].note)
-                    note.setStyleSheet(muted_style(italic=True))
-                    self._notes.append(note)
-                    column.addWidget(note)
-                column.addWidget(flow)
-                self._flows.append(flow)
-                continue
-            row = QWidget()
-            across = QHBoxLayout(row)
-            across.setContentsMargins(0, 0, 0, 0)
-            # The tiles' own gap, and each section as wide as whole tile columns: so a
-            # shelf's tiles stand in the same columns as a full row's above them, and
-            # each title sits over its own tiles. A wider gap here put "Dice" over the
-            # gap between columns, a column away from its Reroll tile.
-            across.setSpacing(int(theme.metric("action-grid.gap")))
-            for section in shelf:
-                part = QWidget()
-                part.setFixedWidth(self._row_width(self._section_columns(section)))
-                stack = QVBoxLayout(part)
-                stack.setContentsMargins(0, 0, 0, 0)
-                stack.setSpacing(column.spacing())
-                title, tiles = self._section(section, flowing=False)
-                stack.addWidget(title)
-                stack.addWidget(tiles)
-                across.addWidget(part)
-            across.addStretch(1)
-            column.addWidget(row)
-            self._shelves.append(row)
+        #: What is in the column only while Show more is ticked: its rows and its tiles.
+        self._more_parts: list[QWidget] = []
+        self._more_tiles: set[int] = set()
+        self._more_shown = more_shown
+        self._add_sections(column, [s for s in live if not s.more], more=False)
+        extra = [s for s in live if s.more]
+        self.more_check: QCheckBox | None = None
+        if extra:
+            check = QCheckBox(SHOW_MORE)
+            font = check.font()
+            font.setPointSizeF(theme.font_size("size.action-tile"))
+            check.setFont(font)
+            check.setChecked(more_shown)
+            check.toggled.connect(self.set_more_shown)
+            column.addWidget(check)
+            self.more_check = check
+            self._add_sections(column, extra, more=True)
+        for part in self._more_parts:
+            part.setVisible(more_shown)
         column.addStretch(1)
         self._scroll.setWidget(content)
 
     # -- building ------------------------------------------------------------
+
+    def _add_sections(
+        self, column: QVBoxLayout, sections: Sequence[GridSection], *, more: bool
+    ) -> None:
+        """Lay *sections* down *column*, short ones sharing a row (see :meth:`_shelve`);
+        *more* marks them as Show more's."""
+        first_tile = len(self.tiles)
+        for shelf in self._shelve(sections):
+            parts: list[QWidget] = []
+            if len(shelf) == 1:
+                title, flow = self._section(shelf[0], flowing=True)
+                parts.append(title)
+                if shelf[0].note:
+                    note = ElidingLabel(shelf[0].note)
+                    note.setStyleSheet(muted_style(italic=True))
+                    self._notes.append(note)
+                    parts.append(note)
+                parts.append(flow)
+                self._flows.append(flow)
+            else:
+                row = QWidget()
+                across = QHBoxLayout(row)
+                across.setContentsMargins(0, 0, 0, 0)
+                # The tiles' own gap, and each section as wide as whole tile columns: so
+                # a shelf's tiles stand in the same columns as a full row's above them,
+                # and each title sits over its own tiles. A wider gap here put "Dice"
+                # over the gap between columns, a column away from its Reroll tile.
+                across.setSpacing(int(theme.metric("action-grid.gap")))
+                for section in shelf:
+                    part = QWidget()
+                    part.setFixedWidth(self._row_width(self._section_columns(section)))
+                    stack = QVBoxLayout(part)
+                    stack.setContentsMargins(0, 0, 0, 0)
+                    stack.setSpacing(column.spacing())
+                    title, tiles = self._section(section, flowing=False)
+                    stack.addWidget(title)
+                    stack.addWidget(tiles)
+                    across.addWidget(part)
+                across.addStretch(1)
+                parts.append(row)
+                self._shelves.append(row)
+            for part in parts:
+                column.addWidget(part)
+            if more:
+                self._more_parts += parts
+        if more:
+            self._more_tiles |= {id(t) for t in self.tiles[first_tile:]}
+
+    # -- Show more -----------------------------------------------------------
+
+    @property
+    def more_shown(self) -> bool:
+        """Whether the sections marked ``more`` are showing."""
+        return self._more_shown
+
+    def set_more_shown(self, on: bool) -> None:
+        """Show the sections marked ``more`` (``True``) or hide them, and re-fit the
+        popup where it is."""
+        if on == self._more_shown:
+            return
+        self._more_shown = on
+        if self.more_check is not None and self.more_check.isChecked() != on:
+            self.more_check.blockSignals(True)
+            self.more_check.setChecked(on)
+            self.more_check.blockSignals(False)
+        for part in self._more_parts:
+            part.setVisible(on)
+        if self.isVisible() and self._anchor_rect is not None:
+            self._place()
+        self.moreToggled.emit(on)
+
+    def _showing(self, widgets: Sequence[QWidget]) -> list[QWidget]:
+        """*widgets* less those Show more is keeping out of the column."""
+        if self._more_shown:
+            return list(widgets)
+        hidden = set(map(id, self._more_parts))
+        return [w for w in widgets if id(w) not in hidden]
+
+    def shown_tiles(self) -> list[GridTile]:
+        """The tiles in the popup as it stands: less Show more's, while it is unticked."""
+        if self._more_shown:
+            return list(self.tiles)
+        return [t for t in self.tiles if id(t) not in self._more_tiles]
 
     @staticmethod
     def _row_width(tiles: int) -> int:
@@ -304,17 +391,20 @@ class ActionGridPopup(QFrame):
         columns = min(wanted, fits)
         width = columns * side + (columns - 1) * gap
         # A shelf is a fixed row: never narrower than the widest that still fits.
-        shelves = [s.sizeHint().width() for s in self._shelves]
+        shelves = [s.sizeHint().width() for s in self._showing(self._shelves)]
         return max([width] + [w for w in shelves if w <= available])
 
     def _content_height(self, width: int) -> int:
         """How tall the sections stand at a tile area *width* pixels wide."""
         spacing = self._scroll.widget().layout().spacing()
         shelved = {id(t) for shelf in self._shelves for t in shelf.findChildren(QLabel)}
-        parts = [t.sizeHint().height() for t in self._titles if id(t) not in shelved]
-        parts += [note.sizeHint().height() for note in self._notes]
-        parts += [f.heightForWidth(width) for f in self._flows]
-        parts += [shelf.sizeHint().height() for shelf in self._shelves]
+        titles = [t for t in self._titles if id(t) not in shelved]
+        parts = [t.sizeHint().height() for t in self._showing(titles)]
+        parts += [note.sizeHint().height() for note in self._showing(self._notes)]
+        parts += [f.heightForWidth(width) for f in self._showing(self._flows)]
+        parts += [shelf.sizeHint().height() for shelf in self._showing(self._shelves)]
+        if self.more_check is not None:
+            parts.append(self.more_check.sizeHint().height())
         return sum(parts) + spacing * max(0, len(parts) - 1)
 
     def fit_to(self, screen: QRect, room: int | None = None) -> None:
@@ -345,9 +435,19 @@ class ActionGridPopup(QFrame):
         screen's top edge, nowhere near the button.
         """
         screen = anchor.screen() or self.screen()
-        available = screen.availableGeometry()
-        here = QRect(anchor.mapToGlobal(QPoint(0, 0)), anchor.size())
-        self._anchor_rect = here
+        self._available = screen.availableGeometry()
+        self._anchor_rect = QRect(anchor.mapToGlobal(QPoint(0, 0)), anchor.size())
+        self._place()
+        self.show()
+        first = next((t for t in self.shown_tiles() if t.isEnabled()), None)
+        if first is not None:
+            first.setFocus(Qt.FocusReason.PopupFocusReason)
+
+    def _place(self) -> None:
+        """Size the popup and put it by its anchor (see :meth:`show_under`)."""
+        available, here = self._available, self._anchor_rect
+        if here is None:
+            return
         below = available.bottom() - here.bottom()
         above = here.top() - available.top()
         self.fit_to(available)
@@ -358,10 +458,6 @@ class ActionGridPopup(QFrame):
         x = max(available.left(), min(x, available.right() - self.width() + 1))
         y = max(available.top(), min(y, available.bottom() - self.height() + 1))
         self.move(x, y)
-        self.show()
-        first = next((t for t in self.tiles if t.isEnabled()), None)
-        if first is not None:
-            first.setFocus(Qt.FocusReason.PopupFocusReason)
 
     # -- the mouse -------------------------------------------------------------
 
@@ -409,7 +505,7 @@ class ActionGridPopup(QFrame):
     def _neighbour(self, tile: GridTile, dx: int, dy: int) -> GridTile | None:
         """The enabled tile one step from *tile*: the next or previous in reading order
         across, the nearest in the row above or below down."""
-        live = [t for t in self.tiles if t.isEnabled()]
+        live = [t for t in self.shown_tiles() if t.isEnabled()]
         if tile not in live:
             return None
         if dx:

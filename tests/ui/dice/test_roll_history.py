@@ -22,6 +22,7 @@ from mm_companion.core.session.model import new_session
 from mm_companion.ui.roll_history import (
     HIDDEN_MARK,
     HISTORY_FLOOR_HEIGHT,
+    HISTORY_FLOOR_WIDTH,
     MAX_CARDS,
     MIN_HISTORY_HEIGHT,
     MIN_HISTORY_WIDTH,
@@ -239,14 +240,17 @@ def test_a_card_built_after_the_strip_was_told_starts_out_lit(panel: RollHistory
 
 
 def test_the_history_asks_for_two_cards_and_settles_for_one(panel: RollHistoryPanel) -> None:
-    """Width is a real minimum; height is only what it asks for.
+    """Both ask for more than they settle for.
 
     The height has to give, because the history is the elastic part of the Dice
     block — when the roll panel above it grows, this is what finds the room rather
-    than the block growing past the window. The width does not: the roller's
-    row/column reflow reads it as a genuine floor.
+    than the block growing past the window. The width gives too since 2026-11-13: as
+    a hard minimum, :data:`MIN_HISTORY_WIDTH` held the block wider than a window the
+    user dragged thinner. The roller's reflow still reads it (not the floor) as what a
+    history beside the roller needs.
     """
-    assert panel._scroll.minimumWidth() == MIN_HISTORY_WIDTH
+    assert panel._scroll.minimumWidth() == HISTORY_FLOOR_WIDTH < MIN_HISTORY_WIDTH
+    assert panel.sizeHint().width() == MIN_HISTORY_WIDTH
     assert panel._scroll.minimumHeight() == HISTORY_FLOOR_HEIGHT
     assert panel.sizeHint().height() == MIN_HISTORY_HEIGHT
 
@@ -777,3 +781,26 @@ def test_a_narrow_history_never_scrolls_sideways(qapp) -> None:
         qapp.processEvents()
     assert panel._scroll.horizontalScrollBar().maximum() == 0
     panel.close()
+
+
+def test_a_hover_anywhere_on_a_card_says_how_it_was_rolled(qapp: QApplication) -> None:
+    """The breakdown was on the number line alone (the user's report, 2026-11-13)."""
+    panel = RollHistoryPanel()
+    panel.add_roll(roll(seq=1, label="Blast: Attack", die=15, bonus=4))
+    (card,) = panel.cards()
+    assert "Total" in card.toolTip() and "Blast: Attack" in card.toolTip()
+
+
+def test_each_row_of_a_table_breaks_its_rolls_down(qapp: QApplication) -> None:
+    """A group table had no hover at all; now each row's rolls, and all of them."""
+    from mm_companion.core.rules import RollSpec
+
+    thug = RollSpec(label="Thug", targets=("Thug",)).to_dict()
+    panel = RollHistoryPanel(gm=True)
+    panel.add_roll(roll(seq=1, group="g", label="Thug: Dodge", die=12, bonus=3, spec=thug))
+    panel.add_roll(roll(seq=2, group="g", label="Thug: Toughness", die=8, bonus=2, spec=thug))
+    (table,) = panel.cards()
+    tips = [line.toolTip() for line in table._lines]
+    # One row, the Thug's: the Dodge check and the save after it, both broken down.
+    assert len(tips) == 1 and "Dodge" in tips[0] and "Toughness" in tips[0]
+    assert "Total" in table.toolTip()

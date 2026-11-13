@@ -139,6 +139,28 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   notes](actions.md#end-of-turn)). A chip
   carrying one has no 🎲, so its tooltip says how it comes off instead of the record's
   own recovery (`shake_off_hint`, through `condition_tooltip(…, data)`).
+- **Shaking off is no action, and every chip that comes off by a check has a 🎲**
+  (`core/rules/turns.py`, the user's call, 2026-11-13). Recover (the Actions grid) is an
+  action with its own limits; resisting an impression or an Affliction again is not,
+  and several can come off in one round. So a chip carrying a `ShakeOff` offers the
+  same 🎲 a damage-caused Dazed does (`condition_check_offered` replaces `can_recover`
+  at every chip: the sheet's, the simple sheet's, the GM's NPC, player and Scene
+  cards), and the die rolls `condition_check` — the shake-off against what put it on,
+  carrying the record (`shakes_off`), or else the recovery check. Settling it is the
+  path Recover's check already took (`DiceSection.settle_recovery`,
+  `GMWindow._on_recovery_back`). The GM's 🎲 on a player's chip asks them with
+  `condition_check_request`, read off their latest snapshot (an impression's record
+  may name no trait, and then their best option is asked for). One that clears by
+  itself (Instant Recovery) has no die.
+- **Start turn and End turn on a sheet** (the Conditions block's header, and the simple
+  sheet's). Start turn is the old "Clear temporary", always shown, with a history line.
+  End turn plans with `turn_end` — each shake-off due as a turn ends (one per record),
+  then each damage condition's end-of-turn check; what clears by itself comes off, what
+  waits for a minute or a scene is named — and hands the checks to the Dice block as a
+  batch on `rolls-requested`, which rolls them one after another
+  (`DiceSection.perform_rolls`: a queue, since `roll-requested` refuses a roll while a
+  die tumbles). The GM's End turn on a creature's card is unchanged (see [the actions
+  notes](actions.md#end-of-turn)).
 - **Some conditions have an amount, and some are temporary** (combat maneuvers). An
   `AppliedCondition` may carry `amount` (All-Out Attack −3) and `temporary` (it lasts
   until the start of the bearer's next turn); both stay out of a save at their defaults,

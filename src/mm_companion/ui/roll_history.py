@@ -139,6 +139,13 @@ EMPTY_TEXT = "No rolls yet — every roll at this table shows up here."
 #: block, a reflow would read that sliver as "a row fits here").
 MIN_HISTORY_WIDTH = 260
 
+#: Narrowest a roll history may actually be squeezed to. :data:`MIN_HISTORY_WIDTH` is
+#: what the reflow reads (a history *beside* the roller needs that much), but as a hard
+#: minimum it held the Dice block wider than a window the user dragged thinner, and
+#: the block clipped its right edge (the user's report, 2026-11-13). Below 260 a
+#: card's buttons crowd its name; that is the user's call to make by dragging.
+HISTORY_FLOOR_WIDTH = 140
+
 #: How tall a roll history *asks* to be. A card is roughly 70px, so this is two of
 #: them and the start of a third — enough that the list reads as a list. It is the
 #: history's size **hint**, deliberately not its minimum: see
@@ -177,7 +184,7 @@ def size_history_scroll(scroll: QScrollArea) -> None:
     the pinned strip could no longer fit it. A history is a scrolling list; what it
     wants is a readable window onto the log, not the whole log.
     """
-    scroll.setMinimumWidth(MIN_HISTORY_WIDTH)
+    scroll.setMinimumWidth(HISTORY_FLOOR_WIDTH)
     scroll.setMinimumHeight(HISTORY_FLOOR_HEIGHT)
 
 
@@ -662,7 +669,11 @@ def roll_working(
     total = total_html or f"<b>{die + modifier}</b>"
     shown = ROUTINE_WORD if routine else str(die)
     if other_die and not routine:
-        shown = f"{shown} <s>{other_die}</s>"
+        # Aim: both dice, then the one kept — "best of 4 and 15 → 15 + 4 = 19". The
+        # dropped one used to be a struck-through number beside the kept one, which
+        # nobody read as "rolled twice" (the user's report, 2026-11-13).
+        low, high = sorted((die, other_die))
+        shown = f"best of {low} and {high} → {die}"
     if not modifier and not routine and not other_die:
         return total
     working = shown
@@ -728,7 +739,8 @@ def breakdown_lines(roll: dict) -> list[tuple[str, str]]:
     if roll.get("routine"):
         lines = [("Take 10", str(die))]
     elif other:
-        lines = [("d20, best of two", f"{die} (dropped {other})")]
+        low, high = sorted((die, other))
+        lines = [("Two d20s (Aim)", f"{low} and {high}"), ("Kept, the higher", str(die))]
     elif roll.get("reroll"):
         lines = [("d20, lucky reroll", str(die))]
     else:
@@ -991,9 +1003,9 @@ def stamp_card(card: QWidget, when: datetime | None, previous: datetime | None) 
     cards can never leave one stranded.
     """
     card.when = when
+    refresh_card_tooltip(card)
     if when is None:
         return
-    card.setToolTip(f"{when:%H:%M}")
     text = gap_text(previous, when)
     layout = card.layout()
     info = layout.itemAt(0).layout() if layout is not None and layout.count() else None
@@ -1003,6 +1015,30 @@ def stamp_card(card: QWidget, when: datetime | None, previous: datetime | None) 
     gap.setObjectName("timeGap")
     gap.setStyleSheet(muted_style(italic=True))
     info.insertWidget(0, gap)
+
+
+def refresh_card_tooltip(card: QWidget) -> None:
+    """Put *card*'s hover on the **whole card**: how its rolls were made, then its time.
+
+    The breakdown was on the number line alone, and a group table had none at all, so
+    the cards that most needed explaining (an impression, an area, an attack with
+    maneuvers on it) explained nothing to a pointer anywhere else on them (the user's
+    report, 2026-11-13). A card's labels have no tooltip of their own, so a hover
+    anywhere on it lands here; its buttons keep theirs. *card* says what it holds with
+    ``hover_text()`` (rich text, or ``""``), and :func:`stamp_card` gives it ``when``.
+    """
+    hover = getattr(card, "hover_text", None)
+    parts = [hover() if callable(hover) else ""]
+    when = getattr(card, "when", None)
+    if when is not None:
+        muted = theme.color("text.muted.rich")
+        parts.append(f"<span style='color:{muted}'>{when:%H:%M}</span>")
+    text = "<br>".join(part for part in parts if part)
+    card.setToolTip(f"<qt>{text}</qt>" if text else "")
+
+
+#: Between two rolls' breakdowns in one hover.
+BREAKDOWN_RULE = "<hr>"
 
 
 def fit_button(text: str) -> QPushButton:
@@ -1042,6 +1078,10 @@ class HistoryCard(QFrame):
 
     def set_save_state(self, saved_keys: set, room: bool) -> None:
         """No-op unless the card carries a star (see :class:`SessionRollCard`)."""
+
+    def hover_text(self) -> str:
+        """What the card says on hover besides its time (:func:`refresh_card_tooltip`)."""
+        return ""
 
     def enterEvent(self, event) -> None:  # noqa: N802 - Qt override
         reveal_hover_buttons(self, True)
@@ -1241,8 +1281,8 @@ class SessionRollCard(HistoryCard):
         mark_natural(self, roll)
         self._buttons = heading_row(info, _rich(roll_heading(roll)))
         headline = _rich(roll_headline(roll))
-        headline.setToolTip(roll_breakdown(roll))
         info.addWidget(headline)
+        refresh_card_tooltip(self)
 
         # The chain — on every card, whoever rolled it. A save an attack forced is
         # made by the *other* side of the table, so the button has to be on the
@@ -1290,6 +1330,11 @@ class SessionRollCard(HistoryCard):
                     lambda: self.removeRequested.emit(self.seq),
                 )
             )
+
+    def hover_text(self) -> str:
+        """How the roll was made: the die (both of two, a reroll's lift), each part of
+        the modifier, the total, and the DC (:func:`roll_breakdown`)."""
+        return roll_breakdown(self.roll)
 
     def parameters(self) -> dict:
         """The quick-roll parameters this card would save."""
@@ -1637,6 +1682,28 @@ class GroupTableCard(HistoryCard):
                 tint = theme.color("tint.worse" if outcome_is_failure(degree) else "tint.warning")
                 text += f" → <span style='color:{tint}'><b>{escape_rich_text(outcome)}</b></span>"
             self._add_line(text, self._undo_of(rolls))
+            self._lines[-1].setToolTip(f"<qt>{self._row_hover(name, rolls)}</qt>")
+        refresh_card_tooltip(self)
+
+    @staticmethod
+    def _row_hover(name: str, rolls: list[dict]) -> str:
+        """One row's rolls, every one broken down in the order they were made: the
+        Dodge check and the save after it, each with its die, its parts and its DC."""
+        parts = []
+        if name:
+            parts.append(f"<b>{escape_rich_text(name)}</b>")
+        parts.append(BREAKDOWN_RULE.join(roll_breakdown(roll) for roll in rolls))
+        spec = RollSpec.from_dict(rolls[-1].get("spec"))
+        degree = rolls[-1].get("degree")
+        degree = None if degree is None else int(degree)
+        outcome = resistance_outcome(spec, degree) if spec is not None else ""
+        if outcome:
+            parts.append(f"→ <b>{escape_rich_text(outcome)}</b>")
+        return "<br>".join(parts)
+
+    def hover_text(self) -> str:
+        """Every roll of the table, row by row (the hover a single row shows, for all)."""
+        return BREAKDOWN_RULE.join(self._row_hover(name, rolls) for name, rolls in self.rows())
 
     def _undo_of(self, rolls: list[dict]) -> tuple[str, Callable[[], None]] | None:
         """The ↶ of the latest roll in a row that has one."""

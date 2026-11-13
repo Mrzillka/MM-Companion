@@ -17,9 +17,10 @@ from contextlib import contextmanager
 from functools import wraps
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QFont, QFontMetrics, QFontMetricsF, QMouseEvent, QPalette
+from PySide6.QtGui import QFont, QFontMetrics, QFontMetricsF, QMouseEvent, QPalette, QValidator
 from PySide6.QtWidgets import (
     QAbstractScrollArea,
+    QAbstractSpinBox,
     QApplication,
     QDoubleSpinBox,
     QFormLayout,
@@ -51,6 +52,7 @@ def make_spin_box(
     max_width: int | None = None,
     guarded: bool = True,
     snug: bool = False,
+    blank_clears: bool = False,
 ) -> QSpinBox:
     """Build a range-bounded spin box.
 
@@ -59,9 +61,14 @@ def make_spin_box(
     wheel guard so the box only reacts to the wheel once focused. Pass
     ``guarded=False`` when the caller guards the box itself in a batch. ``snug``
     makes the box as wide as its widest value and no wider, and keeps it from
-    stretching (see :class:`SnugSpinBox`).
+    stretching (see :class:`SnugSpinBox`). ``blank_clears`` lets the box be
+    emptied, which clears it — to 0, or its minimum and so its special value text
+    (see :class:`BlankClears`).
     """
-    spin = SnugSpinBox() if snug else QSpinBox()
+    if blank_clears:
+        spin = SnugBlankSpinBox() if snug else BlankSpinBox()
+    else:
+        spin = SnugSpinBox() if snug else QSpinBox()
     spin.setRange(minimum, maximum)
     if value is not None:
         spin.setValue(value)
@@ -112,6 +119,11 @@ class _Snug:
     sits in a box of a probe width, and everything else (frame, padding, any arrows)
     is the chrome. The hint is that chrome plus the widest value, never more than
     Qt's. Measured at every call, so a theme or style switch reaches it.
+
+    The chrome is the **focused** box's whenever that is the wider: the theme's focus
+    ring is thicker than the resting border, so the hint used to be two pixels wider
+    while the box held focus than while it did not — and a box fixed to it at one
+    moment read as the wrong width at the next (the roller's, 2026-11-13).
     """
 
     _PROBE = 200
@@ -125,9 +137,22 @@ class _Snug:
         option = QStyleOptionSpinBox()
         self.initStyleOption(option)
         option.rect = probe
-        field = self.style().subControlRect(
-            QStyle.ComplexControl.CC_SpinBox, option, QStyle.SubControl.SC_SpinBoxEditField, self
-        )
+        fields = []
+        for focused in (False, True):
+            if focused:
+                option.state |= QStyle.StateFlag.State_HasFocus
+            else:
+                option.state &= ~QStyle.StateFlag.State_HasFocus
+            fields.append(
+                self.style().subControlRect(
+                    QStyle.ComplexControl.CC_SpinBox,
+                    option,
+                    QStyle.SubControl.SC_SpinBoxEditField,
+                    self,
+                )
+            )
+        # The narrower field is the wider chrome (see the class docstring).
+        field = min(fields, key=lambda rect: rect.width())
         # And inside the field, the line edit keeps its own margins (the sheet's
         # padding lands on it too): where its text area sits in a probe-wide edit.
         edit = self.lineEdit()
@@ -162,12 +187,89 @@ class SnugSignedSpinBox(_Snug, SignedSpinBox):
     """A :class:`SignedSpinBox` sized to its values (see :class:`_Snug`)."""
 
 
+class BlankClears:
+    """A spin box that may be emptied, which clears it: to 0, or to its minimum when 0
+    is out of its range.
+
+    Qt counts an empty box as unfinished input and puts the old number back when it
+    loses focus, so a box could not be cleared by selecting the number and deleting
+    it — the first thing anyone tries (the user's reports, 2026-11-13: the roller's DC,
+    then its Modifier, Bonus and Penalty). Blank is the cleared value here, at once, and
+    the box shows what that reads as ("—", "+0") once it loses focus.
+    """
+
+    def blank_value(self) -> int:
+        """What an emptied box holds: 0 where the range has it, else the minimum."""
+        return 0 if self.minimum() <= 0 <= self.maximum() else self.minimum()
+
+    def validate(self, text: str, pos: int) -> object:
+        if not text.strip():
+            return (QValidator.State.Acceptable, text, pos)
+        return super().validate(text, pos)
+
+    def valueFromText(self, text: str) -> int:  # noqa: N802 - Qt override
+        if not text.strip():
+            return self.blank_value()
+        return super().valueFromText(text)
+
+    def focusOutEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        blank = not self.lineEdit().text().strip()
+        super().focusOutEvent(event)
+        if blank:
+            # Qt leaves an accepted blank as typed; show what the cleared value reads as.
+            value = self.blank_value()
+            self.setValue(value)
+            special = value == self.minimum() and self.specialValueText()
+            self.lineEdit().setText(special or self.textFromValue(value))
+
+
+class BlankSpinBox(BlankClears, QSpinBox):
+    """A :class:`QSpinBox` that may be emptied (see :class:`BlankClears`)."""
+
+
+class SnugBlankSpinBox(BlankClears, _Snug, QSpinBox):
+    """A snug :class:`QSpinBox` that may be emptied (see :class:`BlankClears`)."""
+
+
+class SnugBlankSignedSpinBox(BlankClears, _Snug, SignedSpinBox):
+    """A snug :class:`SignedSpinBox` that may be emptied, to 0 (see :class:`BlankClears`)."""
+
+
+class _SelectOnFocus(QObject):
+    """The event filter :func:`select_all_on_focus` installs."""
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: ANN001, N802 - Qt override
+        if event.type() == QEvent.Type.FocusIn and isinstance(watched, QAbstractSpinBox):
+            # After the click that focused it has put the cursor down, not before.
+            QTimer.singleShot(0, watched, watched.selectAll)
+        return False
+
+
+def select_all_on_focus(spin: QAbstractSpinBox) -> None:
+    """Select *spin*'s whole value whenever it takes focus, by click as well as by Tab,
+    so a number typed into it replaces what was there.
+
+    Qt selects on Tab only; a click put the cursor beside the old number, which then
+    had to be deleted before the new one could go in (the user's report, 2026-11-13).
+    """
+    spin.installEventFilter(_SelectOnFocus(spin))
+
+
 def make_signed_spin_box(
-    limit: int, *, max_width: int | None = None, buttons: bool = False, snug: bool = False
+    limit: int,
+    *,
+    max_width: int | None = None,
+    buttons: bool = False,
+    snug: bool = False,
+    blank_clears: bool = False,
 ) -> SignedSpinBox:
     """A wheel-guarded :class:`SignedSpinBox` from -*limit* to +*limit*, arrowless
-    unless *buttons*. ``snug`` as for :func:`make_spin_box`."""
-    spin = SnugSignedSpinBox() if snug else SignedSpinBox()
+    unless *buttons*. ``snug`` as for :func:`make_spin_box`; ``blank_clears`` lets it
+    be emptied, to 0 (``snug`` boxes only)."""
+    if snug:
+        spin = SnugBlankSignedSpinBox() if blank_clears else SnugSignedSpinBox()
+    else:
+        spin = SignedSpinBox()
     spin.setRange(-limit, limit)
     spin.setValue(0)
     if not buttons:

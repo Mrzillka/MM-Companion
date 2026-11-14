@@ -81,9 +81,15 @@ NOTE_TEXT = (
 )
 
 MODIFIER_NOTE = (
-    "How the roller's Modifier row is set for one roll: step buttons either side of the "
-    "box (−5 −1 +1 +5), or a slider beside it running −10 to +20. The box takes any "
-    "number typed into it either way."
+    "How the roller's rows are set for one roll — the Modifier (or Bonus and Penalty) and "
+    "the DC: step buttons either side of the box (−5 −1 +1 +5), or a slider beside it. "
+    "The box takes any number typed into it either way."
+)
+
+MODIFIER_SPLIT_LABEL = "Separate Bonus and Penalty rows"
+MODIFIER_SPLIT_NOTE = (
+    "Show the roller's modifier as two rows, Bonus and Penalty, instead of one signed "
+    "Modifier row. The roll uses the bonus minus the penalty."
 )
 
 #: The modifier row's two ways, as the combo offers them.
@@ -254,6 +260,9 @@ class GeneralPage(SettingsPage):
             self._modifier_input.addItem(label, style)
         self._modifier_input.currentIndexChanged.connect(lambda *_: self._set_status(""))
         row.addWidget(with_help(self._modifier_input, MODIFIER_NOTE))
+        self._modifier_split = QCheckBox(MODIFIER_SPLIT_LABEL)
+        self._modifier_split.toggled.connect(lambda *_: self._set_status(""))
+        row.addWidget(with_help(self._modifier_split, MODIFIER_SPLIT_NOTE))
         row.addStretch()
         return panel
 
@@ -273,6 +282,7 @@ class GeneralPage(SettingsPage):
             or self._notifications.isChecked() != self._saved_notifications
             or self._corner.currentData() != self._saved_corner
             or self._modifier_input.currentData() != self._saved_modifier_input
+            or self._modifier_split.isChecked() != self._saved_modifier_split
         )
 
     def save(self) -> None:
@@ -293,6 +303,8 @@ class GeneralPage(SettingsPage):
         self._saved = self._chosen()
         storage.set_modifier_input(self._modifier_input.currentData())
         self._saved_modifier_input = self._modifier_input.currentData()
+        storage.set_modifier_split(self._modifier_split.isChecked())
+        self._saved_modifier_split = self._modifier_split.isChecked()
         for window in _open_windows():
             window.sync_dice_layout()
         self._set_status("Saved.")
@@ -326,6 +338,8 @@ class GeneralPage(SettingsPage):
         self._modifier_input.setCurrentIndex(
             max(0, self._modifier_input.findData(self._saved_modifier_input))
         )
+        self._saved_modifier_split = storage.modifier_split()
+        self._modifier_split.setChecked(self._saved_modifier_split)
         self._set_status("")
 
     def _set_status(self, text: str) -> None:

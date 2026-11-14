@@ -8,9 +8,13 @@ as *offered*: an action id mapped to ``None`` (it runs) or to the reason it cann
 right now (no NPC group to act with). An action the host does not mention at all is not
 built yet, and its tile is shown disabled with :data:`NOT_BUILT`.
 
-**Reroll** and **Ask to Roll** are the roller's own: the roller hands the host's builder
-their entries in *offered* (``DiceRollerPanel.own_actions``) — Reroll lit or greyed from its
-own last roll, Ask from whether the host gave it any traits to ask for.
+**Reroll**, **Ask to Roll** and **Take 10** are the roller's own: the roller hands the
+host's builder their entries in *offered* (``DiceRollerPanel.own_actions``) — Reroll lit or
+greyed from its own last roll, Ask from whether the host gave it any traits to ask for.
+
+A section marked ``more`` in the data is shown only while the popup's **Show more** box
+is ticked (the user's call, 2026-11-13): the popup opens on the few actions a table
+reaches for every round, and the rest are a tick away.
 """
 
 from __future__ import annotations
@@ -31,6 +35,14 @@ ACTION_REROLL = "reroll"
 
 #: The action that asks the table to roll a trait (the roller's own small form).
 ACTION_REQUEST = "request"
+
+#: The action that makes the check now as a routine one (take 10). It was a button
+#: beside the roller's DC until 2026-11-13.
+ACTION_TAKE_TEN = "take_ten"
+TAKE_TEN_TEXT = (
+    "Make the check now with the die counted as a 10, so there is no natural 1 or 20 — "
+    "a routine check, for one made without pressure (Ctrl+T)."
+)
 
 #: Why Ask to Roll is greyed out: the host gave the roller no traits to ask for.
 NO_REQUEST_TRAITS = "There are no traits to ask for here."
@@ -103,6 +115,46 @@ def action_tooltip(name: str, text: str, reason: str | None = None) -> str:
     return help_markup(body)
 
 
+def own_items(offered: Mapping[str, str | None]) -> tuple[list[GridItem], list[GridItem]]:
+    """The roller's own tiles, for a menu with no data to say how to draw them: Ask and
+    Reroll, and the Take 10 that goes under **Show more**. Ask only if *offered* names it."""
+    shown = []
+    if ACTION_REQUEST in offered:
+        reason = offered[ACTION_REQUEST]
+        shown.append(
+            GridItem(
+                ACTION_REQUEST,
+                "Ask",
+                ACTION_REQUEST,
+                action_tooltip("Ask to Roll", "Ask the table to roll a trait.", reason),
+                enabled=reason is None,
+            )
+        )
+    reason = offered.get(ACTION_REROLL)
+    shown.append(
+        GridItem(
+            ACTION_REROLL,
+            "Reroll",
+            ACTION_REROLL,
+            action_tooltip("Reroll", "Throw your last roll again.", reason),
+            enabled=reason is None,
+        )
+    )
+    more = []
+    if ACTION_TAKE_TEN in offered:
+        reason = offered[ACTION_TAKE_TEN]
+        more.append(
+            GridItem(
+                ACTION_TAKE_TEN,
+                "Take 10",
+                ACTION_TAKE_TEN,
+                action_tooltip("Take 10", TAKE_TEN_TEXT, reason),
+                enabled=reason is None,
+            )
+        )
+    return shown, more
+
+
 def combat_menu(
     data: GameData,
     offered: Mapping[str, str | None],
@@ -124,28 +176,11 @@ def combat_menu(
             for key, caption, tip in fallback
             if key in offered and offered[key] is None
         ]
-        reroll = offered.get(ACTION_REROLL)
-        items.append(
-            GridItem(
-                ACTION_REROLL,
-                "Reroll",
-                ACTION_REROLL,
-                action_tooltip("Reroll", "Reroll your last roll.", reroll),
-                enabled=reroll is None,
-            )
-        )
-        if ACTION_REQUEST in offered:
-            request = offered[ACTION_REQUEST]
-            items.append(
-                GridItem(
-                    ACTION_REQUEST,
-                    "Ask",
-                    ACTION_REQUEST,
-                    action_tooltip("Ask to Roll", "Ask the table to roll a trait.", request),
-                    enabled=request is None,
-                )
-            )
-        return [GridSection("Actions", tuple(items))]
+        shown, more = own_items(offered)
+        sections = [GridSection("Actions", tuple(items + shown))]
+        if more:
+            sections.append(GridSection("More", tuple(more), more=True))
+        return sections
     sections: list[GridSection] = []
     for section in combat.menu:
         items = []
@@ -166,7 +201,11 @@ def combat_menu(
                 )
             )
         if items:
-            sections.append(GridSection(section.title, tuple(items), note=section_note(reasons)))
+            sections.append(
+                GridSection(
+                    section.title, tuple(items), note=section_note(reasons), more=section.more
+                )
+            )
     return sections
 
 

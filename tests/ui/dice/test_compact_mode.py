@@ -304,10 +304,11 @@ def test_the_mini_page_may_be_dragged_smaller_than_the_roller(window: MainWindow
 
     window._compact.enter()
 
-    # The roller is well wider than that, and the page still does not ask for its
-    # width: a scroll area does not pass its child's minimum on, which is the whole
-    # reason the roller is inside one.
-    assert panel.minimumSizeHint().width() > floor.width()
+    # However wide the roller is, the page does not ask for its width: a scroll area
+    # does not pass its child's minimum on, which is the whole reason the roller is
+    # inside one. (Since the steps shed to ±1 when narrow, 2026-11-13, the roller's own
+    # minimum is under the floor anyway.)
+    assert panel.minimumSizeHint().width() > 0
     assert page.minimumSizeHint().width() <= floor.width() + page.strip.sizeHint().width()
 
 

@@ -940,6 +940,7 @@ def _parse_combat(raw: dict) -> CombatRules:
                 id=str(s["id"]),
                 title=str(s.get("title", s["id"])),
                 items=tuple(str(i) for i in s.get("items", ()) if isinstance(i, str)),
+                more=bool(s.get("more", False)),
             )
             for s in block.get("menu", ())
             if isinstance(s, dict) and s.get("id")

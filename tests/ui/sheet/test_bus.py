@@ -36,6 +36,7 @@ from mm_companion.ui.blocks.bus import (
     PIN_REQUESTED,
     RECOVERY_REQUESTED,
     ROLL_REQUESTED,
+    ROLLS_REQUESTED,
     UNPIN_REQUESTED,
     USE_SPENT,
     SignalBus,
@@ -55,6 +56,7 @@ BASE_TOPICS = {
 
 REQUEST_TOPICS = {
     ROLL_REQUESTED,
+    ROLLS_REQUESTED,
     LOAD_REQUESTED,
     NOTE_REQUESTED,
     PIN_REQUESTED,

@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import QGroupBox, QVBoxLayout, QWidget
 
 from mm_companion.core import library
@@ -94,6 +94,11 @@ from mm_companion.ui.sections.titled_section import strip_groupbox_caption
 from mm_companion.ui.session_bridge import SessionBridge, live_session
 from mm_companion.ui.toasts import notify_window
 
+#: :meth:`DiceSection.perform_rolls`: how often a queued roll checks whether the die
+#: before it has landed, and the beat it then leaves so that result is read.
+QUEUE_POLL_MS = 150
+QUEUE_GAP_MS = 900
+
 
 class DiceSection(QGroupBox):
     """A d20 roller as a sheet block (see the module docstring)."""
@@ -133,6 +138,12 @@ class DiceSection(QGroupBox):
         self._area_dialog: AreaDialog | None = None
         #: The same for the Impress dialog, which is modeless for the same reason.
         self._impress_dialog: ImpressDialog | None = None
+        #: Rolls waiting their turn (:meth:`perform_rolls`), and what wakes the next.
+        self._roll_queue: list[RollSpec] = []
+        self._queue_after_landing = False
+        self._queue_timer = QTimer(self)
+        self._queue_timer.setSingleShot(True)
+        self._queue_timer.timeout.connect(self._roll_next_queued)
 
         self.view = DiceRollerView()
         # Every spec that reaches the roller — from the bus, or from a follow-up chip
@@ -226,6 +237,42 @@ class DiceSection(QGroupBox):
                 # costs and counts lands now — once, here, and only for a die that was
                 # really thrown, never for a click the tumbling roller refused.
                 self.useSpent.emit(spec)
+
+    def perform_rolls(self, specs: object) -> None:
+        """Roll several, one after another — the ``rolls-requested`` topic's handler.
+
+        End turn shakes several conditions off at once, and the roller throws one die
+        at a time: each waits until the one before it has landed (and a beat more, so
+        its result is seen), then goes. Anything in the tuple that is not a
+        :class:`~mm_companion.core.rules.RollSpec` is skipped.
+        """
+        if not isinstance(specs, (tuple, list)):
+            return
+        self._roll_queue.extend(spec for spec in specs if isinstance(spec, RollSpec))
+        if self._roll_queue and not self._queue_timer.isActive():
+            self._queue_timer.start(0)
+
+    def queued_rolls(self) -> int:
+        """How many rolls are still waiting their turn (:meth:`perform_rolls`)."""
+        return len(self._roll_queue)
+
+    def _roll_next_queued(self) -> None:
+        if not self._roll_queue:
+            return
+        if self.view.panel.rolling:
+            # Still in the air: look again shortly, and once it lands leave a beat.
+            self._queue_after_landing = True
+            self._queue_timer.start(QUEUE_POLL_MS)
+            return
+        if self._queue_after_landing:
+            self._queue_after_landing = False
+            self._queue_timer.start(QUEUE_GAP_MS)
+            return
+        spec = self._roll_queue.pop(0)
+        self.perform_roll(spec)
+        if self._roll_queue:
+            self._queue_after_landing = True
+            self._queue_timer.start(QUEUE_POLL_MS)
 
     def start_maneuver(self, action_id: str):
         """An attack maneuver's tile — see

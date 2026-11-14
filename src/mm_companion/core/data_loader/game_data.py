@@ -509,11 +509,13 @@ class CombatAction:
 
 @dataclass(frozen=True)
 class CombatMenuSection:
-    """One titled section of the Actions popup: action ids, in order."""
+    """One titled section of the Actions popup: action ids, in order. A section with
+    :attr:`more` set shows only while the popup's **Show more** box is ticked."""
 
     id: str
     title: str
     items: tuple[str, ...] = ()
+    more: bool = False
 
 
 @dataclass(frozen=True)

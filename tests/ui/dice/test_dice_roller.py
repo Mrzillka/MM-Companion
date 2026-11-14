@@ -1252,24 +1252,27 @@ def test_the_die_stays_put_whatever_the_readout_says(qapp) -> None:
         panel.close()
 
 
-def test_actions_ends_the_modifier_row_and_take_10_the_dc_row(qapp: QApplication) -> None:
-    # The user's layout (2026-11-11): what changes the roll on one row, what it is
-    # rolled against on the next.
+def test_actions_has_a_row_of_its_own_under_the_dc(qapp: QApplication) -> None:
+    # The user's layout (2026-11-13): the modifier, the DC, then Actions under them;
+    # Take 10 left the roller for the Actions popup.
     view = DiceRollerView()
     view.show()
     panel = view.panel
     panel.set_modifier_steps((1, 5))
 
     _settled(qapp, view, 360, 800)  # the right-hand pinned strip's shape
-    assert panel._controls.wide
 
-    def middle(widget) -> int:
-        return widget.mapTo(panel, widget.rect().center()).y()
+    def top(widget) -> int:
+        return widget.mapTo(panel, widget.rect().topLeft()).y()
 
-    modifier, dc = middle(panel._modifier_spin), middle(panel._dc_spin)
-    assert abs(modifier - middle(panel._actions_button)) < panel._actions_button.height()
-    assert abs(dc - middle(panel._routine_button)) < panel._routine_button.height()
-    assert abs(dc - middle(panel._dc_label)) < panel._dc_spin.height()
+    def left(widget) -> int:
+        return widget.mapTo(panel, widget.rect().topLeft()).x()
+
+    assert top(panel._actions_button) >= top(panel._dc_spin) + panel._dc_spin.height()
+    # Under the controls, not the labels.
+    first_step = min(panel._dc_step_buttons, key=left)
+    assert left(panel._actions_button) == left(first_step)
+    assert not hasattr(panel, "_routine_button")
 
 
 def test_the_dc_box_is_one_box_and_empty_means_no_dc(qapp: QApplication) -> None:
@@ -1346,7 +1349,7 @@ def test_take_10_makes_the_check_now_as_a_routine_one(
     panel.localRoll.connect(rolls.append)
     panel._modifier_spin.setValue(3)
     panel.set_dc(12)
-    panel._routine_button.click()
+    panel.open_actions().tile("take_ten").click()
     assert [(r["die"], r["routine"], r["dc"]) for r in rolls] == [(10, True, 12)]
     assert rolls[0]["bonus"] == 3
     # One roll's worth: the die's next click is a die roll again.

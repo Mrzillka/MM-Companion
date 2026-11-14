@@ -200,24 +200,16 @@ class BodyScroll(QScrollArea):
 DIALOG_CHARS = 52
 
 
-def fit_to_screen(window: QWidget, *, share: float = 0.85, min_chars: int = 0) -> None:
-    """Size *window* to what it asks for, but never past *share* of its screen.
+def refresh_layouts(window: QWidget) -> None:
+    """Make *window*'s size hint tell the truth about what it holds right now.
 
-    Width and height alike, and moved back onto the screen if that left it hanging off
-    an edge. Everything inside is in a :class:`BodyScroll`, so what does not fit scrolls.
-    *min_chars* opens it at least that many average characters wide — the size it
-    opens at, which the user may still drag narrower.
+    Measured on first show, before Qt has laid anything out, and straight after a part
+    of the body was shown or hidden, before the layout has heard of it: invalidate and
+    activate the layouts first, or the scrolled body's hint is the stale one — from
+    before its rows existed, or from before a section folded away. ``activate`` alone
+    does nothing to a layout Qt has not yet marked dirty, which is the second case: a
+    folded section left the window at its unfolded height.
     """
-    screen = window.screen() or QGuiApplication.primaryScreen()
-    if screen is None:
-        return
-    room = screen.availableGeometry()
-    # Measured on first show, before Qt has laid anything out, and straight after a part
-    # of the body was shown or hidden, before the layout has heard of it: invalidate and
-    # activate the layouts first, or the scrolled body's hint is the stale one — from
-    # before its rows existed, or from before a section folded away. ``activate`` alone
-    # does nothing to a layout Qt has not yet marked dirty, which is the second case: a
-    # folded section left the window at its unfolded height.
     for scroll in window.findChildren(BodyScroll):
         inner = scroll.widget()
         if inner is not None and inner.layout() is not None:
@@ -227,8 +219,26 @@ def fit_to_screen(window: QWidget, *, share: float = 0.85, min_chars: int = 0) -
     if window.layout() is not None:
         window.layout().invalidate()
         window.layout().activate()
+
+
+def fit_to_screen(
+    window: QWidget, *, share: float = 0.85, min_chars: int = 0, min_width: int = 0
+) -> None:
+    """Size *window* to what it asks for, but never past *share* of its screen.
+
+    Width and height alike, and moved back onto the screen if that left it hanging off
+    an edge. Everything inside is in a :class:`BodyScroll`, so what does not fit scrolls.
+    *min_chars* opens it at least that many average characters wide, and *min_width* at
+    least that many pixels — the size it opens at, which the user may still drag
+    narrower.
+    """
+    screen = window.screen() or QGuiApplication.primaryScreen()
+    if screen is None:
+        return
+    room = screen.availableGeometry()
+    refresh_layouts(window)
     hint = window.sizeHint()
-    floor = window.fontMetrics().averageCharWidth() * min_chars
+    floor = max(window.fontMetrics().averageCharWidth() * min_chars, min_width)
     width = min(max(hint.width(), window.width(), floor), int(room.width() * share))
     height = min(hint.height(), int(room.height() * share))
     window.resize(width, max(height, window.minimumSizeHint().height()))
@@ -343,6 +353,10 @@ def regrow(window: QWidget, *, share: float = 0.85) -> None:
         if not window.isVisible():
             return
         screen = window.screen() or QGuiApplication.primaryScreen()
+        # Without this the scrolled body's hint is from before the change, and a row put
+        # in from the scene widened the table past a window that stayed put (the
+        # user's report, 2026-11-13).
+        refresh_layouts(window)
         hint = window.sizeHint()
         width, height = window.width(), window.height()
         if screen is not None:
@@ -987,7 +1001,33 @@ class ActionWindow(QDialog):
         super().showEvent(event)
         if not self._fitted:
             self._fitted = True
-            fit_to_screen(self)
+            fit_to_screen(self, min_width=self._widest_width())
+
+    def _widest_width(self) -> int:
+        """How wide the window would like to be with **every** creature on the scene in.
+
+        It opens at that width, so putting someone in from the scene never makes the
+        table wider than the window: a creature's resistance combo ("Highest (Will
+        +10)") is the widest thing in a row, and the window used to be measured with
+        only the rows already in (the user's report, 2026-11-13). Measured by showing
+        the rows that are out for the measurement and hiding them again, inside this
+        first show, before anything is painted.
+        """
+        out = [
+            widget
+            for row in self._rows
+            for widget in (row.include, *row.cells, row.modifier)
+            if widget.isHidden()
+        ]
+        for widget in out:
+            widget.setVisible(True)
+        try:
+            refresh_layouts(self)
+            return self.sizeHint().width()
+        finally:
+            for widget in out:
+                widget.setVisible(False)
+            refresh_layouts(self)
 
     def done(self, result: int) -> None:
         """Every way the window goes away — Close, Esc, the title bar's ✕.

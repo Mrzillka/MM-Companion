@@ -113,9 +113,11 @@ def test_the_modifier_and_dc_read_as_fields(qapp) -> None:
     panel.set_modifier_steps((1, 5))
     _settle(qapp, view)
     assert panel._modifier_spin.text() == "+0"
-    # The steps are flat; the box is the row's one field, wider than any step.
+    # The steps are flat; the box is the row's one field, as wide as a signed two-digit
+    # number and no wider — the steps take the row's spare width (2026-11-13).
     assert all(step.autoRaise() for step in panel._step_buttons)
-    assert all(panel._modifier_spin.width() > step.width() for step in panel._step_buttons)
+    boxes = (panel._modifier_spin, panel._dc_spin, panel._bonus_spin, panel._penalty_spin)
+    assert panel._modifier_spin.width() == max(box.sizeHint().width() for box in boxes)
     # The DC box is the modifier box's twin, under it, between steps of its own.
     assert panel._dc_spin.alignment() & Qt.AlignmentFlag.AlignHCenter
     assert panel._dc_spin.width() == panel._modifier_spin.width()

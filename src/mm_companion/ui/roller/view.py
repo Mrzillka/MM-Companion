@@ -213,7 +213,7 @@ class DiceRollerView(ReflowBox, QWidget):
             wanted = min(wanted, max(floor, available - MIN_HISTORY_WIDTH))
             return [wanted, max(1, available - wanted)]
         floor = self.panel.row_minimum_width() + self.REFLOW_HYSTERESIS
-        spare = available - self._history_part.minimumSizeHint().width()
+        spare = available - self._history_minimum()
         if spare < floor:
             return [self.panel.column_minimum_width(), max(1, available)]
         # Exactly what the controls ask for: everything past that is the history's.
@@ -261,8 +261,13 @@ class DiceRollerView(ReflowBox, QWidget):
         half. A side-by-side arrangement is only worth having when the roller keeps its
         own shape in it.
         """
-        history = self._history_part.minimumSizeHint().width()
-        return self.panel.column_natural_width() + self.REFLOW_SPACING + history
+        return self.panel.column_natural_width() + self.REFLOW_SPACING + self._history_minimum()
+
+    def _history_minimum(self) -> int:
+        """The least a history beside the roller is worth: :data:`MIN_HISTORY_WIDTH`,
+        not the history's own (lower) floor, which is only how far it may be squeezed
+        stacked under the roller."""
+        return max(MIN_HISTORY_WIDTH, self._history_part.minimumSizeHint().width())
 
     def sync_reflow(self) -> bool:
         """Re-run the width-driven reflow, unless the parts are out on loan.

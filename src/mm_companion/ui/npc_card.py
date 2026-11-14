@@ -70,12 +70,11 @@ from mm_companion.core.rules import (
     DEFEAT_NONE,
     MinionRules,
     area_capable_builds,
-    can_recover,
     character_defeat_state,
+    condition_check_hint,
+    condition_check_offered,
     power_area_uses,
-    recovery_hint,
 )
-from mm_companion.core.rules import recovery_check as condition_recovery_check
 from mm_companion.ui import theme
 from mm_companion.ui.attack_targets import add_target_actions
 from mm_companion.ui.card_chips import _ConditionChip, clear_temporary_button, start_card_drag
@@ -684,13 +683,14 @@ class NPCCard(QFrame):
                     self.removeConditionRequested.emit(self.name_key, cid, param)
                 )
             )
-            if can_recover(self._character, self._data, applied):
-                check = condition_recovery_check(record)
+            # Its recovery check, or the shake-off against what put it on — either way
+            # no Recover action (core.rules.condition_check).
+            if condition_check_offered(self._character, self._data, applied):
                 chip.arm_recovery(
                     lambda cid=applied.condition_id, param=applied.parameter: (
                         self.recoveryRequested.emit(self.name_key, cid, param)
                     ),
-                    f"{recovery_hint(check)} — click to roll it" if check else "",
+                    condition_check_hint(self._data, applied),
                 )
             self._chip_flow.addWidget(chip)
         self._chips.setVisible(bool(self._character.conditions))

@@ -9,6 +9,7 @@ from mm_companion.core.character import Character
 from mm_companion.ui.action_menu import (
     ACTION_REQUEST,
     ACTION_REROLL,
+    ACTION_TAKE_TEN,
     NO_REQUEST_TRAITS,
     NOT_BUILT,
     NOTHING_TO_REROLL,
@@ -28,11 +29,14 @@ def test_the_actions_button_sits_where_the_action_row_was(qapp) -> None:
     assert panel._reroll_button.isHidden()
 
 
-def test_without_a_host_menu_the_popup_offers_the_panels_own_two(qapp) -> None:
+def test_without_a_host_menu_the_popup_offers_the_panels_own_three(qapp) -> None:
     view = DiceRollerView()  # held: the panel's widgets die with it
     panel = view.panel
     popup = panel.open_actions()
-    assert [t.key for t in popup.tiles] == [ACTION_REROLL, ACTION_REQUEST]
+    assert [t.key for t in popup.tiles] == [ACTION_REQUEST, ACTION_REROLL, ACTION_TAKE_TEN]
+    # Take 10 is behind Show more, as on a host's menu.
+    assert ACTION_TAKE_TEN not in [t.key for t in popup.shown_tiles()]
+    assert popup.tile(ACTION_TAKE_TEN).isEnabled()
     assert not popup.tile(ACTION_REROLL).isEnabled()
     assert NOTHING_TO_REROLL in popup.tile(ACTION_REROLL).toolTip()
     # No traits to ask for until a host hands some over.
@@ -153,7 +157,10 @@ def test_a_players_menu_follows_the_data_and_leaves_out_the_gms_tiles(qapp, data
     gm_only = {a.id for a in data.combat.actions if a.gm_only}
     assert keys == [k for k in order if k not in gm_only]
     titles = [t.text() for t in popup._titles]
-    assert titles == ["Attack Maneuvers", "Actions", "Area & Group", "Dice"]
+    # A player has no Group section: all of it is the GM's.
+    assert titles == ["Attack Maneuvers", "Dice", "Actions", "More Maneuvers", "More Dice"] + [
+        "More Actions"
+    ]
     assert popup.tile("impress").isEnabled()
 
 

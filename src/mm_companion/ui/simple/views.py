@@ -770,15 +770,25 @@ class ConditionsView(_View):
         self.damage.stepChosen.connect(self._on_damage)
         top.addWidget(self.damage)
         top.addStretch()
-        from mm_companion.ui.sections.conditions import CLEAR_TEMPORARY_TEXT, CLEAR_TEMPORARY_TIP
+        from mm_companion.ui.sections.conditions import (
+            END_TURN_TEXT,
+            END_TURN_TIP,
+            START_TURN_TEXT,
+            START_TURN_TIP,
+        )
 
-        # The live block's "Clear temporary", shown only while something is temporary.
-        self.clear_button = QToolButton()
-        self.clear_button.setText(CLEAR_TEMPORARY_TEXT)
-        self.clear_button.setToolTip(CLEAR_TEMPORARY_TIP)
-        self.clear_button.clicked.connect(self._clear_temporary)
-        top.addWidget(self.clear_button)
-        self.clear_button.hide()
+        # The live block's turn buttons: Start turn takes the temporary conditions off,
+        # End turn rolls what a turn's end shakes off (both through the live section).
+        self.start_button = QToolButton()
+        self.start_button.setText(START_TURN_TEXT)
+        self.start_button.setToolTip(START_TURN_TIP)
+        self.start_button.clicked.connect(lambda _c=False: self._call("start_turn"))
+        top.addWidget(self.start_button)
+        self.end_button = QToolButton()
+        self.end_button.setText(END_TURN_TEXT)
+        self.end_button.setToolTip(END_TURN_TIP)
+        self.end_button.clicked.connect(lambda _c=False: self._call("end_turn"))
+        top.addWidget(self.end_button)
         self._top = QWidget()
         self._top.setLayout(top)
         layout.addWidget(self._top)
@@ -798,10 +808,10 @@ class ConditionsView(_View):
         menu = build_condition_menu(self, self._data, section.choose_condition)
         menu.exec(self.add_button.mapToGlobal(self.add_button.rect().bottomLeft()))
 
-    def _clear_temporary(self) -> None:
-        clear = self._funnel("clear_temporary_conditions")
-        if clear is not None:
-            clear()
+    def _call(self, name: str) -> None:
+        funnel = self._funnel(name)
+        if funnel is not None:
+            funnel()
 
     def _on_damage(self, index: int) -> None:
         apply = getattr(self.context.section, "apply_damage_step", None)
@@ -823,7 +833,7 @@ class ConditionsView(_View):
         if one was rolled, *recover* for one that is rolled off with a recovery check,
         *tone* the tint it is drawn in, *temporary* for one that offers its own ✕.
         """
-        from mm_companion.core.rules import can_recover
+        from mm_companion.core.rules import condition_check_offered
         from mm_companion.ui.sections.conditions import (
             condition_display_name,
             condition_tone_token,
@@ -844,7 +854,7 @@ class ConditionsView(_View):
             random,
             (roll(applied) or None) if random and roll is not None else None,
             self._funnel("roll_recovery") is not None
-            and can_recover(self._character, self._data, applied),
+            and condition_check_offered(self._character, self._data, applied),
             condition_tone_token(record),
             applied.temporary,
         )
@@ -886,7 +896,9 @@ class ConditionsView(_View):
             recovery = QToolButton()
             recovery.setText("🎲")
             recovery.setAutoRaise(True)
-            recovery.setToolTip("Roll the recovery check — a success takes this off.")
+            from mm_companion.core.rules import condition_check_hint
+
+            recovery.setToolTip(condition_check_hint(self._data, applied))
             roll_recovery = self._funnel("roll_recovery")
             recovery.clicked.connect(
                 lambda _c=False, a=applied, go=roll_recovery: go(a) if go else None
@@ -931,10 +943,8 @@ class ConditionsView(_View):
             self._chips_host.setVisible(has_any)
             self._chips_host.refresh_height()
             self.empty.setVisible(not has_any)
-            self.clear_button.setVisible(
-                self._funnel("clear_temporary_conditions") is not None
-                and any(applied.temporary for applied in conditions)
-            )
+            self.start_button.setVisible(self._funnel("start_turn") is not None)
+            self.end_button.setVisible(self._funnel("end_turn") is not None)
 
 
 # -- Notes, on paper ----------------------------------------------------------------

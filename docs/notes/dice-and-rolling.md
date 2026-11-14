@@ -298,7 +298,8 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
   - **A card's ☆ and ✕ are one text line tall** (`fit_to_text_line`, padding 0), so
     heading_row's top alignment puts their glyph level with the first line; at a
     button's own height they sat a few pixels off, up or down by platform.
-- **The two-row pass** (2026-11-11, the user's layout; tests in
+- **The two-row pass** (2026-11-11, the user's layout — Take 10 and the wide/narrow
+  decision were dropped on 2026-11-13, see the actions-feedback pass below; tests in
   `tests/ui/dice/test_roll_controls.py`). It supersedes the "one toolbar" above:
   ```
   Modifier  [−5][−1] [ +0 ] [+1][+5]   Actions ▾
@@ -341,6 +342,76 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
     (`ActionLine.set_input`, `ActionLane.set_input`). The `✕` is at the end of every line
     now. In slider mode the modifier's slider takes the penalty steps' columns and its
     box the rest, so the box still starts where the DC box does.
+- **The actions-feedback pass** (2026-11-13, the user's list after testing the Actions
+  menu; tests in `tests/ui/dice/test_roller_rows.py`). It changes several calls above:
+  - **Every row is a `FieldRow`** (`ui/roller/fields.py`): a label, a box, the slider it
+    can have instead of steps, and its steps. The Modifier, **Bonus**, **Penalty** and
+    **DC** rows are the same kind of row, and `RollControls` takes the four.
+  - **The box is as wide as its widest value and never stretches** (`_fit_boxes`: every
+    box at the widest of their snug hints, so they stand in one column). Stretched, the
+    modifier's box took the slider's room and the slider was a sliver. The steps (or the
+    slider) take the row's spare width now.
+  - **The slider setting reaches the DC too.** The two-row pass kept the DC's steps under
+    it ("a slider is no way to hit 17"); the user asked for the slider there, so with the
+    slider chosen every row is `label [slider] [box]`. The DC's reaches
+    `DC_SLIDER_MAX` (40); the box still takes a typed 60.
+  - **An unset DC reads "—" again** (`DC_NONE`), at the user's word, and **emptying the
+    box** means none (`widgets.BlankClears`, `make_spin_box(blank_clears=True)`):
+    Qt counts a blank spin box as unfinished input and put the old number back, so the
+    obvious way to clear a DC did nothing.
+  - **Bonus and Penalty rows** (Settings ▸ General, `storage.modifier_split()`, off by
+    default): the roller before the maneuvers rework. The one modifier box stays the
+    number every roll reads, hidden; `_gather_modifier` writes the two boxes'
+    difference into it and `_spread_modifier` follows it the other way — a bonus added
+    (a quick roll, Extra Effort's +2) lands in Bonus, a penalty in Penalty, and 0
+    empties both.
+  - **Narrower still, the outer steps go** (`RollControls.tight`): `−1 [box] +1`. A
+    second adaptive decision beside the wide/narrow one, so it has its own dead-band and
+    rides the same `@no_reentry` sync, and the minimum reported is the tight shape's.
+    The user's report: floated thinner than its recommended size, the roller clipped its
+    right edge.
+  - **Typing into a box replaces what is there, and emptying one clears it** (the user's
+    second report, same day). `widgets.select_all_on_focus` selects a box's value when
+    it takes focus by click as well as by Tab (Qt selects on Tab only; a click put the
+    cursor beside the old number). `widgets.BlankClears` (was `BlankIsMinimum`;
+    `blank_clears=` on both spin-box factories) clears an emptied box **at once** — to
+    0 where the range has it (Modifier "+0", Bonus, Penalty), else to the minimum (the
+    DC's "—"). All four roller boxes have both.
+  - **Actions has a row of its own under the DC; Take 10 left the roller** (the user's
+    call, same day: little used, for the room it took). It is the `take_ten` tile in the
+    Actions popup now (a `builtin` action, in `own_actions` beside Reroll and Ask, behind
+    **Show more**), and still `Ctrl+T`. With the button pair gone, so is the wide/narrow
+    decision: `RollControls` is a plain `QWidget` with the one adaptive decision left
+    (tight), its minimum the tight shape's. Actions spans the step-and-box columns, not
+    the labels'.
+  - **The boxes are refitted once polished** (`RollControls._refit_boxes`, a deferred
+    pass on a box's Polish/StyleChange/FontChange and on show), and **a snug box's hint
+    no longer moves with focus**: the theme's focus ring is thicker than the resting
+    border, so `_Snug` measured two pixels more while the box held focus, and boxes
+    fixed at one moment read as the wrong width the next (it surfaced as an
+    order-dependent test failure after the compact-mode tests). `_Snug` now measures the
+    focused chrome whenever that is the wider.
+  - **The history's hard minimum width is `HISTORY_FLOOR_WIDTH` (140)**, not
+    `MIN_HISTORY_WIDTH` (260), which held the Dice block 20px wider than a 245px window
+    — the other half of that clipping. The reflow still reads 260 as what a history
+    *beside* the roller needs (`DiceRollerView._history_minimum`).
+  - **The readout's minimum height follows its width** (`ReadoutLabel.minimumSizeHint`):
+    the panel's layouts size it off hints, and the hint's height is the template's
+    width's, so a long attack name wrapped narrow to more lines than that and the result
+    line under it was cut in half.
+  - **Aim throws one die after the other** (`AIM_PAUSE_MS`, `AIM_SECOND_MS`,
+    `_land_first_die`, `_throw_second_die`): the die lands on the first, the readout says
+    "First die: 4 — rolling the second…", then it tumbles for the second. A session roll
+    brings both back together; which is shown first is picked at random, since two
+    independent dice have no order worth keeping (and no wire change was needed). The
+    tumble's flicker is one `QTimer` now (`_tumble_timer`) so the pause can stop it. The
+    result says `best of 4 and 15 → 15 + 4 = 19`, and the hover "Two d20s (Aim): 4 and
+    15", "Kept, the higher: 15". A tumble of no length (the tests') lands at once.
+  - **The whole card hovers** (`refresh_card_tooltip`, a card's `hover_text()`): the
+    breakdown was on a card's number line only, and a group table had none. Now a hover
+    anywhere on a card shows how its rolls were made, then its time; on a group table
+    each row's hover is every roll of that row broken down (the Dodge check and the save
+    after it), and the card's is all of them.
 - **Deferral is a window, not a flag, and that was a bug first.** The shared history
   holds one's *own* roll back so the card lands as the die settles rather than the
   instant the server answers. Only the roller's `sessionRollRevealed` lets a held roll
@@ -1066,8 +1137,9 @@ of NPCs — often fewer. Two answers, and they are independent.
 
 ## The Actions button
 
-On the toolbar, after the DC box and Take 10 — **above** the action lane, so it never
-moves when a pick puts a line there — the **Actions ▾** button (the old Action row of
+On a row of its own under the DC row (since 2026-11-13; it ended the modifier row
+before) — **above** the action lane, so it never moves when a pick puts a line there —
+the **Actions ▾** button (the old Action row of
 push buttons — Reroll, Impress, Area — is gone). It opens the **Actions popup**
 (`ui/action_grid.py`, see [the UI utilities notes](ui-utilities.md)): titled sections of
 square icon tiles, built from `actions.json`'s `combat` block by
@@ -1090,8 +1162,16 @@ available moves (a roll comes back, the GM forms an NPC group).
   opens the same window the group card's menu does. **Team attack** is the call to roll
   (`ui/team_call.py`), greyed off the air or with nobody on the Scene; the NPC-group
   window is on the group's ☰ menu only.
-- **Reroll and Ask are the panel's own**: picking Reroll calls `reroll()`, Ask opens
-  the Ask to Roll form; neither is reported.
+- **Reroll, Ask and Take 10 are the panel's own**: picking Reroll calls `reroll()`, Ask
+  opens the Ask to Roll form, Take 10 calls `take_ten()`; none is reported.
+- **Show more** (the user's call, 2026-11-13): a menu section with `"more": true` in the
+  data shows only while the popup's small **Show more** box is ticked. The popup opens
+  on Attack Maneuvers (the four), Dice (Ask, Reroll) and Actions (Attack, Aim, Defend,
+  Grab, Impress, Area); Finishing and Surprise, Take 10, the other actions and the GM's
+  Group section are behind the box. The tick is the app's, not the panel's
+  (`storage.actions_show_more()`); the popup re-sizes and re-places itself where it is
+  (`ActionGridPopup.set_more_shown`), and counts its columns over every section so the
+  tiles do not move under the pointer.
   Every other pick goes out on `actionRequested(key)`, which is what the hosts' Impress
   and Area handlers always listened to. `can_reroll` replaces the old button's enabled
   state as the thing a test reads.

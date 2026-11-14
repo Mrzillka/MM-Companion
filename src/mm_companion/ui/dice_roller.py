@@ -2,7 +2,7 @@
 
 Set a modifier (a signed box with the common circumstance steps either side of it)
 and, optionally, a Difficulty Class, then click the D20 to play a short roll
-animation and read the result beside it — or press **Take 10** for a routine check.
+animation and read the result beside it — or pick **Take 10** (Actions) for a routine check.
 When a DC is set the result also shows the degree of success/failure. Past rolls
 stack up in a history panel (each card can be removed or saved); a saved roll can be
 named, dragged to reorder, and lives in a persistent row of "quick roll" pills for
@@ -71,6 +71,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSlider,
+    QSpinBox,
     QStackedWidget,
     QToolButton,
     QVBoxLayout,
@@ -88,13 +89,14 @@ from mm_companion.core.rules import (
 )
 from mm_companion.core.session.model import KIND_ROLL
 from mm_companion.ui import theme
-from mm_companion.ui.action_grid import ActionGridPopup, GridItem, GridSection
+from mm_companion.ui.action_grid import ActionGridPopup, GridSection
 from mm_companion.ui.action_menu import (
     ACTION_REQUEST,
     ACTION_REROLL,
+    ACTION_TAKE_TEN,
     NOTHING_TO_REROLL,
-    action_tooltip,
     choose_from_menu,
+    own_items,
 )
 from mm_companion.ui.flow_layout import FlowLayout
 from mm_companion.ui.reflow import ReflowBox
@@ -124,6 +126,7 @@ from mm_companion.ui.roller.action_lane import (
     LineShift,
 )
 from mm_companion.ui.roller.controls import RollControls
+from mm_companion.ui.roller.fields import FieldRow
 from mm_companion.ui.roller.flourish import DieBurst, pulse_halo, shake
 from mm_companion.ui.roller.quick_rolls import QuickRollStrip, RollerQuickRollsMixin
 from mm_companion.ui.roller.requests import RollerRequestsMixin
@@ -137,6 +140,7 @@ from mm_companion.ui.widgets import (
     help_markup,
     make_signed_spin_box,
     make_spin_box,
+    select_all_on_focus,
     tinted_style,
 )
 
@@ -153,6 +157,16 @@ FLICKER_MAX_MS = 220
 # session that has gone quiet — long enough to ride out a slow relay, short
 # enough that the inputs are not locked forever.
 SESSION_ROLL_TIMEOUT_MS = 8000
+
+#: A roll made twice for the higher (Aim) is thrown **one die after the other** (the
+#: user's call, 2026-11-13): the die lands on the first, rests there for
+#: :data:`AIM_PAUSE_MS` while the readout says so, then tumbles for
+#: :data:`AIM_SECOND_MS` and lands on the second. Both were thrown at once before, and
+#: the result named the dropped one only as a struck-through number.
+AIM_PAUSE_MS = 700
+AIM_SECOND_MS = 900
+#: What the readout says while the die rests on the first of two.
+AIM_FIRST_TEXT = "First die: <b>{die}</b> — rolling the second…"
 
 NO_ANSWER = "The session did not answer, so nothing was rolled."
 NOT_SENT = "The roll could not be sent to the session."
@@ -183,6 +197,21 @@ MODIFIER_SLIDER_HINT = (
     f"{MODIFIER_SLIDER_MAX:+d}; type in the box for more. The next roll uses it up."
 )
 
+#: The Bonus and Penalty rows the modifier can be instead (Settings ▸ General, the
+#: user's call, 2026-11-13): how far each box and slider runs, from 0.
+BONUS_LABEL = "Bonus"
+PENALTY_LABEL = "Penalty"
+SPLIT_LIMIT = MODIFIER_LIMIT
+SPLIT_SLIDER_MAX = 20
+BONUS_HINT = "A bonus on this one roll: a good tool, help, an advantage. The next roll uses it up."
+PENALTY_HINT = (
+    "A penalty on this one roll: cover, a distraction, poor footing. The next roll uses it up."
+)
+
+#: The DC's slider (Settings ▸ General ▸ Modifier, slider): how far it reaches. The box
+#: beside it takes the full :data:`DC_LIMIT`.
+DC_SLIDER_MAX = 40
+
 #: The Actions button's caption: the arrow says it opens something.
 ACTIONS_LABEL = "Actions ▾"
 
@@ -200,10 +229,10 @@ OWN_ATTACK_SHORT = "⚠ Own attack"
 
 #: The roller's Difficulty Class box: with a number in it, the roll is judged against it.
 DC_LABEL = "DC"
-#: What the DC box says while it holds none, muted like a placeholder. A word rather
-#: than "—" (a dash in a small box read as a label, not as somewhere a number goes), and
-#: muted because "none" in the text colour read as a value — or a bug (2026-11-10).
-DC_NONE = "not set"
+#: What the DC box says while it holds none, muted like a placeholder. It was "not set"
+#: for a while, which widened the box past a two-digit number; the user asked for the
+#: dash back (2026-11-13). Emptying the box puts it back too (:class:`DcSpinBox`).
+DC_NONE = "—"
 #: The highest DC the box takes.
 DC_LIMIT = 60
 #: Where a bonus step takes a DC that is not set, until the host says otherwise
@@ -224,14 +253,6 @@ REROLL_LABEL = "↻ Reroll"
 REROLL_HINT = (
     "**Reroll:** throw this roll again — same trait, modifier and DC — as a lucky "
     "re-roll: a 1–10 counts 10 more (a Hero Point, or the Luck advantage)."
-)
-
-#: The roller's take-10 button (PDF p17): a routine check, made as a 10.
-ROUTINE_LABEL = "Take 10"
-ROUTINE_HINT = (
-    "**Routine check (take 10):** make the check now with the die counted as a 10, so there "
-    "is no natural 1 or 20. For a check made without pressure.\n\nTakes whatever is loaded, "
-    "with the modifier and the DC set."
 )
 
 
@@ -424,6 +445,30 @@ class ReadoutLabel(QLabel):
         width = self._reference_width()
         return QSize(width, self.heightForWidth(width))
 
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        """As tall as the text is wrapped **at the width it has**.
+
+        The layouts above the readout (the panel's reflow, the splitter) size it off
+        its hints, never its height-for-width, and the hint's height is the template's
+        width's. Squeezed narrower than that — the roller floated thinner than its
+        recommended size — a long attack name wrapped to more lines than that height
+        held, and the result line under it was cut in half (the user's report,
+        2026-11-13). A word-wrapped label's height following its width is height, which
+        scrolls; the width it reports stays a word's.
+        """
+        hint = super().minimumSizeHint()
+        width = self.width()
+        if width <= 0 or not self.wordWrap():
+            return hint
+        return QSize(hint.width(), max(hint.height(), self.heightForWidth(width)))
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001, N802 - Qt override
+        super().resizeEvent(event)
+        # A new width wraps the text anew: ask the layouts for the height that needs.
+        # Narrower is only ever taller, so a scroll bar this brings on keeps itself on.
+        if event.oldSize().width() != event.size().width():
+            self.updateGeometry()
+
 
 class DiceRollerPanel(
     RollerShapeMixin, RollerRequestsMixin, RollerQuickRollsMixin, ReflowBox, QWidget
@@ -511,6 +556,19 @@ class DiceRollerPanel(
         self._own_id = ""
         # Wall-clock for the tumble; drives the flicker's ease-out deceleration.
         self._roll_clock = QElapsedTimer()
+        # The tumble's next flicker. One timer rather than a chain of single shots, so
+        # Aim's pause can stop it and its second tumble restart it without two chains.
+        self._tumble_timer = QTimer(self)
+        self._tumble_timer.setSingleShot(True)
+        self._tumble_timer.timeout.connect(self._tick_roll)
+        # Aim's two throws (see AIM_PAUSE_MS): 0 for a roll of one die, 1 while the first
+        # tumbles, 2 while the die rests on it, 3 while the second tumbles. And the first
+        # die, as ``(face, natural)``, once a roll made here has thrown it.
+        self._aim_stage = 0
+        self._aim_first: tuple[int, bool] | None = None
+        self._aim_pause = QTimer(self)
+        self._aim_pause.setSingleShot(True)
+        self._aim_pause.timeout.connect(self._throw_second_die)
         # What the sheet asked to roll, if anything — see :meth:`load_spec`. A spec
         # that was *loaded* is sticky: it survives the roll so the sliders can be
         # nudged and the die thrown again.
@@ -577,6 +635,8 @@ class DiceRollerPanel(
         # The same steps either side of the DC box, and where a bonus step takes a DC
         # that is not set (see :meth:`set_dc_start`).
         self._dc_step_buttons: list[QToolButton] = []
+        # And either side of the Bonus and Penalty boxes (see :meth:`set_modifier_split`).
+        self._split_step_buttons: list[QToolButton] = []
         self._dc_start = DC_START
         # The colour token the die glows in after a roll lands (see
         # :meth:`_glow_outcome`), and the timer that lets it settle back.
@@ -593,6 +653,8 @@ class DiceRollerPanel(
         self._line_rearm = None
         # Step buttons or a slider beside the modifier box (Settings ▸ General).
         self._modifier_input = storage.modifier_input()
+        # One Modifier row, or Bonus and Penalty rows (Settings ▸ General).
+        self._modifier_split = storage.modifier_split()
         self._quick_rolls: list[dict] = self._load_quick_rolls()
         # Whether the panel is in its fixed compact shape (see :meth:`_apply_shape`),
         # in which case the width-driven reflow stands down — and the two separate
@@ -694,74 +756,88 @@ class DiceRollerPanel(
 
         # The modifier: one signed box between its penalty steps and its bonus steps,
         # −5 −1 [+0] +1 +5. It used to be a −30..+30 slider, which is no way to hit +2.
-        self._modifier_spin = make_signed_spin_box(MODIFIER_LIMIT, snug=True)
+        # Every row is a FieldRow — a box, its steps, and the slider it can have instead
+        # (Settings ▸ General) — so all of them read and behave alike.
+        # Emptied, it clears to +0; focused, its value is selected, so a typed number
+        # replaces it (the user's report, 2026-11-13) — the same for every box here.
+        self._modifier_spin = make_signed_spin_box(MODIFIER_LIMIT, snug=True, blank_clears=True)
+        select_all_on_focus(self._modifier_spin)
         # "+0" at rest, not "0": signed like every value it can hold, so it reads as the
         # modifier the steps either side of it move, not as a sixth button.
         self._modifier_spin.set_zero_text("+0")
         self._modifier_spin.setToolTip(MODIFIER_HINT)
         self._modifier_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        _stretch_across(self._modifier_spin)
         self._modifier_spin.valueChanged.connect(self._mark_extras)
         self._modifier_spin.valueChanged.connect(self._inputs_edited)
-        self._modifier_label = QLabel(MODIFIER_LABEL)
-        self._modifier_label.setToolTip(MODIFIER_HINT)
-        # Both labels sit a little in from the column's edge: the DC capsule is drawn
-        # from that edge (it cannot reach past the panel's), and its text needs air.
-        self._modifier_label.setContentsMargins(_capsule_inset(), 0, _label_gap(), 0)
-        # The other way to set it (Settings ▸ General): a slider in place of the penalty
-        # steps. Built either way, so the setting can switch it live.
-        self._modifier_slider = QSlider(Qt.Orientation.Horizontal)
-        self._modifier_slider.setRange(MODIFIER_SLIDER_MIN, MODIFIER_SLIDER_MAX)
-        self._modifier_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self._modifier_slider.setTickInterval(MODIFIER_SLIDER_TICKS)
-        self._modifier_slider.setPageStep(MODIFIER_SLIDER_TICKS)
-        self._modifier_slider.setToolTip(MODIFIER_SLIDER_HINT)
-        guard_wheel(self._modifier_slider)
-        _stretch_across(self._modifier_slider)
-        self._modifier_slider.valueChanged.connect(self._slider_moved)
-        self._modifier_spin.valueChanged.connect(self._sync_modifier_slider)
+        self._modifier_spin.valueChanged.connect(self._spread_modifier)
+        self._modifier_label = self._row_label(MODIFIER_LABEL, MODIFIER_HINT)
+        self._modifier_slider = self._row_slider(
+            MODIFIER_SLIDER_MIN, MODIFIER_SLIDER_MAX, MODIFIER_SLIDER_HINT
+        )
+        self._modifier_row = FieldRow(
+            "modifier", self._modifier_label, self._modifier_spin, self._modifier_slider
+        )
 
-        # The DC is **one** box where empty ("not set") means no DC — it used to be a
+        # Or two rows, Bonus and Penalty, as before the maneuvers rework (Settings ▸
+        # General). The one modifier box stays the number every roll reads; these two
+        # write their difference into it (:meth:`_gather_modifier`) and follow it
+        # (:meth:`_spread_modifier`).
+        self._spreading = False
+        self._bonus_spin = self._split_box(BONUS_HINT)
+        self._penalty_spin = self._split_box(PENALTY_HINT)
+        for box in (self._bonus_spin, self._penalty_spin):
+            box.valueChanged.connect(self._mark_extras)
+        self._bonus_label = self._row_label(BONUS_LABEL, BONUS_HINT)
+        self._penalty_label = self._row_label(PENALTY_LABEL, PENALTY_HINT)
+        self._bonus_row = FieldRow(
+            "bonus",
+            self._bonus_label,
+            self._bonus_spin,
+            self._row_slider(0, SPLIT_SLIDER_MAX, BONUS_HINT),
+        )
+        self._penalty_row = FieldRow(
+            "penalty",
+            self._penalty_label,
+            self._penalty_spin,
+            self._row_slider(0, SPLIT_SLIDER_MAX, PENALTY_HINT),
+        )
+
+        # The DC is **one** box where empty ("—") means no DC — it used to be a
         # checkbox beside a box that sat greyed at 15 while unticked, two controls for
-        # one number. Nobody grades a roll against DC 0, so 0 is free to mean "none".
-        self._dc_label = QLabel(DC_LABEL)
-        self._dc_label.setToolTip(DC_HINT)
-        self._dc_label.setContentsMargins(_capsule_inset(), 0, _label_gap(), 0)
-        self._dc_spin = make_spin_box(0, DC_LIMIT, value=0, buttons=False, snug=True)
+        # one number. Nobody grades a roll against DC 0, so 0 is free to mean "none",
+        # and emptying the box is how to say it.
+        self._dc_label = self._row_label(DC_LABEL, DC_HINT)
+        self._dc_spin = make_spin_box(
+            0, DC_LIMIT, value=0, buttons=False, snug=True, blank_clears=True
+        )
+        select_all_on_focus(self._dc_spin)
         self._dc_spin.setSpecialValueText(DC_NONE)
         self._dc_spin.setToolTip(DC_HINT)
         # Centred like the modifier's box above it, which it lines up under.
         self._dc_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        _stretch_across(self._dc_spin)
         self._dc_spin.valueChanged.connect(self._mark_dc)
         self._dc_spin.valueChanged.connect(self._inputs_edited)
+        self._dc_slider = self._row_slider(0, DC_SLIDER_MAX, DC_HINT)
+        self._dc_row = FieldRow("dc", self._dc_label, self._dc_spin, self._dc_slider)
 
-        # Take 10 is a **button** that makes the check now, rather than a checkbox that
-        # changed what the next click of the die did and had to be remembered.
-        self._routine_button = QPushButton(ROUTINE_LABEL)
-        self._routine_button.setToolTip(help_markup(f"{ROUTINE_HINT} ({TAKE_TEN_SHORTCUT})"))
-        self._routine_button.clicked.connect(lambda _=False: self.take_ten())
-
+        # Take 10 is a tile in the Actions popup (and Ctrl+T): it was a button beside
+        # the DC, little used for the room it took (the user's call, 2026-11-13).
         self._actions_button = QPushButton(ACTIONS_LABEL)
         self._actions_button.setToolTip(
             "Combat maneuvers and actions: attack maneuvers, Aid, Grab, Impress, Reroll…"
         )
         self._actions_button.clicked.connect(self.open_actions)
 
-        # The two buttons may narrow to their captions: the platform's push-button
-        # minimum is wider than either needs, and it is what pushed the pair off the
-        # rows in the right-hand strip.
-        for button in (self._routine_button, self._actions_button):
-            button.setMinimumWidth(_caption_width(button))
+        # It may narrow to its caption: the platform's push-button minimum is wider than
+        # it needs, and it was what pushed the buttons off the rows in the right strip.
+        self._actions_button.setMinimumWidth(_caption_width(self._actions_button))
 
         self._controls = RollControls(
-            modifier_label=self._modifier_label,
-            modifier_box=self._modifier_spin,
-            modifier_slider=self._modifier_slider,
+            modifier=self._modifier_row,
+            bonus=self._bonus_row,
+            penalty=self._penalty_row,
+            dc=self._dc_row,
             actions=self._actions_button,
-            dc_label=self._dc_label,
-            dc_box=self._dc_spin,
-            take_ten=self._routine_button,
         )
         # The capsule a set DC is drawn as (see :meth:`_mark_dc`).
         self._dc_pair = self._controls.capsule
@@ -784,15 +860,81 @@ class DiceRollerPanel(
             grid.addWidget(self._hidden_check, 4, 0, 1, 2)
         return part
 
-    # -- the modifier's two inputs ---------------------------------------------
+    # -- the field rows -------------------------------------------------------
+
+    @staticmethod
+    def _row_label(text: str, hint: str) -> QLabel:
+        label = QLabel(text)
+        label.setToolTip(hint)
+        # The labels sit a little in from the column's edge: the DC capsule is drawn
+        # from that edge (it cannot reach past the panel's), and its text needs air.
+        label.setContentsMargins(_capsule_inset(), 0, _label_gap(), 0)
+        return label
+
+    @staticmethod
+    def _row_slider(minimum: int, maximum: int, hint: str) -> QSlider:
+        """A row's slider, for when the setting asks for sliders: ticks at every major
+        circumstance step, as wide as the row shares out."""
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(minimum, maximum)
+        slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        slider.setTickInterval(MODIFIER_SLIDER_TICKS)
+        slider.setPageStep(MODIFIER_SLIDER_TICKS)
+        slider.setToolTip(hint)
+        guard_wheel(slider)
+        _stretch_across(slider)
+        return slider
+
+    def _split_box(self, hint: str) -> QSpinBox:
+        """A Bonus or Penalty box: 0 up, centred, writing into the modifier."""
+        box = make_spin_box(0, SPLIT_LIMIT, value=0, buttons=False, snug=True, blank_clears=True)
+        select_all_on_focus(box)
+        box.setToolTip(hint)
+        box.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        box.valueChanged.connect(self._gather_modifier)
+        return box
+
+    def _gather_modifier(self, *_args) -> None:
+        """Bonus or Penalty moved: the modifier is their difference."""
+        if self._spreading:
+            return
+        net = self._bonus_spin.value() - self._penalty_spin.value()
+        self._spreading = True
+        try:
+            self._modifier_spin.setValue(net)
+        finally:
+            self._spreading = False
+
+    def _spread_modifier(self, value: int) -> None:
+        """The modifier moved by itself (a step, a quick roll, a roll spending it): move
+        Bonus or Penalty by the difference — a bonus added lands in Bonus, a penalty in
+        Penalty — and empty both when it goes back to 0."""
+        if self._spreading:
+            return
+        bonus, penalty = self._bonus_spin.value(), self._penalty_spin.value()
+        delta = value - (bonus - penalty)
+        if value == 0:
+            bonus = penalty = 0
+        elif delta > 0:
+            bonus += delta
+        elif delta < 0:
+            penalty -= delta
+        if max(bonus, penalty) > SPLIT_LIMIT:
+            bonus, penalty = max(value, 0), max(-value, 0)
+        self._spreading = True
+        try:
+            self._bonus_spin.setValue(bonus)
+            self._penalty_spin.setValue(penalty)
+        finally:
+            self._spreading = False
 
     def modifier_input(self) -> str:
-        """``"buttons"`` or ``"slider"``: how the modifier row is set right now."""
+        """``"buttons"`` or ``"slider"``: how the rows are set right now."""
         return self._modifier_input
 
     def set_modifier_input(self, style: str) -> None:
-        """Set the modifier and the action lines with step buttons, or with sliders
-        (``storage.MODIFIER_INPUTS``). The DC keeps its steps either way."""
+        """Set every row — the modifier (or Bonus and Penalty), the DC — and the action
+        lines with step buttons, or with sliders (``storage.MODIFIER_INPUTS``)."""
         if style not in storage.MODIFIER_INPUTS:
             style = storage.MODIFIER_INPUT_BUTTONS
         if style == self._modifier_input:
@@ -802,33 +944,31 @@ class DiceRollerPanel(
         self.updateGeometry()
         self.contentChanged.emit()
 
+    def modifier_split(self) -> bool:
+        """Whether the modifier is showing as Bonus and Penalty rows."""
+        return self._modifier_split
+
+    def set_modifier_split(self, split: bool) -> None:
+        """Show Bonus and Penalty rows (``True``) or the one Modifier row."""
+        split = bool(split)
+        if split == self._modifier_split:
+            return
+        self._modifier_split = split
+        self._apply_modifier_input()
+        self.updateGeometry()
+        self.contentChanged.emit()
+
     def sync_modifier_input(self) -> None:
-        """Re-read the setting (it was saved on the General page)."""
+        """Re-read both settings (they were saved on the General page)."""
         self.set_modifier_input(storage.modifier_input())
+        self.set_modifier_split(storage.modifier_split())
 
     def _apply_modifier_input(self) -> None:
-        slider = self._modifier_input == storage.MODIFIER_INPUT_SLIDER
-        # All of them are in the grid (parented) before any is shown.
-        self._controls.set_slider(slider)
-        for button in self._step_buttons:
-            button.setVisible(not slider)
-        for button in self._dc_step_buttons:
-            button.setVisible(True)
+        # Every row's widgets belong to the controls already, so showing is safe.
+        self._controls.set_slider(self._modifier_input == storage.MODIFIER_INPUT_SLIDER)
+        self._controls.set_split(self._modifier_split)
         self._lane.set_input(self._modifier_input)
-        self._sync_modifier_slider()
-
-    def _slider_moved(self, value: int) -> None:
-        if self._modifier_spin.value() != value:
-            self._modifier_spin.setValue(value)
-
-    def _sync_modifier_slider(self, *_args) -> None:
-        """Follow the box (a step, a typed number, a roll spending it), as far as the
-        slider reaches — a +25 typed in leaves it at its end."""
-        value = max(MODIFIER_SLIDER_MIN, min(MODIFIER_SLIDER_MAX, self._modifier_spin.value()))
-        if self._modifier_slider.value() != value:
-            self._modifier_slider.blockSignals(True)
-            self._modifier_slider.setValue(value)
-            self._modifier_slider.blockSignals(False)
+        self._spread_modifier(self._modifier_spin.value())
 
     def _place_dc_capsule(self) -> None:
         """Lay the DC capsule over the DC row, a little proud of it."""
@@ -837,26 +977,36 @@ class DiceRollerPanel(
             controls.place_capsule()
 
     def set_modifier_steps(self, steps: Sequence[int]) -> None:
-        """Put *steps* either side of the modifier box and the DC box, as penalties and
-        as bonuses.
+        """Put *steps* either side of every box — the modifier's, Bonus's and
+        Penalty's, the DC's — as penalties and as bonuses.
 
         ``(1, 5)`` — the host reads them from the game data — gives ``−5 −1 [+0] +1 +5``
-        on both rows. A step **adds** to its box, so +1 twice is +2. The panel reads no
+        on every row. A step **adds** to its box, so +1 twice is +2. The panel reads no
         game data, so until a host calls this there are no steps, only the boxes.
         """
-        old = [*self._step_buttons, *self._dc_step_buttons]
-        self._step_buttons = []
-        self._dc_step_buttons = []
+        old = [*self._step_buttons, *self._dc_step_buttons, *self._split_step_buttons]
         sizes = sorted({abs(int(step)) for step in steps if int(step)})
         signed = [-size for size in reversed(sizes)] + sizes
+
+        def nudge(box: QSpinBox) -> Callable[[int], None]:
+            return lambda amount: box.setValue(box.value() + amount)
+
         modifier = [self._step_button(step, self.add_bonus, "to the modifier") for step in signed]
         dc = [self._step_button(step, self._step_dc, "to the DC") for step in signed]
+        bonus = [
+            self._step_button(step, nudge(self._bonus_spin), "to the bonus") for step in signed
+        ]
+        penalty = [
+            self._step_button(step, nudge(self._penalty_spin), "to the penalty") for step in signed
+        ]
         self._step_buttons = modifier
         self._dc_step_buttons = dc
-        self._controls.set_steps(modifier, dc)
+        self._split_step_buttons = [*bonus, *penalty]
+        self._controls.set_steps(
+            {"modifier": modifier, "dc": dc, "bonus": bonus, "penalty": penalty}
+        )
         for button in old:
             discard_widget(button)
-        # Parented by the grid now, so they may be shown or hidden for the setting.
         self._apply_modifier_input()
         self.updateGeometry()
         self.contentChanged.emit()
@@ -927,6 +1077,7 @@ class DiceRollerPanel(
         return {
             ACTION_REROLL: None if self._last_roll is not None else NOTHING_TO_REROLL,
             ACTION_REQUEST: self.request_reason(),
+            ACTION_TAKE_TEN: None,
         }
 
     @property
@@ -938,23 +1089,8 @@ class DiceRollerPanel(
         own = self.own_actions()
         if self._menu_builder is not None:
             return list(self._menu_builder(own))
-        reason = own[ACTION_REROLL]
-        reroll = GridItem(
-            ACTION_REROLL,
-            "Reroll",
-            ACTION_REROLL,
-            action_tooltip("Reroll", "Throw your last roll again.", reason),
-            enabled=reason is None,
-        )
-        reason = own[ACTION_REQUEST]
-        request = GridItem(
-            ACTION_REQUEST,
-            "Ask",
-            ACTION_REQUEST,
-            action_tooltip("Ask to Roll", "Ask the table to roll a trait.", reason),
-            enabled=reason is None,
-        )
-        return [GridSection("Dice", (reroll, request))]
+        shown, more = own_items(own)
+        return [GridSection("Dice", tuple(shown)), GridSection("More", tuple(more), more=True)]
 
     def open_actions(self) -> ActionGridPopup | None:
         """Open the Actions popup under its button, and return it.
@@ -970,11 +1106,17 @@ class DiceRollerPanel(
         if self._action_popup is not None:
             self._action_popup.close()
         try:
-            popup = ActionGridPopup(self._action_sections(), self._actions_button)
+            popup = ActionGridPopup(
+                self._action_sections(),
+                self._actions_button,
+                more_shown=storage.actions_show_more(),
+            )
         except Exception:  # noqa: BLE001 - a bad menu must not take the roller down
             log_exception("Building the Actions popup")
             return None
         popup.picked.connect(self._on_action_picked)
+        # Remembered by the app, not the panel: every roller opens it the same way.
+        popup.moreToggled.connect(storage.set_actions_show_more)
         popup.destroyed.connect(lambda _=None, p=popup: self._forget_popup(p))
         self._action_popup = popup
         popup.show_under(self._actions_button)
@@ -987,6 +1129,8 @@ class DiceRollerPanel(
     def _on_action_picked(self, key: str) -> None:
         if key == ACTION_REROLL:
             self.reroll()
+        elif key == ACTION_TAKE_TEN:
+            self.take_ten()
         elif key == ACTION_REQUEST:
             # Over the tile, as a submenu would open — but only once the Actions popup
             # has closed: two popups open at once fight over which one a click closes.
@@ -1087,11 +1231,20 @@ class DiceRollerPanel(
         text is wider, so the roller grew sideways each time the value left 0.
         """
         value = self._modifier_spin.value()
-        style = ""
-        if value:
-            style = tinted_style("tint.better" if value > 0 else "tint.worse", bold=False)
-        self._modifier_label.setStyleSheet(style)
-        self._modifier_spin.setStyleSheet(f"QSpinBox {{ {style} }}" if style else "")
+        rows = (
+            (
+                self._modifier_label,
+                self._modifier_spin,
+                value,
+                "tint.better" if value > 0 else "tint.worse",
+            ),
+            (self._bonus_label, self._bonus_spin, self._bonus_spin.value(), "tint.better"),
+            (self._penalty_label, self._penalty_spin, self._penalty_spin.value(), "tint.worse"),
+        )
+        for label, box, amount, token in rows:
+            style = tinted_style(token, bold=False) if amount else ""
+            label.setStyleSheet(style)
+            box.setStyleSheet(f"QSpinBox {{ {style} }}" if style else "")
 
     def _mark_dc(self) -> None:
         """Draw a set DC as a tinted capsule round its label and box.
@@ -1523,14 +1676,10 @@ class DiceRollerPanel(
     def _input_widgets(self) -> list[QWidget]:
         return [
             self._spec_chip,
-            self._modifier_spin,
-            self._modifier_slider,
-            *self._step_buttons,
-            *self._dc_step_buttons,
+            *(w for row in self._controls.all_rows() for w in (row.box, row.slider, *row.steps)),
             self._lane,
             self._dc_spin,
             self._hidden_check,
-            self._routine_button,
             self._request_combo,
             self._request_dc,
             self._request_button,
@@ -1939,6 +2088,8 @@ class DiceRollerPanel(
         for widget in self._input_widgets():
             widget.setEnabled(False)
         self._roll_clock.restart()
+        self._aim_first = None
+        self._aim_stage = 1 if self._twice() and not self._routine() else 0
         self._request_session_roll()
         self._tick_roll()
         return True
@@ -2005,7 +2156,9 @@ class DiceRollerPanel(
         if str(roll.get("player_id", "")) != self._own_id:
             return
         self._pending = roll
-        if self._roll_clock.elapsed() >= ROLL_DURATION_MS:
+        if self._aim_stage == 1 and self._roll_clock.elapsed() >= ROLL_DURATION_MS:
+            self._land_first_die()
+        elif self._aim_stage == 0 and self._roll_clock.elapsed() >= ROLL_DURATION_MS:
             self._reveal_session_roll(roll)
 
     def _tick_roll(self) -> None:
@@ -2013,13 +2166,18 @@ class DiceRollerPanel(
         interval so the tumble decelerates, or finish once there is a result."""
         if not self._rolling:  # a direct _finish_roll() (e.g. in tests) pre-empted us
             return
+        if self._aim_stage == 2:  # resting on Aim's first die
+            return
         elapsed = self._roll_clock.elapsed()
-        if elapsed >= ROLL_DURATION_MS:
+        duration = AIM_SECOND_MS if self._aim_stage == 3 else ROLL_DURATION_MS
+        if elapsed >= duration:
             if not self._awaiting:
-                self._finish_roll()
+                if not self._land_first_die():
+                    self._finish_roll()
                 return
             if self._pending is not None:
-                self._reveal_session_roll(self._pending)
+                if not self._land_first_die():
+                    self._reveal_session_roll(self._pending)
                 return
             if elapsed >= SESSION_ROLL_TIMEOUT_MS:
                 self._abandon_roll(NO_ANSWER)
@@ -2027,9 +2185,47 @@ class DiceRollerPanel(
         self._face.setText(str(random.randint(1, 20)))
         # Ease-out: interval grows with the square of progress, so frames start
         # rapid and stretch out as the die settles.
-        progress = min(1.0, elapsed / ROLL_DURATION_MS) if ROLL_DURATION_MS else 1.0
+        progress = min(1.0, elapsed / duration) if duration else 1.0
         interval = FLICKER_MIN_MS + (FLICKER_MAX_MS - FLICKER_MIN_MS) * progress**2
-        QTimer.singleShot(round(interval), self._tick_roll)
+        self._tumble_timer.start(round(interval))
+
+    def _land_first_die(self) -> bool:
+        """Aim's first throw is over: show it and rest on it, then throw the second.
+
+        ``False`` when there is no first die to show — a roll of one die, the second of
+        two, or a tumble with no length (the tests', whose rolls land at once). Made
+        here, the first die is thrown now and kept for :meth:`_finish_roll`; rolled by
+        the session, both came back together and either is shown first — two
+        independent dice, so which was "first" is only the order they are shown in.
+        """
+        if self._aim_stage != 1 or not ROLL_DURATION_MS:
+            return False
+        if self._awaiting:
+            roll = self._pending or {}
+            dice = [int(roll.get("die", 0)), int(roll.get("other_die") or 0)]
+            face = random.choice(dice) if all(dice) else dice[0]
+        else:
+            self._aim_first = reroll_d20() if self._rerolling else (roll_d20(), True)
+            face = self._aim_first[0]
+        self._aim_stage = 2
+        self._tumble_timer.stop()
+        self._face.setText(str(face))
+        self._readout.setText(
+            f"<span style='color:{theme.color('text.muted.rich')}'>"
+            f"{AIM_FIRST_TEXT.format(die=face)}</span>"
+        )
+        self._readout.setToolTip("")
+        self._readout_changed()
+        self._aim_pause.start(AIM_PAUSE_MS)
+        return True
+
+    def _throw_second_die(self) -> None:
+        """The pause on Aim's first die is over: tumble for the second."""
+        if not self._rolling or self._aim_stage != 2:
+            return
+        self._aim_stage = 3
+        self._roll_clock.restart()
+        self._tick_roll()
 
     def _finish_roll(self) -> None:
         """Resolve the roll locally and report it, ending any tumble in progress."""
@@ -2040,8 +2236,12 @@ class DiceRollerPanel(
         bonus, penalty, dc, _hidden = self._roll_parameters()
         if routine:
             die, natural = ROUTINE_DIE, False
+        elif self._aim_first is not None:
+            # Aim's first die, thrown and shown before the second tumbled.
+            die, natural = self._aim_first
         else:
             die, natural = reroll_d20() if self._rerolling else (roll_d20(), True)
+        self._end_aim()
         other_die = 0
         if twice and not routine:
             # Aim: a second die, the higher kept — with its own "natural" (a lucky
@@ -2101,6 +2301,13 @@ class DiceRollerPanel(
         # Last, so everything above still sees what was rolled.
         self._wind_down()
 
+    def _end_aim(self) -> None:
+        """Forget Aim's two throws: the roll has landed, or been given up on."""
+        self._aim_stage = 0
+        self._aim_first = None
+        self._aim_pause.stop()
+        self._tumble_timer.stop()
+
     def _wind_down(self) -> None:
         """Clear what the roll that just landed used up — its one-roll trait, its
         modifier, its lines, a take 10 — leaving its result beside the die.
@@ -2129,6 +2336,7 @@ class DiceRollerPanel(
         self._rolling = False
         self._awaiting = False
         self._pending = None
+        self._end_aim()
         self._disconnect_session()
 
         die = int(roll.get("die", 0))
@@ -2174,6 +2382,7 @@ class DiceRollerPanel(
         self._rolling = False
         self._awaiting = False
         self._pending = None
+        self._end_aim()
         self._pending_last = None
         self._rerolling = False
         self._rolled_lines = ()

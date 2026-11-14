@@ -64,6 +64,8 @@ Request topic           Payload / server
 ======================  ====================================================
 ``roll-requested``      a :class:`~mm_companion.core.rules.RollSpec`; the Dice
                         block rolls it
+``rolls-requested``     several, in a tuple; the Dice block rolls them one
+                        after another (End turn's checks)
 ``load-requested``      the same, but the Dice block only *shows* it in its
                         chip — what a single click on a stat line asks for,
                         leaving the die to a double-click
@@ -156,6 +158,11 @@ RESEED_TOPICS = tuple(t for t in NOTIFICATIONS if t != EDITED)
 
 # Request topics (the payload channel — see the module docstring).
 ROLL_REQUESTED = "roll-requested"
+#: Several rolls, one after another: the payload is a tuple of
+#: :class:`~mm_companion.core.rules.RollSpec`. A turn's end shakes several conditions off
+#: at once (the Conditions block's End turn), and ``roll-requested`` refuses a roll
+#: while a die still tumbles, so the Dice block queues these instead.
+ROLLS_REQUESTED = "rolls-requested"
 LOAD_REQUESTED = "load-requested"
 NOTE_REQUESTED = "note-requested"
 PIN_REQUESTED = "pin-requested"

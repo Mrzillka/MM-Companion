@@ -1260,3 +1260,21 @@ def test_the_impress_dialog_picks_targets_off_a_copy_of_the_scene(qapp, data) ->
     dialog.picker._activate("s2")
     assert dialog.target_refs() == ["s2"]
     assert dialog.picker.shown_refs() == []
+
+
+def test_the_window_opens_wide_enough_for_everyone_on_the_scene(qapp, data) -> None:
+    """Rows put in from the scene never widen the table past the window (the user's
+    report, 2026-11-13): it opens at the width every row in would need."""
+    window, _said = _gm_window(data)
+    window.set_included([])
+    window.show()
+    qapp.processEvents()
+    opened = window.width()
+
+    window.set_included(["s-nova", "s-mook"])
+    qapp.processEvents()
+    from mm_companion.ui.action_ui import refresh_layouts
+
+    refresh_layouts(window)
+    assert window.sizeHint().width() <= opened
+    window.close()

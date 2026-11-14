@@ -7,6 +7,30 @@ touching the area rather than after.
 
 Take one off this list by doing it, and delete its entry in the same commit.
 
+## Review every action, one by one — ASAP
+
+Play-testing the Actions grid (2026-11-13) turned up problems with several actions, and
+the user asked for a **review of each action on its own, as soon as possible** — not a
+sweep of the whole grid at once. Take them one at a time: read the book's entry (the
+`rulebook` skill, or ask the `mm-rules` agent), run the action at a table (a player's
+sheet *and* the GM's window, on the air and off it), and check what it rolls, what DC it
+is judged against, who resists and with what, which conditions land, on whom, for how
+long, and what its history card and hover say. Fix what is wrong in that action's own
+commit, and tick it off here.
+
+From `actions.json`'s grid, in its order:
+
+- [ ] Attack maneuvers: Accurate Attack, All-Out Attack, Defensive Attack, Power
+      Attack, Finishing Attack, Surprise Attack
+- [ ] Actions: Aid, Aim, Attack, Block, Catch, Charge (and Slam), Defend, Disarm, Drop
+      Prone, Escape, Feint, Grab, Impress, Recover, Smash, Stand, Trick, Trip
+- [ ] Area & Group: Area Attack, Team Attack, Team Check, Group Check
+- [ ] Dice: Reroll, Ask to Roll
+
+Known so far, to check first: Recover's "once per conflict scene" is not counted (see
+"Combat maneuvers: what is left overall"), and Aim's "lost if your next standard action
+is not that attack" is not tracked.
+
 ## Before release
 
 Work kept for the stable **1.0 release**. Ordinary releases go out without it; pick
@@ -178,8 +202,15 @@ of the turn economy should hang off:
 - **A condition put on by hand carries no record**, so a Dazed or Stunned put there
   still gets the damage Stamina check. A save the GM rolls "as written" (nobody's
   number) lands nowhere.
-- **A chip with a record shows no 🎲.** Shaking one off is End turn's, or Recover's
-  (the Actions grid), not the chip's.
+- **The GM's cards have no Start turn.** A sheet's Conditions block has Start turn and
+  End turn (2026-11-13); the GM's NPC, player and Scene cards still have End turn and a
+  "Clear temporary" shown only while something is temporary, which is the same thing.
+- **End turn on an NPC sheet rolls nothing.** An NPC sheet has no Dice block, and
+  `rolls-requested` is not one of the `OUTWARD_REQUESTS` the GM window takes over, so
+  its checks go nowhere (what clears by itself still comes off). The GM's End turn on
+  the NPC's card is the way.
+- **A player's own End turn and the GM's both work**, and nothing stops both being
+  pressed: the player then rolls their shake-offs twice.
 - **There is no turn tracker.** The GM ends each creature's turn by hand; initiative
   order is on the board, but nothing walks it.
 

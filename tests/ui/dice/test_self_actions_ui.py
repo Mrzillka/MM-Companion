@@ -165,7 +165,7 @@ def test_aim_rolls_two_dice_and_keeps_the_higher(qapp, data, menu, monkeypatch) 
     panel._finish_roll()
     (roll,) = rolls
     assert (roll["die"], roll["other_die"]) == (17, 5)
-    assert "<s>5</s>" in panel._readout.text()
+    assert "best of 5 and 17" in panel._readout.text()
 
 
 def test_a_rerolled_aim_throws_two_lucky_dice(qapp, data, menu, monkeypatch) -> None:

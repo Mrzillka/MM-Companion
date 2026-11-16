@@ -2,7 +2,7 @@
 
 Matters when adding a block, or touching the page, the pinned strip or layout persistence.
 
-Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
+Working notes for MM-Companion, split out of [AGENTS.md](../../AGENTS.md).
 
 ## The page is a tree, and the user owns it
 

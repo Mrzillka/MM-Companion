@@ -13,10 +13,10 @@ Two halves:
 
 Usage (from anywhere in the repo)::
 
-    python .claude/skills/affected-tests/affected.py            # select and run
-    python .claude/skills/affected-tests/affected.py --dry      # only show the selection
-    python .claude/skills/affected-tests/affected.py --full     # run all, rebuild the records
-    python .claude/skills/affected-tests/affected.py -- -x -k x  # anything after -- goes to pytest
+    python .agents/skills/affected-tests/affected.py            # select and run
+    python .agents/skills/affected-tests/affected.py --dry      # only show the selection
+    python .agents/skills/affected-tests/affected.py --full     # run all, rebuild the records
+    python .agents/skills/affected-tests/affected.py -- -x -k x  # anything after -- goes to pytest
 
 Exit status is pytest's (0 when every selected test passed, or nothing needed running).
 """

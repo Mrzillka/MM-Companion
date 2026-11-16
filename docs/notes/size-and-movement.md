@@ -2,7 +2,7 @@
 
 Matters when touching size, speed, or a movement effect.
 
-Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
+Working notes for MM-Companion, split out of [AGENTS.md](../../AGENTS.md).
 
 Size used to be a full data model with one live wire (ground speed) and a label. It is a
 **trait source** now, and movement reconciles rather than accumulating. Both are

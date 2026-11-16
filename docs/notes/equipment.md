@@ -2,7 +2,7 @@
 
 Matters when touching equipment, gear or vehicles.
 
-Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
+Working notes for MM-Companion, split out of [AGENTS.md](../../AGENTS.md).
 
 Equipment is the powers layer used a second way, not a parallel one. The full map is
 `docs/mm-equipment-architecture.md`, the rules themselves are

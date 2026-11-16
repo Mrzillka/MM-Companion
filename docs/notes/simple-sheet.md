@@ -4,7 +4,7 @@ Matters when touching the play view (View ▸ Simple Sheet, the bar's **Simple s
 switch), printing, or adding a block — every block has a look there, even if it is the
 default one.
 
-Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
+Working notes for MM-Companion, split out of [AGENTS.md](../../AGENTS.md).
 
 ## What it is
 

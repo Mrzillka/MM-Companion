@@ -25,7 +25,7 @@ by hand, by you, from the commit log. `make_release.py` refuses to tag without
 them.
 
 All paths are relative to the repo root. Two drivers live in
-`.claude/skills/make-release/`: `release_notes.py` (material, scaffold, check)
+`.agents/skills/make-release/`: `release_notes.py` (material, scaffold, check)
 and `make_release.py` (tag + push).
 
 ## Mods are released separately
@@ -52,7 +52,7 @@ one's.
 ### 1. See the level and gather the material
 
 ```bash
-python .claude/skills/make-release/release_notes.py
+python .agents/skills/make-release/release_notes.py
 ```
 
 Read-only. It reports the release **level** and how far back the changelog
@@ -78,12 +78,12 @@ Do this **before** drafting, not after:
 - **For a major release**, ask which features are the *headline* ones (the log
   won't tell you what the user considers the story of this version), and ask what
   the **near-term plans** are for the *What's next* section. There is no roadmap
-  file in this repo — **never invent one**. Use `AskUserQuestion`.
+  file in this repo — **never invent one**. Ask the user a concise question.
 
 ### 3. Write `docs/releases/vX.Y.Z.md`
 
 ```bash
-python .claude/skills/make-release/release_notes.py --scaffold
+python .agents/skills/make-release/release_notes.py --scaffold
 ```
 
 Writes the level-appropriate skeleton (it refuses to clobber an existing file
@@ -91,7 +91,7 @@ without `--force`). Replace **every** `TODO` and every `<!-- ... -->` guidance
 comment with real prose per *How to write the notes* below, then:
 
 ```bash
-python .claude/skills/make-release/release_notes.py --check
+python .agents/skills/make-release/release_notes.py --check
 ```
 
 Show the finished notes to the user before committing them.
@@ -108,8 +108,10 @@ git checkout -b "release/v$NEW"
 git add src/mm_companion/__init__.py "docs/releases/v$NEW.md"
 # Optionally also bump the README "Status" line to $NEW in the same commit.
 git commit -m "Release v$NEW"
+git checkout develop
+git merge --no-ff "release/v$NEW" -m "Merge release/v$NEW into develop"
 git checkout main
-git merge --no-ff "release/v$NEW" -m "Merge release/v$NEW into main"
+git merge --no-ff develop -m "Merge develop into main for v$NEW"
 ```
 
 If the bump and notes are already committed on `main` (clean tree, `HEAD`
@@ -119,10 +121,10 @@ version == working version), skip this step.
 
 ```bash
 # Preview — prints version, tag, branch, notes verdict, and what it would do:
-python .claude/skills/make-release/make_release.py --dry-run
+python .agents/skills/make-release/make_release.py --dry-run
 
 # Publish — create the annotated tag and push branch + tag (fires the build):
-python .claude/skills/make-release/make_release.py
+python .agents/skills/make-release/make_release.py
 ```
 
 The driver refuses (touching nothing) if the bump isn't committed, if the tag
@@ -273,7 +275,7 @@ Linux, download `MM-Companion-X.Y.Z-linux-x86_64.tar.gz`, extract it and run `./
 
 - *"Release notes are not ready: …"* — do steps 1–4: `--scaffold`, write the
   prose, `--check`, and commit `docs/releases/vX.Y.Z.md` with the bump.
-- *"Version bump is not committed"* — do step 4 (commit the bump to `main`).
+- *"Version bump is not committed"* — do step 4 (commit the bump on the release branch, then merge through `develop` into `main`).
 - *"Tag vX.Y.Z already exists"* — that version is already released; run
   build-installer to bump first.
 - *"On branch '…', not 'main'"* — switch to `main` (the release branch) or pass

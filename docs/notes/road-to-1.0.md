@@ -50,7 +50,7 @@ what the box can actually hold, and what a new GM sees when the cap is reached
 - 1.0 is a promise that saved characters keep loading. Confirm the character
   file format is one we are willing to migrate forward from, rather than break.
 - **Be open about the AI assistance.** Most commits carry `Co-Authored-By:
-  Claude`, and `CLAUDE.md` and `.claude/skills/` are in the repo. Say so in the
+  Claude`, and `AGENTS.md` and `.agents/skills/` are in the repo. Say so in the
   post rather than have someone "discover" it. Being caught hiding it goes over
   far worse on RPG subreddits than admitting it.
 

@@ -26,7 +26,7 @@ driver. After it finishes, tell them which was done and the new version — the
 driver prints exactly that (e.g. `MINOR update complete: 0.1.2 -> 0.1.3`).
 
 All paths below are relative to the repo root. The driver lives at
-`.claude/skills/build-installer/build_installer.py`.
+`.agents/skills/build-installer/build_installer.py`.
 
 ## Prerequisites (one-time, on the build machine)
 
@@ -48,12 +48,12 @@ interpreter to the build, so the freeze always uses the right deps:
 
 ```bash
 # preview the version change only — no files touched, no build:
-python .claude/skills/build-installer/build_installer.py minor --dry-run
-python .claude/skills/build-installer/build_installer.py major --dry-run
+python .agents/skills/build-installer/build_installer.py minor --dry-run
+python .agents/skills/build-installer/build_installer.py major --dry-run
 
 # do it for real (bump + full build, ~2-3 min):
-python .claude/skills/build-installer/build_installer.py minor
-python .claude/skills/build-installer/build_installer.py major
+python .agents/skills/build-installer/build_installer.py minor
+python .agents/skills/build-installer/build_installer.py major
 ```
 
 On success it prints a summary and leaves the installer at

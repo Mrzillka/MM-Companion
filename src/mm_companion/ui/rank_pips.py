@@ -35,7 +35,7 @@ committed until a click.
 
 **Width adapts; height does not.** Narrower than its natural width the pips shrink
 toward a floor and past it clip; nothing here reports a minimum width, since whether a
-card is too narrow to read is the player's call (``CLAUDE.md``). Shrinking happens in
+card is too narrow to read is the player's call (``AGENTS.md``). Shrinking happens in
 the paint, so it never relays anything out and needs no reflow guard.
 
 Notch ``0`` — off — is not a pip: it is where the scale stands with every pip hollow.

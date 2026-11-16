@@ -28,10 +28,10 @@ what actually keeps every release described. Write them with
 
 Usage (from anywhere in the repo)::
 
-    python .claude/skills/make-release/make_release.py --dry-run   # preview only
-    python .claude/skills/make-release/make_release.py             # tag + push
-    python .claude/skills/make-release/make_release.py --watch      # + wait for CI
-    python .claude/skills/make-release/make_release.py --no-notes   # skip the notes guard
+    python .agents/skills/make-release/make_release.py --dry-run   # preview only
+    python .agents/skills/make-release/make_release.py             # tag + push
+    python .agents/skills/make-release/make_release.py --watch      # + wait for CI
+    python .agents/skills/make-release/make_release.py --no-notes   # skip the notes guard
 
 The local ``.exe`` from ``build-installer`` is NOT uploaded — the runner builds
 its own from the tagged commit. build-installer's local build is a smoke test.
@@ -224,7 +224,7 @@ def main() -> int:
     if not notes_ok:
         fail(
             f"Release notes are not ready: {notes_why}. Every release ships a description "
-            f"and a changelog. Run 'python .claude/skills/make-release/release_notes.py "
+            f"and a changelog. Run 'python .agents/skills/make-release/release_notes.py "
             f"--scaffold', write it, and commit {notes_rel} alongside the version bump "
             "(pass --no-notes only if you deliberately mean to release without notes)."
         )

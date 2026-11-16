@@ -2,7 +2,7 @@
 
 Matters when adding a block, or a field to the model.
 
-Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
+Working notes for MM-Companion, split out of [AGENTS.md](../../AGENTS.md).
 
 `Ctrl+Z` walks the sheet back, `Ctrl+Shift+Z` / `Ctrl+Y` forward, and two bare
 menu-bar buttons **Undo** and **Redo** sit immediately before the 🔒 (which stays the bar's last

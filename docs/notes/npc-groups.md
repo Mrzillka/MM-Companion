@@ -3,7 +3,7 @@
 Matters when touching the GM's NPC board, Quick NPC, Copy, or anything that treats
 several NPCs as one.
 
-Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
+Working notes for MM-Companion, split out of [AGENTS.md](../../AGENTS.md).
 
 ## What a group is
 

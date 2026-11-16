@@ -2,7 +2,7 @@
 
 Matters when touching GM mode / online play.
 
-Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
+Working notes for MM-Companion, split out of [AGENTS.md](../../AGENTS.md).
 
 GM Mode and online play are a self-contained subsystem, split the usual
 `ui → core → data` way. The full map is `docs/mm-session-architecture.md`; the

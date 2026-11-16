@@ -56,3 +56,6 @@ reference/
 .testmondata
 .testmondata-*
 .affected-tests/
+
+# Original Claude instructions, skills and local settings (preserved locally)
+/.legacy-claude/

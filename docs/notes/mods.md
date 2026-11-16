@@ -2,7 +2,7 @@
 
 Matters when touching data loading or startup.
 
-Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
+Working notes for MM-Companion, split out of [AGENTS.md](../../AGENTS.md).
 
 The base ruleset is loaded as **the default mod** through the same pipeline that
 loads user mods, so game content is fully data-first and moddable. The full

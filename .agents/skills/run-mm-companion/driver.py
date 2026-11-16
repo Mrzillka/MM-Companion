@@ -5,20 +5,20 @@ the window), this builds a window, pumps the Qt event loop a few times, saves a
 PNG screenshot, and exits. That makes every UI surface reachable programmatically
 from a single command:
 
-    python .claude/skills/run-mm-companion/driver.py start        # launcher (StartWindow)
-    python .claude/skills/run-mm-companion/driver.py sheet        # editable character sheet
-    python .claude/skills/run-mm-companion/driver.py sheet-demo   # sheet with values driven in
-    python .claude/skills/run-mm-companion/driver.py sheet-locked # the read-only view
-    python .claude/skills/run-mm-companion/driver.py sheet-unlocked      # its editable twin
-    python .claude/skills/run-mm-companion/driver.py sheet-unlock-toggle # unlocked by the toggle
-    python .claude/skills/run-mm-companion/driver.py constructor  # the Power Constructor
-    python .claude/skills/run-mm-companion/driver.py compact      # the window shrunk to the roller
-    python .claude/skills/run-mm-companion/driver.py compact-gm   # the same, from the GM window
-    python .claude/skills/run-mm-companion/driver.py gm           # GM Mode, with a cast of NPCs
-    python .claude/skills/run-mm-companion/driver.py npc          # the simplified NPC sheet
-    python .claude/skills/run-mm-companion/driver.py impress-gm   # the GM's Impress window
-    python .claude/skills/run-mm-companion/driver.py area-gm      # the GM's area-attack window
-    python .claude/skills/run-mm-companion/driver.py all           # start + sheet + constructor
+    python .agents/skills/run-mm-companion/driver.py start        # launcher (StartWindow)
+    python .agents/skills/run-mm-companion/driver.py sheet        # editable character sheet
+    python .agents/skills/run-mm-companion/driver.py sheet-demo   # sheet with values driven in
+    python .agents/skills/run-mm-companion/driver.py sheet-locked # the read-only view
+    python .agents/skills/run-mm-companion/driver.py sheet-unlocked      # its editable twin
+    python .agents/skills/run-mm-companion/driver.py sheet-unlock-toggle # unlocked by the toggle
+    python .agents/skills/run-mm-companion/driver.py constructor  # the Power Constructor
+    python .agents/skills/run-mm-companion/driver.py compact      # the window shrunk to the roller
+    python .agents/skills/run-mm-companion/driver.py compact-gm   # the same, from the GM window
+    python .agents/skills/run-mm-companion/driver.py gm           # GM Mode, with a cast of NPCs
+    python .agents/skills/run-mm-companion/driver.py npc          # the simplified NPC sheet
+    python .agents/skills/run-mm-companion/driver.py impress-gm   # the GM's Impress window
+    python .agents/skills/run-mm-companion/driver.py area-gm      # the GM's area-attack window
+    python .agents/skills/run-mm-companion/driver.py all           # start + sheet + constructor
 
 The other action surfaces are impress-dialog, impress-dialog-offline,
 impress-gm-running, area-dialog, area-dialog-offline and roll-prompt.
@@ -31,7 +31,7 @@ touches the user's real %APPDATA%\\MM-Companion (pass --keep-home to opt out).
 ``parchment-light``, or anything in the workspace ``themes/`` dir) and tags the
 filename with it, so the same surface can be compared across looks:
 
-    python .claude/skills/run-mm-companion/driver.py sheet --theme slate-dark
+    python .agents/skills/run-mm-companion/driver.py sheet --theme slate-dark
 
 To drive a NEW flow, add a branch in build() that constructs the window and
 pokes its real widgets before the screenshot — see the "sheet-demo" branch,

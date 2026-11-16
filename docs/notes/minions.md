@@ -3,7 +3,7 @@
 Matters when touching the minion flag, the Session settings page, the damage row on a
 minion's card, or anything that resolves a check against a creature that might be one.
 
-Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
+Working notes for MM-Companion, split out of [AGENTS.md](../../AGENTS.md).
 
 ## The rules, and where each one lands
 

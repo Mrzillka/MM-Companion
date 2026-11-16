@@ -2,7 +2,7 @@
 
 Matters when touching startup, settings, saving, loading or the character library.
 
-Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
+Working notes for MM-Companion, split out of [AGENTS.md](../../AGENTS.md).
 
 - On launch, `__main__.main()` shows a splash with a loading bar — up before the
   interface is imported, which is most of a start (see [the UI utilities

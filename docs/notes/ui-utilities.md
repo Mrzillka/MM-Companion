@@ -2,7 +2,7 @@
 
 Matters when adding widgets.
 
-Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
+Working notes for MM-Companion, split out of [AGENTS.md](../../AGENTS.md).
 
 The `ui/` package has a small support layer that section code is expected to go
 through rather than reinvent. When building new sheet widgets, use it:

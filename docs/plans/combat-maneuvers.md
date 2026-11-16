@@ -1,7 +1,7 @@
 # Combat maneuvers and the Actions menu — plan
 
 Branch: **`feature/combat-maneuvers`** (off `develop`). Driven by the
-`/combat-maneuvers` skill (`.claude/skills/combat-maneuvers/SKILL.md`), one phase per
+`$combat-maneuvers` skill (`.agents/skills/combat-maneuvers/SKILL.md`), one phase per
 session. This file is the single source of truth for the feature: the status table,
 the decisions, the design, and the progress log at the bottom. **Update it at the end of
 every session.**
@@ -252,7 +252,7 @@ here.
 
 Read before designing anything: `docs/notes/actions.md`, `conditions-and-damage.md`,
 `dice-and-rolling.md`, `theme.md`, `ui-utilities.md`, `session.md`, `testing.md`, and
-for the GM `minions.md` and `npc-groups.md`. **The standing rules in `CLAUDE.md` apply
+for the GM `minions.md` and `npc-groups.md`. **The standing rules in `AGENTS.md` apply
 in full**: no rules content in Python, theme tokens only, widgets never compute game
 numbers, `core` has no Qt, no minimum sizes decided by content, never show a parentless
 widget, log failures.
@@ -728,7 +728,7 @@ Each phase ends with: tests green (affected), ruff + black clean, this file upda
       attack did nothing, now greyed with the reason.
 - [x] `docs/notes/actions.md` gets a "Combat maneuvers" section,
       `conditions-and-damage.md` temporary conditions, `dice-and-rolling.md` the new
-      slider/lane/Actions button, and `CLAUDE.md`'s summary paragraph one sentence.
+      slider/lane/Actions button, and `AGENTS.md`'s summary paragraph one sentence.
 - [x] Remaining work goes to `docs/notes/debts.md`.
 - [x] `ruff check .`, `black --check .`, and the **full `pytest`**. Run the app
       (`run-mm-companion` skill) and screenshot the roller and popup for the user.
@@ -860,7 +860,7 @@ commit hash.
   grey it with `NO_ATTACKS` (they read `reacting`). Notes: most were written phase by
   phase; added the "every tile" paragraph and an index of where each kind is documented
   (`actions.md` "Combat maneuvers"), Block's no-attack case (`dice-and-rolling.md`), and
-  the sentence in `CLAUDE.md`. Debts: a new "Combat maneuvers: what is left overall"
+  the sentence in `AGENTS.md`. Debts: a new "Combat maneuvers: what is left overall"
   (no turn clock, Prone's ±5 never reaching an attack roll, Charge's −2 outside the caps,
   Recover's once per scene and Aim's lapse untracked, Accurate/Power's duration, the
   lane growing, no System dot, the chip not naming the power, DC/Routine still two rows).
@@ -901,7 +901,7 @@ commit hash.
   for `resolve_group` had no lead die — an NPC's opposed check is a lead-only group, so the
   new tests stage one; (2) heredocs with backticks still break the Bash tool (three times
   this session) — scripts go in the scratchpad. Next: phase 10 (every tile checked, notes,
-  `CLAUDE.md`'s sentence, debts, full run, screenshots, hand-off). **Tests:** the affected run (a full run on this branch) was **stopped at 87% by the system (low memory)**, with no failure up to there; the popup, window-flash and theme files past 87% were run after and are green (378). The rest of the last 13% (the other widget files, the main/start/mods windows) does not touch this change and is left to phase 10's full run. Commit: b771d60.
+  `AGENTS.md`'s sentence, debts, full run, screenshots, hand-off). **Tests:** the affected run (a full run on this branch) was **stopped at 87% by the system (low memory)**, with no failure up to there; the popup, window-flash and theme files past 87% were run after and are green (378). The rest of the last 13% (the other widget files, the main/start/mods windows) does not touch this change and is left to phase 10's full run. Commit: b771d60.
 
 - **2026-11-09 — Phase 8 (done).** Aid, Feint and Trick, player and GM. Asked the user
   two questions, now decisions 17 (what they leave is **spent by the attack it is for**,
@@ -1190,5 +1190,5 @@ commit hash.
   2). Next: phase 2. Commit: 495dd33.
 
 - **2026-11-08 — Phase 0.** Rules checked against the book (p200–205). The user's
-  answers recorded in §1. The plan and the `/combat-maneuvers` skill written. Branch
+  answers recorded in §1. The plan and the `$combat-maneuvers` skill written. Branch
   `feature/combat-maneuvers` created off `develop` (f8084e2). Next: phase 1.

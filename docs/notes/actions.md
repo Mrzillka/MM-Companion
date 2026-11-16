@@ -4,7 +4,7 @@ Matters when touching the Impress action, area attacks, `actions.json`, the roll
 Actions popup, the history's table card, or anything that resolves one check against
 several creatures.
 
-Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
+Working notes for MM-Companion, split out of [AGENTS.md](../../AGENTS.md).
 
 ## The shape
 

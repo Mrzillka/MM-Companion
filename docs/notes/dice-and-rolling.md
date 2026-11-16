@@ -2,7 +2,7 @@
 
 Matters when touching the roller, the roll history, compact mode or any stat block that rolls.
 
-Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
+Working notes for MM-Companion, split out of [AGENTS.md](../../AGENTS.md).
 
 ## The Dice block
 

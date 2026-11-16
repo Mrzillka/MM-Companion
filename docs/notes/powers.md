@@ -2,7 +2,7 @@
 
 Matters when touching powers.
 
-Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
+Working notes for MM-Companion, split out of [AGENTS.md](../../AGENTS.md).
 
 Powers are the most complex part, and are split the same core/data/ui way. Read
 `docs/mm-powers-architecture.md` for the full model; the shape:

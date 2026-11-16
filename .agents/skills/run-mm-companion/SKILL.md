@@ -13,7 +13,7 @@ human entry point (`python -m mm_companion`) opens a window and blocks on
 exits — no blocking, no manual clicking.
 
 All paths below are relative to the repo root (`<unit>/`). The driver lives at
-`.claude/skills/run-mm-companion/driver.py`.
+`.agents/skills/run-mm-companion/driver.py`.
 
 ## Prerequisites
 
@@ -33,38 +33,38 @@ step — it's pure Python.
 Launch and screenshot any UI surface with one command:
 
 ```bash
-python .claude/skills/run-mm-companion/driver.py all
+python .agents/skills/run-mm-companion/driver.py all
 ```
 
 `all` writes `_driver_shots/start.png`, `sheet.png`, and `constructor.png`.
 Single surfaces:
 
 ```bash
-python .claude/skills/run-mm-companion/driver.py start        # the launcher
-python .claude/skills/run-mm-companion/driver.py sheet        # blank editable character sheet
-python .claude/skills/run-mm-companion/driver.py constructor  # the Power Constructor
-python .claude/skills/run-mm-companion/driver.py constructor-extended  # ...and its Extended settings section
-python .claude/skills/run-mm-companion/driver.py sheet-size    # a Huge character: size in the totals, speed netted per mode
-python .claude/skills/run-mm-companion/driver.py size-ladder   # the Growth/Shrinking rung strip on a power card
-python .claude/skills/run-mm-companion/driver.py size-ladder-reload  # ...a dialled rung, saved and reopened from disk
-python .claude/skills/run-mm-companion/driver.py size-ladder-narrow  # ...wrapped, in a narrow locked sheet
-python .claude/skills/run-mm-companion/driver.py grid-drop-beside  # the wash showing the half a dropped block takes
-python .claude/skills/run-mm-companion/driver.py grid-drop-merge   # ...and the whole-frame wash that means "make tabs"
-python .claude/skills/run-mm-companion/driver.py grid-close        # a block dragged small enough that letting go closes it
-python .claude/skills/run-mm-companion/driver.py tab-group         # two blocks in one cell, and the handle the cell is dragged by
-python .claude/skills/run-mm-companion/driver.py settings     # the Settings window (Themes page)
-python .claude/skills/run-mm-companion/driver.py gm           # GM Mode (session, players, NPCs, rolls)
-python .claude/skills/run-mm-companion/driver.py npc          # the simplified NPC sheet
-python .claude/skills/run-mm-companion/driver.py simple-sheet # the simple sheet (play view)
-python .claude/skills/run-mm-companion/driver.py simple-sheet-custom  # ...in the Custom preset
-python .claude/skills/run-mm-companion/driver.py simple-sheet-narrow  # ...rows stacked on a narrow window
-python .claude/skills/run-mm-companion/driver.py simple-print --theme slate-dark  # page 1 of its PDF
-python .claude/skills/run-mm-companion/driver.py impress-gm   # the GM's Impress window (also: impress-gm-running)
-python .claude/skills/run-mm-companion/driver.py area-gm      # the GM's area-attack window
-python .claude/skills/run-mm-companion/driver.py impress-dialog  # a player's Impress (also: impress-dialog-offline)
-python .claude/skills/run-mm-companion/driver.py area-dialog  # a player's area attack (also: area-dialog-offline)
-python .claude/skills/run-mm-companion/driver.py roll-prompt  # the roll the GM asks a player for
-python .claude/skills/run-mm-companion/driver.py roller-lane  # the roller: Modifier/DC rows with Actions and Take 10, an attack loaded, a line on the action lane
+python .agents/skills/run-mm-companion/driver.py start        # the launcher
+python .agents/skills/run-mm-companion/driver.py sheet        # blank editable character sheet
+python .agents/skills/run-mm-companion/driver.py constructor  # the Power Constructor
+python .agents/skills/run-mm-companion/driver.py constructor-extended  # ...and its Extended settings section
+python .agents/skills/run-mm-companion/driver.py sheet-size    # a Huge character: size in the totals, speed netted per mode
+python .agents/skills/run-mm-companion/driver.py size-ladder   # the Growth/Shrinking rung strip on a power card
+python .agents/skills/run-mm-companion/driver.py size-ladder-reload  # ...a dialled rung, saved and reopened from disk
+python .agents/skills/run-mm-companion/driver.py size-ladder-narrow  # ...wrapped, in a narrow locked sheet
+python .agents/skills/run-mm-companion/driver.py grid-drop-beside  # the wash showing the half a dropped block takes
+python .agents/skills/run-mm-companion/driver.py grid-drop-merge   # ...and the whole-frame wash that means "make tabs"
+python .agents/skills/run-mm-companion/driver.py grid-close        # a block dragged small enough that letting go closes it
+python .agents/skills/run-mm-companion/driver.py tab-group         # two blocks in one cell, and the handle the cell is dragged by
+python .agents/skills/run-mm-companion/driver.py settings     # the Settings window (Themes page)
+python .agents/skills/run-mm-companion/driver.py gm           # GM Mode (session, players, NPCs, rolls)
+python .agents/skills/run-mm-companion/driver.py npc          # the simplified NPC sheet
+python .agents/skills/run-mm-companion/driver.py simple-sheet # the simple sheet (play view)
+python .agents/skills/run-mm-companion/driver.py simple-sheet-custom  # ...in the Custom preset
+python .agents/skills/run-mm-companion/driver.py simple-sheet-narrow  # ...rows stacked on a narrow window
+python .agents/skills/run-mm-companion/driver.py simple-print --theme slate-dark  # page 1 of its PDF
+python .agents/skills/run-mm-companion/driver.py impress-gm   # the GM's Impress window (also: impress-gm-running)
+python .agents/skills/run-mm-companion/driver.py area-gm      # the GM's area-attack window
+python .agents/skills/run-mm-companion/driver.py impress-dialog  # a player's Impress (also: impress-dialog-offline)
+python .agents/skills/run-mm-companion/driver.py area-dialog  # a player's area attack (also: area-dialog-offline)
+python .agents/skills/run-mm-companion/driver.py roll-prompt  # the roll the GM asks a player for
+python .agents/skills/run-mm-companion/driver.py roller-lane  # the roller: Modifier/DC rows with Actions and Take 10, an attack loaded, a line on the action lane
 ```
 
 `settings-demo` goes further: it duplicates the active preset, borrows Slate
@@ -80,7 +80,7 @@ are not done.
 the real section API, so the derived math cascades exactly as under a mouse.
 
 ```bash
-python .claude/skills/run-mm-companion/driver.py sheet-demo
+python .agents/skills/run-mm-companion/driver.py sheet-demo
 ```
 
 The resulting `_driver_shots/sheet-demo.png` shows STR 4 / STA 6 / AGL 8 →
@@ -111,7 +111,7 @@ constructor).
 ## Test
 
 ```bash
-python .claude/skills/affected-tests/affected.py  # only what a change can affect
+python .agents/skills/affected-tests/affected.py  # only what a change can affect
 pytest                                    # full suite (~16 min, GUI tests included)
 pytest tests/ui/sheet/test_ui_wiring.py   # a fast UI-wiring slice
 ```

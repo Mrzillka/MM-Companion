@@ -2,7 +2,7 @@
 
 Matters when touching Abilities, Resistances, Advantages or Skills.
 
-Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
+Working notes for MM-Companion, split out of [AGENTS.md](../../AGENTS.md).
 
 Those four blocks are the same thing seen four ways — an ordered list of rows in a
 `QTableWidget` that shows all of its content and never scrolls on its own (its

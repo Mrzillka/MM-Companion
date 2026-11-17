@@ -6,7 +6,7 @@ import pytest
 
 from mm_companion.core.character import Character
 from mm_companion.core.npc import quick_npc
-from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
+from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance, PowerGroup
 from mm_companion.core.rules import (
     TeamEntry,
     combine_team_attack,
@@ -86,3 +86,23 @@ def test_the_save_rises_with_the_bonus(data) -> None:
     assert raised.ladder.rank == save.ladder.rank + 5
     assert str(raised.dc) in raised.label
     assert team_save_spec(save, 0).dc == save.dc
+
+
+def test_grouped_powers_are_available_for_team_attack(data):
+    char = _damage(data, 6)
+    char.powers = [PowerGroup(name="Attacks", children=char.powers)]
+    assert team_attack_options(char, data)
+
+
+def test_team_bonus_raises_known_zero_damage_rank(data):
+    save = team_attack_options(_damage(data, 0), data)[0].save
+    raised = team_save_spec(save, 2)
+    assert raised.dc == save.dc + 2
+    assert raised.ladder.rank == 2
+    assert raised.effect_rank == 2
+
+
+def test_zero_rank_damage_counts_for_team_rank_spread(data):
+    zero = team_attack_options(_damage(data, 0), data)[0]
+    strong = team_attack_options(_damage(data, data.system.team_attack.rank_spread + 1), data)[0]
+    assert "within" in team_incompatibility([zero, strong], data)

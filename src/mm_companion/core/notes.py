@@ -21,13 +21,13 @@ is what a note being imported looks like before it is copied in.
 
 from __future__ import annotations
 
-import os
 import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
 from mm_companion.core import storage
+from mm_companion.core.files import atomic_write_text
 from mm_companion.core.library import slugify, unique_path
 
 NOTE_SUFFIX = ".md"
@@ -125,13 +125,10 @@ def write_note(ref: str | None, text: str) -> bool:
     path = resolve_note_path(ref)
     if path is None:
         return False
-    temp = path.with_name(path.name + ".tmp")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        temp.write_text(text, encoding="utf-8")
-        os.replace(temp, path)
+        atomic_write_text(path, text)
     except OSError:
-        temp.unlink(missing_ok=True)
         return False
     return True
 

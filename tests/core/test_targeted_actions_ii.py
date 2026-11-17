@@ -138,6 +138,17 @@ def test_the_opposed_stage_reads_the_actors_best(data, ana) -> None:
     assert targeted_opposed_spec(data, targeted_action(data, "smash"), "", ana, attack) is None
 
 
+def test_zero_damage_is_distinct_from_an_attack_without_damage(data, ana):
+    attack = _attack(ana, data)
+    zero = replace(
+        attack.follow_up, effect_rank=0, dc=10, ladder=replace(attack.follow_up.ladder, rank=0)
+    )
+    attack = replace(attack, follow_up=zero)
+    assert attack_damage_rank(attack) == 0
+    check = targeted_opposed_spec(data, targeted_action(data, "disarm"), "", ana, attack)
+    assert check is not None and check.modifier == 0
+
+
 def test_the_target_resists_with_strength_or_dodge(data, thug) -> None:
     grab = targeted_action(data, "grab")
     resist = targeted_resist_spec(data, grab, "Grab", 18)

@@ -81,7 +81,7 @@ def test_escape_waits_for_a_hold_and_picks_no_attack(qapp, data, table, menu, mo
     assert thrown[0].dc is None  # the GM reads the DC off the grabber
 
 
-def test_block_readies_then_loads_a_harder_block_each_time(qapp, data, menu) -> None:
+def test_block_readies_then_loads_a_harder_block_each_time(qapp, data, menu, instant_die) -> None:
     hero = _hero(data)
     sheet = CharacterSheet(data, hero)
     dice = sheet.dice
@@ -92,7 +92,13 @@ def test_block_readies_then_loads_a_harder_block_each_time(qapp, data, menu) -> 
     first = dice.panel.current_spec()
     assert first.dc is None and "attacker's result" in first.label
     (blocking,) = hero.conditions
+    assert blocking.count == 1  # loading/abandoning a check has spent nothing
+    dice.start_self_action("block")
+    assert dice.panel.current_spec().modifier == first.modifier
+    dice.panel._start_roll()
     assert blocking.count == 2
+    dice.panel.reroll()
+    assert blocking.count == 2  # rerolling is still the same block
     dice.start_self_action("block")
     second = dice.panel.current_spec()
     assert second.modifier == first.modifier - 2

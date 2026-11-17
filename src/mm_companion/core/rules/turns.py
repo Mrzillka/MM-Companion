@@ -35,6 +35,7 @@ from .shaking import (
     CADENCE_MINUTE,
     CADENCE_TURN,
     held_shake_offs,
+    same_origin,
     shake_off_cadence,
     shake_off_choice,
     shake_off_dc,
@@ -48,6 +49,7 @@ __all__ = [
     "condition_check",
     "condition_check_request",
     "condition_check_hint",
+    "refresh_condition_check",
     "TurnEnd",
     "turn_end",
     "waiting_text",
@@ -117,6 +119,34 @@ def condition_check_request(
         shakes_off=shake,
         hint=SHAKE_OFF_HINT,
     )
+
+
+def refresh_condition_check(
+    char: Character, game_data: GameData, spec: RollSpec
+) -> RollSpec | None:
+    """Rebuild a queued condition check against the state left by earlier rolls.
+
+    A condition removed or superseded meanwhile no longer needs its check. Ordinary
+    queued rolls pass through unchanged.
+    """
+    if not (spec.shakes_off or spec.recovers):
+        return spec
+    for applied in char.conditions:
+        if applied.provenance is not None:
+            continue
+        if spec.shakes_off is not None:
+            matches = applied.shake_off is not None and same_origin(
+                applied.shake_off, spec.shakes_off
+            )
+        else:
+            matches = (
+                applied.shake_off is None
+                and applied.condition_id == spec.recovers
+                and (applied.parameter or "") == spec.recovers_parameter
+            )
+        if matches:
+            return condition_check(char, game_data, applied)
+    return None
 
 
 def condition_check_hint(game_data: GameData, applied: AppliedCondition) -> str:

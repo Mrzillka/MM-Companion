@@ -235,6 +235,7 @@ class PowerConstructorWindow(QMainWindow):
         # What the build looked like when the window opened, so a close can tell
         # whether there is anything to lose.
         self._saved = False
+        self._close_requested = False
         self._baseline = self._snapshot()
 
     def _snapshot(self) -> dict:
@@ -1601,13 +1602,25 @@ class PowerConstructorWindow(QMainWindow):
         self._saved = True
         return True
 
+    def request_close(self) -> bool:
+        """Ask to close on the user's behalf, including an update's shutdown."""
+        self._close_requested = True
+        try:
+            return self.close()
+        finally:
+            self._close_requested = False
+
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
         """Ask before throwing away an unsaved build.
 
         Only a close the user asked for (the title bar's ✕, Alt+F4) asks: a host
         closing the window from code has already decided.
         """
-        if event.spontaneous() and self.has_unsaved_changes() and not self._confirm_discard():
+        if (
+            (event.spontaneous() or self._close_requested)
+            and self.has_unsaved_changes()
+            and not self._confirm_discard()
+        ):
             event.ignore()
             return
         self.closed.emit()

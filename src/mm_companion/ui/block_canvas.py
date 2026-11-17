@@ -275,6 +275,7 @@ class BlockCanvas(QWidget):
         *,
         default_pinned: list[list[str]] | None = None,
         instance_factory: InstanceFactory | None = None,
+        instance_validator: Callable[[str], bool] | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("blockCanvas")
@@ -305,6 +306,7 @@ class BlockCanvas(QWidget):
         # key. Only a host with multi-instance blocks supplies it — the GM window
         # passes none, so nothing there can be conjured out of a layout file.
         self._instance_factory = instance_factory
+        self._instance_validator = instance_validator
         self._windows: dict[str, BlockWindow] = {}
         # Which floated blocks are pinned above other applications. Kept here, by
         # block key, rather than on the window: dragging a block out and docking it
@@ -1105,11 +1107,19 @@ class BlockCanvas(QWidget):
         same way — otherwise a restored layout leaves the View menu's checkmarks
         describing the arrangement this one replaced.
         """
-        # Before anything is validated: make the frames the model expects to
-        # exist. _validate demands that the layout's keys and the live frames
-        # match *exactly*, so an instance named in a saved layout has to be built
-        # first or the whole layout is rejected and the user loses their page.
-        self._reconcile_instances(model)
+        # Validate against the proposed block set before destroying live frames.
+        # An invalid layout must leave the current page and its open notes alone.
+        if self._instance_factory is not None:
+            wanted = self._requested_instances(model)
+            if self._instance_validator is not None and any(
+                not self._instance_validator(key) for key in wanted
+            ):
+                return False
+            proposed = {key for key in self._frames if instance_template(key) == key} | set(wanted)
+            if self._validate(model, known=proposed) is None:
+                return False
+        if not self._reconcile_instances(model):
+            return False
         parsed = self._validate(model)
         if parsed is None:
             return False
@@ -1145,7 +1155,19 @@ class BlockCanvas(QWidget):
         self._settled()
         return True
 
-    def _reconcile_instances(self, model: object) -> None:
+    @staticmethod
+    def _requested_instances(model: object) -> dict[str, str]:
+        raw = model.get("instances") if isinstance(model, dict) else None
+        wanted: dict[str, str] = {}
+        if isinstance(raw, list):
+            for entry in raw:
+                if isinstance(entry, dict) and isinstance(entry.get("key"), str):
+                    key = entry["key"]
+                    if instance_template(key) != key:
+                        wanted[key] = str(entry.get("title") or key)
+        return wanted
+
+    def _reconcile_instances(self, model: object) -> bool:
         """Make the multi-instance frames *model* names, and destroy the rest.
 
         The one place a block is built from a layout file rather than from the
@@ -1158,17 +1180,17 @@ class BlockCanvas(QWidget):
         answer for a layout naming a block this version no longer has.
         """
         if self._instance_factory is None or not isinstance(model, dict):
-            return
-        raw = model.get("instances")
-        wanted: dict[str, str] = {}
-        if isinstance(raw, list):
-            for entry in raw:
-                if isinstance(entry, dict) and isinstance(entry.get("key"), str):
-                    key = entry["key"]
-                    if instance_template(key) != key:
-                        wanted[key] = str(entry.get("title") or key)
+            return True
+        wanted = self._requested_instances(model)
 
-        for key in [k for k in self._frames if instance_template(k) != k and k not in wanted]:
+        departing = [k for k in self._frames if instance_template(k) != k and k not in wanted]
+        # Preflight every departing section before removing any frame. An unsaved
+        # note must keep both its widget and its place if the write fails.
+        for key in departing:
+            flush = getattr(self._frames[key].section, "flush", None)
+            if callable(flush) and flush() is False:
+                return False
+        for key in departing:
             self.remove_block(key)
         for key, title in wanted.items():
             if key in self._frames:
@@ -1176,8 +1198,9 @@ class BlockCanvas(QWidget):
             built = self._instance_factory(key)
             if built is not None:
                 self.add_block(key, built[0] or title, built[1], built[2])
+        return True
 
-    def _validate(self, model: object):
+    def _validate(self, model: object, *, known: set[str] | None = None):
         """Parse a persistence model → (page, region, floating, hidden, anchors) or None.
 
         Enforces the invariant that has held since the arrangement was rows: every
@@ -1200,7 +1223,7 @@ class BlockCanvas(QWidget):
         """
         if not isinstance(model, dict):
             return None
-        known = set(self._frames)
+        known = set(self._frames) if known is None else known
         if model.get("version") == 7:
             migrated = lt.migrate_v7(model, known)
             if migrated is None:

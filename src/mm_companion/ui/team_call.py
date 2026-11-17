@@ -347,7 +347,7 @@ class TeamCallController(QObject):
             if index in fits:
                 lines.append(f"{text} — left out ({html.escape(fits[index])})")
                 continue
-            rank = f"rank {option.rank}" if option.rank else ""
+            rank = f"rank {option.rank}" if option.rank_known else ""
             if dc is None:
                 lines.append(f"{text}" + (f" ({rank})" if rank else ""))
                 continue

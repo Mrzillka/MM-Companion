@@ -19,6 +19,7 @@ from mm_companion.core.rules import (
     RollSpec,
     effect_resistance_dc_base,
     effect_stat_rows,
+    estimated_power_level,
     follow_ups_for_result,
     linked_attacks,
     localize_spec,
@@ -359,3 +360,31 @@ def test_a_capped_effect_check_rolls_the_rank_the_dc_is_built_from(data, hero) -
     check, save = power_rolls(Power(name="Read", effects=[effect]), hero, data)
     assert check.modifier == 5
     assert save.dc == 15
+
+
+def test_linked_power_estimate_uses_the_shared_attack_bonus(data, hero):
+    power = _linked(data)
+    power.effects[0].rank = 6
+    hero.powers = [power]
+    assert estimated_power_level(hero, data) == 10
+    power.effects.reverse()
+    assert estimated_power_level(hero, data) == 8
+
+
+@pytest.mark.parametrize("policy,expected", [("highest", 10), ("lowest", 8)])
+def test_linked_power_estimate_respects_ruleset_bonus_policy(data, hero, policy, expected):
+    data = replace(data, system=replace(data.system, linked_attack_bonus=policy))
+    power = _linked(data)
+    power.effects[0].rank = 6
+    hero.powers = [power]
+    assert estimated_power_level(hero, data) == expected
+
+
+def test_critical_updates_measured_rank_alongside_save_dc(data, hero):
+    attack = power_rolls(_linked(data), hero, data)[0]
+    before = attack.follow_ups()
+    raised = follow_ups_for_result(attack, 20, 1, data)
+    for original, critical in zip(before, raised, strict=True):
+        assert critical.effect_rank == original.effect_rank + data.system.critical_effect_bonus
+        if original.ladder.kind == "damage":
+            assert critical.ladder.rank == original.ladder.rank + data.system.critical_effect_bonus

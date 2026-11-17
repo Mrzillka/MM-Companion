@@ -82,12 +82,18 @@ def test_mod_without_python_module_is_ignored() -> None:
     assert loaded == []
 
 
-def test_import_failure_does_not_crash() -> None:
+def test_import_failure_does_not_crash(monkeypatch) -> None:
+    failures = []
+    monkeypatch.setattr(mods.diagnostics, "log_exception", lambda *args: failures.append(args))
+
     def boom(name: str) -> None:
         raise ImportError("broken mod")
 
     loaded = mods.load_mod_python_modules([_mod("m1")], trusted={"m1"}, importer=boom)
     assert loaded == []
+    assert len(failures) == 1
+    assert "m1" in failures[0][0]
+    assert isinstance(failures[0][1], ImportError)
 
 
 # --- settings seams ---------------------------------------------------------

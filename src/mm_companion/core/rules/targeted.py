@@ -142,19 +142,19 @@ def bare_attack_check(attack: RollSpec) -> RollSpec:
     )
 
 
-def attack_damage_rank(attack: RollSpec | None) -> int:
+def attack_damage_rank(attack: RollSpec | None) -> int | None:
     """The Damage rank of *attack* (the first damage save it forces, as rolled on the
-    attacker's sheet); ``0`` when it deals no Damage or the rank is not known here."""
+    attacker's sheet); ``None`` when it deals no Damage or the rank is not known here."""
 
     if attack is None:
-        return 0
+        return None
     for save in attack.follow_ups():
         if save.ladder is not None and save.ladder.kind == LADDER_DAMAGE:
-            if save.effect_rank:
+            if save.effect_rank is not None:
                 return save.effect_rank
             if save.ladder.rank:
                 return save.ladder.rank
-    return 0
+    return None
 
 
 def _candidate(
@@ -168,7 +168,7 @@ def _candidate(
         return "Attack", bare_attack_check(attack)
     if check.kind == COMBAT_CHECK_DAMAGE:
         rank = attack_damage_rank(attack)
-        if rank <= 0:
+        if rank is None:
             return None
         return "Damage", RollSpec(label=f"Damage {rank}", modifier=rank)
     if check.kind == COMBAT_CHECK_ABILITY:

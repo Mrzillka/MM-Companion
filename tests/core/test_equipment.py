@@ -161,6 +161,24 @@ def test_a_save_without_equipment_still_loads(data) -> None:
     assert restored.equipment_group_order == []
 
 
+def test_live_snapshot_preserves_equipment_runtime_without_changing_build_saves(data, hero):
+    armor = _item(data, "chain_mail")
+    armor.worn = False
+    armor.current_speed = 2
+    accessory = _item(data, "axe")
+    accessory.worn = False
+    armor.accessories.append(accessory)
+    hero.equipment.append(armor)
+
+    live = Character.from_dict(hero.to_dict(include_runtime=True)).equipment[0]
+    saved = Character.from_dict(hero.to_dict()).equipment[0]
+
+    assert live.worn is False and live.current_speed == 2
+    assert live.accessories[0].worn is False
+    assert saved.worn is True and saved.current_speed is None
+    assert saved.accessories[0].worn is True
+
+
 def test_worn_items_filters_on_the_runtime_flag(data, hero) -> None:
     worn, stowed = _item(data, "axe"), _item(data, "crossbow")
     stowed.worn = False

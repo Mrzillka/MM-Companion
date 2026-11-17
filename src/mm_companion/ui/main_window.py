@@ -18,7 +18,9 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core import library, storage
 from mm_companion.core.character import Character
+from mm_companion.core.diagnostics import log_exception
 from mm_companion.ui import loading
+from mm_companion.ui.character_files import read_character
 from mm_companion.ui.character_sheet import CharacterSheet
 from mm_companion.ui.compact import CompactController
 from mm_companion.ui.connection_indicator import install_connection_indicator
@@ -681,7 +683,12 @@ class MainWindow(QMainWindow):
         # the user, not a step for them to walk back through.
         if self._undo is not None:
             self._undo.flush()
-        saved_path = library.save_character(self._sheet.character, path=path)
+        try:
+            saved_path = library.save_character(self._sheet.character, path=path)
+        except (OSError, ValueError, TypeError) as exc:
+            log_exception(f"Saving character {path}")
+            QMessageBox.warning(self, "Could not save character", f"{path}\n\n{exc}")
+            return False
         self._path = saved_path
         if self._undo is not None:
             self._undo.mark_saved()
@@ -699,7 +706,9 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
-        character = library.load_character(Path(path))
+        character = read_character(self, Path(path))
+        if character is None:
+            return
         with loading.loading(self, opening_text(character)):
             window = self._new_child(character, Path(path))
         self._show_child(window)
@@ -834,10 +843,17 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Guard unsaved changes, announce the close, then close normally."""
+        if not self._sheet.flush_pending():
+            event.ignore()
+            return
         if self._dirty and not self._confirm_close():
             event.ignore()
             return
-        self._persist_layout()
+        try:
+            self._persist_layout()
+        except OSError as exc:
+            log_exception("Saving the sheet layout on close")
+            QMessageBox.warning(self, "Could not save window layout", str(exc))
         self.closed.emit()
         super().closeEvent(event)
 

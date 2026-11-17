@@ -250,7 +250,7 @@ notes](actions.md#grab-trip-disarm-smash-and-escape)).
 - **Two holds share one bundle.** Holding (Ana) and Holding (Bo) give Hindered and
   Vulnerable the same provenance, so letting go of one takes both bundles' members.
 - **The GM's judge does not block.** A Blocking creature's block is rolled by hand with
-  the attacker's result in the DC box (the user's call, 2026-11-09).
+  the attacker's result +1 in the DC box (the user's call, 2026-11-09).
 - **Narrated outcomes stay narrated.** A disarmed item, a smashed object's Damage and a
   trip's extra distance are said in the history; nothing tracks them.
 
@@ -334,3 +334,13 @@ sheet states.
 text" tests to fail by exactly that 1px. Loosen them to allow an overlap of at most one
 column, keeping the click test as the real proof. Then chase the garbage-collection
 abort, and move the pin to `>=6.6,<6.13,!=6.11.3,!=6.12.0`.
+
+## Timing clarification from the code review (2026-11-17)
+
+The user chose to preserve current documented behavior during the code review and
+leave timing automation as feature work. The maneuver-duration debt also includes
+All-Out's attack bonus: only its Defense penalty currently persists, while 4e's
+maneuver duration covers both terms (PDF p203, printed p201). Any persistence work
+must replace/revalidate a reselected maneuver instead of stacking its old and new
+contributions. Aim also relies on the table to retain its chosen target, and
+Recover's per-scene allowance concerns successful recovery, not failed attempts.

@@ -292,10 +292,13 @@ class PlayerCard(QFrame):
         if not raw:
             return
         character = Character.from_dict(raw)
+        name = library.display_name(character)
+        hero_points = int(character.characteristics.get("hero_points", 0) or 0)
+        summary = character_summary_html(character, self._data, name)
         self._character = character
-        self._character_label.setText(library.display_name(character))
+        self._character_label.setText(name)
         self._pl_label.setText(f"PL {character.power_level}")
-        self._hero_points.set_value(int(character.characteristics.get("hero_points", 0) or 0))
+        self._hero_points.set_value(hero_points)
         self._set_portrait(raw.get("portrait"))
         self._show_conditions()
         self.pins.set_character(character)
@@ -303,9 +306,7 @@ class PlayerCard(QFrame):
         # The same hover summary an NPC card gives, so the GM can read a player's
         # numbers without opening a window for them - over the character's name, not
         # the whole card, so it does not pop up over every chip and button on it.
-        self._character_label.setToolTip(
-            character_summary_html(character, self._data, library.display_name(character))
-        )
+        self._character_label.setToolTip(summary)
 
     def set_scene_controls(self, shown: bool) -> None:
         """Show or hide this card's Scene toggle.

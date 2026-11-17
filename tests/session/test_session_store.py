@@ -46,6 +46,29 @@ def test_ensure_workspace_creates_the_sessions_dir(_home: Path) -> None:
     assert workspace.sessions_dir.is_dir()
 
 
+@pytest.mark.parametrize("bad", [b'{"players": [null]}', b'{"players": null}', b"\xff"])
+def test_malformed_session_does_not_hide_other_saved_sessions(bad):
+    good = new_session("Good")
+    save_session(good)
+    broken = new_session("Broken")
+    folder = save_session(broken)
+    (folder / SESSION_FILENAME).write_bytes(bad)
+
+    assert [summary.name for summary in list_sessions()] == ["Good"]
+    with pytest.raises(SessionStoreError):
+        load_session(broken.id)
+
+
+def test_torn_utf8_and_non_object_roll_lines_do_not_lose_the_other_rolls():
+    state = new_session()
+    directory = save_session(state)
+    (directory / ROLLS_FILENAME).write_bytes(
+        b'{"seq": 1, "die": 7}\nnull\n[]\n\xff\n{"seq": 2, "die": 11}\n'
+    )
+
+    assert [roll.die for roll in load_session(state.id).rolls] == [7, 11]
+
+
 def test_session_settings_keys_exist_with_safe_defaults() -> None:
     assert storage.DEFAULT_SETTINGS["session_last_id"] is None
     assert storage.DEFAULT_SETTINGS["session_player_name"] == ""

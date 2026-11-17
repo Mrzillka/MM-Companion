@@ -118,7 +118,11 @@ class HubClient:
         connection.set_timeout(timeout)
         self._connection = connection
 
-        answer = self._exchange(ControlHello(secret=self.secret))
+        try:
+            answer = self._exchange(ControlHello(secret=self.secret))
+        except HubClientError:
+            self.close()
+            raise
         if not isinstance(answer, ControlWelcome):
             self.close()
             raise HubClientError("that server did not open a control channel")

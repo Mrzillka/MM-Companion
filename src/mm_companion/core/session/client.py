@@ -246,6 +246,8 @@ class SessionClient:
         self._connection: Connection | None = None
         self._reader: threading.Thread | None = None
         self._closing = False
+        self._lifecycle_lock = threading.RLock()
+        self._connecting = False
         # Waited on between redials, so ``close`` can cut a backoff short instead
         # of leaving a thread to wake up and dial a session we have left.
         self._wake = threading.Event()
@@ -273,21 +275,38 @@ class SessionClient:
         the caller's to see fail — only a connection that was once established is
         retried in the background.
         """
-        if self.connected:
-            raise SessionClientError("already connected")
-        self._closing = False
-        self._wake.clear()
-        self._set_state(STATE_CONNECTING)
+        with self._lifecycle_lock:
+            if (
+                self._connecting
+                or self.connection_state != STATE_OFFLINE
+                or self.connected
+                or (self._reader is not None and self._reader.is_alive())
+            ):
+                raise SessionClientError("already connected or reconnecting")
+            self._connecting = True
+            self._closing = False
+            self._wake.clear()
+            self._set_state(STATE_CONNECTING)
         try:
-            message = self._dial_and_handshake(timeout)
-        except SessionClientError:
-            self._set_state(STATE_OFFLINE)
-            raise
-        self._set_state(STATE_ONLINE)
-        self._emit(EVENT_CONNECTED, message.to_dict())
-        self._reader = threading.Thread(target=self._run, name="session-client", daemon=True)
-        self._reader.start()
-        return message
+            try:
+                message = self._dial_and_handshake(timeout)
+            except SessionClientError:
+                self._set_state(STATE_OFFLINE)
+                raise
+            with self._lifecycle_lock:
+                if self._closing:
+                    raise SessionClientError("the client was closed")
+                self._set_state(STATE_ONLINE)
+                self._emit(EVENT_CONNECTED, message.to_dict())
+                if not self._closing:
+                    self._reader = threading.Thread(
+                        target=self._run, name="session-client", daemon=True
+                    )
+                    self._reader.start()
+            return message
+        finally:
+            with self._lifecycle_lock:
+                self._connecting = False
 
     def _dial_and_handshake(self, timeout: float = CONNECT_TIMEOUT) -> Welcome:
         """Open one connection and seat ourselves on it, or raise.
@@ -328,28 +347,32 @@ class SessionClient:
             connection.close()
             raise SessionClientError("the session did not send a welcome")
 
-        self.session_id = message.session_id
-        self.session_name = message.session_name
-        self.player_id = message.player_id
-        self.player_token = message.player_token or self.player_token
-        self.roster = list(message.roster)
-        self.history = list(message.history)
-        self.is_gm = bool(message.is_gm)
-        self.npc_paths = list(message.npc_paths)
-        self.scene = [dict(entry) for entry in message.scene]
-        self.scene_sources = dict(message.scene_sources)
-        self.mod_state = {
-            mod: {key: dict(payload) for key, payload in entries.items()}
-            for mod, entries in message.mod_state.items()
-            if isinstance(entries, dict)
-        }
-        # Not cleared: the portraits for this scene follow the welcome as their
-        # own messages, and a redial into the same seat would otherwise blank
-        # every card between the welcome and their arrival.
-
         connection.set_timeout(IO_TIMEOUT)
-        self._connection = connection
-        return message
+        with self._lifecycle_lock:
+            if self._closing:
+                connection.close()
+                raise SessionClientError("the client was closed")
+            self.session_id = message.session_id
+            self.session_name = message.session_name
+            self.player_id = message.player_id
+            self.player_token = message.player_token or self.player_token
+            self.roster = list(message.roster)
+            self.history = list(message.history)
+            self.is_gm = bool(message.is_gm)
+            self.npc_paths = list(message.npc_paths)
+            self.scene = [dict(entry) for entry in message.scene]
+            self.scene_sources = dict(message.scene_sources)
+            self.mod_state = {
+                mod: {key: dict(payload) for key, payload in entries.items()}
+                for mod, entries in message.mod_state.items()
+                if isinstance(entries, dict)
+            }
+            # Not cleared: the portraits for this scene follow the welcome as their
+            # own messages, and a redial into the same seat would otherwise blank
+            # every card between the welcome and their arrival.
+
+            self._connection = connection
+            return message
 
     def close(self, reason: str = "closed") -> None:
         """Hang up, emitting :data:`EVENT_DISCONNECTED` once.
@@ -361,19 +384,21 @@ class SessionClient:
         a client in the middle of a reconnect has no socket and is very much
         still in a session it needs to be told it has left.
         """
-        was_live = self.connection_state != STATE_OFFLINE
-        self._closing = True
-        # Set before waking, so a thread parked in a backoff sees the flag the
-        # moment it comes round rather than dialling a session we have left.
-        self._wake.set()
-        connection = self._connection
-        self._connection = None
+        with self._lifecycle_lock:
+            was_live = self.connection_state != STATE_OFFLINE
+            self._closing = True
+            # Set before waking, so a thread parked in a backoff sees the flag the
+            # moment it comes round rather than dialling a session we have left.
+            self._wake.set()
+            connection = self._connection
+            self._connection = None
         if connection is not None:
             connection.close()
         reader = self._reader
-        self._reader = None
         if reader is not None and reader is not threading.current_thread():
             reader.join(timeout=2.0)
+        if reader is None or not reader.is_alive():
+            self._reader = None
         self.connection_state = STATE_OFFLINE
         if was_live:
             self._emit(EVENT_STATE, {"state": STATE_OFFLINE, "reason": reason})
@@ -384,8 +409,7 @@ class SessionClient:
         return self
 
     def __exit__(self, *_exc: object) -> None:
-        if self.connected:
-            self.close()
+        self.close()
 
     # -- sending -----------------------------------------------------------
 
@@ -746,12 +770,15 @@ class SessionClient:
                     return exc.code
                 reason = str(exc)
                 continue
-            self._set_state(STATE_ONLINE)
-            # The same event a first join raises, carrying a fresh Welcome: the
-            # roster and the roll history repaint from it, so a caller needs no
-            # separate "you are back" path.
-            self._emit(EVENT_CONNECTED, message.to_dict())
-            return None
+            with self._lifecycle_lock:
+                if self._closing:
+                    return reason
+                self._set_state(STATE_ONLINE)
+                # The same event a first join raises, carrying a fresh Welcome: the
+                # roster and the roll history repaint from it, so a caller needs no
+                # separate "you are back" path.
+                self._emit(EVENT_CONNECTED, message.to_dict())
+                return None
         return reason
 
     def _set_state(self, state: str, **detail: object) -> None:

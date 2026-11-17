@@ -53,6 +53,65 @@ def test_saving_clears_dirty(qapp: QApplication) -> None:
     assert "*" not in win.windowTitle()
 
 
+def test_a_failed_save_keeps_the_dirty_sheet_open(qapp, tmp_path, monkeypatch):
+    win = MainWindow(locked=False)
+    win._sheet.abilities._abilities["STR"].setValue(3)
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args))
+
+    def fail(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(library, "save_character", fail)
+    assert win._write(tmp_path / "hero.json") is False
+    assert win._dirty and win._path is None
+    assert warnings and "disk full" in warnings[0][-1]
+    # Choosing Save on close must still refuse the close after a write failure.
+    win._path = tmp_path / "hero.json"
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Save)
+    event = QCloseEvent()
+    win.closeEvent(event)
+    assert not event.isAccepted()
+
+
+def test_an_unwritten_note_prevents_the_sheet_closing(qapp, monkeypatch):
+    from mm_companion.core import notes
+
+    win = MainWindow(locked=False)
+    ref = notes.create_note("Session log")
+    win.sheet.notes.open_note(ref)
+    win._dirty = False
+    win.sheet.notes._open[0].editor.source.setPlainText("unwritten paragraph")
+    monkeypatch.setattr(notes, "write_note", lambda *args: False)
+    monkeypatch.setattr(
+        QMessageBox, "question", lambda *args: pytest.fail("Unexpected sheet prompt")
+    )
+    event = QCloseEvent()
+
+    win.closeEvent(event)
+
+    assert not event.isAccepted()
+    assert win.sheet.notes.open_refs() == (ref,)
+    assert win.sheet.notes._open[0].editor.text() == "unwritten paragraph"
+
+
+def test_a_layout_write_failure_still_announces_the_sheet_closed(qapp, monkeypatch):
+    win = MainWindow(locked=False)
+    closed, warnings = [], []
+    win.closed.connect(lambda: closed.append(True))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args))
+
+    def fail():
+        raise OSError("settings are read-only")
+
+    monkeypatch.setattr(win, "_persist_layout", fail)
+    event = QCloseEvent()
+    win.closeEvent(event)
+
+    assert event.isAccepted() and closed == [True]
+    assert warnings and "read-only" in warnings[0][-1]
+
+
 def _menu_labels(win: MainWindow, title: str) -> list[str]:
     """The entries of one menu bar menu.
 

@@ -397,9 +397,41 @@ def test_restoring_a_layout_without_instances_destroys_the_extra_blocks(make_she
     plain = sheet.save_layout()
     key = sheet.add_block_instance("notes")
     assert key in sheet.block_keys()
+    expanded = sheet.save_layout()
 
     assert sheet.restore_layout(plain) is True
     assert key not in sheet.block_keys()
+    assert sheet.section(key) is None
+    assert sheet.restore_layout(expanded) is True
+    assert sheet.section(key) is not None
+
+
+def test_layout_restore_keeps_a_block_with_unwritten_text(make_sheet, two_notes, monkeypatch):
+    sheet = make_sheet()
+    plain = sheet.save_layout()
+    key = sheet.add_block_instance("notes")
+    block = sheet.section(key)
+    block.open_note(two_notes[0])
+    block._open[0].editor.source.setPlainText("unwritten paragraph")
+    monkeypatch.setattr(notes, "write_note", lambda *args: False)
+
+    assert sheet.restore_layout(plain) is False
+    assert key in sheet.block_keys() and sheet.section(key) is block
+    assert block._open[0].editor.text() == "unwritten paragraph"
+
+
+def test_an_invalid_layout_leaves_live_instances_and_their_refs_untouched(make_sheet, two_notes):
+    sheet = make_sheet()
+    plain = json.loads(sheet.save_layout())
+    key = sheet.add_block_instance("notes")
+    section = sheet.section(key)
+    section.open_note(two_notes[0])
+    before = sheet.save_layout()
+    plain["version"] = -1
+
+    assert sheet.restore_layout(json.dumps(plain)) is False
+    assert sheet.save_layout() == before
+    assert sheet.section(key) is section and section.open_refs() == (two_notes[0],)
 
 
 # -- merging -------------------------------------------------------------------
@@ -800,6 +832,44 @@ def test_a_note_that_would_not_write_stays_dirty(make_sheet, two_notes, monkeypa
 
     assert item.editor in block._dirty
     assert item.editor.text() == "something worth keeping"
+    assert block._autosave.interval() > 0
+
+
+def test_an_unwritten_note_cannot_be_closed_or_discarded_by_reseed(
+    make_sheet, two_notes, monkeypatch
+):
+    origin, _ = two_notes
+    sheet = make_sheet()
+    block = sheet.notes
+    block.open_note(origin)
+    editor = block._open[0].editor
+    editor.source.setPlainText("unwritten text")
+    monkeypatch.setattr(notes, "write_note", lambda *args: False)
+
+    block._close_ref(origin)
+    assert block.open_refs() == (origin,)
+    # The same protection when undo removes the reference before reseeding.
+    sheet.character.notes.clear()
+    block.reseed()
+    assert block.open_refs() == (origin,)
+    assert block._open[0].editor is editor and editor.text() == "unwritten text"
+    assert sheet.character.notes["notes"].files == [origin]
+
+
+def test_a_failed_write_refuses_a_split_and_block_destruction(make_sheet, two_notes, monkeypatch):
+    origin, log = two_notes
+    sheet = make_sheet()
+    key = sheet.add_block_instance("notes")
+    block = sheet._sections_by_key[key]
+    block.open_note(origin)
+    block.open_note(log)
+    block._open[0].editor.source.setPlainText("unwritten text")
+    monkeypatch.setattr(notes, "write_note", lambda *args: False)
+
+    assert block._begin_split(0, QPoint()) is False
+    sheet.remove_block_instance(key)
+    assert sheet._sections_by_key[key] is block
+    assert block._open[0].editor.text() == "unwritten text"
 
 
 def test_deleting_a_note_does_not_write_it_back(make_sheet, two_notes) -> None:

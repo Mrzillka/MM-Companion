@@ -12,7 +12,7 @@ from types import ModuleType
 
 from PySide6.QtCore import Qt, QTimer, QtMsgType, qInstallMessageHandler
 from PySide6.QtGui import QCursor, QGuiApplication
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 
 from mm_companion import __version__
 from mm_companion.core import diagnostics
@@ -143,17 +143,28 @@ def main() -> int:
     splash.show()
     app.processEvents()
 
-    with loading.loading(splash, "Starting MM-Companion…", at_once=True):
-        with loading.part(0.75):
-            start_window = _import_interface()
-        loading.say("Preparing workspace…")
-        with loading.part(0.3):
-            ensure_workspace()
-            # Import trusted enabled mods' Python modules so their register_* hooks
-            # fire before any game data is parsed or rendered.
-            initialize_mods()
-        loading.say("Opening the launcher…")
-        window = start_window.StartWindow()
+    try:
+        with loading.loading(splash, "Starting MM-Companion…", at_once=True):
+            with loading.part(0.75):
+                start_window = _import_interface()
+            loading.say("Preparing workspace…")
+            with loading.part(0.3):
+                ensure_workspace()
+                # Import trusted enabled mods' Python modules so their register_* hooks
+                # fire before any game data is parsed or rendered.
+                initialize_mods()
+            loading.say("Opening the launcher…")
+            window = start_window.StartWindow()
+    except Exception as exc:  # noqa: BLE001 - windowed startup has no console
+        diagnostics.log_exception("Starting MM-Companion failed", exc)
+        splash.close()
+        QMessageBox.critical(
+            None,
+            "Could not start MM-Companion",
+            f"MM-Companion could not open its launcher.\n\n{exc}\n\n"
+            "Check your workspace permissions or installed mods, then try again.",
+        )
+        return 1
     window.show()
     splash.close()
     # Once the event loop runs, so a report of a failed update opens over a

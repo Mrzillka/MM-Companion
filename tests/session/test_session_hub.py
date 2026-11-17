@@ -357,10 +357,15 @@ def test_a_wrong_operator_secret_is_refused_not_downgraded(hub) -> None:
     # believing they had powers they do not.
     instance, transports = hub()
 
+    caller = client(instance, transports, "guess")
     with pytest.raises(HubClientError) as excinfo:
-        client(instance, transports, "guess").connect(timeout=TIMEOUT)
+        caller.connect(timeout=TIMEOUT)
 
     assert excinfo.value.code == ERROR_BAD_TOKEN
+    assert not caller.connected
+    caller.secret = SECRET
+    assert caller.connect(timeout=TIMEOUT)
+    caller.close()
 
 
 def test_a_join_code_is_not_an_operator_secret(hub) -> None:
@@ -811,3 +816,47 @@ def test_a_hub_with_no_operator_refuses_to_delete_someone_elses_session(hub) -> 
 def test_hub_error_is_still_the_base_of_the_specific_ones() -> None:
     assert issubclass(UnknownSessionError, HubError)
     assert issubclass(hub_mod.HubFullError, HubError)
+
+
+def test_inflight_create_reserves_capacity(hub, monkeypatch):
+    instance, _ = hub(max_sessions=1)
+    hosting = threading.Event()
+    release = threading.Event()
+    original_host = instance._host
+    results = []
+
+    def delayed_host(state):
+        if state.name == "First":
+            hosting.set()
+            assert release.wait(TIMEOUT)
+        return original_host(state)
+
+    monkeypatch.setattr(instance, "_host", delayed_host)
+    worker = threading.Thread(target=lambda: results.append(instance.create("First")), daemon=True)
+    worker.start()
+    assert hosting.wait(TIMEOUT)
+    try:
+        with pytest.raises(hub_mod.HubFullError):
+            instance.create("Second")
+    finally:
+        release.set()
+        worker.join(timeout=TIMEOUT)
+    assert not worker.is_alive()
+    assert len(results) == 1
+    assert len(instance.session_ids()) == 1
+
+
+def test_failed_create_leaves_no_orphan_and_releases_capacity(hub, monkeypatch):
+    instance, _ = hub(max_sessions=1)
+    original_host = instance._host
+
+    def failed_host(state):
+        raise OSError("relay unavailable")
+
+    monkeypatch.setattr(instance, "_host", failed_host)
+    with pytest.raises(HubError, match="relay unavailable"):
+        instance.create("Unreachable")
+    assert store.list_sessions() == []
+    assert instance.session_ids() == []
+    monkeypatch.setattr(instance, "_host", original_host)
+    assert instance.create("Retry")["name"] == "Retry"

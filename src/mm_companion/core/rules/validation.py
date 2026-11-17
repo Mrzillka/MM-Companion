@@ -35,7 +35,6 @@ from .powers_terms import (
     _effective_stats,
     config_field_gate_open,
     config_field_shown,
-    effect_attack_skill_bonus,
     effect_base_attack_bonus,
     effect_makes_attack,
     linked_attacks,
@@ -255,9 +254,13 @@ def estimated_power_level(char: Character, game_data: GameData) -> int:
 
     attack_cap = game_data.costs.power_level.caps.get("attack_effect")
     if attack_cap is not None:
-        attack_key = game_data.system.trait_keys.attack
         for power in offensive_builds(char, game_data):
-            for effect in power.effects:
+            shared_bonus = {
+                index: attack.bonus
+                for attack in linked_attacks(power, game_data, char)
+                for index in attack.indices
+            }
+            for index, effect in enumerate(power.effects):
                 if effect_resistance_dc_base(effect, game_data) is None:
                     continue  # not an attack/resisted effect — these caps don't apply
                 # Size raises the effective rank *and* the cap it is measured
@@ -273,14 +276,10 @@ def estimated_power_level(char: Character, game_data: GameData) -> int:
                     # power_pl_violations reads it.
                     pl = max(pl, rank)
                 elif effect_makes_attack(effect, game_data):
-                    linked = effect_attack_skill_bonus(effect, char, game_data)
-                    attack_ability = (
-                        linked
-                        if linked is not None
-                        else effective_ability(char, game_data, attack_key)
+                    attack = (
+                        shared_bonus.get(index, effect_base_attack_bonus(effect, game_data, char))
+                        + rank
                     )
-                    impact = _effective_stats(effect, game_data)[3]
-                    attack = attack_ability + impact.check_bonus + rank
                     pl = max(pl, _pl_for_cap(attack, attack_cap))
                 else:  # auto-hit effect: rank alone is capped at PL
                     pl = max(pl, rank)

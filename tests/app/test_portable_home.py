@@ -59,3 +59,30 @@ def test_explicit_home_env_var_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     _apply_portable_home()
 
     assert os.environ[storage.HOME_ENV_VAR] == str(explicit)
+
+
+def test_workspace_startup_failure_is_reported_and_closes_splash(qapp, monkeypatch):
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QMessageBox, QWidget
+
+    from mm_companion import __main__ as entry
+
+    splash = QWidget()
+    reported = []
+    monkeypatch.setattr(entry, "QApplication", lambda args: qapp)
+    monkeypatch.setattr(entry, "_make_splash", lambda: splash)
+    monkeypatch.setattr(entry, "_route_qt_messages", lambda: None)
+    monkeypatch.setattr(entry.diagnostics, "install", lambda *a, **k: None)
+    monkeypatch.setattr(entry.gc_guard, "install", lambda app: None)
+    monkeypatch.setattr(entry, "_import_interface", lambda: SimpleNamespace())
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args: reported.append(args))
+
+    def refuse_workspace():
+        raise PermissionError("workspace is read-only")
+
+    monkeypatch.setattr(entry, "ensure_workspace", refuse_workspace)
+    assert entry.main() == 1
+    assert not splash.isVisible()
+    assert len(reported) == 1
+    assert "workspace is read-only" in reported[0][2]

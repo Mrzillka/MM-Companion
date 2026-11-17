@@ -145,6 +145,7 @@ class CharacterSheet(QWidget):
             self._without_excluded(default_rows()),
             default_pinned=self._without_excluded(default_pin_lines()),
             instance_factory=self._build_instance,
+            instance_validator=self._can_build_instance,
         )
         loading.step(canvas_steps)
 
@@ -174,6 +175,7 @@ class CharacterSheet(QWidget):
         self._update_min_width()
 
         self._wire_sections()
+        self._canvas.block_removed.connect(self._forget_instance)
 
     def _without_excluded(self, lines: list[list[str]]) -> list[list[str]]:
         """*lines* of block keys minus the ones this sheet does not build, emptied rows dropped."""
@@ -196,6 +198,12 @@ class CharacterSheet(QWidget):
         if not self._excluded or not isinstance(model, dict):
             return model
         model = dict(model)
+        if isinstance(model.get("instances"), list):
+            model["instances"] = [
+                entry
+                for entry in model["instances"]
+                if not (isinstance(entry, dict) and self._is_excluded(str(entry.get("key", ""))))
+            ]
         if isinstance(model.get("hidden"), list):
             model["hidden"] = [k for k in model["hidden"] if not self._is_excluded(str(k))]
         for name in ("floating", "hidden_anchors"):
@@ -355,13 +363,19 @@ class CharacterSheet(QWidget):
         """
         if instance_template(key) == key or key not in self._sections_by_key:
             return
+        section = self._sections_by_key[key]
+        flush = getattr(section, "flush", None)
+        if callable(flush) and flush() is False:
+            return
+        self._canvas.remove_block(key)
+
+    def _forget_instance(self, key: str) -> None:
+        """Drop a removed frame's section, including removals during layout restore."""
+        if instance_template(key) == key or key not in self._sections_by_key:
+            return
         section = self._sections_by_key.pop(key)
         self._descriptor_by_key.pop(key, None)
         self._descriptors = [d for d in self._descriptors if d.key != key]
-        flush = getattr(section, "flush", None)
-        if callable(flush):
-            flush()  # land any unwritten note before the widget goes
-        self._canvas.remove_block(key)
         # The block is gone, so its entry in the model is nobody's. Left behind it
         # would be an empty NotesState the next instance to reuse this key would
         # inherit — and `notes#2` is reused as soon as the middle of three closes.
@@ -380,6 +394,10 @@ class CharacterSheet(QWidget):
         while instance_key(template, number) in self._sections_by_key:
             number += 1
         return instance_key(template, number)
+
+    def _can_build_instance(self, key: str) -> bool:
+        template = instance_template(key)
+        return template != key and any(d.key == template for d in self.multi_templates())
 
     def _build_instance(self, key: str):
         """The canvas's hook: build the block a restored layout names.
@@ -444,6 +462,9 @@ class CharacterSheet(QWidget):
         key = self._key_of(section)
         if key is None:
             return
+        flush = getattr(section, "flush", None)
+        if callable(flush) and flush() is False:
+            return
         new_key = self.add_block_instance(instance_template(key), near=key)
         self._sections_by_key[new_key].adopt([ref], active=ref)
         section.release(ref)
@@ -458,6 +479,15 @@ class CharacterSheet(QWidget):
         key, self._split_key = self._split_key, None
         if key is not None:
             self._canvas.title_bar_released(key, global_pos)
+
+    def flush_pending(self) -> bool:
+        """Land independently saved block contents before a window can close."""
+        written = True
+        for section in self._sections():
+            flush = getattr(section, "flush", None)
+            if callable(flush) and flush() is False:
+                written = False
+        return written
 
     def _key_of(self, section) -> str | None:
         for key, candidate in self._sections_by_key.items():

@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from mm_companion.core import storage
+from mm_companion.core.files import atomic_write_text
 
 from .model import RollRecord, SessionState
 
@@ -83,12 +84,10 @@ def save_session(
     directory = session_dir(state.id, workspace)
     directory.mkdir(parents=True, exist_ok=True)
     payload = state.to_dict(include_rolls=False)
-    (directory / SESSION_FILENAME).write_text(
-        json.dumps(payload, indent=2) + "\n", encoding="utf-8"
-    )
+    atomic_write_text(directory / SESSION_FILENAME, json.dumps(payload, indent=2) + "\n")
     if write_rolls:
         lines = "".join(json.dumps(roll.to_dict()) + "\n" for roll in state.rolls)
-        (directory / ROLLS_FILENAME).write_text(lines, encoding="utf-8")
+        atomic_write_text(directory / ROLLS_FILENAME, lines)
     return directory
 
 
@@ -112,14 +111,16 @@ def load_rolls(session_id: str, workspace: storage.Workspace | None = None) -> l
     if not path.is_file():
         return []
     rolls: list[RollRecord] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            rolls.append(RollRecord.from_dict(json.loads(line)))
-        except (json.JSONDecodeError, TypeError, ValueError, KeyError):
-            continue
+    with path.open("rb") as stream:
+        for line in stream:
+            if not line.strip():
+                continue
+            try:
+                raw = json.loads(line)
+                if isinstance(raw, dict):
+                    rolls.append(RollRecord.from_dict(raw))
+            except (ValueError, TypeError, KeyError, OverflowError):
+                continue
     rolls.sort(key=lambda roll: roll.seq)
     return rolls
 
@@ -131,13 +132,16 @@ def load_session(session_id: str, workspace: storage.Workspace | None = None) ->
         raw = json.loads(path.read_text(encoding="utf-8"))
     except OSError as exc:
         raise SessionStoreError(f"no session {session_id!r}: {exc}") from exc
-    except json.JSONDecodeError as exc:
+    except ValueError as exc:
         raise SessionStoreError(f"session {session_id!r} is corrupt: {exc}") from exc
     if not isinstance(raw, dict):
         raise SessionStoreError(f"session {session_id!r} is corrupt: not a JSON object")
 
-    state = SessionState.from_dict(raw)
-    state.rolls = load_rolls(session_id, workspace)
+    try:
+        state = SessionState.from_dict(raw)
+        state.rolls = load_rolls(session_id, workspace)
+    except (AttributeError, TypeError, ValueError, KeyError, OverflowError, OSError) as exc:
+        raise SessionStoreError(f"session {session_id!r} is corrupt or unreadable: {exc}") from exc
     # A slot's ``connected`` flag describes a live socket, which no longer exists
     # after a restart; everyone starts disconnected and reconnects on their own.
     for slot in state.players.values():
@@ -165,19 +169,16 @@ def list_sessions(workspace: storage.Workspace | None = None) -> list[SessionSum
         if not child.is_dir() or not is_valid_session_id(child.name):
             continue
         try:
-            raw = json.loads((child / SESSION_FILENAME).read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            state = load_session(child.name, workspace)
+        except SessionStoreError:
             continue
-        if not isinstance(raw, dict):
-            continue
-        state = SessionState.from_dict(raw)
         summaries.append(
             SessionSummary(
                 id=state.id,
                 name=state.name,
                 updated_at=state.updated_at,
                 player_count=len(state.players),
-                roll_count=len(load_rolls(child.name, workspace)),
+                roll_count=len(state.rolls),
                 path=child,
             )
         )

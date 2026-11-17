@@ -20,6 +20,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from .files import atomic_write_text
+
 APP_NAME = "MM-Companion"
 HOME_ENV_VAR = "MM_COMPANION_HOME"
 
@@ -403,9 +405,7 @@ def ensure_workspace() -> Workspace:
     workspace.sessions_dir.mkdir(parents=True, exist_ok=True)
     workspace.themes_dir.mkdir(parents=True, exist_ok=True)
     if not workspace.settings_file.exists():
-        workspace.settings_file.write_text(
-            json.dumps(DEFAULT_SETTINGS, indent=2) + "\n", encoding="utf-8"
-        )
+        atomic_write_text(workspace.settings_file, json.dumps(DEFAULT_SETTINGS, indent=2) + "\n")
     return workspace
 
 
@@ -413,9 +413,10 @@ def load_settings() -> dict:
     """Read the settings file, falling back to defaults if missing or invalid."""
     workspace = get_workspace()
     try:
-        return json.loads(workspace.settings_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return dict(DEFAULT_SETTINGS)
+        raw = json.loads(workspace.settings_file.read_text(encoding="utf-8"))
+        return raw if isinstance(raw, dict) else copy.deepcopy(DEFAULT_SETTINGS)
+    except (OSError, ValueError):
+        return copy.deepcopy(DEFAULT_SETTINGS)
 
 
 def save_settings(settings: dict) -> None:
@@ -427,7 +428,7 @@ def save_settings(settings: dict) -> None:
     ``layout`` (base64 strings) here so no Qt types leak into this layer.
     """
     workspace = ensure_workspace()
-    workspace.settings_file.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+    atomic_write_text(workspace.settings_file, json.dumps(settings, indent=2) + "\n")
 
 
 def update_settings(**changes: object) -> dict:
@@ -894,7 +895,7 @@ def local_mod_state(mod_id: str) -> dict:
         return {}
     try:
         loaded = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
         return {}
     return loaded if isinstance(loaded, dict) else {}
 
@@ -912,7 +913,7 @@ def set_local_mod_state(mod_id: str, state: dict) -> None:
         return
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+        atomic_write_text(path, json.dumps(state, indent=2) + "\n")
     except (OSError, TypeError, ValueError):
         # TypeError/ValueError: a mod handed us something json cannot render.
         # Losing the write is the right failure — the alternative is a half-written
@@ -1015,3 +1016,21 @@ def forget_my_session(session_id: str) -> None:
     update_settings(
         session_my_sessions=[row for row in my_sessions() if row.get("id") != session_id]
     )
+
+
+def mod_ids(key: str) -> list[str]:
+    """Validated enabled/trusted/load-order ids; malformed settings mean no ids."""
+    if key not in ("enabled_mods", "trusted_mods", "mod_order"):
+        return []
+    stored = load_settings().get(key)
+    if not isinstance(stored, list):
+        return []
+    return list(dict.fromkeys(value for value in stored if isinstance(value, str)))
+
+
+def mod_options() -> dict[str, dict]:
+    """Saved per-mod overrides, ignoring malformed entries."""
+    stored = load_settings().get("mod_options")
+    if not isinstance(stored, dict):
+        return {}
+    return {key: dict(value) for key, value in stored.items() if isinstance(value, dict)}

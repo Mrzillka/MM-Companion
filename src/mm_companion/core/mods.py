@@ -52,7 +52,8 @@ from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
 
-from . import storage
+from . import diagnostics, storage
+from .session.protocol import sanitize_mod_id
 
 DATA_PACKAGE = "mm_companion"
 BASE_MOD_ID = "base"
@@ -113,7 +114,7 @@ class Mod:
             return json.loads(source.read_text(encoding="utf-8"))
         if self.root is None:
             return None
-        path = self.root / filename
+        path = _content_path(filename, self.root)
         if not path.exists():
             return None
         return json.loads(path.read_text(encoding="utf-8"))
@@ -124,33 +125,75 @@ class Mod:
 
 
 def _option_from_dict(raw: dict) -> ModOption:
+    if not isinstance(raw.get("id"), str) or not raw["id"].strip():
+        raise ValueError("Each mod option must have a non-empty string id.")
+    choices = _string_list(raw.get("choices", []), "option choices")
+    for name in ("label", "description"):
+        if name in raw and not isinstance(raw[name], str):
+            raise ValueError(f"Mod option {name} must be a string.")
     opt_type = raw.get("type", "text")
     return ModOption(
         id=raw["id"],
         label=raw.get("label", raw["id"]),
         type=opt_type if opt_type in OPTION_TYPES else "text",
         default=raw.get("default"),
-        choices=tuple(raw.get("choices", [])),
+        choices=choices,
         description=raw.get("description", ""),
     )
 
 
+def _string_list(raw: object, name: str) -> tuple[str, ...]:
+    if not isinstance(raw, (list, tuple)) or any(not isinstance(item, str) for item in raw):
+        raise ValueError(f"Mod {name} must be a list of strings.")
+    return tuple(raw)
+
+
+def _content_path(filename: str, root: Path | None) -> Path:
+    """Resolve a portable relative content path, confined to the mod directory."""
+    parts = filename.replace("\\", "/").split("/")
+    if not filename or ":" in filename or not parts[0] or ".." in parts:
+        raise ValueError("Mod content paths must stay inside the mod folder.")
+    if root is None:
+        return Path(filename)
+    try:
+        path = (root / filename).resolve()
+        path.relative_to(root.resolve())
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ValueError("Mod content paths must stay inside the mod folder.") from exc
+    return path
+
+
 def _mod_from_manifest(manifest: dict, *, is_base: bool, root: Path | None) -> Mod:
+    if not isinstance(manifest, dict):
+        raise ValueError("A mod manifest must be a JSON object.")
+    mod_id = sanitize_mod_id(manifest.get("id"))
+    if not mod_id or mod_id != manifest.get("id"):
+        raise ValueError("A mod id must be a path-safe identifier.")
+    if not is_base and mod_id == BASE_MOD_ID:
+        raise ValueError(f'"{BASE_MOD_ID}" is reserved for the base ruleset')
+    for name in ("name", "description", "python_module"):
+        if name in manifest and not isinstance(manifest[name], str):
+            if name == "python_module" and manifest[name] is None:
+                continue
+            raise ValueError(f"Mod {name} must be a string.")
     options = tuple(
         _option_from_dict(opt)
         for opt in manifest.get("options", [])
         if isinstance(opt, dict) and "id" in opt
     )
+    files = _string_list(manifest.get("files", []), "files")
+    for filename in files:
+        _content_path(filename, root)
     return Mod(
         id=manifest["id"],
         name=manifest.get("name", manifest["id"]),
         version=str(manifest.get("version", "")),
         priority=int(manifest.get("priority", 0)),
-        files=tuple(manifest.get("files", [])),
+        files=files,
         is_base=is_base,
         root=root,
         python_module=manifest.get("python_module"),
-        requires=tuple(manifest.get("requires", [])),
+        requires=_string_list(manifest.get("requires", []), "requires"),
         description=manifest.get("description", ""),
         options=options,
     )
@@ -183,12 +226,12 @@ def discover_workspace_mods(workspace: storage.Workspace | None = None) -> list[
             continue
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError, KeyError):
+        except (OSError, ValueError):
             continue
         try:
             result.append(_mod_from_manifest(manifest, is_base=False, root=child))
-        except KeyError:
-            continue  # manifest missing a required key (id)
+        except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
+            continue  # malformed metadata must not stop startup
     return result
 
 
@@ -207,9 +250,9 @@ def active_mods(
     ids are ignored.
     """
     if enabled is None:
-        enabled = list(storage.load_settings().get("enabled_mods", []))
+        enabled = storage.mod_ids("enabled_mods")
     if order is None:
-        order = list(storage.load_settings().get("mod_order", []))
+        order = storage.mod_ids("mod_order")
     mods = [base_mod()]
     if not enabled:
         return mods
@@ -269,7 +312,8 @@ def load_mod_python_modules(
                 sys.path.insert(0, root_str)
         try:
             importer(mod.python_module)
-        except Exception:  # noqa: BLE001 — a bad mod must not crash the app
+        except Exception as exc:  # noqa: BLE001 — a bad mod must not crash the app
+            diagnostics.log_exception(f"Could not load Python module for mod {mod.id}", exc)
             continue
         loaded.append(mod.id)
     return loaded
@@ -284,9 +328,8 @@ def initialize_mods(workspace: storage.Workspace | None = None) -> list[str]:
     Reads ``enabled_mods`` and ``trusted_mods`` from settings. Returns the mod ids
     whose modules were imported.
     """
-    settings = storage.load_settings()
-    enabled = list(settings.get("enabled_mods", []))
-    trusted = set(settings.get("trusted_mods", []))
+    enabled = storage.mod_ids("enabled_mods")
+    trusted = set(storage.mod_ids("trusted_mods"))
     mods = active_mods(enabled, workspace)
     return load_mod_python_modules(mods, trusted=trusted)
 
@@ -295,8 +338,7 @@ def initialize_mods(workspace: storage.Workspace | None = None) -> list[str]:
 
 
 def _update_id_list(key: str, mod_id: str, present: bool) -> list[str]:
-    settings = storage.load_settings()
-    ids = list(settings.get(key, []))
+    ids = storage.mod_ids(key)
     if present and mod_id not in ids:
         ids.append(mod_id)
     elif not present and mod_id in ids:
@@ -348,8 +390,7 @@ def mod_option_values(mod_id: str, mod: Mod | None = None) -> dict:
     result is just the raw stored overrides. Values not declared by the mod are
     dropped so a stale override can't leak in.
     """
-    stored = storage.load_settings().get("mod_options", {})
-    overrides = stored.get(mod_id, {}) if isinstance(stored, dict) else {}
+    overrides = storage.mod_options().get(mod_id, {})
     if mod is None:
         return dict(overrides)
     values: dict = {}
@@ -360,8 +401,7 @@ def mod_option_values(mod_id: str, mod: Mod | None = None) -> dict:
 
 def set_mod_options(mod_id: str, values: dict) -> dict:
     """Persist option overrides for *mod_id*; returns the full ``mod_options`` map."""
-    settings = storage.load_settings()
-    stored = dict(settings.get("mod_options", {}) or {})
+    stored = storage.mod_options()
     stored[mod_id] = dict(values)
     storage.update_settings(mod_options=stored)
     return stored
@@ -383,21 +423,28 @@ def import_mod_folder(source: Path, workspace: storage.Workspace | None = None) 
         raise ModImportError(f"No {MANIFEST_FILENAME} found in {source}")
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError) as exc:
         raise ModImportError(f"Could not read {manifest_path}: {exc}") from exc
-    mod_id = manifest.get("id")
-    if not mod_id:
-        raise ModImportError(f'{manifest_path} is missing an "id"')
-    if mod_id == BASE_MOD_ID:
-        raise ModImportError(f'"{mod_id}" is reserved for the base ruleset')
+    # Validate before copying anything: the id becomes a directory name, and bad
+    # metadata must not leave a half-installed mod that breaks the next startup.
+    try:
+        parsed = _mod_from_manifest(manifest, is_base=False, root=None)
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise ModImportError(f"Invalid {manifest_path}: {exc}") from exc
+    mod_id = parsed.id
 
     workspace = workspace or storage.get_workspace()
     workspace.mods_dir.mkdir(parents=True, exist_ok=True)
     destination = workspace.mods_dir / mod_id
+    if destination.resolve().is_relative_to(source.resolve()):
+        raise ModImportError("A mod cannot be installed inside its source folder.")
     if destination.exists():
         raise ModImportError(f'A mod with id "{mod_id}" is already installed')
 
-    shutil.copytree(source, destination)
+    try:
+        shutil.copytree(source, destination)
+    except OSError as exc:
+        raise ModImportError(f"Could not install {mod_id}: {exc}") from exc
     return _mod_from_manifest(manifest, is_base=False, root=destination)
 
 
@@ -503,13 +550,12 @@ def remove_mod(mod_id: str, workspace: storage.Workspace | None = None) -> Path 
         shutil.rmtree(mod.root)
         removed = mod.root
 
-    settings = storage.load_settings()
-    options = dict(settings.get("mod_options", {}) or {})
+    options = storage.mod_options()
     options.pop(mod_id, None)
     storage.update_settings(
-        enabled_mods=[i for i in settings.get("enabled_mods", []) if i != mod_id],
-        trusted_mods=[i for i in settings.get("trusted_mods", []) if i != mod_id],
-        mod_order=[i for i in settings.get("mod_order", []) if i != mod_id],
+        enabled_mods=[i for i in storage.mod_ids("enabled_mods") if i != mod_id],
+        trusted_mods=[i for i in storage.mod_ids("trusted_mods") if i != mod_id],
+        mod_order=[i for i in storage.mod_ids("mod_order") if i != mod_id],
         mod_options=options,
     )
     return removed

@@ -160,8 +160,18 @@ def test_import_mod_folder_copies_valid_folder(_home: Path, tmp_path: Path) -> N
 
 @pytest.mark.parametrize(
     "manifest",
-    [None, {"name": "x"}, {"id": "base"}, {"id": "dup"}],
-    ids=["no-manifest", "no-id", "reserved-id", "already-installed"],
+    [
+        None,
+        {"name": "x"},
+        {"id": "base"},
+        {"id": "dup"},
+        {"id": "../escape"},
+        {"id": "../../escape"},
+        {"id": "bad", "priority": "oops"},
+        [],
+        {"id": "bad", "files": "content.json"},
+        {"id": "bad", "options": [{"id": []}]},
+    ],
 )
 def test_import_mod_folder_refuses_a_folder_it_cannot_install(
     _home: Path, tmp_path: Path, manifest: dict | None
@@ -173,6 +183,14 @@ def test_import_mod_folder_refuses_a_folder_it_cannot_install(
         (source / mods.MANIFEST_FILENAME).write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(mods.ModImportError):
         mods.import_mod_folder(source)
+
+
+@pytest.mark.parametrize("payload", ["null", "[]", '{"id":"x", "priority":"oops"}', '{"id":[]}'])
+def test_a_malformed_workspace_manifest_does_not_stop_discovery(_home, payload):
+    folder = storage.ensure_workspace().mods_dir / "broken"
+    folder.mkdir()
+    (folder / mods.MANIFEST_FILENAME).write_text(payload, encoding="utf-8")
+    assert mods.discover_workspace_mods() == []
 
 
 # --- removing a mod ---------------------------------------------------------
@@ -201,3 +219,90 @@ def test_remove_mod_absent_is_noop(_home: Path) -> None:
     mods.set_mod_enabled("ghost", True)
     assert mods.remove_mod("ghost") is None
     assert storage.load_settings()["enabled_mods"] == []
+
+
+@pytest.mark.parametrize("bad", [None, 7, "oops", [None, {}]])
+def test_malformed_mod_preferences_do_not_break_startup_or_edits(bad):
+    storage.save_settings(
+        {key: bad for key in ("enabled_mods", "trusted_mods", "mod_order", "mod_options")}
+    )
+    assert [mod.id for mod in mods.active_mods()] == ["base"]
+    assert mods.initialize_mods() == []
+    assert mods.mod_option_values("example") == {}
+    assert mods.set_mod_enabled("example", True) == ["example"]
+    assert mods.set_mod_options("example", {"size": 2}) == {"example": {"size": 2}}
+    mods.remove_mod("example")
+    assert mods.mod_option_values("example") == {}
+
+
+def test_malformed_individual_mod_options_are_ignored():
+    storage.save_settings({"mod_options": {"broken": None, "good": {"size": 2}}})
+    assert mods.mod_option_values("broken") == {}
+    assert mods.mod_option_values("good") == {"size": 2}
+
+
+@pytest.mark.parametrize("field", ["name", "description"])
+def test_null_manifest_display_text_is_rejected(field):
+    with pytest.raises(ValueError):
+        mods._mod_from_manifest({"id": "example", field: None}, is_base=False, root=None)
+
+
+@pytest.mark.parametrize("field", ["label", "description"])
+@pytest.mark.parametrize("value", [None, [], {}])
+def test_non_text_option_metadata_is_rejected(field, value):
+    with pytest.raises(ValueError):
+        mods._mod_from_manifest(
+            {"id": "example", "options": [{"id": "option", field: value}]},
+            is_base=False,
+            root=None,
+        )
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "../outside.json",
+        "..\\outside.json",
+        "C:/outside.json",
+        "/outside.json",
+        "effects.json:stream",
+    ],
+)
+def test_mod_content_paths_cannot_escape_the_mod(filename):
+    with pytest.raises(ValueError):
+        mods._mod_from_manifest({"id": "example", "files": [filename]}, is_base=False, root=None)
+
+
+def test_mod_reader_does_not_read_outside_its_root(tmp_path):
+    root = tmp_path / "mod"
+    root.mkdir()
+    (tmp_path / "outside.json").write_text('{"private": true}', encoding="utf-8")
+    mod = mods.Mod("example", "Example", "1", 0, ("../outside.json",), root=root)
+    with pytest.raises(ValueError):
+        mod.read("../outside.json")
+
+
+def test_mod_content_can_use_a_nested_file_inside_its_root(tmp_path):
+    nested = tmp_path / "content"
+    nested.mkdir()
+    (nested / "effects.json").write_text('{"effects": []}', encoding="utf-8")
+    mod = mods._mod_from_manifest(
+        {"id": "example", "files": ["content/effects.json"]}, is_base=False, root=tmp_path
+    )
+    assert mod.read("content/effects.json") == {"effects": []}
+
+
+def test_mod_content_symlink_cannot_escape_its_root(tmp_path):
+    root = tmp_path / "mod"
+    root.mkdir()
+    outside = tmp_path / "outside.json"
+    outside.write_text("{}", encoding="utf-8")
+    link = root / "effects.json"
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        pytest.skip("Creating symlinks is unavailable on this platform")
+    with pytest.raises(ValueError):
+        mods._mod_from_manifest(
+            {"id": "example", "files": ["effects.json"]}, is_base=False, root=root
+        )

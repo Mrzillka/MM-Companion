@@ -440,6 +440,8 @@ class CombatOption:
     name: str
     tooltip: str = ""
     effect: CombatEffect = field(default_factory=CombatEffect)
+    requires_advantage: str = ""
+    replaces_options: bool = False
 
 
 @dataclass(frozen=True)

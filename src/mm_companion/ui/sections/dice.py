@@ -51,6 +51,7 @@ from mm_companion.core.rules import (
     power_area_use,
     reacting,
     recovery_succeeded,
+    refresh_condition_check,
     requested_roll_choices,
     self_action,
     targeted_action,
@@ -269,7 +270,9 @@ class DiceSection(QGroupBox):
             self._queue_timer.start(QUEUE_GAP_MS)
             return
         spec = self._roll_queue.pop(0)
-        self.perform_roll(spec)
+        spec = refresh_condition_check(self._character, self._data, spec)
+        if spec is not None:
+            self.perform_roll(spec)
         if self._roll_queue:
             self._queue_after_landing = True
             self._queue_timer.start(QUEUE_POLL_MS)

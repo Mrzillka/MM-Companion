@@ -879,6 +879,8 @@ def _parse_combat_action(raw: dict) -> CombatAction:
                 name=str(o.get("name", o["id"])),
                 tooltip=str(o.get("tooltip", "")),
                 effect=_parse_combat_effect(o),
+                requires_advantage=str(o.get("requiresAdvantage", "")),
+                replaces_options=bool(o.get("replacesOptions", False)),
             )
             for o in raw.get("options", ())
             if isinstance(o, dict) and o.get("id")

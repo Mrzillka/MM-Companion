@@ -1336,10 +1336,14 @@ class DiceRollerPanel(
         button = self._actions_button
         return button.mapToGlobal(button.rect().bottomLeft())
 
-    def choose_attack(self) -> RollSpec | None:
+    def choose_attack(self, *, attack_range: str = "") -> RollSpec | None:
         """Offer the character's attacks on a plain menu and return the one picked
         (``None``: dismissed, or no attacks). Loads nothing itself."""
-        choices = self.attack_choices()
+        choices = [
+            c
+            for c in self.attack_choices()
+            if not attack_range or c.spec.attack_range == attack_range
+        ]
         if not choices:
             return None
         index = choose_from_menu(self, [c.caption for c in choices], self.menu_point())
@@ -1734,6 +1738,7 @@ class DiceRollerPanel(
         manual rolls against a trait no longer loaded). Only a DC this method set is
         withdrawn; one the player typed is theirs.
         """
+        self._prepared_before = None
         # *localize* false puts back a spec this panel already held, which has been
         # through the localizer once (twice would add this sheet's number again).
         if spec is not None and localize:
@@ -1860,6 +1865,21 @@ class DiceRollerPanel(
 
         spin = self._modifier_spin
         spin.setValue(max(spin.minimum(), min(spin.maximum(), spin.value() + amount)))
+
+    def prepare_spec(
+        self,
+        spec: RollSpec,
+        *,
+        minion: bool = False,
+        before: Callable[[RollSpec | None], bool] | None = None,
+    ) -> bool:
+        """Load an action now; declare and roll it only when the die is clicked."""
+        if self._rolling:
+            return False
+        self.load_spec(spec, minion=minion)
+        self._prepared_before = before
+        self._transient = True
+        return True
 
     def roll_spec(
         self,
@@ -2051,6 +2071,7 @@ class DiceRollerPanel(
         if self._rolling:
             return False
         if not self._rerolling:
+            before = before or getattr(self, "_prepared_before", None)
             # What the lines read may have moved since they were set (a condition, a
             # power switched): pulled down to what fits now, never up.
             self._lane.relimit()
@@ -2058,6 +2079,7 @@ class DiceRollerPanel(
             flight = self.with_lines(self._spec)
             if before is not None and not before(flight):
                 return False
+            self._prepared_before = None
             self._flight = flight if flight is not self._spec else None
             bonus, penalty, dc, hidden = self._roll_parameters()
             self._pending_last = {

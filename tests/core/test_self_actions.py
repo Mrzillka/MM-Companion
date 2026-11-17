@@ -201,7 +201,11 @@ def test_a_slam_can_start_from_a_known_zero_damage_rank(data):
 def test_a_slam_needs_a_damage_attack(data) -> None:
     save = RollSpec(label="Will vs. 18", dc=18, effect_rank=8, rolled_by_target=True)
     attack = RollSpec(
-        label="Attack +6 vs. Defense", modifier=6, follow_up=save, marks=("attack_check",)
+        label="Attack +6 vs. Defense",
+        modifier=6,
+        follow_up=save,
+        marks=("attack_check",),
+        attack_range="close",
     )
     assert line_fit(data, "charge/slam", attack)
     assert line_fit(data, "charge", attack) == ""

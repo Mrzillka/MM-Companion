@@ -97,7 +97,7 @@ class GMRollsMixin:
             return
         where = context if isinstance(context, AnswerContext) else AnswerContext()
         if not spec.trait_key:
-            self._roller.roll_spec(spec)
+            self._roller.prepare_spec(spec)
             return
         _sources, targets = self.impress_parties()
         npcs = [p for p in targets if p.kind == PARTY_NPC and p.character is not None]
@@ -146,7 +146,7 @@ class GMRollsMixin:
             if portrait is not None:
                 action.setIcon(QIcon(portrait))
         menu.addSeparator()
-        menu.addAction(AS_WRITTEN_CAPTION, lambda: self._roller.roll_spec(spec))
+        menu.addAction(AS_WRITTEN_CAPTION, lambda: self._roller.prepare_spec(spec))
         menu.exec(QCursor.pos())
 
     def _roll_as(
@@ -169,14 +169,17 @@ class GMRollsMixin:
         if party.minion:
             # Every seat's card then reads the worst rung, which is what lands.
             rolled = minion_save_spec(rolled, self.minion_rules())
-        # Set first: the roll can come back before roll_spec returns (a hosted
-        # server answers in-process, and a test's die does not tumble).
-        self._answering = _Answering(spec, party, where)
-        if not self._roller.roll_spec(rolled, minion=self.rolls_as_minion(party.character)):
-            self._answering = None
-            return
-        if where.seq is not None:
-            self._answered.setdefault(where.seq, set()).add(party.name)
+
+        def before(_made_of):
+            # Set only when the die is clicked, before a hosted result can return.
+            self._answering = _Answering(spec, party, where)
+            if where.seq is not None:
+                self._answered.setdefault(where.seq, set()).add(party.name)
+            return True
+
+        self._roller.prepare_spec(
+            rolled, minion=self.rolls_as_minion(party.character), before=before
+        )
 
     def _on_answer_back(self, roll: object) -> None:
         """A roll of the GM's own is back: if an NPC answered with it, apply its rung."""

@@ -62,6 +62,7 @@ from mm_companion.core.rules import (
     impression_shake_off,
     maintained_by,
     minion_save_spec,
+    opposing_effects,
     reapplied_landing,
     reapply_request,
     reapply_roll,
@@ -103,6 +104,8 @@ RESOLVE_CAPTION = "Resolve Impress"
 
 class ImpressHost(Protocol):
     """What the controller needs from the GM window."""
+
+    def action_result(self, title: str, text: str) -> None: ...
 
     def impress_parties(self) -> tuple[list[ImpressParty], list[ImpressParty]]:
         """``(who may impress, who may be targeted)`` as the board stands now."""
@@ -598,6 +601,25 @@ class ImpressController(QObject):
         if resolving is None:
             return
         plan = resolving.plan
+        adjusted = []
+        spent = []
+        for target in plan.targets:
+            counted = opposing_effects(
+                plan.source.character,
+                plan.source.name,
+                target.party.character,
+                target.party.name,
+                self._data,
+                check_only=True,
+            )
+            adjusted.append(replace(target, dc_offset=target.dc_offset + counted.attack))
+            spent.extend((c.condition_id, c.parameter) for c in counted.attacker_spent)
+            if counted.notes:
+                resolving.said.append("with " + ", ".join(counted.notes))
+        if spent:
+            self._host.action_remove(plan.source, list(dict.fromkeys(spent)))
+        plan = replace(plan, targets=tuple(adjusted))
+        resolving.plan = plan
         dc: int | None = None
         if total is not None and die is not None:
             # A minion's natural 20 is no added success (PDF p25), so no critical bonus.
@@ -1135,6 +1157,7 @@ class ImpressController(QObject):
             action.window.set_result(target.party.ref, shown, token)
         if not resolving.pending:
             plan = resolving.plan
+            self._host.action_result(plan.title, "; ".join(resolving.said))
             self._host.impress_notice(
                 f"{plan.impression.name} — " + "; ".join(resolving.said), theme.color("accent")
             )

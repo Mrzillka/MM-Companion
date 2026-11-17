@@ -575,6 +575,8 @@ def test_a_hit_offers_the_save_it_forced(qapp: QApplication) -> None:
     # Pressing it rolls the save against its own DC.
     rolled = _Rolled(panel)
     chain[0].click()
+    assert not rolled.payloads
+    sheet.dice.panel._start_roll()
     assert rolled.last["label"] == "Toughness vs. 18"
     assert rolled.last["dc"] == 18
     # With this sheet's own Toughness (Stamina 5), and marked as one's own attack: on
@@ -624,7 +626,8 @@ def test_a_save_that_held_still_reports_the_hit_it_cost(qapp: QApplication) -> N
     panel._start_roll()
 
     lines = [lb.text() for lb in history.cards()[0].findChildren(QLabel)]
-    assert "Hit (unless Impervious)!" in lines
+    assert "Hit!" in lines
+    assert "Hit (unless Impervious)!" not in lines
 
 
 def test_a_save_with_nothing_to_say_on_a_success_says_nothing(qapp: QApplication) -> None:
@@ -668,6 +671,8 @@ def test_a_natural_20_raises_the_dc_of_the_save_it_forces(qapp: QApplication) ->
     assert chain[0].text() == "🎲 Toughness vs. 18 — critical hit, DC 23"
     rolled = _Rolled(sheet.dice.panel)
     chain[0].click()
+    assert not rolled.payloads
+    sheet.dice.panel._start_roll()
     assert rolled.last["dc"] == 23
 
 
@@ -680,6 +685,8 @@ def test_a_natural_1_that_still_hits_helps_the_target_resist(qapp: QApplication)
     assert chain[0].text() == "🎲 Toughness vs. 18 — natural 1, +5 to resist"
     rolled = _Rolled(sheet.dice.panel)
     chain[0].click()
+    assert not rolled.payloads
+    sheet.dice.panel._start_roll()
     # The target's help, not a cut to the DC — on top of this sheet's own Toughness 5,
     # since it is one's own card.
     assert rolled.last["bonus"] == 5 + 5
@@ -738,6 +745,8 @@ def test_another_players_card_offers_the_save_with_their_own_toughness(
 
     rolled = _Rolled(sheet.dice.panel)
     chain[0].click()
+    assert not rolled.payloads
+    sheet.dice.panel._start_roll()
     assert rolled.last["bonus"] == 5  # their own Toughness, filled in for them
     assert rolled.last["dc"] == 18
 
@@ -771,6 +780,8 @@ def test_your_own_card_fills_in_your_own_toughness_and_says_so(
 
     rolled = _Rolled(sheet.dice.panel)
     button.click()
+    assert not rolled.payloads
+    sheet.dice.panel._start_roll()
     assert rolled.last["bonus"] == 5
     spec = rolled.last["spec"]
     assert spec.own_attack

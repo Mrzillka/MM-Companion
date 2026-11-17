@@ -50,6 +50,7 @@ from .derived import (
     initiative_ability,
     initiative_advantage_bonus,
     initiative_modifier,
+    own_skill_rows,
     resistance_base,
     resistance_total,
     skill_bonus,
@@ -83,6 +84,7 @@ COUNTER_ACTION_LIMIT = "Standard"
 KIND_ABILITY = "ability"
 KIND_RESISTANCE = "resistance"
 KIND_SKILL = "skill"
+KIND_COMBAT_SKILL = "combat-skill"
 KIND_INITIATIVE = "initiative"
 KIND_POWER_CHECK = "power-check"
 KIND_POWER_SAVE = "power-save"
@@ -1095,6 +1097,14 @@ def _own_trait_roll(spec: RollSpec, char: Character, game_data: GameData) -> Rol
     if spec.kind == KIND_ABILITY:
         if any(a.key == key for a in game_data.abilities):
             return ability_roll(char, game_data, key)
+    elif spec.kind == KIND_COMBAT_SKILL:
+        skill = next((s for s in game_data.skills if s.id == key), None)
+        if skill is not None:
+            candidates = [skill_roll(char, game_data, skill.name)]
+            candidates.extend(
+                skill_roll(char, game_data, row.row_id) for row in own_skill_rows(char, skill)
+            )
+            return max(candidates, key=lambda r: r.modifier)
     elif spec.kind in (KIND_RESISTANCE, KIND_POWER_SAVE, KIND_AREA_DODGE, ""):
         if spec.kind == KIND_POWER_SAVE and is_choice_key(key):
             return _best_own_roll(key, char, game_data, worst=rolls_worst(spec))

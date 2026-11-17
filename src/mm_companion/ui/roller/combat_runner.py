@@ -25,6 +25,7 @@ from mm_companion.core import library
 from mm_companion.core.character import Character
 from mm_companion.core.components import TONE_HINDRANCE
 from mm_companion.core.data_loader import GameData
+from mm_companion.core.data_loader.game_data import COMBAT_CHECK_SPEED
 from mm_companion.core.rules import (
     AttackChoice,
     RollSpec,
@@ -32,6 +33,7 @@ from mm_companion.core.rules import (
     apply_actions,
     attack_choices,
     check_spec,
+    condition_speed_lines,
     is_team_call,
     lasting_conditions,
     line_fit,
@@ -41,6 +43,7 @@ from mm_companion.core.rules import (
     maneuver_trade,
     reacting,
     reaction_changes,
+    reaction_choices,
     reaction_spec,
     recover_choices,
     self_action,
@@ -114,6 +117,7 @@ class CombatRunner:
         #: lane for the attack that is its entry.
         self.team_call: RollSpec | None = None
         self._reaction_actors: dict[tuple[str, str], CombatActor] = {}
+        self._movement_ranks: dict[str, tuple[int, str]] = {}
         panel.set_attack_choices(self.attack_choices)
         panel.set_line_shift(self.shift)
         panel.set_line_rearm(self.rearm)
@@ -142,6 +146,7 @@ class CombatRunner:
         """Take every action line off the lane."""
         for line in list(self._panel.action_lines()):
             self._panel.remove_action_line(line.key)
+        self._movement_ranks.clear()
 
     def own(self, spec: RollSpec) -> RollSpec:
         """*spec* as the actor rolls it: its name in front of the label, and as the
@@ -175,7 +180,13 @@ class CombatRunner:
         if call is not None and any(key == TEAM_LINE for key, _value in lines):
             spec = team_join_spec(spec, call, self.attacker_name(), self._data)
         shifted = apply_actions(
-            spec, lines, self._data, actor.character if actor is not None else None
+            spec,
+            lines,
+            self._data,
+            actor.character if actor is not None else None,
+            movement_rank=next(
+                (self._movement_ranks[k][0] for k, _v in lines if k in self._movement_ranks), None
+            ),
         )
         if shifted.then is not None:
             shifted = replace(shifted, then=self.own(shifted.then))
@@ -192,22 +203,34 @@ class CombatRunner:
         if lasting:
             self.actor.land(tuple(lasting))
 
-    def ensure_attack(self) -> bool:
+    def ensure_attack(self, attack_range: str = "") -> bool:
         """Make sure one of the actor's attacks is on the chip, asking with the picker
         when none is (or the one there is somebody else's). ``False``: called off."""
         actor = self.actor
         loaded = self._panel.loaded_attack()
-        if loaded is not None and (not actor or not actor.name or loaded.actor == actor.name):
+        if (
+            loaded is not None
+            and (not actor or not actor.name or loaded.actor == actor.name)
+            and (not attack_range or loaded.attack_range == attack_range)
+        ):
             return True
-        spec = self._panel.choose_attack()
+        spec = (
+            self._panel.choose_attack(attack_range=attack_range)
+            if attack_range
+            else self._panel.choose_attack()
+        )
         if spec is None:
             return False
         self._load(spec)
         return True
 
-    def choose_attack(self) -> RollSpec | None:
+    def choose_attack(self, attack_range: str = "") -> RollSpec | None:
         """One of the actor's attacks off the picker (loads nothing)."""
-        return self._panel.choose_attack()
+        return (
+            self._panel.choose_attack(attack_range=attack_range)
+            if attack_range
+            else self._panel.choose_attack()
+        )
 
     def load(self, spec: RollSpec) -> None:
         """Put *spec* on the chip as the actor's (a minion's 20 no critical)."""
@@ -394,13 +417,42 @@ class CombatRunner:
         if changes:
             actor.land(changes)
             name = actor.name or library.display_name(actor.character)
-            self._note(self_action_note(self._data, name, title, changes))
+            note = self_action_note(self._data, name, title, changes)
+            self._note(f"{note} {action.reminder}" if action.reminder else note)
         if recovery is not None and recovery.spec is not None:
-            self._throw(recovery.spec, load=False)
-        check = check_spec(self._data, actor.character, action, effect)
+            self._throw(recovery.spec, load=True)
+        movement = None
+        if effect.check is not None and effect.check.kind == COMBAT_CHECK_SPEED:
+            movement = self._choose_movement()
+            if movement is None:
+                return None
+        check = check_spec(
+            self._data,
+            actor.character,
+            action,
+            effect,
+            movement_rank=movement[0] if movement is not None else None,
+        )
         if check is not None:
+            if movement is not None:
+                check = replace(check, label=f"{check.label} ({movement[1]})")
             self._throw(check, load=True)
         return None
+
+    def _choose_movement(self) -> tuple[int, str] | None:
+        if self.actor is None:
+            return None
+        modes = condition_speed_lines(self.actor.character, self._data)
+        if not modes:
+            return None
+        index = (
+            0
+            if len(modes) == 1
+            else choose_from_menu(
+                self._parent, [f"{m.label}: rank {m.rank}" for m in modes], self._panel.menu_point()
+            )
+        )
+        return None if index is None else (modes[index].rank, modes[index].label)
 
     def _react(self, action) -> bool:
         """Block while Blocking: which attack blocks (the picker), then its check is
@@ -408,9 +460,17 @@ class CombatRunner:
         record's step for each block already made, which this one adds to. Whether it
         was loaded."""
         actor = self.actor
-        attack = self.choose_attack()
-        if actor is None or attack is None:
+        if actor is None:
             return False
+        choices = reaction_choices(self._data, action, actor.character)
+        if not choices:
+            return False
+        index = choose_from_menu(
+            self._parent, [c.caption for c in choices], self._panel.menu_point()
+        )
+        if index is None:
+            return False
+        attack = choices[index].spec
         spec = reaction_spec(self._data, action, actor.character, attack)
         if spec is None:
             return False
@@ -421,10 +481,15 @@ class CombatRunner:
     def _start_self_line(self, action, option_id: str, title: str, effect):
         """Put a self action that rides on the next roll on the lane, replacing the same
         action taken another way (a Slam replaces a plain Charge)."""
-        if action.needs_attack and not self.ensure_attack():
+        if action.needs_attack and not self.ensure_attack(action.attack_range):
             return None
         panel = self._panel
         key = line_key(action.id, option_id)
+        if effect.slam:
+            movement = self._choose_movement()
+            if movement is None:
+                return None
+            self._movement_ranks[key] = movement
         for line in panel.action_lines():
             if line.key != key and split_line_key(line.key)[0] == action.id:
                 panel.remove_action_line(line.key)
@@ -432,7 +497,7 @@ class CombatRunner:
         return panel.start_action_line(
             key,
             title,
-            fixed=effect.line,
+            fixed=effect.line + (f", {self._movement_ranks[key][1]}" if effect.slam else ""),
             needs_attack=action.needs_attack,
             tooltip=action.tooltip,
             tone=tone,

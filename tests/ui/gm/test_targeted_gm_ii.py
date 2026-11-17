@@ -66,7 +66,8 @@ def _staged(lead_die: int, degrees: list[int], calls: list):
         )
         if lead_modifier is None:
             return GroupResult(None, None, results)
-        return GroupResult(lead_die, lead_die + lead_modifier, results)
+        face = lead_die if len(calls) == 1 and lead_die else max(2, 7 + 2 * degrees[0])
+        return GroupResult(face, face + lead_modifier, results)
 
     return fake
 
@@ -104,6 +105,50 @@ def _hits(window: GMWindow, target: str, spec: RollSpec) -> int:
     """A die that hits *target*'s Defense with *spec* — without a natural 20."""
     dc = defense_class_in_play(window._npc_state[target].character, window._data)
     return max(2, min(19, dc - spec.modifier + 1))
+
+
+def test_smash_object_save_loads_in_history_and_never_hurts_its_owner(window, instant_die):
+    thug = _npc(window, "Thug", scene=True)
+    act, spec = _declare(window, "smash", thug, option="held")
+    window._targeted.take_roll(_roll(spec, 19, 30))
+    window._targeted.accept("t1")
+    card = next(c for c in window._history.cards() if hasattr(c, "fields"))
+    card.fields["toughness"].setValue(10)
+    card.fields["hits"].setValue(2)
+    before = list(_direct(window, thug))
+    card.button.click()
+    loaded = window._roller.current_spec()
+    assert loaded.modifier == 8 and loaded.effect_rank == spec.effect_rank
+    assert card.pending and _direct(window, thug) == before
+    window._roller._start_roll()
+    assert "object Hits now 3" in card.status()
+    assert _direct(window, thug) == before
+
+
+def test_trip_throw_falling_save_is_loaded_and_lands_on_the_target(window, instant_die):
+    thug = _npc(window, "Thug", scene=True)
+    act, spec = _declare(window, "trip", thug)
+    action = window._data.combat.action("trip")
+    target = next(t for t in window.impress_parties()[1] if t.name == "Thug")
+    window._targeted._land(act, action, "", 2, target, None)
+    card = next(c for c in window._history.cards() if hasattr(c, "fields"))
+    card.fields["mass"].setValue(-3)
+    card.fields["spaces"].setValue(3)
+    card.button.click()
+    loaded = window._roller.current_spec()
+    assert loaded.dc == 13 and loaded.targets == ("Thug",)
+    window._roller._start_roll()
+    assert not card.pending and "Resisted" in card.status()
+    assert ("hit", None) in _direct(window, thug)
+
+
+def test_smash_damage_rank_survives_the_action_payload(window):
+    from mm_companion.core.session.protocol import sanitize_mod_payload
+
+    thug = _npc(window, "Thug", scene=True)
+    act, spec = _declare(window, "smash", thug)
+    restored = TargetedDeclaration.from_dict(sanitize_mod_payload(act.declaration.to_dict()))
+    assert restored.spec.effect_rank == spec.effect_rank
 
 
 @pytest.fixture
@@ -145,8 +190,8 @@ def test_a_players_grab_hits_asks_for_strength_and_holds(
     assert calls == [] and not act.done
     window._targeted.take_roll(_roll(ask, 15, ask.modifier))
     # Then the Thug resists her total with Strength or Dodge, and fails by one.
-    ((_lead, (line,)),) = calls
-    assert line[1] == 15 + ask.modifier
+    ((target_modifier, no_lines),) = calls
+    assert no_lines == [] and target_modifier is not None
     assert _direct(window, thug) == [("restrained", None)]
     assert player_seat["applied"] == [("p1", "holding", "Thug")]
     assert act.done and "Restrained" in act.card.status()
@@ -202,7 +247,7 @@ def _act_as(window: GMWindow, monkeypatch, name: str, die: int) -> None:
         window._targeted.take_roll(_roll(spec, die, spec.modifier))
         return True
 
-    monkeypatch.setattr(window._roller, "roll_spec", roll_spec)
+    monkeypatch.setattr(window._roller, "prepare_spec", roll_spec)
 
 
 def test_the_gms_npc_trips_another(window: GMWindow, menu, monkeypatch) -> None:
@@ -215,9 +260,9 @@ def test_the_gms_npc_trips_another(window: GMWindow, menu, monkeypatch) -> None:
     _act_as(window, monkeypatch, "Thug", defense_class_in_play(brute_char, window._data))
     menu.picks = [0, 0]  # the Brute; the Thug's first attack
     window._gm_combat_action("trip")
-    (lead, no_lines), (no_lead, (line,)) = calls
+    (lead, no_lines), (target_modifier, no_target_lines) = calls
     assert no_lines == [] and lead == max(attack.modifier, 0)  # its close attack bonus
-    assert no_lead is None and line[1] == 14 + lead
+    assert target_modifier is not None and no_target_lines == []
     assert _direct(window, brute) == [("prone", None)]
     assert _direct(window, thug) == []
 
@@ -284,6 +329,8 @@ def test_a_hosted_grab_runs_both_stages_through_the_server(qapp, window: GMWindo
     check = replace(check, modifier=check.modifier + 40)
     opposed = targeted_opposed_spec(data, action, "", thug_char, attack)
     act = window._targeted.act_own(party, "grab", "", target, check, opposed=opposed)
+    assert not act.done
+    window._roller._start_roll()
     _wait(qapp, lambda: act.done)
     said = "; ".join(act.said)
     # The hit, the Thug's opposed check off the server, then the Brute's resistance.

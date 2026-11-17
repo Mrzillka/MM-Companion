@@ -286,6 +286,8 @@ def test_the_attack_tile_aims_the_npcs_shifted_attack(
     (made,) = aimed
     assert made.source.source == brute
     assert made.declaration.target_name == "Thug"
+    assert made.roll is None
+    window._roller._start_roll()
     # What is resolved is what the die was made of: All-Out's +2 is on it.
     assert made.declaration.spec.modifier == before + 2
     assert _conditions(window, brute) == [("all_out_attack", 2, True)]
@@ -368,12 +370,9 @@ def test_an_npcs_action_reaches_its_open_sheet_as_temporary(window: GMWindow, me
     assert applied.condition_id == "defending" and applied.temporary and applied.amount == 2
 
 
-def test_a_blocking_npc_with_no_attack_is_greyed_for_block(window) -> None:
-    """The GM's chooser greys a Blocking NPC with no attack for Block, as the sheet
-    greys the tile: its block check picks an attack."""
+def test_a_blocking_npc_needs_no_power_to_block(window) -> None:
     from mm_companion.core.character import Character
     from mm_companion.core.rules import apply_condition
-    from mm_companion.ui.gm.combat import NO_ATTACKS_MARK
     from mm_companion.ui.impress import PARTY_NPC, ImpressParty
 
     data = window._data
@@ -382,7 +381,7 @@ def test_a_blocking_npc_with_no_attack_is_greyed_for_block(window) -> None:
     party = ImpressParty("npc:x", "Thug", PARTY_NPC, "thug.json", plain)
     assert window._actor_reason(party, block) == ""
     apply_condition(plain, "blocking", data)
-    assert window._actor_reason(party, block) == NO_ATTACKS_MARK
+    assert window._actor_reason(party, block) == ""
 
 
 def test_gm_block_counts_only_the_npcs_settled_checks(window, menu, instant_die):

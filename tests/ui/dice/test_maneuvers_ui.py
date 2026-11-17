@@ -298,6 +298,7 @@ def test_an_aimed_attack_declares_the_shifted_spec(qapp, data, instant_die, monk
     section.start_maneuver(POWER).set_value(2)
     rolls = _rolls(panel)
     section.aim_attack((attack, SceneTarget("r2", "Thug")))
+    panel._start_roll()
     (payload,) = sent
     declared = AttackDeclaration.from_dict(payload).spec
     assert declared.modifier == 4 and declared.follow_up.dc == 20
@@ -320,6 +321,7 @@ def test_a_declaration_that_fails_rolls_nothing(qapp, data, monkeypatch) -> None
     panel.load_spec(attack)
     section.start_maneuver(POWER)
     section.aim_attack((attack, SceneTarget("r2", "Thug")))
+    panel._start_roll()
     assert not panel.rolling
     assert [line.key for line in panel.action_lines()] == [POWER]
-    assert panel.current_spec() == attack  # the chip as it was
+    assert panel.current_spec().targets == ("Thug",)  # kept loaded for retry

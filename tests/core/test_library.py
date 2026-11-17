@@ -112,6 +112,49 @@ def test_list_is_empty_when_the_directory_is_missing(_home: Path) -> None:
     assert library.list_saved_characters() == []
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "null",
+        "[]",
+        '{"power_level": "oops"}',
+        '{"powers": [null]}',
+        '{"abilities": {"STR": "oops"}}',
+        '{"resistances": {"TOUGHNESS": true}}',
+        '{"skill_ranks": {"Athletics": 2.5}}',
+    ],
+)
+def test_library_skips_malformed_character_objects(_home: Path, payload: str) -> None:
+    library.save_character(_sample_character())
+    bad = storage.get_workspace().characters_dir / "broken.json"
+    bad.write_text(payload, encoding="utf-8")
+
+    assert [s.name for s in library.list_saved_characters()] == ["Iron Man"]
+    with pytest.raises(ValueError):
+        library.load_character(bad)
+
+
+def test_failed_save_keeps_the_old_character_and_image_reference(_home, tmp_path, monkeypatch):
+    from mm_companion.core import files
+
+    char = _sample_character()
+    path = library.save_character(char)
+    original = path.read_bytes()
+    portrait = tmp_path / "new-portrait.png"
+    portrait.write_bytes(b"portrait")
+    char.image_path = str(portrait)
+
+    def fail(*args):
+        raise OSError("simulated replacement failure")
+
+    monkeypatch.setattr(files.os, "replace", fail)
+    with pytest.raises(OSError):
+        library.save_character(char, path=path)
+
+    assert path.read_bytes() == original
+    assert char.image_path == str(portrait)
+
+
 def test_display_name_falls_back_to_a_placeholder() -> None:
     assert library.display_name(Character()) == library.UNNAMED
 

@@ -13,7 +13,7 @@ caret where they were.
 
 **This widget scrolls, and that is the exception it looks like.** Every other
 sheet block shows all of its content and lets the page scroll (see
-``CLAUDE.md``); a note has no bound, so the block takes a fixed preferred height
+``AGENTS.md``); a note has no bound, so the block takes a fixed preferred height
 and the text scrolls inside it — the same call the roll history and the GM's
 Rolls block already make. More room comes from floating or pinning the block.
 """

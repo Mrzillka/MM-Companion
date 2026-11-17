@@ -77,7 +77,7 @@ class NPCWindow(MainWindow):
         and then the window forgets everything it knew about the blank one it was:
         the undo history, the dirty flag, the file.
         """
-        self.sheet.character.restore(character.to_dict(), keep_runtime=False)
+        self.sheet.character.restore(character.to_dict(include_runtime=True), keep_runtime=False)
         self.sheet.reseed()
         self._path = Path(path) if path else None
         if self._undo is not None:

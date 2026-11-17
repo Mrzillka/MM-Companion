@@ -2,7 +2,7 @@
 
 Matters when touching the data loader or adding a content file.
 
-Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
+Working notes for MM-Companion, split out of [AGENTS.md](../../AGENTS.md).
 
 - `core/data_loader/` is the *only* entry point for game content. It is a package:
   the records sit in topic modules (`traits`, `power_records`, `system_records`,

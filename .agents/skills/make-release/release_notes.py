@@ -25,9 +25,9 @@ the agent's job. See the make-release skill for how to write it.
 
 Usage (from anywhere in the repo)::
 
-    python .claude/skills/make-release/release_notes.py             # material
-    python .claude/skills/make-release/release_notes.py --scaffold  # write skeleton
-    python .claude/skills/make-release/release_notes.py --check     # finished?
+    python .agents/skills/make-release/release_notes.py             # material
+    python .agents/skills/make-release/release_notes.py --scaffold  # write skeleton
+    python .agents/skills/make-release/release_notes.py --check     # finished?
 """
 
 from __future__ import annotations

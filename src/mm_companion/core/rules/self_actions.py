@@ -34,6 +34,7 @@ from ..data_loader import (
     CombatAction,
     CombatCheck,
     CombatEffect,
+    CombatOption,
     ConditionChange,
     GameData,
     ResistanceOutcome,
@@ -45,7 +46,9 @@ from ..data_loader.game_data import (
     COMBAT_KIND_LOADER,
     COMBAT_KIND_SELF,
 )
-from .conditions import apply_condition, remove_condition
+from .attack_choices import AttackChoice, attack_choices
+from .conditions import apply_condition, condition_attack_check_mod, remove_condition
+from .derived import all_advantage_selections
 from .extra_effort import extra_effort_rules
 from .maneuvers import (
     LINE_KEY_SEPARATOR,
@@ -57,7 +60,7 @@ from .maneuvers import (
     shift_maneuvers,
     split_line_key,
 )
-from .movement import speed_lines
+from .movement import condition_speed_lines
 from .recovery import can_recover, recovery_roll
 from .rolls import LADDER_DAMAGE, RollSpec, ability_roll, add_part, localize_spec, skill_roll
 from .shaking import held_shake_offs, shake_off_recover_spec
@@ -72,11 +75,13 @@ __all__ = [
     "apply_condition_requests",
     "check_spec",
     "self_action_changes",
+    "self_action_options",
     "line_fit",
     "line_key",
     "reacting",
     "reaction_changes",
     "reaction_spec",
+    "reaction_choices",
     "recover_choices",
     "self_action",
     "self_action_note",
@@ -102,6 +107,29 @@ def self_action(game_data: GameData, action_id: str) -> CombatAction | None:
     if action.effect == CombatEffect() and not action.options and action.recovery is None:
         return None
     return action
+
+
+def self_action_options(
+    game_data: GameData, action: CombatAction, character: Character | None
+) -> tuple[CombatOption, ...]:
+    """Available ways to take the action, including advantage-granted replacements."""
+    owned = (
+        {
+            selection.name
+            for selection in all_advantage_selections(character, game_data)
+            if selection.rank > 0
+        }
+        if character is not None
+        else set()
+    )
+    advantage_ids = {record.id for record in game_data.advantages if record.name in owned}
+    options = tuple(
+        option
+        for option in action.options
+        if not option.requires_advantage or option.requires_advantage in advantage_ids
+    )
+    replacements = tuple(option for option in options if option.replaces_options)
+    return replacements or options
 
 
 def _line_effect(game_data: GameData, key: str) -> tuple[CombatAction, CombatEffect] | None:
@@ -152,18 +180,20 @@ def line_fit(game_data: GameData, key: str, spec: RollSpec | None) -> str:
     found = _line_effect(game_data, key)
     if found is None or spec is None:
         return ""
-    _action, effect = found
+    action, effect = found
+    if action.attack_range and spec.attack_range != action.attack_range:
+        return f"Requires a {action.attack_range} attack."
     touches_check = effect.attack_modifier or effect.roll_twice or effect.dc is not None
     if (touches_check or effect.critical_hit) and not has_attack_check(spec, game_data):
         return "This attack makes no attack check."
-    if effect.slam and not any(s.effect_rank > 0 for s in _damage_saves(spec)):
+    if effect.slam and not any(s.effect_rank is not None for s in _damage_saves(spec)):
         return "A slam needs an attack that deals Damage."
     return ""
 
 
 def speed_rank(character: Character, game_data: GameData) -> int:
     """The actor's fastest speed rank, over every mode of movement it has."""
-    lines = speed_lines(character, game_data)
+    lines = condition_speed_lines(character, game_data)
     return max((line.rank for line in lines), default=0)
 
 
@@ -173,15 +203,18 @@ def _slam(
     effect: CombatEffect,
     character: Character | None,
     game_data: GameData,
+    movement_rank: int | None = None,
 ) -> RollSpec:
     """The attack as a Slam: its Damage at the slam's rank, and the slammer's own save
     against it loaded next (:attr:`~.rolls.RollSpec.then`)."""
     rules = action.slam
     saves = _damage_saves(spec)
-    if rules is None or not saves or saves[0].effect_rank <= 0:
+    if rules is None or not saves or saves[0].effect_rank is None:
         return spec
     rank = saves[0].effect_rank
-    speed = speed_rank(character, game_data) if character is not None else 0
+    speed = movement_rank
+    if speed is None:
+        speed = speed_rank(character, game_data) if character is not None else 0
     slam_rank = max(rank + rules.rank_bonus, speed)
     if effect.full_speed:
         slam_rank += rules.full_speed_bonus
@@ -193,7 +226,7 @@ def _slam(
     follow_up = None if spec.follow_up is None else shifted(spec.follow_up)
     spec = replace(spec, follow_up=follow_up, also=tuple(shifted(s) for s in spec.also))
     save = _damage_saves(spec)[0]
-    own = slam_rank // 2 if rules.halve_self else slam_rank
+    own = (slam_rank + 1) // 2 if rules.halve_self else slam_rank
     dc = save.dc - save.effect_rank + own
     ladder = save.ladder if save.ladder is None else replace(save.ladder, rank=own)
     then = replace(
@@ -251,6 +284,7 @@ def _apply_effect(
     effect: CombatEffect,
     character: Character | None,
     game_data: GameData,
+    movement_rank: int | None = None,
 ) -> RollSpec:
     attack = has_attack_check(spec, game_data)
     if attack and effect.attack_modifier:
@@ -268,7 +302,7 @@ def _apply_effect(
     if attack and effect.critical_hit:
         spec = replace(spec, critical_hit=True)
     if effect.slam:
-        spec = _slam(spec, action, effect, character, game_data)
+        spec = _slam(spec, action, effect, character, game_data, movement_rank)
     if effect.kill is not None:
         spec = _kill(spec, effect, game_data)
     return spec
@@ -285,6 +319,8 @@ def apply_actions(
     picks: Iterable[Pick],
     game_data: GameData,
     character: Character | None = None,
+    *,
+    movement_rank: int | None = None,
 ) -> RollSpec:
     """*spec* as rolled with every line in *picks* on it — the attack maneuvers
     (:func:`~.maneuvers.apply_maneuvers`) and the self actions' lines — named together in
@@ -298,7 +334,7 @@ def apply_actions(
         if found is None or line_fit(game_data, key, spec):
             continue
         action, effect = found
-        shifted = _apply_effect(shifted, action, effect, character, game_data)
+        shifted = _apply_effect(shifted, action, effect, character, game_data, movement_rank)
         names.append(_line_name(action, key))
     if not names:
         return spec
@@ -392,6 +428,28 @@ def reacting(action: CombatAction, character: Character | None) -> bool:
     return rule is not None and _has(character, rule.condition)
 
 
+def reaction_choices(
+    game_data: GameData, action: CombatAction, character: Character
+) -> list[AttackChoice]:
+    """Applicable attacks and the data-defined basic check for a reaction."""
+    rule = action.reaction
+    if rule is None:
+        return []
+    choices = [
+        choice
+        for choice in attack_choices(character, game_data)
+        if not rule.attack_range or choice.spec.attack_range == rule.attack_range
+    ]
+    if rule.check is not None:
+        base = check_spec(game_data, character, action, CombatEffect(check=rule.check))
+        if base is not None:
+            shift, _why = condition_attack_check_mod(character, game_data, rule.attack_range)
+            base = add_part(base, "Attack conditions", shift)
+            base = replace(base, attack_range=rule.attack_range)
+            choices.append(AttackChoice(f"{base.label} {base.modifier:+d}", base))
+    return choices
+
+
 def reaction_spec(
     game_data: GameData, action: CombatAction, character: Character, attack: RollSpec | None
 ) -> RollSpec | None:
@@ -419,7 +477,7 @@ def reaction_spec(
         detail += f", {made} earlier {'block' if made == 1 else 'blocks'} {shift:+d}"
     label = f"{action.name} ({detail})" + (f" {rule.line}" if rule.line else "")
     spec = add_part(spec, "Earlier blocks", shift)
-    return replace(spec, label=label, dc=None, hint=action.tooltip)
+    return replace(spec, label=label, dc=None, hint=action.tooltip, reaction=action.id)
 
 
 def reaction_changes(action: CombatAction) -> tuple[ConditionChange, ...]:
@@ -430,7 +488,12 @@ def reaction_changes(action: CombatAction) -> tuple[ConditionChange, ...]:
 
 
 def check_spec(
-    game_data: GameData, character: Character, action: CombatAction, effect: CombatEffect
+    game_data: GameData,
+    character: Character,
+    action: CombatAction,
+    effect: CombatEffect,
+    *,
+    movement_rank: int | None = None,
 ) -> RollSpec | None:
     """The check *effect* loads into the roller (Catch's Agility, Stand's Acrobatics or
     speed rank), at its DC, carrying what a success sheds (``recovers``)."""
@@ -447,7 +510,7 @@ def check_spec(
             return None
         spec = skill_roll(character, game_data, check.trait, label=skill.name)
     elif check.kind == COMBAT_CHECK_SPEED:
-        rank = speed_rank(character, game_data)
+        rank = speed_rank(character, game_data) if movement_rank is None else movement_rank
         spec = RollSpec(label=f"Speed rank {rank}", modifier=rank)
     else:
         return None

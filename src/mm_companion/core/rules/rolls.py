@@ -50,6 +50,7 @@ from .derived import (
     initiative_ability,
     initiative_advantage_bonus,
     initiative_modifier,
+    own_skill_rows,
     resistance_base,
     resistance_total,
     skill_bonus,
@@ -83,6 +84,7 @@ COUNTER_ACTION_LIMIT = "Standard"
 KIND_ABILITY = "ability"
 KIND_RESISTANCE = "resistance"
 KIND_SKILL = "skill"
+KIND_COMBAT_SKILL = "combat-skill"
 KIND_INITIATIVE = "initiative"
 KIND_POWER_CHECK = "power-check"
 KIND_POWER_SAVE = "power-save"
@@ -373,11 +375,14 @@ class RollSpec:
     #: :attr:`costs`' reason: it describes this sheet, not the roll — and left out of
     #: equality, so a spec rebuilt off the wire is still the roll it was.
     marks: tuple[str, ...] = field(default=(), compare=False)
+    #: A loaded reaction's action id; local only, consumed once the check settles.
+    reaction: str = field(default="", compare=False)
     #: On a power's save: the effect rank it is made against (its DC less the effect's
     #: DC base), which an attack maneuver trades against (Accurate and Power Attack,
-    #: :mod:`.maneuvers`). 0 when unknown. **Local only**, for :attr:`marks`' reason: the
-    #: DC and the ladder's rank are what travel, and both are shifted with it.
-    effect_rank: int = field(default=0, compare=False)
+    #: :mod:`.maneuvers`). None when unknown; zero is a known rank. **Local only**,
+    #: for :attr:`marks`' reason: the DC and the ladder's rank are what travel,
+    #: and both are shifted with it.
+    effect_rank: int | None = field(default=None, compare=False)
     #: On an attack: **every** hit is a critical hit, not only a natural 20's — a
     #: Finishing Attack's (p201). On the wire, so the GM's judge and the target's card
     #: raise the save as the attacker's did.
@@ -587,6 +592,20 @@ def spec_parts(spec: RollSpec) -> tuple[tuple[str, int], ...]:
     if rest:
         parts.append((OTHER_PART, rest))
     return tuple(parts)
+
+
+def shift_save_rank(spec: RollSpec, amount: int) -> RollSpec:
+    """Shift a save's DC and measured effect rank together, leaving its label to the caller."""
+    ladder = spec.ladder
+    if ladder is not None and (ladder.rank or ladder.kind == LADDER_DAMAGE):
+        ladder = replace(ladder, rank=max(0, ladder.rank + amount))
+    return replace(
+        spec,
+        dc=None if spec.dc is None else spec.dc + amount,
+        dc_if_resisted=None if spec.dc_if_resisted is None else spec.dc_if_resisted + amount,
+        effect_rank=None if spec.effect_rank is None else max(0, spec.effect_rank + amount),
+        ladder=ladder,
+    )
 
 
 def add_part(spec: RollSpec, name: str, amount: int, **changes: object) -> RollSpec:
@@ -1009,8 +1028,7 @@ def follow_up_for_result(
         if bonus and follow_up.dc is not None:
             raised = follow_up.dc + bonus
             return replace(
-                follow_up,
-                dc=raised,
+                shift_save_rank(follow_up, bonus),
                 label=f"{follow_up.label} — critical hit, DC {raised}",
             )
     elif die == 1:
@@ -1079,6 +1097,14 @@ def _own_trait_roll(spec: RollSpec, char: Character, game_data: GameData) -> Rol
     if spec.kind == KIND_ABILITY:
         if any(a.key == key for a in game_data.abilities):
             return ability_roll(char, game_data, key)
+    elif spec.kind == KIND_COMBAT_SKILL:
+        skill = next((s for s in game_data.skills if s.id == key), None)
+        if skill is not None:
+            candidates = [skill_roll(char, game_data, skill.name)]
+            candidates.extend(
+                skill_roll(char, game_data, row.row_id) for row in own_skill_rows(char, skill)
+            )
+            return max(candidates, key=lambda r: r.modifier)
     elif spec.kind in (KIND_RESISTANCE, KIND_POWER_SAVE, KIND_AREA_DODGE, ""):
         if spec.kind == KIND_POWER_SAVE and is_choice_key(key):
             return _best_own_roll(key, char, game_data, worst=rolls_worst(spec))
@@ -1459,13 +1485,13 @@ def _damage_measured(
     return replace(ladder, rank=max(0, rank), penetrating=penetrating_ranks(effect, game_data))
 
 
-def _effect_rank(effect: PowerEffectInstance, game_data: GameData, dc: int | None) -> int:
+def _effect_rank(effect: PowerEffectInstance, game_data: GameData, dc: int | None) -> int | None:
     """The rank a save of *effect* at *dc* is made against, read back off the DC as
-    :func:`_damage_measured` does (0 when either part is unknown)."""
+    :func:`_damage_measured` does (None when either part is unknown)."""
 
     base = effect_resistance_dc_base(effect, game_data)
     if dc is None or base is None:
-        return 0
+        return None
     return max(0, dc - base)
 
 

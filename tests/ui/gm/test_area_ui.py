@@ -1065,7 +1065,7 @@ def test_the_gm_answers_a_request_as_one_of_their_npcs(
     window._npc_state[mook].character.resistances["TOUGHNESS"] = 6
     rolled: list[RollSpec] = []
     monkeypatch.setattr(
-        window._roller, "roll_spec", lambda spec, **_kw: rolled.append(spec) or True
+        window._roller, "prepare_spec", lambda spec, **_kw: rolled.append(spec) or True
     )
     save = RollSpec(
         label="Toughness vs. Burst",
@@ -1135,7 +1135,12 @@ def _answer_as_npc(window: GMWindow, spec: RollSpec, party, degree: int, monkeyp
     from mm_companion.ui.roll_history import AnswerContext
 
     rolled: list[RollSpec] = []
-    monkeypatch.setattr(window._roller, "roll_spec", lambda s, **_kw: rolled.append(s) or True)
+    monkeypatch.setattr(
+        window._roller,
+        "prepare_spec",
+        lambda s, before=None, **_kw: (before(s) if before else True)
+        and (rolled.append(s) or True),
+    )
     window._roll_as(spec, party, AnswerContext(seq=3))
     (sent,) = rolled
     record = {

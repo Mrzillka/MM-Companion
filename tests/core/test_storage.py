@@ -55,6 +55,15 @@ def test_save_settings_replaces_the_file(_home: Path) -> None:
     assert load_settings() == {"theme": "dark", "layout": {"dock_state": "abc123"}}
 
 
+@pytest.mark.parametrize("contents", [b"null", b"[]", b'"text"', b"\xff"])
+def test_invalid_settings_use_defaults_and_remain_editable(_home, contents):
+    workspace = ensure_workspace()
+    workspace.settings_file.write_bytes(contents)
+    assert load_settings() == DEFAULT_SETTINGS
+    update_settings(theme="dark")
+    assert load_settings()["theme"] == "dark"
+
+
 def test_update_settings_merges_and_persists_a_layout(_home: Path) -> None:
     ensure_workspace()
 

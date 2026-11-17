@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Codex when working with code in this repository.
 
 ## What this is
 
@@ -59,7 +59,7 @@ pip install -e ".[dev]"
 - Host a session headless: `python -m mm_companion.server` (or the
   `mm-companion-server` console script; `--help` for options). Run the public
   relay: `python -m mm_companion.relay`. Both are Qt-free and stdlib-only.
-- Run the tests a change can affect: `python .claude/skills/affected-tests/affected.py`
+- Run the tests a change can affect: `python .agents/skills/affected-tests/affected.py`
   (the `affected-tests` skill) — use this while working.
 - Run all tests (~16 min): `pytest` — required before a feature is called done
   or merged into `develop`.
@@ -213,12 +213,12 @@ notes file that owns it.
   `reference/core-book.pdf` and the per-page text extracted from it under
   `reference/core-book/` are ignored by git. Answer rules questions from `docs/`
   and `docs/notes/` first; when the answer genuinely is not there, grep the
-  extracted text — see the `rulebook` skill. Never `Read` the PDF itself without
+  extracted text — see the `rulebook` skill. Never render the PDF itself without
   asking: it renders pages as images at ~2k tokens each. The book informs what a
   mechanic does and is never transcribed into `data/` or `docs/` (see Licensing
   boundary).
 - **A rules question that `docs/` does not settle goes to the `mm-rules` agent**
-  (`.claude/agents/mm-rules.md`). It checks the book and online sources, cites
+  (`.codex/agents/mm-rules.toml`). It checks the book and online sources, cites
   pages, separates RAW from interpretation and house rule, tells editions apart,
   and reports where the app's data disagrees with the book. Ask it before building
   a mechanic on a rule you have not verified.
@@ -253,3 +253,13 @@ notes file that owns it.
   merging locally, not through a PR.
 - `.idea/` (PyCharm) is intentionally not committed. In PyCharm, mark `src/` as
   Sources Root so `import mm_companion` resolves.
+
+## Codex workspace
+
+- Repository skills live in `.agents/skills/`; custom agents live in `.codex/agents/`.
+- On this Windows machine use `.venv/Scripts/python.exe` for project commands
+  (or activate `.venv` first). The bare `python` on PATH belongs to Inkscape and
+  does not have the project dependencies.
+- See `docs/codex.md` for the migration record and a short workflow guide.
+- `.legacy-claude/` is a local, gitignored archive. Do not load its instructions
+  as active guidance or add its private settings to git.

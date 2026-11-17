@@ -30,12 +30,31 @@ from mm_companion.ui.roll_history import (
     NoteCard,
     RollHistoryPanel,
     degree_label,
+    outcome_widget,
     quick_roll_key,
+    roll_headline,
+    roll_natural,
     roll_parameters,
 )
 from mm_companion.ui.session_bridge import SessionBridge, set_active_session
 
 pytestmark = pytest.mark.usefixtures("workspace")
+
+
+def test_minion_twenty_is_visible_without_adding_a_success():
+    record = roll(die=20, degree=1, critical=False, minion=True)
+    assert roll_natural(record) == "twenty"
+    assert "Nat 20" in roll_headline(record)
+    assert roll_natural(roll(die=20, degree=1, critical=False, reroll=True)) is None
+
+
+def test_damage_caveat_is_a_warning_instead_of_a_paragraph(qapp):
+    from mm_companion.ui.widgets import HelpButton
+
+    widget = outcome_widget("Hit (unless the target is protected)", failed=False)
+    assert [label.text() for label in widget.findChildren(QLabel)] == ["Hit!"]
+    warning = widget.findChild(HelpButton)
+    assert warning.text() == "⚠" and "unless" in warning.help_text()
 
 
 @pytest.fixture(autouse=True)

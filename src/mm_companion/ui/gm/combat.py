@@ -25,7 +25,6 @@ from mm_companion.core.rules import (
     action_reason,
     attack_choices,
     maneuver_action,
-    reacting,
     self_action,
     self_action_changes,
     self_action_note,
@@ -113,7 +112,7 @@ class GMCombatMixin:
         """Why *party* cannot take *action* now (``""``: it can) — shown beside it."""
         wants = action is None or action.needs_attack or action.kind == COMBAT_KIND_MANEUVER
         # Block while Blocking picks the attack that blocks.
-        if wants or reacting(action, party.character):
+        if wants:
             if not attack_choices(party.character, self._data):
                 return NO_ATTACKS_MARK
         if action is not None and (
@@ -188,6 +187,7 @@ class GMCombatMixin:
         entry = self._npc_state.get(key)
         minion = self.rolls_as_minion(entry.character if entry is not None else None)
         held = bool(spec.recovers or spec.shakes_off)
+        previous = self._recovering
         if held:
             # Set first, as _roll_npc_recovery does: a roll can come back before
             # roll_spec returns.
@@ -195,7 +195,7 @@ class GMCombatMixin:
         if load:
             self._roller.load_spec(spec, minion=minion, localize=False)
         elif not self._roller.roll_spec(spec, minion=minion) and held:
-            self._recovering = None
+            self._recovering = previous
 
     def _follow_actor(self, key: str) -> None:
         """An NPC's own card or sheet rolled something: the lines on the lane were
@@ -271,7 +271,7 @@ class GMCombatMixin:
             option = action.options[index].id
         attack = None
         if action.targeted.uses_attack:
-            attack = self._combat.choose_attack()
+            attack = self._combat.choose_attack(action.attack_range)
             if attack is None:
                 return
         check = targeted_check_spec(self._data, action, option, party.character, attack)

@@ -348,6 +348,7 @@ class TargetedRules:
     resist: tuple[tuple[str, str], ...] = ()
     opposed: OpposedStage | None = None
     ally: bool = False
+    resist_by_range: tuple[tuple[str, str], ...] = ()
 
     @property
     def uses_attack(self) -> bool:
@@ -366,6 +367,8 @@ class ReactionRule:
     condition: str
     step: int = 0
     line: str = ""
+    check: CombatCheck | None = None
+    attack_range: str = ""
 
 
 @dataclass(frozen=True)
@@ -440,6 +443,20 @@ class CombatOption:
     name: str
     tooltip: str = ""
     effect: CombatEffect = field(default_factory=CombatEffect)
+    requires_advantage: str = ""
+    replaces_options: bool = False
+
+
+@dataclass(frozen=True)
+class CombatFollowUp:
+    """An optional post-hit object save or throw/fall, configured by action data."""
+
+    kind: str
+    resistance: str = ""
+    dc_base: int = 0
+    max_rank: int = 0
+    strength_trait: str = ""
+    ladder: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -480,6 +497,9 @@ class CombatAction:
     #: How a targeted action is rolled (Aid, Feint, Grab …); ``None`` for every other.
     targeted: TargetedRules | None = None
     reaction: ReactionRule | None = None
+    reminder: str = ""
+    attack_range: str = ""
+    follow_up: CombatFollowUp | None = None
 
     @property
     def tile_caption(self) -> str:

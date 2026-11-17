@@ -2,7 +2,16 @@
 
 Matters when touching data loading or startup.
 
-Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
+Working notes for MM-Companion, split out of [AGENTS.md](../../AGENTS.md).
+
+Manifest ids must pass the shared `sanitize_mod_id` check before any import copy:
+the id becomes a directory name. Metadata is parsed before copying too, and bad
+workspace manifests are skipped during discovery. Installing inside the source
+folder is refused to avoid recursive copies.
+
+Mod preferences are read through `storage.mod_ids` and `storage.mod_options`;
+malformed lists or per-mod option objects fall back to empty values so settings
+cannot prevent startup or opening the manager.
 
 The base ruleset is loaded as **the default mod** through the same pipeline that
 loads user mods, so game content is fully data-first and moddable. The full
@@ -43,7 +52,8 @@ authoring guide is `docs/modding.md`; the shape:
   `mods.initialize_mods()` (called in `__main__.main()` after
   `ensure_workspace()`, before the first `load_game_data()`) imports the
   enabled+trusted mods' Python modules so their `register_*` hooks fire first; the
-  base ruleset is implicitly trusted and an import that raises is swallowed.
+  base ruleset is implicitly trusted; an import that raises is logged and skipped
+  so a broken mod cannot stop startup.
 - **A mod can reach the table, and keep its own memory.** Three seams added with
   protocol v10 (the full story is in [the session notes](session.md)):
   `SessionBridge.set_mod_state` / `mod_state` publish and read a keyed, opaque
@@ -75,3 +85,8 @@ authoring guide is `docs/modding.md`; the shape:
   (data+Python — a piece of gear and the stat-applier seam), all three exercised
   end-to-end by `tests/core/test_mod_loading.py`; plus `guardian-kit`, the finished mod
   built step by step in `docs/modding-tutorial.md`.
+
+Manifest content filenames must be relative paths inside the mod directory.
+Parent traversal, rooted/drive paths and alternate-stream syntax are rejected
+before copying/discovery. The reader resolves containment again so replacing a
+content file with an external symlink cannot read outside the mod.

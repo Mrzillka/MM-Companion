@@ -25,8 +25,9 @@ from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMessageBox
 from mm_companion.core import library, storage
 from mm_companion.core.character import SHAKE_EFFECT, AdvantageSelection, Character, ShakeOff
 from mm_companion.core.data_loader import load_game_data
+from mm_companion.core.equipment import EquipmentItem
 from mm_companion.core.powers import ModifierSelection, Power, PowerEffectInstance
-from mm_companion.core.rules import apply_condition
+from mm_companion.core.rules import apply_condition, resistance_total
 from mm_companion.core.session import discovery
 from mm_companion.core.session.model import new_session
 from mm_companion.core.session.protocol import (
@@ -199,6 +200,31 @@ def test_a_burst_of_edits_coalesces_into_one_send(qapp: QApplication, table) -> 
 
     assert wait_for(qapp, lambda: pusher.sent > 1)
     assert pusher.sent == 2  # twenty edits, one snapshot
+
+
+def test_stowed_armor_stays_stowed_on_the_gms_live_snapshot(qapp, table):
+    host, player = table
+    data = load_game_data()
+    hero = Character.new_default(data)
+    hero.equipment.append(
+        EquipmentItem(
+            build=Power(name="Armor", effects=[PowerEffectInstance("protection", rank=4)]),
+            worn=False,
+        )
+    )
+    sheet = CharacterSheet(data, hero)
+    pusher = SnapshotPusher(sheet, player)
+    slot_id = player.client.player_id
+
+    assert wait_for(qapp, lambda: host.state.players[slot_id].character.get("equipment"))
+    remote = Character.from_dict(host.state.players[slot_id].character)
+    assert pusher.sent == 1
+    assert remote.equipment[0].worn is False
+    assert (
+        resistance_total(remote, data, "TOUGHNESS")
+        == resistance_total(hero, data, "TOUGHNESS")
+        == 0
+    )
 
 
 def test_a_runtime_change_pushes_too(qapp: QApplication, table) -> None:
@@ -803,3 +829,50 @@ def test_a_players_roller_never_receives_a_hidden_roll(qapp: QApplication, table
     assert wait_for(qapp, lambda: len(view._session_history.cards()) == 1)
     labels = view._session_history.cards()[0].findChildren(QLabel)
     assert any("in the open" in label.text() for label in labels)
+
+
+def test_hosted_block_spends_once_after_result_and_pushes_the_count(
+    qapp, table, monkeypatch, instant_die
+):
+    from tests.ui.dice.test_self_actions_ui import _Menu
+
+    host, player = table
+    set_active_session(player)
+    _Menu.pick, _Menu.shown = 0, []
+    monkeypatch.setattr("mm_companion.ui.action_menu.QMenu", _Menu)
+    data = load_game_data()
+    hero = Character.new_default(data)
+    hero.abilities["ATK"] = 6
+    hero.powers = [Power(name="Punch", effects=[PowerEffectInstance("damage", rank=4)])]
+    sheet = CharacterSheet(data, hero)
+    pusher = SnapshotPusher(sheet, player, debounce_ms=10)
+    panel = sheet.dice.panel
+    try:
+        sheet.dice.start_self_action("block")
+        sheet.dice.start_self_action("block")
+        blocking = next(c for c in hero.conditions if c.condition_id == "blocking")
+        assert blocking.count == 1
+        assert panel._start_roll()
+        assert wait_for(qapp, lambda: blocking.count == 2)
+        assert len([roll for roll in host.state.rolls if roll.die]) == 1
+        panel.reroll()
+        assert wait_for(
+            qapp,
+            lambda: len([roll for roll in host.state.rolls if roll.die]) == 2
+            and not panel._rolling,
+        )
+        assert blocking.count == 2
+        seat = host.state.players[player.client.player_id]
+        assert wait_for(
+            qapp,
+            lambda: any(
+                c.get("id") == "blocking" and c.get("count") == 2
+                for c in (seat.character or {}).get("conditions", [])
+            ),
+        )
+        sheet.dice.start_self_action("block")
+        assert panel.current_spec().modifier == 4
+        panel.load_spec(None)  # abandoning the next block spends nothing
+        assert blocking.count == 2
+    finally:
+        pusher.detach()

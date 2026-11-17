@@ -379,8 +379,8 @@ class Character:
             resistances={r.key: 0 for r in game_data.resistances},
         )
 
-    def to_dict(self) -> dict:
-        """Serialize to plain JSON-friendly types (conditions become a list of dicts)."""
+    def to_dict(self, *, include_runtime: bool = False) -> dict:
+        """Serialize the build, optionally including live equipment state for snapshots."""
 
         return {
             "power_level": self.power_level,
@@ -416,7 +416,11 @@ class Character:
             ),
             # Omitted entirely when the character owns no gear, so a save written
             # before equipment existed round-trips byte-for-byte.
-            **({"equipment": [e.to_dict() for e in self.equipment]} if self.equipment else {}),
+            **(
+                {"equipment": [e.to_dict(include_runtime=include_runtime) for e in self.equipment]}
+                if self.equipment
+                else {}
+            ),
             **(
                 {"equipment_group_order": list(self.equipment_group_order)}
                 if self.equipment_group_order
@@ -467,6 +471,13 @@ class Character:
         )
         characteristics["power_level"] = power_level
         characteristics["power_points"] = power_points_total
+        ranks = {key: dict(raw.get(key, {})) for key in ("abilities", "resistances", "skill_ranks")}
+        if any(
+            not isinstance(value, int) or isinstance(value, bool)
+            for values in ranks.values()
+            for value in values.values()
+        ):
+            raise ValueError("Trait ranks must be integers.")
 
         return cls(
             power_level=power_level,
@@ -474,9 +485,9 @@ class Character:
             image_path=raw.get("image_path"),
             profile=dict(raw.get("profile", {})),
             characteristics=characteristics,
-            abilities=dict(raw.get("abilities", {})),
-            resistances=dict(raw.get("resistances", {})),
-            skill_ranks=dict(raw.get("skill_ranks", {})),
+            abilities=ranks["abilities"],
+            resistances=ranks["resistances"],
+            skill_ranks=ranks["skill_ranks"],
             focuses={k: list(v) for k, v in raw.get("focuses", {}).items()},
             specializations={k: list(v) for k, v in raw.get("specializations", {}).items()},
             skill_order=[str(name) for name in raw.get("skill_order", [])],

@@ -1,8 +1,13 @@
 # The dice roller
 
+Queued condition checks are rebuilt by `core.rules.refresh_condition_check` just
+before each roll. Earlier End turn checks can remove penalties or supersede another
+condition; keeping their precomputed modifiers would roll against stale numbers.
+A check whose condition has gone is skipped.
+
 Matters when touching the roller, the roll history, compact mode or any stat block that rolls.
 
-Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
+Working notes for MM-Companion, split out of [AGENTS.md](../../AGENTS.md).
 
 ## The Dice block
 
@@ -245,8 +250,9 @@ Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
     below +0."), shown on the slider and box (`cap_reason`).
   - **The no-DC warning is a flag**: `NO_DC_SHORT` ("⚠ No DC") in its own label under
     the result, `NO_DC_WARNING` its tooltip (`warning_text()`).
-  - **Natural 20s and 1s** (`roll_history.natural_kind` / `roll_natural`: a graded roll
-    trusts `critical`, an ungraded one its die unless routine or a lucky re-roll):
+  - **Natural 20s and 1s** (`roll_history.natural_kind` / `roll_natural`: genuine faces
+    show even without an added degree, including minion 20s; exclude routine checks
+    and lifted lucky re-rolls):
     `dice.critical` / the new `dice.fumble` token for the halo; a burst over the die
     (`ui/roller/flourish.py`'s `DieBurst`: rays and sparks, or a breaking ring of
     shards), the halo pulsing (20) or the die shaking (1); a 20's numeral in gold; a
@@ -1400,3 +1406,7 @@ the **server** rolls it (`RollRequest.reroll`, protocol v12) and stamps `reroll`
 record itself — a client's label is not evidence, and every seat should see which dice
 were lucky. `reroll_label` adds "(reroll)" wherever a roll is named. It spends nothing —
 no Hero Point, no Luck rank — which is the player's to mark.
+
+Save-rank shifts use `rolls.shift_save_rank`: critical hits and team bonuses move
+the DC and measured effect/Damage ranks together. Known Damage rank zero must
+move too; non-Damage ladders whose zero means unmeasured keep that convention.

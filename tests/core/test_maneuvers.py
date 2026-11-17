@@ -247,6 +247,26 @@ def test_a_linked_attack_moves_every_save(data) -> None:
     assert [s.dc for s in shifted.follow_ups()] == [s.dc + 2 for s in attack.follow_ups()]
 
 
+def test_a_known_zero_rank_limits_the_whole_linked_tradeoff(data):
+    from dataclasses import replace
+
+    hero = _hero(data)
+    attack = _attack(hero, data)
+    zero = replace(
+        attack.follow_up, effect_rank=0, dc=10, ladder=replace(attack.follow_up.ladder, rank=0)
+    )
+    linked = replace(attack, follow_up=zero, also=(attack.follow_up,))
+
+    assert maneuver_values(linked, hero, data)["effect_rank"] == 0
+    assert maneuver_limit(data, ACCURATE, linked, hero).maximum == 0
+    # A legitimate rank increase (e.g. Slam) can still raise a known zero save.
+    from mm_companion.core.rules.maneuvers import _shift_save
+
+    raised = _shift_save(zero, 2)
+    assert raised.effect_rank == raised.ladder.rank == 2
+    assert raised.dc == 12
+
+
 def test_nothing_that_moves_anything_leaves_the_spec_alone(data) -> None:
     hero = _hero(data)
     attack = _attack(hero, data)

@@ -37,8 +37,12 @@ PAYLOAD_SHA = hashlib.sha256(PAYLOAD).hexdigest()
 
 @pytest.fixture(autouse=True)
 def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from mm_companion.ui import app_restart
+
     monkeypatch.setenv(storage.HOME_ENV_VAR, str(tmp_path))
     monkeypatch.delenv(updates.FEED_ENV_VAR, raising=False)
+    monkeypatch.setattr(app_restart, "_suppressed", False)
+    monkeypatch.setattr(app_restart, "_suppression_epoch", 0)
 
 
 def _release_json(tag: str = "v9.0.0", **extra: object) -> dict:
@@ -124,6 +128,10 @@ def test_a_release_without_its_installer_has_none() -> None:
         _release_json(prerelease=True),
         _release_json(tag="nightly"),
         {"message": "Not Found"},
+        _release_json(assets=12),
+        _release_json(assets={"name": "installer"}),
+        None,
+        [],
     ],
 )
 def test_release_from_json_rejects_what_is_not_a_release(payload: dict) -> None:
@@ -228,6 +236,19 @@ def test_the_feed_can_be_pointed_elsewhere(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 # -- downloading ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "name", ["../escape.exe", r"..\escape.exe", "/escape.exe", "C:evil.exe", "..", ""]
+)
+def test_a_download_cannot_escape_its_destination(name, tmp_path, monkeypatch):
+    def unexpected(*args, **kwargs):
+        pytest.fail("An invalid name reached the network")
+
+    monkeypatch.setattr(updates.urllib.request, "urlopen", unexpected)
+    with pytest.raises(UpdateError, match="invalid filename"):
+        updates.download_asset(ReleaseAsset(name, "https://example.invalid"), tmp_path)
+    assert list(tmp_path.iterdir()) == []
 
 
 class _Response(io.BytesIO):
@@ -850,6 +871,46 @@ def test_closing_suppresses_a_restart_a_window_asks_for(qapp: QApplication) -> N
         app_restart._suppressed = False
 
 
+def test_update_shutdown_honors_an_unsaved_constructors_cancel(qapp, monkeypatch):
+    from mm_companion.ui.power_constructor.window import PowerConstructorWindow
+
+    launcher = QWidget()
+    dialog = UpdateDialog(release_from_json(_release_json("v99.0.0")), launcher)
+    editor = PowerConstructorWindow()
+    editor.canvas.add_effect("damage")
+    editor.show()
+    asked = []
+    monkeypatch.setattr(editor, "_confirm_discard", lambda: asked.append(True) or False)
+
+    assert dialog._close_other_windows() is False
+    assert editor.isVisible() and asked == [True]
+    editor.close()  # explicit programmatic cleanup still bypasses the prompt
+
+
+def test_update_saves_the_constructor_before_asking_to_close_its_sheet(qapp, monkeypatch):
+    from mm_companion.ui.main_window import MainWindow
+
+    launcher = QWidget()
+    dialog = UpdateDialog(release_from_json(_release_json("v99.0.0")), launcher)
+    sheet = MainWindow(locked=False)
+    sheet.show()
+    sheet.sheet.powers._open_constructor()
+    editor = sheet.sheet.powers._windows[-1]
+    editor._name.setText("Blast")
+    editor.canvas.add_effect("damage")
+    monkeypatch.setattr(editor, "_confirm_discard", editor._try_save)
+    seen = []
+    monkeypatch.setattr(
+        sheet, "_confirm_close", lambda: seen.append(len(sheet.sheet.character.powers)) or False
+    )
+
+    assert dialog._close_other_windows() is False
+    assert not editor.isVisible() and sheet.isVisible()
+    assert seen == [1]
+    sheet._dirty = False
+    sheet.close()
+
+
 # -- the launcher after an update ---------------------------------------------------
 
 
@@ -914,3 +975,154 @@ def test_the_badge_sends_a_source_checkout_to_the_release_page(
     badge.show_update(release_from_json(_release_json("v99.0.0")))
     badge._open_update()
     assert opened == ["https://github.com/Mrzillka/MM-Companion/releases/tag/v99.0.0"]
+
+
+def test_cancelled_dialog_ignores_an_already_queued_download(qapp, tmp_path, monkeypatch, quits):
+    _fake_download(monkeypatch, tmp_path / "setup.exe")
+    launched = _fake_launch(monkeypatch, _launch(tmp_path))
+    closed = []
+    monkeypatch.setattr(
+        UpdateDialog, "_close_other_windows", lambda self: closed.append(True) or True
+    )
+    dialog = _dialog()
+    worker = threading.Thread(target=dialog._download_worker, args=(_asset(),))
+    worker.start()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    # The worker has emitted success, but the GUI has not consumed that signal.
+    dialog.reject()
+    qapp.processEvents()
+    try:
+        assert launched == []
+        assert closed == []
+        assert quits == []
+    finally:
+        dialog._poll.stop()
+
+
+def test_handoff_still_quits_if_the_update_note_cannot_be_written(qapp, monkeypatch, quits):
+    def fail(*args):
+        raise OSError("workspace is read-only")
+
+    monkeypatch.setattr(updates, "record_pending_update", fail)
+    dialog = _dialog()
+    dialog._hand_over()
+    assert quits == [True]
+    assert dialog._handed_over
+
+
+def test_failed_withdrawal_keeps_polling_the_installer(qapp, tmp_path, monkeypatch, quits):
+    launch = _launch(tmp_path)
+    dialog = _dialog()
+    dialog._launch = launch
+    dialog._poll.start()
+
+    def fail(*args):
+        raise OSError("cancel file is read-only")
+
+    monkeypatch.setattr(launch, "withdraw", fail)
+    dialog.reject()
+    assert dialog._poll.isActive()
+    assert dialog._launch is launch
+    assert not dialog._cancel.is_set()
+    launch.ready_file.write_text("ready")
+    dialog._check_installer()
+    assert quits == [True]
+
+
+def test_update_result_cleanup_failure_does_not_break_startup(monkeypatch):
+    updates.record_pending_update("99.0.0", updates.update_log_file("99.0.0"))
+    pending = updates._pending_file()
+    original = Path.unlink
+
+    def refuse_pending(path, *args, **kwargs):
+        if path == pending:
+            raise PermissionError("pending file is read-only")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", refuse_pending)
+    assert updates.take_update_result(current="99.0.0").succeeded
+
+
+def test_stale_installer_handshake_cleanup_failure_is_an_update_error(tmp_path, monkeypatch):
+    original = Path.unlink
+
+    def refuse_ready(path, *args, **kwargs):
+        if path.name == "installer.ready":
+            raise PermissionError("ready file is read-only")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", refuse_ready)
+    with pytest.raises(UpdateError, match="read-only"):
+        updates.launch_installer(tmp_path / "setup.exe")
+
+
+def test_settings_restart_respects_unsaved_constructor_cancel(qapp, monkeypatch):
+    from mm_companion.ui import app_restart
+    from mm_companion.ui.power_constructor.window import PowerConstructorWindow
+
+    monkeypatch.setattr(app_restart, "_suppressed", False)
+    launched = []
+    quit_calls = []
+    monkeypatch.setattr(app_restart.QProcess, "startDetached", lambda *args: launched.append(args))
+    monkeypatch.setattr(qapp, "quit", lambda: quit_calls.append(True))
+    editor = PowerConstructorWindow()
+    editor.canvas.add_effect("damage")
+    editor.show()
+    asked = []
+    monkeypatch.setattr(editor, "_confirm_discard", lambda: asked.append(True) or False)
+    try:
+        app_restart.restart_app()
+        assert editor.isVisible()
+        assert asked == [True]
+        assert launched == [] and quit_calls == []
+    finally:
+        editor.close()
+
+
+@pytest.mark.parametrize("ending", ["failure", "cancel"])
+def test_aborted_update_restores_future_restarts(qapp, monkeypatch, ending):
+    from mm_companion.ui import app_restart
+
+    monkeypatch.setattr(app_restart, "_suppressed", False)
+    dialog = _dialog()
+    dialog._close_other_windows()
+    assert app_restart._suppressed
+    if ending == "failure":
+        dialog._show_failure("installer could not start")
+    else:
+        dialog.reject()
+    assert not app_restart._suppressed
+
+
+def test_update_discards_old_and_suppressed_restart_requests(qapp, monkeypatch):
+    from mm_companion.ui import app_restart
+
+    monkeypatch.setattr(app_restart, "_suppressed", False)
+    calls = []
+    app_restart.defer_restart(lambda: calls.append("old"))
+    app_restart.suppress_restart()
+    app_restart.defer_restart(lambda: calls.append("during update"))
+    app_restart.suppress_restart(False)
+    app_restart.defer_restart(lambda: calls.append("new"))
+    qapp.processEvents()
+    assert calls == ["new"]
+
+
+def test_failed_restart_keeps_a_launcher_and_reports_the_error(qapp, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from mm_companion.ui import app_restart
+
+    monkeypatch.setattr(app_restart, "_suppressed", False)
+    quit_calls = []
+    messages = []
+    monkeypatch.setattr(qapp, "quit", lambda: quit_calls.append(True))
+    monkeypatch.setattr(app_restart.QProcess, "startDetached", lambda *args: (False, 0))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: messages.append(args))
+    launcher = StartWindow()
+    launcher.show()
+    app_restart.restart_app()
+    assert quit_calls == []
+    assert messages and "restart" in messages[0][2].lower()
+    assert any(isinstance(w, StartWindow) and w.isVisible() for w in qapp.topLevelWidgets())

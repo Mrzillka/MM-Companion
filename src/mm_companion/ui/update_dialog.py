@@ -44,9 +44,9 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion import __version__
-from mm_companion.core import updates
+from mm_companion.core import diagnostics, updates
 from mm_companion.core.updates import InstallerLaunch, ReleaseInfo, UpdateCancelled, UpdateResult
-from mm_companion.ui.app_restart import suppress_restart
+from mm_companion.ui.app_restart import close_windows, restart_allowed, suppress_restart
 from mm_companion.ui.widgets import muted_style, tinted_style
 
 #: How often the waiting stage looks at the installer, in ms.
@@ -75,18 +75,6 @@ def _session_running() -> bool:
     return active_session() is not None
 
 
-def _closing_order(window: QWidget) -> int:
-    """Character sheets before everything else.
-
-    GM Mode closes the NPC sheets it opened as part of its own close and does not
-    pass on a refusal, so reaching an unsaved NPC sheet through GM Mode first would
-    ask about it twice. Asked directly first, each sheet asks once.
-    """
-    from mm_companion.ui.main_window import MainWindow
-
-    return 0 if isinstance(window, MainWindow) else 1
-
-
 class UpdateDialog(QDialog):
     """Downloads and starts the installer for *release*, then quits the app."""
 
@@ -103,6 +91,7 @@ class UpdateDialog(QDialog):
         self._log_file = updates.update_log_file(release.version)
         # Set once the installer is running and the app is on its way out.
         self._handed_over = False
+        self._restart_was_allowed: bool | None = None
         self.setWindowTitle("Update MM-Companion")
         self.setModal(True)
 
@@ -192,6 +181,8 @@ class UpdateDialog(QDialog):
     # -- stages 2-4: check, close up, start the installer ----------------------
 
     def _install(self, installer: Path) -> None:
+        if self._cancel.is_set() or self._handed_over:
+            return
         self._bar.setRange(0, _BAR_STEPS)
         self._bar.setValue(_BAR_STEPS)
         self._cancel_button.setEnabled(False)
@@ -244,20 +235,15 @@ class UpdateDialog(QDialog):
         the sheet it belongs to. A window refused if it is still showing afterwards,
         which is what an unsaved sheet does when its Cancel is chosen.
         """
+        if self._restart_was_allowed is None:
+            self._restart_was_allowed = restart_allowed()
         suppress_restart()
-        keep = {self, self.parentWidget()}
-        windows = [
-            window
-            for window in QApplication.topLevelWidgets()
-            if window not in keep and window.parentWidget() is None
-        ]
-        for window in sorted(windows, key=_closing_order):
-            if not window.isVisible():
-                continue
-            window.close()
-            if window.isVisible():
-                return False
-        return True
+        return close_windows(keep=(self, self.parentWidget()))
+
+    def _restore_restarts(self) -> None:
+        if self._restart_was_allowed is not None:
+            suppress_restart(not self._restart_was_allowed)
+            self._restart_was_allowed = None
 
     def _check_installer(self) -> None:
         launch = self._launch
@@ -295,7 +281,12 @@ class UpdateDialog(QDialog):
         """Stage 5: the installer is running and waiting for us to go."""
         self._poll.stop()
         self._handed_over = True
-        updates.record_pending_update(self._release.version, self._log_file)
+        try:
+            updates.record_pending_update(self._release.version, self._log_file)
+        except OSError as exc:
+            # Setup is already waiting to replace the app. Bookkeeping failure
+            # must not strand it waiting for a process that never exits.
+            diagnostics.log_exception("Could not record the pending update", exc)
         self._status.setText("Installing — MM-Companion will reopen when it is done.")
         self._detail.setText("")
         _quit_app()
@@ -303,6 +294,7 @@ class UpdateDialog(QDialog):
     # -- endings ----------------------------------------------------------------
 
     def _show_failure(self, message: str, *, tint: str = "tint.worse") -> None:
+        self._restore_restarts()
         self._bar.hide()
         self._status.setText(message)
         self._status.setStyleSheet(tinted_style(tint, bold=False) if tint else "")
@@ -330,11 +322,22 @@ class UpdateDialog(QDialog):
             return
         if self._launch is not None and not self._launch.has_given_up():
             self._poll.stop()
-            if not self._launch.withdraw():
+            try:
+                withdrawn = self._launch.withdraw()
+            except OSError as exc:
+                diagnostics.log_exception("Could not cancel the installer", exc)
+                self._status.setText("Could not ask the installer to cancel.")
+                self._detail.setText(
+                    "Still checking whether it can continue. You can retry Cancel."
+                )
+                self._poll.start()
+                return
+            if not withdrawn:
                 self._hand_over()
                 return
             self._launch = None
         self._cancel.set()
+        self._restore_restarts()
         super().reject()
 
 

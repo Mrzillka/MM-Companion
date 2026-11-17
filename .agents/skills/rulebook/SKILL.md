@@ -10,15 +10,9 @@ and every answer cited by page. The book itself is never in git.
 
 ## Why not just read the PDF
 
-The `Read` tool renders PDF pages as **images** — about 2k tokens a page, 20
-pages a call. Paging through a ~250-page book that way costs six figures of
-tokens and still often misses. So the book is extracted **once** into one text
-file per page, and looked up with `Grep`. A lookup then costs a few hundred
-tokens and returns a page number you can check against the printed book.
-
-**Never `Read` the `.pdf` itself without asking the user first.** That is the
-expensive image path this whole setup exists to avoid. The only legitimate
-reason to want it is a scanned PDF with no text layer (see Troubleshooting).
+Search the extracted text with `rg` instead of rendering PDF pages. This keeps
+lookups small and preserves page citations. Ask the user before rendering the
+PDF itself; use that fallback only when the text extraction cannot settle a question.
 
 ## One-time setup
 
@@ -27,7 +21,7 @@ reason to want it is a scanned PDF with no text layer (see Troubleshooting).
 2. Extract it:
 
 ```bash
-python .claude/skills/rulebook/extract.py
+python .agents/skills/rulebook/extract.py
 ```
 
 Whatever the PDF is called, the text always lands in `reference/core-book/` as
@@ -59,12 +53,8 @@ Then, three steps:
 
 1. **Grep the page files**, always bounded:
 
-   ```
-   Grep  pattern: "Affliction"
-         path: "reference/core-book"
-         output_mode: "content"
-         -C: 3
-         head_limit: 40
+   ```powershell
+   rg -n -m 10 -C 3 "Affliction" reference/core-book
    ```
 
    Search for the game term as printed, not a paraphrase. A term like *Damage*
@@ -111,7 +101,7 @@ Content under the OGL; the published book mixes OGC with Product Identity.
 - **May inform `data/`:** mechanics — ranks, costs, DCs, degrees, table values,
   how an effect resolves. Facts and numbers, written into the data files in our
   own words, with provenance recorded for the OGL Section 15 as the Licensing
-  boundary in `CLAUDE.md` already requires.
+  boundary in `AGENTS.md` already requires.
 - **Never transcribed anywhere:** prose and flavour text, sidebars, sample
   characters, setting and character names, product names, artwork descriptions —
   Product Identity, whether into `data/`, `docs/`, or a commit message.

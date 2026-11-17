@@ -98,3 +98,8 @@ def test_an_entry_far_below_the_strongest_is_left_out(data) -> None:
     assert set(out) == {0}
     assert "below the strongest" in out[0]
     assert team_fits([], data) == {}
+
+
+def test_zero_rank_damage_is_not_an_unknown_team_entry(data):
+    out = team_fits([_option(data, rank=0), _option(data, rank=6)], data)
+    assert set(out) == {0}

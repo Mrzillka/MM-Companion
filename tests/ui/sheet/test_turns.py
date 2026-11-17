@@ -19,6 +19,8 @@ from mm_companion.core.rules import (
     condition_check,
     condition_check_offered,
     condition_check_request,
+    refresh_condition_check,
+    shake_off_made,
     turn_end,
 )
 
@@ -87,6 +89,15 @@ def test_a_third_degree_affliction_waits_for_its_minute(data) -> None:
 
     assert plan.checks == ()
     assert plan.waiting == (("Sleep Ray", "minute"),)
+
+
+def test_a_queued_check_is_skipped_if_its_condition_has_gone(data) -> None:
+    char = Character.new_default(data)
+    shake = _held(data, char, "hindered")
+    (spec,) = turn_end(char, data).checks
+    shake_off_made(char, shake)
+
+    assert refresh_condition_check(char, data, spec) is None
 
 
 # -- the sheet ---------------------------------------------------------------------------
@@ -177,3 +188,26 @@ def test_end_turn_with_nothing_on_says_so(qapp, data) -> None:
 
     assert plan.empty
     assert notes == ["ends their turn — nothing to shake off"]
+
+
+def test_later_end_turn_checks_use_the_state_left_by_earlier_checks(qapp, data, monkeypatch):
+    from mm_companion.ui.character_sheet import CharacterSheet
+
+    monkeypatch.setattr(roller_module, "ROLL_DURATION_MS", 0)
+    monkeypatch.setattr(dice_module, "QUEUE_POLL_MS", 0)
+    monkeypatch.setattr(dice_module, "QUEUE_GAP_MS", 0)
+    faces = iter((20, 10))
+    monkeypatch.setattr(roller_module, "roll_d20", lambda: next(faces))
+    sheet = CharacterSheet(data)
+    _held(data, sheet.character, "impaired")
+    apply_condition(sheet.character, "stunned", data)
+    sheet.conditions.reseed()
+
+    sheet.conditions.end_turn()
+    for _ in range(40):
+        qapp.processEvents()
+        if not sheet.dice.queued_rolls() and not sheet.dice.panel.rolling:
+            break
+
+    # The first success removed Impaired: Stamina is now +0, so 10 makes DC 10.
+    assert sheet.character.conditions == []

@@ -35,11 +35,13 @@ target's resistance as two rows.
 from __future__ import annotations
 
 import html
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from typing import Protocol
 
-from PySide6.QtCore import QObject
-from PySide6.QtWidgets import QWidget
+from PySide6.QtCore import QObject, Signal
+from PySide6.QtGui import QIntValidator
+from PySide6.QtWidgets import QCheckBox, QFormLayout, QLabel, QLineEdit, QWidget
 
 from mm_companion.core.data_loader import ConditionChange, GameData
 from mm_companion.core.data_loader.game_data import (
@@ -51,15 +53,24 @@ from mm_companion.core.rules import (
     MinionRules,
     OpposingEffects,
     RollSpec,
-    actor_degree,
+    action_followup_spec,
+    action_throw_damage,
+    action_throw_limit,
+    add_part,
+    answer_rung,
     concrete_changes,
     defense_against,
+    effective_ability,
     judge_attack,
     localize_spec,
-    opposed_dc,
+    minion_save_spec,
+    object_followup_caption,
+    opposed_action_degree,
     opposing_effects,
     opposing_spent,
+    resolve_rung,
     routine_total,
+    rung_caption,
     targeted_action,
     targeted_dc_from,
     targeted_outcome_text,
@@ -79,6 +90,25 @@ from mm_companion.ui.attack_targets import (
 )
 from mm_companion.ui.impress import PARTY_NPC, PARTY_PLAYER, ImpressParty, new_action_id
 from mm_companion.ui.roll_history import ActionCard
+from mm_companion.ui.widgets import make_signed_spin_box, make_spin_box
+
+
+class _RequiredInteger(QLineEdit):
+    """A number the GM must supply, without quietly assuming zero."""
+
+    valueChanged = Signal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setValidator(QIntValidator(-100, 100, self))
+        self.setPlaceholderText("Enter value")
+        self.textChanged.connect(lambda _text: self.valueChanged.emit(self.value()))
+
+    def value(self) -> int:
+        return int(self.text()) if self.hasAcceptableInput() else 0
+
+    def setValue(self, value: int) -> None:
+        self.setText(str(value))
 
 
 class TargetedHost(Protocol):
@@ -98,6 +128,10 @@ class TargetedHost(Protocol):
 
     def roller_adjustment(self) -> int: ...
 
+    def action_result(self, title: str, text: str) -> None: ...
+
+    def land_rung(self, party, changes, shake_off=None) -> tuple: ...
+
     def combat_land(self, party: ImpressParty, changes: tuple[ConditionChange, ...]) -> bool: ...
 
 
@@ -114,6 +148,8 @@ class _Targeted:
     resolving: bool = False
     done: bool = False
     said: list[str] = field(default_factory=list)
+    critical: bool = False
+    graze: bool = False
 
 
 class TargetedController(QObject):
@@ -127,6 +163,8 @@ class TargetedController(QObject):
         self._acts: dict[str, _Targeted] = {}
         #: A check that came in before its declaration did, by action id.
         self._early: dict[str, dict] = {}
+        self._followup_pending: dict[str, object] = {}
+        self._followup_runs: list[ActionRun] = []
         bridge.actionRequested.connect(self._on_action_request)
         bridge.rollAdded.connect(self.take_roll)
 
@@ -229,6 +267,18 @@ class TargetedController(QObject):
         gathers it), or an action's own check."""
         if not isinstance(roll, dict):
             return
+        for run in list(self._followup_runs):
+            if run.closed:
+                self._followup_runs.remove(run)
+            elif run.take_roll(roll):
+                return
+        raw_spec = roll.get("spec")
+        made = raw_spec if isinstance(raw_spec, RollSpec) else RollSpec.from_dict(raw_spec)
+        if made is not None and roll.get("kind", KIND_ROLL) == KIND_ROLL:
+            pending = self._followup_pending.pop(made.action_id, None)
+            if pending is not None:
+                pending(roll)
+                return
         for act in list(self._acts.values()):
             if act.run.take_roll(roll):
                 return
@@ -321,6 +371,21 @@ class TargetedController(QObject):
         if rules.vs_defense:
             self._judge_hit(act, action, target, ally, roll)
             return
+        opposing = opposing_effects(
+            act.source.character,
+            act.source.name,
+            target.character,
+            target.name,
+            self._data,
+            check_only=True,
+        )
+        if opposing.notes:
+            act.said.append("with " + ", ".join(opposing.notes))
+        if opposing.any:
+            self._spend(act, target, opposing)
+        if opposing.attack:
+            modifier = int(roll.get("bonus", 0)) - int(roll.get("penalty", 0)) + opposing.attack
+            roll = {**roll, "bonus": max(0, modifier), "penalty": max(0, -modifier)}
         die = int(roll.get("die", 0))
         modifier = int(roll.get("bonus", 0)) - int(roll.get("penalty", 0))
         total = total_of(roll)
@@ -338,7 +403,7 @@ class TargetedController(QObject):
             act.said.append(f"{total} vs DC {dc}")
             self._land(act, action, decl.option, verdict.degree, target, ally)
             return
-        self._resist(act, action, target, ally, total, die, minion=bool(roll.get("minion")))
+        self._resist(act, action, target, ally, roll)
 
     def _judge_hit(self, act: _Targeted, action, target, ally, roll: dict) -> None:
         """The attack of a Grab, Trip, Disarm or Smash against the target's Defense,
@@ -378,6 +443,8 @@ class TargetedController(QObject):
             self._finish(act, "; ".join(act.said))
             return
         act.said.append(f"hit ({total} vs Defense {dc})")
+        act.critical = verdict.critical
+        act.graze = die == 1 and bool(roll.get("critical")) and not verdict.by_routine
         if action.targeted.opposed is None:
             self._land(act, action, decl.option, max(verdict.degree, 1), target, ally)
             return
@@ -404,12 +471,11 @@ class TargetedController(QObject):
         def rolled(record: dict) -> None:
             total = total_of(record)
             act.said.append(f"{source.name} {total}")
-            die = int(record.get("die", 0))
-            self._resist(act, action, target, ally, total, die, minion=bool(record.get("minion")))
+            self._resist(act, action, target, ally, record)
 
         if source.kind == PARTY_NPC:
             rules = self._host.minion_rules()
-            own = replace(spec, modifier=spec.modifier + self._host.roller_adjustment())
+            own = add_part(spec, "GM adjustment", self._host.roller_adjustment())
             line = group_line(
                 source.name,
                 own,
@@ -432,48 +498,71 @@ class TargetedController(QObject):
         if act.card is not None:
             act.card.set_status(f"Waiting for {source.name}'s roll…", button=ACCEPT_CAPTION)
 
-    def _resist(
-        self, act: _Targeted, action, target, ally, total: int, die: int, *, minion: bool
-    ) -> None:
+    def _resist(self, act: _Targeted, action, target, ally, lead: dict) -> None:
         """The target resists the actor's *total* (a natural 20 on *die* counting as an
         added degree, unless a minion rolled it) with the best of its candidates."""
         decl = act.declaration
         title = targeted_title(action, decl.option)
-        against = opposed_dc(total, die if not minion else 0, self._data)
-        resist = targeted_resist_spec(self._data, action, title, against)
+        total = total_of(lead)
+        resist = targeted_resist_spec(
+            self._data, action, title, attack_range=decl.spec.attack_range
+        )
         if resist is None:
             self._finish(act, "Nothing to resist with.")
             return
-        act.said.append(f"{total} to beat")
+        resist = replace(resist, label=f"{resist.label} (opposed to {total})")
+        act.said.append(f"{total} to oppose")
         rules = self._host.minion_rules()
 
         def landed(record: dict) -> None:
-            degree = record.get("degree")
+            if total_of(record) == total:
+                actor_mod = int(lead.get("bonus", 0)) - int(lead.get("penalty", 0))
+                target_mod = int(record.get("bonus", 0)) - int(record.get("penalty", 0))
+                act.said.append(
+                    f"Tied totals: modifiers {actor_mod:+d} vs {target_mod:+d}; "
+                    + ("random tiebreak" if actor_mod == target_mod else "higher modifier wins")
+                )
+            degree = opposed_action_degree(
+                int(lead.get("bonus", 0)) - int(lead.get("penalty", 0)),
+                int(lead.get("die", 0)),
+                int(record.get("bonus", 0)) - int(record.get("penalty", 0)),
+                int(record.get("die", 0)),
+                actor_natural=not lead.get("routine")
+                and (not lead.get("reroll") or bool(lead.get("critical"))),
+                target_natural=not record.get("routine")
+                and (not record.get("reroll") or bool(record.get("critical"))),
+                actor_added_success=not lead.get("minion"),
+                target_added_success=not record.get("minion"),
+            )
             act.said.append(
-                f"{target.name} {total_of(record)} vs {against}"
-                + (" — resisted" if isinstance(degree, int) and degree > 0 else "")
+                f"{target.name} {total_of(record)} vs {total}"
+                + (" — resisted" if degree < 0 else " — failed resistance")
+                + f" ({abs(degree)} {'degree' if abs(degree) == 1 else 'degrees'})"
             )
             self._land(
                 act,
                 action,
                 decl.option,
-                actor_degree(int(degree) if isinstance(degree, int) else None),
+                degree,
                 target,
                 ally,
             )
 
         if target.kind == PARTY_NPC:
             own = localize_spec(resist, target.character, self._data)
-            own = replace(own, modifier=own.modifier + self._host.roller_adjustment(), trait_key="")
+            own = add_part(own, "GM adjustment", self._host.roller_adjustment(), trait_key="")
             line = group_line(
                 target.name,
                 own,
                 title=act.run.title,
-                dc=against,
                 minion=target.minion and rules.no_added_success,
             )
             if not act.run.roll_group(
-                [line], [target], lambda pairs: landed(pairs[0][1]) if pairs else None
+                [],
+                [],
+                lambda pairs: landed(pairs[0][1]) if pairs else None,
+                lead=line,
+                lead_about=target,
             ):
                 self._finish(act, "The resistance did not reach the session — nothing rolled.")
             return
@@ -521,7 +610,182 @@ class TargetedController(QObject):
             act.said.append(
                 rung.text.replace("{actor}", act.source.name).replace("{target}", target.name)
             )
+        if action.reminder:
+            act.said.append(action.reminder)
         self._finish(act, "; ".join(act.said))
+        if degree > 0 and action.follow_up is not None:
+            self._offer_followup(act, action, degree, target)
+
+    def _offer_followup(self, act, action, degree: int, target) -> None:
+        """Optional object/throw resolution stays beside the attack in history."""
+        rule = action.follow_up
+        follow_id = new_action_id()
+        title = f"{act.source.name}: {action.name} follow-up on {target.name}"
+        card = ActionCard(
+            follow_id,
+            html.escape(title),
+            "Load object save" if rule.kind == "object" else "Resolve throw",
+        )
+        body = QWidget(card)
+        form = QFormLayout(body)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        fields = {}
+        card.fields = fields  # The live inline editors, also available to the UI driver.
+        if rule.kind == "object":
+            fields["name"] = QLineEdit(f"{target.name}'s object", body)
+            fields["toughness"] = _RequiredInteger(body)
+            fields["hits"] = make_spin_box(0, 100)
+            fields["rank"] = make_spin_box(0, 100, value=act.declaration.spec.effect_rank or 0)
+            fields["no_hit"] = QCheckBox("Apply Toughness defense exception", body)
+            for key, label in (
+                ("name", "Object"),
+                ("toughness", "Object Toughness (enter)"),
+                ("hits", "Existing object Hits"),
+                ("rank", "Damage rank"),
+                ("no_hit", "Defense exception"),
+            ):
+                form.addRow(label, fields[key])
+        else:
+            fields["mass"] = _RequiredInteger(body)
+            fields["strength"] = make_signed_spin_box(100)
+            if act.source.character is not None:
+                fields["strength"].setValue(
+                    effective_ability(act.source.character, self._data, rule.strength_trait)
+                )
+            fields["spaces"] = make_spin_box(0, 0)
+            fields["rank"] = make_spin_box(0, rule.max_rank)
+            detail = QLabel(body)
+            detail.setWordWrap(True)
+            for key, label in (
+                ("mass", "Target mass rank (enter)"),
+                ("strength", "Throwing Strength"),
+                ("spaces", "Extra throw spaces (0 = no throw)"),
+                ("rank", "Damage rank after falling protection"),
+            ):
+                form.addRow(label, fields[key])
+            form.addRow(detail)
+
+            def refresh():
+                maximum = action_throw_limit(
+                    degree, fields["strength"].value(), fields["mass"].value()
+                )
+                fields["spaces"].setMaximum(maximum)
+                detail.setText(
+                    f"{degree} degrees; Strength {fields['strength'].value()} "
+                    f"vs mass rank {fields['mass'].value()}: up to {maximum} extra spaces."
+                )
+
+            fields["mass"].valueChanged.connect(refresh)
+            fields["strength"].valueChanged.connect(refresh)
+            fields["spaces"].valueChanged.connect(
+                lambda value: fields["rank"].setValue(action_throw_damage(action, value))
+            )
+            refresh()
+        card.add_controls(body)
+
+        def load(_action_id):
+            if rule.kind != "object" and (
+                fields["spaces"].value() == 0 or fields["rank"].value() == 0
+            ):
+                text = "No additional falling Damage."
+                card.set_done(text)
+                body.hide()
+                self._host.action_result(title, text)
+                return
+            required = fields["toughness"] if rule.kind == "object" else fields["mass"]
+            if not required.hasAcceptableInput():
+                card.set_status(
+                    "Enter the object's Toughness."
+                    if rule.kind == "object"
+                    else "Enter the target's mass rank."
+                )
+                return
+            spec = action_followup_spec(
+                self._data,
+                action,
+                fields["rank"].value(),
+                toughness=fields["toughness"].value() if rule.kind == "object" else 0,
+                hits=fields["hits"].value() if rule.kind == "object" else 0,
+                critical=act.critical if rule.kind == "object" else False,
+                graze=act.graze if rule.kind == "object" else False,
+            )
+            if spec is None:
+                return
+            if rule.kind == "object" and fields["no_hit"].isChecked():
+                spec = replace(
+                    spec,
+                    success_outcome=(
+                        f"{spec.success_outcome} " "(unless its Toughness defense prevents the Hit)"
+                    ),
+                )
+            if rule.kind != "object" and target.minion:
+                spec = minion_save_spec(spec, self._host.minion_rules())
+            name = fields["name"].text().strip() if rule.kind == "object" else target.name
+            actor = "" if rule.kind != "object" and target.kind == PARTY_PLAYER else name
+            spec = replace(spec, action_id=follow_id, title=title, targets=(name,), actor=actor)
+
+            def settle(record):
+                result = record.get("degree")
+                if result is None:
+                    return
+                if rule.kind == "object":
+                    caption = object_followup_caption(
+                        spec,
+                        int(result),
+                        fields["hits"].value(),
+                        no_hit=fields["no_hit"].isChecked(),
+                    )
+                else:
+                    rung = answer_rung(
+                        spec.ladder,
+                        int(result),
+                        target.character,
+                        self._data,
+                        self._host.minion_rules(),
+                    )
+                    caption = "Unaffected"
+                    if rung is not None:
+                        caption = rung_caption(rung, self._data)
+                        changes = resolve_rung(
+                            deepcopy(target.character), rung, self._data, source=act.source.name
+                        )
+                        delivered, _landed = self._host.land_rung(target, changes)
+                        if not delivered:
+                            caption += " (not delivered)"
+                verdict = "Resisted" if int(result) > 0 else "Failed resistance"
+                text = f"{name}: {total_of(record)} vs DC {spec.dc} — {verdict}; {caption}"
+                card.set_done(text)
+                self._host.action_result(title, text)
+
+            if rule.kind != "object" and target.kind == PARTY_PLAYER:
+                run = ActionRun(
+                    self._data, self._bridge, self._host, follow_id, title=title, parent=self
+                )
+                self._followup_runs.append(run)
+                if not run.ask(
+                    target, spec, target, lambda _p, record: (settle(record), run.close())
+                ):
+                    card.set_status("Could not request the save. Try again.")
+                    return
+            else:
+                self._followup_pending[follow_id] = settle
+                if rule.kind != "object":
+                    spec = replace(localize_spec(spec, target.character, self._data), trait_key="")
+                if (
+                    self._host.area_roll_attack(
+                        spec, target.character if rule.kind != "object" else None
+                    )
+                    is False
+                ):
+                    self._followup_pending.pop(follow_id, None)
+                    card.set_status("The die is busy. Try again after it settles.")
+                    return
+            card.button.setEnabled(False)
+            body.hide()
+            card.set_status("Waiting for the save — select its chip and click the die.")
+
+        card.actionRequested.connect(load)
+        self._host.action_add_card(card)
 
     # -- saying so ------------------------------------------------------------------------
 
@@ -562,9 +826,12 @@ class TargetedController(QObject):
             card.second_button.setEnabled(False)
 
     def _finish(self, act: _Targeted, text: str, *, notice: bool = True) -> None:
+        if act.done:
+            return
         act.done = True
         act.resolving = False
         if notice:
+            self._host.action_result(act.declaration.spec.title or act.source.name, text)
             self._host.impress_notice(
                 f"{act.declaration.spec.title or act.source.name}: {text}",
                 theme.color("accent"),

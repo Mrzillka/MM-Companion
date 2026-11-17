@@ -108,8 +108,8 @@ def team_fits(options: list[TeamOption], game_data: GameData) -> dict[int, str]:
 
     The first entry sets the effect and the resistance (the same ladder kind and trait
     as its save); one that differs is left out. Of the rest, an entry whose rank is more
-    than the rules' spread below the strongest is left out too (a rank of 0 is unknown
-    and waives the test, as the NPC-group window's does).
+    than the rules' spread below the strongest is left out too (an unmeasured rank
+    waives the test; a known Damage rank of zero still participates).
     """
 
     if not options:
@@ -122,11 +122,11 @@ def team_fits(options: list[TeamOption], game_data: GameData) -> dict[int, str]:
         other = save.ladder.kind if save.ladder is not None else ""
         if save.trait_key != first.trait_key or other != kind:
             out[index] = TEAM_NOT_SAME
-    ranks = [o.rank for i, o in enumerate(options) if i not in out and o.rank]
+    ranks = [o.rank for i, o in enumerate(options) if i not in out and o.rank_known]
     if ranks:
         spread = game_data.system.team_attack.rank_spread
         floor = max(ranks) - spread
         for index, option in enumerate(options):
-            if index not in out and option.rank and option.rank < floor:
+            if index not in out and option.rank_known and option.rank < floor:
                 out[index] = f"rank {option.rank}, more than {spread} below the strongest"
     return out

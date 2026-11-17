@@ -49,8 +49,8 @@ from mm_companion.core.rules import (
     find_area_power,
     localize_spec,
     power_area_use,
-    reacting,
     recovery_succeeded,
+    refresh_condition_check,
     requested_roll_choices,
     self_action,
     targeted_action,
@@ -197,7 +197,7 @@ class DiceSection(QGroupBox):
             elif self_action(self._data, action.id) is not None:
                 reason = action_reason(self._data, action, self._character)
                 # Block while Blocking picks the attack that blocks.
-                wants = action.needs_attack or reacting(action, self._character)
+                wants = action.needs_attack
                 offered[action.id] = reason or (attacks if wants else None)
             elif targeted_action(self._data, action.id) is not None:
                 offered[action.id] = self._targeted_reason(action) or (
@@ -269,7 +269,9 @@ class DiceSection(QGroupBox):
             self._queue_timer.start(QUEUE_GAP_MS)
             return
         spec = self._roll_queue.pop(0)
-        self.perform_roll(spec)
+        spec = refresh_condition_check(self._character, self._data, spec)
+        if spec is not None:
+            self.perform_roll(spec)
         if self._roll_queue:
             self._queue_after_landing = True
             self._queue_timer.start(QUEUE_POLL_MS)
@@ -324,7 +326,7 @@ class DiceSection(QGroupBox):
             )
             return False
 
-        self.perform_roll(aimed, before=declare)
+        self.panel.prepare_spec(aimed, before=declare)
 
     def settle_recovery(self, roll: object) -> None:
         """A roll of this seat's is back: if it was a recovery check and it made it,
@@ -556,7 +558,7 @@ class DiceSection(QGroupBox):
             option = action.options[index].id
         attack = None
         if action.targeted.uses_attack:
-            attack = panel.choose_attack()
+            attack = panel.choose_attack(attack_range=action.attack_range)
             if attack is None:
                 return False
         check = targeted_check_spec(self._data, action, option, self._character, attack)
@@ -599,7 +601,7 @@ class DiceSection(QGroupBox):
             )
             return False
 
-        self.perform_roll(spec, before=declare)
+        self.panel.prepare_spec(spec, before=declare)
         return True
 
     def start_area_tile(self) -> AreaDialog | None:

@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.ui import theme
-from mm_companion.ui.app_restart import restart_app
+from mm_companion.ui.app_restart import defer_restart, restart_app
 from mm_companion.ui.settings.general_page import GeneralPage
 from mm_companion.ui.settings.gm_page import GMPage
 from mm_companion.ui.settings.page import SettingsPage
@@ -160,7 +160,7 @@ class SettingsWindow(QMainWindow):
         super().closeEvent(event)
         if self._restart_on_close:
             # Deferred so this window is fully closed before the app tears down.
-            QTimer.singleShot(0, restart_app)
+            defer_restart(restart_app)
 
     def _prompt_save(self, page: SettingsPage) -> bool:
         choice = QMessageBox.question(

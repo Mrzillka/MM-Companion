@@ -2,7 +2,7 @@
 
 Matters when touching powers.
 
-Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
+Working notes for MM-Companion, split out of [AGENTS.md](../../AGENTS.md).
 
 Powers are the most complex part, and are split the same core/data/ui way. Read
 `docs/mm-powers-architecture.md` for the full model; the shape:
@@ -1249,3 +1249,8 @@ what it left:
   going with it. Deliberate — a stunt is a build the player made, and binning it silently
   because they removed something else is the failure the ⚠ exists to avoid — but the sheet
   can carry a card whose only fault is what is missing.
+
+The NPC PL estimator and the per-power validator both use `linked_attacks` for
+a Linked power's shared bonus, including a ruleset's first/highest/lowest policy.
+Estimating each effect with its solo bonus can understate the PL of the attack
+that is actually rolled.

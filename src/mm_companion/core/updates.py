@@ -56,7 +56,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from mm_companion import __version__
-from mm_companion.core import storage, tls
+from mm_companion.core import diagnostics, storage, tls
 
 #: The repository whose releases are this app's releases.
 REPOSITORY = "Mrzillka/MM-Companion"
@@ -142,7 +142,10 @@ def parse_version(text: str) -> tuple[int, ...] | None:
     match = _VERSION_RE.match(text.strip())
     if match is None:
         return None
-    parts = [int(part) for part in match.group(1).split(".")]
+    try:
+        parts = [int(part) for part in match.group(1).split(".")]
+    except ValueError:
+        return None
     while len(parts) > 1 and parts[-1] == 0:
         parts.pop()
     return tuple(parts)
@@ -178,12 +181,17 @@ def _asset_from_json(entry: object) -> ReleaseAsset | None:
 
 def release_from_json(payload: dict) -> ReleaseInfo | None:
     """Read GitHub's release object; ``None`` if it is not a usable release."""
+    if not isinstance(payload, dict):
+        return None
     tag = payload.get("tag_name")
     if not isinstance(tag, str) or parse_version(tag) is None:
         return None
     if payload.get("draft") or payload.get("prerelease"):
         return None
-    assets = [_asset_from_json(entry) for entry in payload.get("assets") or []]
+    entries = payload.get("assets") or []
+    if not isinstance(entries, list):
+        return None
+    assets = [_asset_from_json(entry) for entry in entries]
     page_url = payload.get("html_url")
     return ReleaseInfo(
         version=tag.lstrip("v"),
@@ -417,6 +425,12 @@ def download_asset(
     installer lying about from an earlier version is deleted.
     """
     folder = dest_dir or download_dir()
+    if (
+        not asset.name
+        or asset.name in (".", "..")
+        or any(char in asset.name for char in ("/", "\\", ":"))
+    ):
+        raise UpdateError("The release asset has an invalid filename.")
     target = folder / asset.name
     clear_downloads(keep=asset.name, folder=folder)
     if target.is_file() and _is_intact(target, asset):
@@ -524,8 +538,11 @@ def launch_installer(
     """
     ready_file = installer.with_name("installer.ready")
     cancel_file = installer.with_name("installer.cancel")
-    for stale in (ready_file, cancel_file):
-        stale.unlink(missing_ok=True)
+    try:
+        for stale in (ready_file, cancel_file):
+            stale.unlink(missing_ok=True)
+    except OSError as exc:
+        raise UpdateError(f"The installer's handshake files could not be cleared: {exc}") from exc
     log_file = log_file or installer.with_name("install.log")
     try:
         # Inno Setup does not create the folder of its /LOG, and gives up at once —
@@ -611,7 +628,10 @@ def take_update_result(current: str = __version__) -> UpdateResult | None:
     except (OSError, ValueError):
         return None
     finally:
-        path.unlink(missing_ok=True)
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            diagnostics.log_exception("Could not clear the pending update note", exc)
     if not isinstance(note, dict):
         return None
     to_version = str(note.get("to", ""))

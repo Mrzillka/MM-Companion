@@ -1318,7 +1318,7 @@
         "help": "The opponent the ally's help is against."
       },
       "debilitates": null,
-      "effect": "An ally's successful Aid: +2 (or +5 for a strong success) on your next attack check against the named opponent. Counted when that attack is judged, then gone.",
+      "effect": "An ally's successful Aid: +2 (or +5 for a strong success) on your next attack check against the named opponent. Counted when that action is judged, then gone.",
       "recovery": "Spent by your next attack on the named opponent.",
       "tone": "benefit",
       "defaultAmount": 2,
@@ -1331,7 +1331,7 @@
     {
       "id": "aided_defense",
       "name": "Aided Defense",
-      "tooltip": "An ally's help: a bonus to your Defense against one opponent's next attack.",
+      "tooltip": "An ally's help: a Defense bonus against the named opponent's attacks until the end of your next turn.",
       "category": "condition",
       "group": "maneuver",
       "includes": [],
@@ -1347,14 +1347,15 @@
         "help": "The opponent the ally's help is against."
       },
       "debilitates": null,
-      "effect": "An ally's successful Aid: +2 (or +5 for a strong success) to your Defense against the named opponent's next attack. Counted when that attack is judged, then gone.",
-      "recovery": "Spent by the named opponent's next attack on you.",
+      "effect": "An ally's successful Aid: +2 (or +5 for a strong success) to your Defense against the named opponent's attacks until the end of your next turn.",
+      "recovery": "Remove at the end of your next turn.",
       "tone": "benefit",
       "defaultAmount": 2,
       "maxAmount": 5,
       "opposing": {
         "defense": 1,
-        "spentBy": "attacked"
+        "spentBy": "attacked",
+        "consume": false
       }
     },
     {
@@ -1405,10 +1406,11 @@
       },
       "debilitates": null,
       "effect": "A successful Trick: you are unaware of the danger if your next action against the named opponent fails, which the GM narrates. Gone once that action is made.",
-      "recovery": "Spent by your next attack on the named opponent.",
+      "recovery": "Spent by your next action on the named opponent.",
       "tone": "hindrance",
       "opposing": {
-        "spentBy": "attacking"
+        "spentBy": "attacking",
+        "anyAction": true
       }
     },
     {
@@ -1430,13 +1432,14 @@
         "help": "The character whose trick failed."
       },
       "debilitates": null,
-      "effect": "An opponent's Trick failed by two or more degrees, leaving them open: +5 on your next attack check against them. Counted when that attack is judged, then gone.",
-      "recovery": "Spent by your next attack on the named opponent.",
+      "effect": "An opponent's Trick failed by two or more degrees, leaving them open: +5 on your next check against them. Counted when that action is judged, then gone.",
+      "recovery": "Spent by your next action on the named opponent.",
       "tone": "benefit",
       "defaultAmount": 5,
       "opposing": {
         "attack": 1,
-        "spentBy": "attacking"
+        "spentBy": "attacking",
+        "anyAction": true
       }
     }
   ]

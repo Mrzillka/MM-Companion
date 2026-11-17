@@ -85,6 +85,8 @@ WORST_DEGREE = -99
 class AreaHost(Protocol):
     """What the controller needs from the GM window."""
 
+    def action_result(self, title: str, text: str) -> None: ...
+
     def impress_parties(self) -> tuple[list[ImpressParty], list[ImpressParty]]:
         """``(who may act, who may be targeted)`` as the board stands now."""
 
@@ -990,6 +992,7 @@ class AreaController(QObject):
         if resolving is None:
             return
         summary = f"{resolving.plan.use.power_name} — " + "; ".join(resolving.said)
+        self._host.action_result(resolving.plan.use.power_name, "; ".join(resolving.said))
         self._host.impress_notice(summary, theme.color("accent"))
         if declared.card is not None:
             declared.card.set_done("Resolved — the table is in the history.")

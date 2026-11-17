@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 
 from mm_companion.core import storage
 from mm_companion.core.character import AppliedCondition, Character
+from mm_companion.core.diagnostics import log_exception
 from mm_companion.core.session.model import (
     new_id,
 )
@@ -17,6 +18,7 @@ from mm_companion.core.session.protocol import (
     DISPOSITION_PLAYER,
 )
 from mm_companion.ui import theme
+from mm_companion.ui.card_summary import character_summary_html
 from mm_companion.ui.gm.model import (
     SCENE_PLAYER,
     _player_key,
@@ -133,20 +135,33 @@ class GMPlayersMixin:
         """A player pushed their live sheet: remember it and restate their card."""
         if not isinstance(character, dict) or not character:
             return
-        self._snapshots[player_id] = character
+        # A snapshot is peer-supplied JSON. Reject malformed model data before it
+        # replaces the last good snapshot used by targeting and the shared scene.
+        try:
+            parsed = Character.from_dict(character)
+            int(parsed.characteristics.get("hero_points", 0) or 0)
+            character_summary_html(parsed, self._data, "")
+        except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
+            log_exception(f"Reading player snapshot {player_id}")
+            self._show_notice(
+                "Could not read the player's character; keeping the last good snapshot.",
+                theme.color("tint.worse"),
+            )
+            return
         card = self._cards.get(player_id)
         if card is not None:
             card.set_character(character)
+        self._snapshots[player_id] = character
         # An Impress being set up reads this player's resist options off the same
         # snapshot, so a sheet that just changed must not leave it on stale numbers.
         entry = self._scene_entry_for(SCENE_PLAYER, player_id)
         if entry is not None and getattr(self, "_impress", None) is not None:
             for window in self._impress.windows.values():
-                window.set_party_character(entry.ref, Character.from_dict(character))
+                window.set_party_character(entry.ref, parsed)
         # The area windows too: a primary player's Defense decides the Hit tick.
         if entry is not None and getattr(self, "_area", None) is not None:
             for window in self._area.windows.values():
-                window.set_party_character(entry.ref, Character.from_dict(character))
+                window.set_party_character(entry.ref, parsed)
         # Their conditions and their picture are on the board too, and a snapshot
         # is the only warning that either moved.
         if self._scene_entry_for(SCENE_PLAYER, player_id) is not None:

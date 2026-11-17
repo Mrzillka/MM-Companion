@@ -37,6 +37,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
+from random import SystemRandom
 
 from ..character import AppliedCondition, Character
 from ..data_loader import (
@@ -60,6 +61,7 @@ from ..data_loader.game_data import (
     TARGETED_ON_TARGET,
 )
 from ..data_loader.traits import OPPOSING_ATTACKED, OPPOSING_ATTACKING
+from ..dice import degrees
 from .conditions import (
     applied_condition_name,
     apply_condition,
@@ -69,10 +71,12 @@ from .derived import defense_class_in_play
 from .rolls import (
     KIND_ABILITY,
     KIND_BEST_OF,
+    KIND_COMBAT_SKILL,
     KIND_RESISTANCE,
     KIND_SKILL,
     LADDER_DAMAGE,
     RollSpec,
+    SpecLadder,
     ability_roll,
     add_part,
     best_of_key,
@@ -84,6 +88,7 @@ from .targeting import failure_degrees
 __all__ = [
     "OpposingEffects",
     "actor_degree",
+    "opposed_action_degree",
     "concrete_changes",
     "defense_against",
     "opposing_effects",
@@ -99,6 +104,10 @@ __all__ = [
     "targeted_resist_spec",
     "targeted_rung",
     "targeted_title",
+    "action_followup_spec",
+    "action_throw_limit",
+    "action_throw_damage",
+    "object_followup_caption",
 ]
 
 
@@ -142,19 +151,19 @@ def bare_attack_check(attack: RollSpec) -> RollSpec:
     )
 
 
-def attack_damage_rank(attack: RollSpec | None) -> int:
+def attack_damage_rank(attack: RollSpec | None) -> int | None:
     """The Damage rank of *attack* (the first damage save it forces, as rolled on the
-    attacker's sheet); ``0`` when it deals no Damage or the rank is not known here."""
+    attacker's sheet); ``None`` when it deals no Damage or the rank is not known here."""
 
     if attack is None:
-        return 0
+        return None
     for save in attack.follow_ups():
         if save.ladder is not None and save.ladder.kind == LADDER_DAMAGE:
-            if save.effect_rank:
+            if save.effect_rank is not None:
                 return save.effect_rank
             if save.ladder.rank:
                 return save.ladder.rank
-    return 0
+    return None
 
 
 def _candidate(
@@ -168,7 +177,7 @@ def _candidate(
         return "Attack", bare_attack_check(attack)
     if check.kind == COMBAT_CHECK_DAMAGE:
         rank = attack_damage_rank(attack)
-        if rank <= 0:
+        if rank is None:
             return None
         return "Damage", RollSpec(label=f"Damage {rank}", modifier=rank)
     if check.kind == COMBAT_CHECK_ABILITY:
@@ -222,6 +231,8 @@ def targeted_check_spec(
     rules: TargetedRules | None = action.targeted
     if rules is None:
         return None
+    if action.attack_range and attack is not None and attack.attack_range != action.attack_range:
+        return None
     effect = action.effect_for(option_id)
     title = targeted_title(action, option_id)
     best = _best_candidate(game_data, rules.checks, character, attack)
@@ -236,7 +247,90 @@ def targeted_check_spec(
     elif rules.vs_defense:
         label += " vs. Defense"
     spec = add_part(spec, title, effect.attack_modifier)
-    return replace(spec, label=label, dc=dc, hint=action.tooltip)
+    return replace(
+        spec, label=label, dc=dc, hint=action.tooltip, effect_rank=attack_damage_rank(attack)
+    )
+
+
+def action_throw_limit(degree: int, strength: int, mass_rank: int) -> int:
+    """Additional throw spaces: extra degrees plus Strength in excess of mass."""
+    return max(0, degree - 1) + max(0, strength - mass_rank)
+
+
+def action_throw_damage(action: CombatAction, spaces: int) -> int:
+    rule = action.follow_up
+    return min(rule.max_rank, max(0, spaces)) if rule is not None else 0
+
+
+def object_followup_caption(spec: RollSpec, degree: int, hits: int, *, no_hit: bool = False) -> str:
+    from .defenses import ToughnessDefense, damage_negated
+    from .rolls import resistance_outcome
+
+    caption = resistance_outcome(spec, degree)
+    if degree > 0:
+        if no_hit and damage_negated(ToughnessDefense(two_degrees=True), rank=0, degree=degree):
+            return "Unaffected by the defense"
+        return f"{caption.partition(' (')[0]}; object Hits now {hits + 1}"
+    return caption
+
+
+def action_followup_spec(
+    game_data: GameData,
+    action: CombatAction,
+    rank: int,
+    *,
+    toughness: int = 0,
+    hits: int = 0,
+    critical: bool = False,
+    graze: bool = False,
+) -> RollSpec | None:
+    """An object's own Damage ladder, or a thrown creature's ordinary Damage save."""
+    rule = action.follow_up
+    if rule is None:
+        return None
+    rank = max(0, rank)
+    if critical:
+        rank += game_data.system.critical_effect_bonus
+    if rule.max_rank:
+        rank = min(rule.max_rank, rank)
+    dc = rule.dc_base + rank
+    if rule.kind == "object":
+        names = [game_data.condition_catalog()[cid].name for cid in rule.ladder]
+        modifier = toughness - hits + (game_data.system.critical_effect_bonus if graze else 0)
+        parts = (("Object Toughness", toughness), ("Existing Hits", -hits))
+        if graze:
+            parts += (("Graze", game_data.system.critical_effect_bonus),)
+        return RollSpec(
+            label=f"Object Toughness vs. DC {dc}",
+            modifier=modifier,
+            dc=dc,
+            effect_rank=rank,
+            parts=parts,
+            success_outcome=names[0] if names else "",
+            outcomes=tuple(names[1:]),
+        )
+    damage = next((e for e in game_data.effects if e.id == game_data.system.damage_effect), None)
+    if damage is None or rank == 0:
+        return None
+    from .targeting import ladder_captions, rung_caption
+
+    return RollSpec(
+        label=f"Falling Damage: {rule.resistance} vs. DC {dc}",
+        dc=dc,
+        kind=KIND_RESISTANCE,
+        trait_key=rule.resistance,
+        effect_rank=rank,
+        outcomes=ladder_captions(damage.resistance_outcomes, game_data),
+        success_outcome=(
+            rung_caption(damage.resistance_success, game_data) if damage.resistance_success else ""
+        ),
+        ladder=SpecLadder(
+            kind=LADDER_DAMAGE,
+            rungs=damage.resistance_outcomes,
+            success=damage.resistance_success,
+            rank=rank,
+        ),
+    )
 
 
 def targeted_opposed_spec(
@@ -260,7 +354,7 @@ def targeted_opposed_spec(
         return None
     source, spec = best
     title = targeted_title(action, option_id)
-    return RollSpec(label=f"{title}: {source} {spec.modifier:+d}", modifier=spec.modifier)
+    return replace(spec, label=f"{title}: {source} {spec.modifier:+d}")
 
 
 def targeted_dc_from(
@@ -299,7 +393,12 @@ def _resist_candidates(
 
 
 def targeted_resist_spec(
-    game_data: GameData, action: CombatAction, title: str, dc: int | None = None
+    game_data: GameData,
+    action: CombatAction,
+    title: str,
+    dc: int | None = None,
+    *,
+    attack_range: str = "",
 ) -> RollSpec | None:
     """What the target of an opposed check rolls: the best of its candidates (a
     :data:`~.rolls.KIND_BEST_OF` spec its own sheet fills in), against *dc* — the
@@ -312,6 +411,9 @@ def targeted_resist_spec(
         return None
     pairs = rules.opposed.resist if rules.opposed is not None else rules.resist
     candidates = _resist_candidates(game_data, pairs)
+    skill_id = dict(rules.resist_by_range).get(attack_range)
+    if skill_id:
+        candidates.insert(0, (KIND_COMBAT_SKILL, skill_id))
     if not candidates:
         return None
     label = f"Resist {title}" + (f" vs. {dc}" if dc is not None else "")
@@ -323,6 +425,47 @@ def targeted_resist_spec(
         dc=dc,
         hint=action.tooltip,
     )
+
+
+def opposed_action_degree(
+    actor_modifier: int,
+    actor_die: int,
+    target_modifier: int,
+    target_die: int,
+    *,
+    actor_natural: bool = True,
+    target_natural: bool = True,
+    actor_added_success: bool = True,
+    target_added_success: bool = True,
+    tied_actor_wins: bool | None = None,
+) -> int:
+    """Grade opposition from the actor's side, including both natural faces.
+
+    Equal totals compare modifiers, then a random tiebreak. The table's agreed
+    interpretation shifts that base result once per natural face, skipping zero.
+    ``tied_actor_wins`` permits a reproducible random tiebreak in tests.
+    """
+    margin = actor_die + actor_modifier - target_die - target_modifier
+    result = degrees(margin)
+    if margin == 0:
+        wins = actor_modifier > target_modifier
+        if actor_modifier == target_modifier:
+            wins = (
+                SystemRandom().choice((False, True)) if tied_actor_wins is None else tied_actor_wins
+            )
+        result = 1 if wins else -1
+    shift = 0
+    for die, natural, added, sign in (
+        (actor_die, actor_natural, actor_added_success, 1),
+        (target_die, target_natural, target_added_success, -1),
+    ):
+        if natural and die == 20 and added:
+            shift += sign
+        elif natural and die == 1:
+            shift -= sign
+    position = result if result < 0 else result - 1
+    position += shift
+    return position if position < 0 else position + 1
 
 
 def actor_degree(target_degree: int | None) -> int:
@@ -449,6 +592,8 @@ def opposing_effects(
     target_name: str,
     game_data: GameData,
     attack_range: str = "",
+    *,
+    check_only: bool = False,
 ) -> OpposingEffects:
     """The attacker's opposing conditions that name the target and are spent by its
     attacking (Aided Attack, Trick Advantage, Tricked), and the target's that name the
@@ -478,24 +623,30 @@ def opposing_effects(
         rule = condition.opposing if condition is not None else None
         if rule is None or rule.spent_by != OPPOSING_ATTACKING:
             continue
+        if check_only and not rule.any_action:
+            continue
         if applied.provenance is not None or applied.parameter != target_name:
             continue
         attack += rule.attack * amount_of(applied, condition)
-        attacker_spent.append(applied)
+        if rule.consume:
+            attacker_spent.append(applied)
         notes.append(applied_condition_name(applied, condition))
     for applied in target.conditions if target is not None else ():
         condition = catalog.get(applied.condition_id)
         rule = condition.opposing if condition is not None else None
         if rule is None or rule.spent_by != OPPOSING_ATTACKED:
             continue
+        if check_only and not rule.any_action:
+            continue
         if applied.provenance is not None or applied.parameter != attacker_name:
             continue
         defense += rule.defense * amount_of(applied, condition)
         if rule.defense_as:
             defense_as.append(rule.defense_as)
-        target_spent.append(applied)
+        if rule.consume:
+            target_spent.append(applied)
         notes.append(f"{target_name}: {applied_condition_name(applied, condition)}")
-    if target is not None:
+    if target is not None and not check_only:
         posture, because = condition_incoming_attack_mod(target, game_data, attack_range)
         if posture:
             attack += posture

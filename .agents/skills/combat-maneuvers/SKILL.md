@@ -18,7 +18,7 @@ the next session.
    - **A dirty tree** means the last session stopped mid-phase. Read the newest
      progress-log entry and `git diff` before touching anything, and carry on from
      there. Never `reset`/`checkout --` someone's changes away.
-   - Never commit on `develop` or `main`, never merge, never open a PR (CLAUDE.md
+   - Never commit on `develop` or `main`, never merge, never open a PR (AGENTS.md
      conventions).
 2. `git log --oneline -10` to see what landed since the log's last entry.
 3. **Read `docs/plans/combat-maneuvers.md` in full**, especially §1's decisions (the
@@ -39,12 +39,12 @@ the next session.
 - **If a phase is too big for one session**, finish a coherent chunk that leaves the
   tests green, mark the phase `in progress (<what is left>)`, and stop there. A
   half-wired feature with green tests beats a finished one with red tests.
-- The standing rules in `CLAUDE.md` hold everywhere: no rules content in Python (it goes
+- The standing rules in `AGENTS.md` hold everywhere: no rules content in Python (it goes
   in `data/`), theme tokens only, widgets never compute game numbers, `core` has no Qt,
   no content-shaped minimum sizes, never show a parentless widget, catch and log
   failures, settings through `core.storage` accessors.
 - **A design question the plan doesn't answer and the user should decide:** ask with
-  `AskUserQuestion` (give a recommended option), then record the answer in §1's
+  a concise question (give a recommended option), then record the answer in §1's
   decisions. For small calls with an obvious default, decide, and note it in the log.
 - **Protocol:** bump at most once for the whole feature (§1 decision 10). Check
   `core/session/protocol.py` against `develop` first: if this branch has already
@@ -52,7 +52,7 @@ the next session.
 
 ## 3. Check it
 
-- Run the **`affected-tests`** skill (`python .claude/skills/affected-tests/affected.py`),
+- Run the **`affected-tests`** skill (`python .agents/skills/affected-tests/affected.py`),
   then `ruff check .` and `black .`.
 - Run the full `pytest` (~16 min; run it in the background) where the phase says
   "full run recommended", and always in phase 10.
@@ -85,7 +85,7 @@ If you can't amend that commit, a small follow-up commit with just the hash is f
 Keep it short, outcome first:
 - which phase was done (or how far it got), and whether the tests are green;
 - anything the user should look at or decide;
-- what the next run of `/combat-maneuvers` will do.
+- what the next run of `$combat-maneuvers` will do.
 
 Stop after one phase unless the user asked for more. In phase 10, don't merge: tell the
 user it's ready for them to call done, and remind them the hub/relay needs a redeploy

@@ -15,6 +15,7 @@ from .game_data import (
     CombatAction,
     CombatCheck,
     CombatEffect,
+    CombatFollowUp,
     CombatMenuSection,
     CombatOption,
     CombatRules,
@@ -392,6 +393,8 @@ def _parse_opposing(raw) -> OpposingRule | None:
         defense=_optional_int(raw.get("defense")) or 0,
         defense_as=str(raw.get("defenseAs", "") or ""),
         spent_by=str(raw.get("spentBy", "") or ""),
+        consume=bool(raw.get("consume", True)),
+        any_action=bool(raw.get("anyAction", False)),
     )
 
 
@@ -825,6 +828,11 @@ def _parse_targeted(raw: object) -> TargetedRules | None:
             else None
         ),
         ally=bool(raw.get("ally", False)),
+        resist_by_range=(
+            tuple((str(k), str(v)) for k, v in raw.get("resistByRange", {}).items())
+            if isinstance(raw.get("resistByRange"), dict)
+            else ()
+        ),
     )
 
 
@@ -867,6 +875,22 @@ def _parse_combat_action(raw: dict) -> CombatAction:
         icon=str(raw.get("icon", "")),
         tooltip=str(raw.get("tooltip", "")),
         kind=str(raw.get("kind", "self")),
+        reminder=str(raw.get("reminder", "")),
+        attack_range=str(raw.get("attackRange", "")),
+        follow_up=(
+            CombatFollowUp(
+                kind=str(raw["followUp"].get("kind", "")),
+                resistance=str(raw["followUp"].get("resistance", "")),
+                dc_base=_optional_int(raw["followUp"].get("dcBase")) or 0,
+                max_rank=_optional_int(raw["followUp"].get("maxRank")) or 0,
+                strength_trait=str(raw["followUp"].get("strengthTrait", "")),
+                ladder=tuple(
+                    str(c) for c in raw["followUp"].get("ladder", []) if isinstance(c, str)
+                ),
+            )
+            if isinstance(raw.get("followUp"), dict)
+            else None
+        ),
         needs_attack=bool(raw.get("needsAttack", False)),
         gm_only=bool(raw.get("gmOnly", False)),
         bonus=str(raw.get("bonus", "")),
@@ -879,6 +903,8 @@ def _parse_combat_action(raw: dict) -> CombatAction:
                 name=str(o.get("name", o["id"])),
                 tooltip=str(o.get("tooltip", "")),
                 effect=_parse_combat_effect(o),
+                requires_advantage=str(o.get("requiresAdvantage", "")),
+                replaces_options=bool(o.get("replacesOptions", False)),
             )
             for o in raw.get("options", ())
             if isinstance(o, dict) and o.get("id")
@@ -910,6 +936,8 @@ def _parse_combat_action(raw: dict) -> CombatAction:
                 condition=str(reaction["condition"]),
                 step=_optional_int(reaction.get("step")) or 0,
                 line=str(reaction.get("line", "")),
+                check=_parse_check(reaction.get("check")),
+                attack_range=str(reaction.get("attackRange", "")),
             )
             if isinstance(reaction, dict) and reaction.get("condition")
             else None

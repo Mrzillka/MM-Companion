@@ -18,6 +18,7 @@ from pathlib import Path
 
 from mm_companion.core import storage
 from mm_companion.core.character import Character
+from mm_companion.core.files import atomic_write_text
 from mm_companion.core.powers import strip_stunts
 
 CHARACTER_SUFFIX = ".json"
@@ -144,21 +145,28 @@ def save_character(
 
     # Copy any external image into the workspace so the character is
     # self-contained; the model then references the stored copy.
-    character.image_path = _store_image(character.image_path)
+    stored_image = _store_image(character.image_path)
 
     # A power stunt is invented at the table and lasts the scene, so it is deliberately
     # not part of the file (see ``Power.stunt_of``). Everything else about the character
     # is written exactly as ``to_dict`` states it.
     payload = character.to_dict()
+    payload["image_path"] = stored_image
     payload["powers"] = strip_stunts(payload.get("powers", []))
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    atomic_write_text(path, json.dumps(payload, indent=2) + "\n")
+    character.image_path = stored_image
     return path
 
 
 def load_character(path: Path) -> Character:
     """Rebuild a :class:`Character` from a saved JSON file."""
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
-    return Character.from_dict(raw)
+    if not isinstance(raw, dict):
+        raise ValueError("A character file must contain a JSON object.")
+    try:
+        return Character.from_dict(raw)
+    except (AttributeError, TypeError, ValueError, KeyError, OverflowError) as exc:
+        raise ValueError(f"Invalid character data in {Path(path).name}: {exc}") from exc
 
 
 def delete_character(path: Path) -> None:
@@ -187,11 +195,10 @@ def list_saved_characters(
     summaries: list[CharacterSummary] = []
     for file in sorted(directory.glob(f"*{CHARACTER_SUFFIX}")):
         try:
-            raw = json.loads(file.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            character = load_character(file)
+            power_level = _estimated_pl(character) if estimate_pl else character.power_level
+        except (OSError, ValueError, TypeError, KeyError, AttributeError, OverflowError):
             continue
-        character = Character.from_dict(raw)
-        power_level = _estimated_pl(character) if estimate_pl else character.power_level
         summaries.append(
             CharacterSummary(
                 name=display_name(character),

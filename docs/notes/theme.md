@@ -2,7 +2,7 @@
 
 Matters whenever you write a colour or a size.
 
-Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
+Working notes for MM-Companion, split out of [AGENTS.md](../../AGENTS.md).
 
 **Never hardcode a colour, radius, border width, column minimum or font size in
 widget code.** All of them are named **tokens** read from the active theme

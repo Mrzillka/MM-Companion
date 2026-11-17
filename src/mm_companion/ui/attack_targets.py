@@ -122,6 +122,8 @@ class TargetedDeclaration:
         }
         if self.opposed is not None:
             out["opposed"] = self.opposed.to_dict()
+        if self.spec.effect_rank is not None:
+            out["damage_rank"] = self.spec.effect_rank
         return out
 
     @classmethod
@@ -147,6 +149,9 @@ class TargetedDeclaration:
         if not texts["target_ref"]:
             return None
         opposed = RollSpec.from_dict(raw.get("opposed")) if raw.get("opposed") else None
+        rank = raw.get("damage_rank")
+        if isinstance(rank, int) and not isinstance(rank, bool) and rank >= 0:
+            spec = replace(spec, effect_rank=rank)
         return cls(spec=spec, opposed=opposed, **texts)
 
 

@@ -42,11 +42,13 @@ from PySide6.QtWidgets import (
 from mm_companion.core import notes
 from mm_companion.core.character import Character, NotesState
 from mm_companion.core.data_loader import GameData
+from mm_companion.core.diagnostics import log_message
 from mm_companion.ui.notes.editor import NoteEditor
 from mm_companion.ui.notes.events import note_events
 from mm_companion.ui.notes.picker import NotePickerDialog
 from mm_companion.ui.sections.titled_section import set_simple_frame, strip_groupbox_caption
 from mm_companion.ui.tab_drag import TabSplitGesture
+from mm_companion.ui.toasts import notify_window
 from mm_companion.ui.widgets import discard_widget, muted_style
 
 #: How far a tab must be dragged *off* its bar before the drag becomes a split.
@@ -67,6 +69,7 @@ LABEL_PREVIEW = "Preview"
 LABEL_EDIT = "Edit"
 
 _MISSING = "(missing)"
+AUTOSAVE_RETRY_MS = 2000
 
 
 @dataclass
@@ -200,6 +203,7 @@ class NotesSection(QGroupBox):
         # flush writes every dirty tab, and a note is only ever dirty because
         # somebody is typing in exactly one of them.
         self._dirty: set[NoteEditor] = set()
+        self._write_failures: set[str] = set()
         self._autosave = QTimer(self)
         self._autosave.setSingleShot(True)
         self._autosave.setInterval(0)
@@ -251,6 +255,16 @@ class NotesSection(QGroupBox):
             current = [item.ref for item in self._open]
             if wanted != current:
                 self.flush()
+                # Undo/reseed may remove a tab reference, but note text is not
+                # undoable. Keep an editor whose latest text could not be saved.
+                unwritten = [
+                    item.ref
+                    for item in self._open
+                    if item.editor in self._dirty and item.ref not in wanted
+                ]
+                if unwritten:
+                    wanted += unwritten
+                    self._state().files[:] = wanted
                 self._rebuild_tabs(wanted)
             self._select(state.active)
             self._refresh_empty_state()
@@ -275,6 +289,8 @@ class NotesSection(QGroupBox):
             rebuilt.append(item)
             self._tabs.addTab(item.editor, "")
         for orphan in keep.values():
+            self._dirty.discard(orphan.editor)
+            self._write_failures.discard(orphan.ref)
             discard_widget(orphan.editor)
         self._open = rebuilt
         self._refresh_tab_captions()
@@ -336,6 +352,8 @@ class NotesSection(QGroupBox):
     def _close_ref(self, ref: str) -> None:
         """Close *ref*'s tab. The file is left alone — closing is not deleting."""
         self.flush()
+        if any(item.ref == ref and item.editor in self._dirty for item in self._open):
+            return
         state = self._state()
         if ref in state.files:
             state.files.remove(ref)
@@ -513,9 +531,9 @@ class NotesSection(QGroupBox):
         the undo stack.
         """
         self._dirty.add(editor)
-        self._autosave.start()
+        self._autosave.start(0)
 
-    def flush(self) -> None:
+    def flush(self) -> bool:
         """Write every note whose text has changed, now.
 
         Lands each editor's own pending debounce first: a flush provoked by
@@ -527,7 +545,7 @@ class NotesSection(QGroupBox):
             item.editor.flush()
         self._autosave.stop()
         if not self._dirty:
-            return
+            return True
         # A note that would not write stays dirty. write_note is careful to answer
         # rather than raise (a read-only file, a full disk, a Windows lock), and
         # dropping that answer meant the text was declared written, never retried,
@@ -539,13 +557,21 @@ class NotesSection(QGroupBox):
                 continue
             if notes.write_note(item.ref, item.editor.text()):
                 item.mtime = notes.note_mtime(item.ref)
+                self._write_failures.discard(item.ref)
             else:
                 unwritten.add(item.editor)
+                if item.ref not in self._write_failures:
+                    self._write_failures.add(item.ref)
+                    message = f"Could not save note {item.ref}. Your text is kept open; retrying."
+                    log_message(message, key=f"note-write:{item.ref}")
+                    notify_window(self, message)
         self._dirty = unwritten
         if unwritten:
-            self._autosave.start()  # try again on the next settle
+            # A zero-interval retry spins continuously on a full/read-only disk.
+            self._autosave.start(AUTOSAVE_RETRY_MS)
         self._refresh_tab_captions()
         self._emit_title()
+        return not unwritten
 
     def _refresh_from_disk(self, item: _OpenNote) -> None:
         """Re-read *item* if its file moved under us (another sheet, another app).
@@ -575,6 +601,8 @@ class NotesSection(QGroupBox):
         """
         refs = self.open_refs()
         if not (0 <= index < len(refs)) or len(refs) < 2:
+            return False
+        if not self.flush():
             return False
         self.splitRequested.emit(refs[index], global_pos)
         return True

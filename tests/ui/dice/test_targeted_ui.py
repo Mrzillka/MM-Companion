@@ -79,7 +79,7 @@ def _rolled(section: DiceSection, monkeypatch) -> list:
         thrown.append(spec)
         return True
 
-    monkeypatch.setattr(section.view.panel, "roll_spec", roll_spec)
+    monkeypatch.setattr(section.view.panel, "prepare_spec", roll_spec)
     return thrown
 
 

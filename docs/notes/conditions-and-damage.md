@@ -2,7 +2,7 @@
 
 Matters when touching conditions, damage, or the display overlay they drive.
 
-Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
+Working notes for MM-Companion, split out of [AGENTS.md](../../AGENTS.md).
 
 - Conditions are a small state-tracker, not a build cost. `conditions.json` is the
   single consolidated catalog (short `tooltip` copy + `includes`/`supersedes` graph

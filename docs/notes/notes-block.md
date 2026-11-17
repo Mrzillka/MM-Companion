@@ -2,7 +2,7 @@
 
 Matters when touching Notes, or adding a block there can be two of.
 
-Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
+Working notes for MM-Companion, split out of [AGENTS.md](../../AGENTS.md).
 
 A tabbed markdown editor over ordinary `.md` files in the workspace, and the one
 block the sheet can have **more than one of**. `docs/` has no separate map; this is it.

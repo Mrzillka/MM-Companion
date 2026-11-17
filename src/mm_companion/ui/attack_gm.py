@@ -128,6 +128,8 @@ def roll_text_html(roll: dict) -> str:
 class AttackHost(Protocol):
     """What the controller needs from the GM window (``AreaHost``'s subset, plus one)."""
 
+    def action_result(self, title: str, text: str) -> None: ...
+
     def impress_parties(self) -> tuple[list[ImpressParty], list[ImpressParty]]: ...
 
     def impress_apply(
@@ -496,7 +498,10 @@ class AttackController(QObject):
                 if rung is not None:
                     shake = self._shake(aimed, save, record.get("dc"), degree, keys.get(id(save)))
                     caption = self._land(aimed, target, rung, shake)
-                aimed.said.append(f"{save_text(save, record)}: {caption or 'resisted'}")
+                verdict = "Resisted" if int(degree) > 0 else "Failed resistance"
+                aimed.said.append(
+                    f"{save_text(save, record)}: {verdict}" + (f" — {caption}" if caption else "")
+                )
             self._finish(aimed, "; ".join(aimed.said))
 
         if not aimed.run.roll_group(lines, about, landed):
@@ -521,7 +526,14 @@ class AttackController(QObject):
                     key = resisted.trait_key if resisted is not None else save.trait_key
                     shake = self._shake(aimed, save, record.get("dc"), degree, key)
                     caption = self._land(aimed, target, rung, shake)
-            aimed.said.append(f"{save_text(save, record)}: {caption or 'resisted'}")
+            verdict = (
+                "Not graded"
+                if degree is None
+                else "Resisted" if int(degree) > 0 else "Failed resistance"
+            )
+            aimed.said.append(
+                f"{save_text(save, record)}: {verdict}" + (f" — {caption}" if caption else "")
+            )
             if caption:
                 aimed.run.tell(target, f"{aimed.declaration.spec.label}: {caption}")
             self._ask_player(aimed, target, queue)
@@ -612,10 +624,13 @@ class AttackController(QObject):
             card.second_button.setEnabled(False)
 
     def _finish(self, aimed: _Aimed, text: str, *, notice: bool = True) -> None:
+        if aimed.done:
+            return
         aimed.done = True
         aimed.resolving = False
         summary = f"{aimed.source.name} → {aimed.declaration.target_name}: {text}"
         if notice:
+            self._host.action_result(f"{aimed.source.name} → {aimed.declaration.target_name}", text)
             self._host.impress_notice(summary, theme.color("accent"))
         if aimed.card is not None:
             aimed.card.set_done(text)

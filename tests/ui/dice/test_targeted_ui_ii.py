@@ -81,7 +81,7 @@ def test_escape_waits_for_a_hold_and_picks_no_attack(qapp, data, table, menu, mo
     assert thrown[0].dc is None  # the GM reads the DC off the grabber
 
 
-def test_block_readies_then_loads_a_harder_block_each_time(qapp, data, menu) -> None:
+def test_block_readies_then_loads_a_harder_block_each_time(qapp, data, menu, instant_die) -> None:
     hero = _hero(data)
     sheet = CharacterSheet(data, hero)
     dice = sheet.dice
@@ -90,23 +90,28 @@ def test_block_readies_then_loads_a_harder_block_each_time(qapp, data, menu) -> 
     assert _Menu.shown == []  # readying asks nothing
     dice.start_self_action("block")  # a close attack comes: block it with the Punch
     first = dice.panel.current_spec()
-    assert first.dc is None and "attacker's result" in first.label
+    assert first.dc is None and "incoming attack" in first.label
     (blocking,) = hero.conditions
+    assert blocking.count == 1  # loading/abandoning a check has spent nothing
+    dice.start_self_action("block")
+    assert dice.panel.current_spec().modifier == first.modifier
+    dice.panel._start_roll()
     assert blocking.count == 2
+    dice.panel.reroll()
+    assert blocking.count == 2  # rerolling is still the same block
     dice.start_self_action("block")
     second = dice.panel.current_spec()
     assert second.modifier == first.modifier - 2
 
 
-def test_block_with_no_attack_readies_but_cannot_block(qapp, data) -> None:
+def test_block_with_no_attack_still_offers_the_basic_check(qapp, data) -> None:
     """Readying needs no attack; blocking picks one, so a Blocking character with
     none sees the tile greyed with the reason rather than a press that does nothing."""
     from mm_companion.core.character import Character
-    from mm_companion.ui.action_menu import NO_ATTACKS
 
     plain = Character.new_default(data)
     sheet = CharacterSheet(data, plain)
     assert sheet.dice.panel.open_actions().tile("block").isEnabled()
     sheet.dice.start_self_action("block")
     tile = sheet.dice.panel.open_actions().tile("block")
-    assert not tile.isEnabled() and NO_ATTACKS in tile.toolTip()
+    assert tile.isEnabled()

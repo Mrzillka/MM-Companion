@@ -583,6 +583,25 @@ def test_a_card_shows_the_player_character_from_their_snapshot(
     assert card.toolTip() == ""
 
 
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"powers": [None]},
+        {"abilities": {"STR": "bad"}},
+        {"characteristics": {"hero_points": "bad"}},
+    ],
+)
+def test_a_malformed_snapshot_keeps_the_previous_character(window, bad):
+    window._show_roster(roster({"display_name": "Aria"}))
+    good = a_character(hero_name="Last good character")
+    window._on_snapshot("p0", good)
+
+    window._on_snapshot("p0", bad)
+
+    assert window._snapshots["p0"] is good
+    assert window._cards["p0"]._character_label.text() == "Last good character"
+
+
 def test_a_card_without_a_snapshot_says_so_and_cannot_be_opened(
     qapp: QApplication, window: GMWindow
 ) -> None:
@@ -4348,6 +4367,29 @@ def test_a_made_recovery_check_takes_the_condition_off_the_npc(window: GMWindow)
 
     assert window._npc_state[goon].character.conditions == []
     assert window._npc_state[goon].card.condition_names() == []
+
+
+@pytest.mark.parametrize("from_action", [False, True])
+def test_a_refused_recovery_roll_preserves_the_one_in_flight(window: GMWindow, from_action) -> None:
+    first, second = _npc_files(window, "First", "Second")
+    for name in (first, second):
+        window._apply_npc_condition(name, "dazed", None)
+
+    window._roll_npc_recovery(first, "dazed", None)
+    pending = window._recovering
+    assert pending is not None
+    if from_action:
+        from dataclasses import replace
+
+        spec = replace(pending.spec, label=f"Second: {pending.spec.label}", actor="Second")
+        window._npc_throw(second, spec, False)
+    else:
+        window._roll_npc_recovery(second, "dazed", None)
+    assert window._recovering is pending
+    _finish_npc_roll(window, 20)
+
+    assert window._npc_state[first].character.conditions == []
+    assert [c.condition_id for c in window._npc_state[second].character.conditions] == ["dazed"]
 
 
 def test_a_failed_recovery_check_leaves_the_condition_on(window: GMWindow) -> None:

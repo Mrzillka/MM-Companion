@@ -151,7 +151,7 @@ def test_a_slam_replaces_a_charge_and_loads_the_own_save(qapp, data, menu, insta
     # Once the die settles, the slammer's own save is on the chip, filled in.
     own = panel.current_spec()
     assert own.label.startswith("Your own impact") and own.modifier == 4
-    assert own.dc == roll["spec"].follow_up.dc - 9 + 4
+    assert own.dc == roll["spec"].follow_up.dc - 9 + 5
 
 
 def test_aim_rolls_two_dice_and_keeps_the_higher(qapp, data, menu, monkeypatch) -> None:
@@ -258,7 +258,7 @@ def test_catch_loads_the_agility_check(qapp, data, menu) -> None:
     assert spec.label == "Catch: Agility" and spec.dc == 10
 
 
-def test_recover_offers_the_check_and_rolls_it(qapp, data, menu, instant_die) -> None:
+def test_recover_loads_the_check_and_waits_for_the_die(qapp, data, menu, instant_die) -> None:
     hero = _hero(data)
     apply_condition(hero, "staggered", data)
     sheet = CharacterSheet(data, hero)
@@ -266,8 +266,53 @@ def test_recover_offers_the_check_and_rolls_it(qapp, data, menu, instant_die) ->
     sheet.dice.start_self_action("recover")
     assert _Menu.shown[-1][-1] == RECOVER_DEFENSE_ONLY
     assert any(c.condition_id == "recovering" for c in hero.conditions)
+    assert not rolls
+    assert sheet.dice.panel.current_spec().recovers == "staggered"
+    sheet.dice.panel._start_roll()
     (roll,) = rolls
     assert roll["spec"].recovers == "staggered"
+
+
+def test_block_without_a_power_uses_the_basic_attack_bonus(qapp, data, menu, instant_die):
+    hero = Character.new_default(data)
+    hero.abilities["ATK"] = 7
+    sheet = CharacterSheet(data, hero)
+    panel = sheet.dice.panel
+    rolls = _rolls(panel)
+    sheet.dice.start_self_action("block")
+    assert any(c.condition_id == "blocking" for c in hero.conditions)
+    assert not rolls
+    sheet.dice.start_self_action("block")
+    assert panel.current_spec().modifier == 7
+    assert not rolls
+    panel._start_roll()
+    sheet.dice.start_self_action("block")
+    assert panel.current_spec().modifier == 5
+
+
+def test_slam_uses_the_chosen_movement_instead_of_the_fastest(qapp, data, menu, monkeypatch):
+    hero = _hero(data)
+    hero.powers.append(Power(name="Wings", effects=[PowerEffectInstance("flight", rank=12)]))
+    section = _loaded(data, hero)
+    picks = iter([1, 0])  # Slam, then ground movement.
+    monkeypatch.setattr(
+        "mm_companion.ui.roller.combat_runner.choose_from_menu", lambda *a, **k: next(picks)
+    )
+    section.start_self_action("charge")
+    rolled = section.panel.with_lines(section.panel.current_spec())
+    assert rolled.follow_up.effect_rank == 9  # Damage 8 + 1, not Flight 12.
+
+
+def test_prepared_action_declares_only_when_the_die_is_clicked(qapp, data, instant_die):
+    section = _loaded(data)
+    called = []
+    rolls = _rolls(section.panel)
+    section.panel.prepare_spec(
+        section.panel.current_spec(), before=lambda s: called.append(s) or True
+    )
+    assert called == [] and rolls == []
+    section.panel._start_roll()
+    assert len(called) == len(rolls) == 1
 
 
 def test_recover_with_nothing_to_shed_just_takes_the_bonus(qapp, data, menu) -> None:
@@ -276,3 +321,16 @@ def test_recover_with_nothing_to_shed_just_takes_the_bonus(qapp, data, menu) -> 
     sheet.dice.start_self_action("recover")
     assert _Menu.shown == []  # nothing to choose between
     assert [c.condition_id for c in hero.conditions] == ["recovering"]
+
+
+def test_instant_up_stands_without_a_check_or_hindered(qapp, data, menu):
+    from mm_companion.core.character import AdvantageSelection
+
+    hero = _hero(data)
+    hero.advantages.append(AdvantageSelection("Instant Up"))
+    apply_condition(hero, "prone", data)
+    sheet = CharacterSheet(data, hero)
+    sheet.dice.start_self_action("stand")
+    assert hero.conditions == []
+    assert sheet.dice.panel.current_spec() is None
+    assert _Menu.shown == []

@@ -588,7 +588,7 @@ def test_a_roll_prompt_offers_the_highest_and_lets_the_player_pick(qapp, data) -
     assert made.trait_key == "WILL" and made.dc == 21 and made.action_id == "a1"
 
 
-def test_the_player_end_opens_closes_and_tells(qapp, data, monkeypatch) -> None:
+def test_the_player_end_uses_history_instead_of_a_roll_window(qapp, data, monkeypatch) -> None:
     from mm_companion.ui import session_player
     from mm_companion.ui.character_sheet import CharacterSheet
 
@@ -609,16 +609,16 @@ def test_the_player_end_opens_closes_and_tells(qapp, data, monkeypatch) -> None:
     receiver = session_player.ActionPromptReceiver(win, bridge, parent=win)
     spec = RollSpec(label="Dodge", dc=18, kind="area-dodge", targets=("Nova",), action_id="a1")
     bridge.actionPrompted.emit(KIND_ROLL_ASK, "a1", {"spec": spec.to_dict(), "asker": "The GM"})
-    dialog = receiver.dialogs["a1"]
-    assert dialog.isVisible() and "Dodge" in dialog._caption.text()
-    # The next roll of the same action replaces it in place.
+    assert "Dodge" in told[-1] and "history" in told[-1]
+    assert not win.findChildren(RollPromptDialog)
     save = replace(spec, label="Toughness", dc=23)
     bridge.actionPrompted.emit(KIND_ROLL_ASK, "a1", {"spec": save.to_dict()})
-    assert receiver.dialogs["a1"] is dialog and "Toughness" in dialog._caption.text()
+    assert "Toughness" in told[-1]
     bridge.actionPrompted.emit(KIND_ROLL_CLOSED, "a1", {"name": "Nova"})
-    assert "a1" not in receiver.dialogs
+    assert not win.findChildren(RollPromptDialog)
     bridge.actionPrompted.emit(KIND_OUTCOME, "a1", {"text": "Fire Burst: Dazed"})
-    assert told == ["Fire Burst: Dazed"]
+    assert told[-1] == "Fire Burst: Dazed"
+    receiver.detach()
 
 
 # -- through a real session ------------------------------------------------------------------
@@ -1069,7 +1069,12 @@ def _sleep_ray(
     )
     party = next(p for p in window.impress_parties()[1] if p.source == mook)
     sent: list[RollSpec] = []
-    monkeypatch.setattr(window._roller, "roll_spec", lambda s, minion=False: sent.append(s) or True)
+    monkeypatch.setattr(
+        window._roller,
+        "prepare_spec",
+        lambda s, minion=False, before=None: (before(s) if before else True)
+        and (sent.append(s) or True),
+    )
     window._roll_as(save, party, AnswerContext(seq=3, source="Doc"))
     (spec,) = sent
     window._on_answer_back(

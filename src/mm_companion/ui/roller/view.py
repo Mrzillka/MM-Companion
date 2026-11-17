@@ -347,7 +347,7 @@ class DiceRollerView(ReflowBox, QWidget):
             box, box_layout = titled_box("Rolls")
             box_layout.addWidget(self._given_history)
             self._given_history.saveToggled.connect(self.panel.toggle_quick_roll)
-            self._given_history.rollFollowUp.connect(self.panel.roll_spec)
+            self._given_history.rollFollowUp.connect(self.panel.prepare_spec)
             # Hold this app's own roll until its die stops tumbling; the roller cues
             # both the window and the release, so a roll it never revealed is
             # flushed rather than stranded.
@@ -362,14 +362,14 @@ class DiceRollerView(ReflowBox, QWidget):
         self._local_history.saveToggled.connect(self.panel.toggle_quick_roll)
         # A chain button on a card puts the next roll back into the panel it came
         # from — an attack's card offers the save it forced.
-        self._local_history.rollFollowUp.connect(self.panel.roll_spec)
+        self._local_history.rollFollowUp.connect(self.panel.prepare_spec)
         local_layout.addWidget(self._local_history)
         outer.addWidget(self._local_box)
 
         self._session_box, session_layout = titled_box("Session rolls")
         self._session_history = RollHistoryPanel()
         self._session_history.saveToggled.connect(self.panel.toggle_quick_roll)
-        self._session_history.rollFollowUp.connect(self.panel.roll_spec)
+        self._session_history.rollFollowUp.connect(self.panel.prepare_spec)
         self._session_history.teamJoinRequested.connect(self.teamJoinRequested)
         # Hold this app's own roll until its die stops tumbling; the roller cues
         # both the window and the release (see the given-history branch above).

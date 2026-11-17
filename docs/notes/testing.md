@@ -134,7 +134,7 @@ now keeps the button's on-screen rectangle instead. If
 ## Running only what a change affects
 
 The full suite takes about 16 minutes. The `affected-tests` skill
-(`.claude/skills/affected-tests/`) runs only the tests a change can reach:
+(`.agents/skills/affected-tests/`) runs only the tests a change can reach:
 pytest-testmon for Python code, and its own fingerprints for game data, block
 sizes, theme presets, icons and the sample mods, which testmon cannot see. Its
 `SKILL.md` gives the selection rules.

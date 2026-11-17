@@ -15,9 +15,9 @@ Version bump levels (versions are 3-part SemVer ``X.Y.Z``):
 
 Usage (run with the project's venv Python so the freeze uses the right deps)::
 
-    python .claude/skills/build-installer/build_installer.py minor
-    python .claude/skills/build-installer/build_installer.py major
-    python .claude/skills/build-installer/build_installer.py minor --dry-run
+    python .agents/skills/build-installer/build_installer.py minor
+    python .agents/skills/build-installer/build_installer.py major
+    python .agents/skills/build-installer/build_installer.py minor --dry-run
 
 On a build failure the version file is restored, so a failed build never leaves
 the repo half-bumped. A successful build leaves the new version in place (commit

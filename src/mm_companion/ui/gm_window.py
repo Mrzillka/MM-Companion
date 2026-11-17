@@ -628,9 +628,9 @@ class GMWindow(
         # A save or a request clicked in this history is answered for a creature the GM
         # plays — whose number goes in is asked first (see _on_history_roll). A
         # right-click rolls it as written, for nobody.
-        self._history.rollFollowUp.disconnect(self._roller.roll_spec)
+        self._history.rollFollowUp.disconnect(self._roller.prepare_spec)
         self._history.rollAnswer.connect(self._on_history_roll)
-        self._history.rollPlain.connect(self._roller.roll_spec)
+        self._history.rollPlain.connect(self._roller.prepare_spec)
         # A team attack's call joined here: one of the GM's NPCs joins it.
         self._history.teamJoinRequested.connect(self._gm_team_join)
         # The roll an NPC answered with, once it is back: what failing did goes on it.

@@ -2,7 +2,14 @@
 
 Matters when touching GM mode / online play.
 
-Working notes for MM-Companion, split out of [CLAUDE.md](../../CLAUDE.md).
+Working notes for MM-Companion, split out of [AGENTS.md](../../AGENTS.md).
+
+The Welcome history is capped by encoded bytes as well as `WELCOME_HISTORY_ROLLS`:
+large, valid specs can exceed the protocol limit long before 200 records. The
+server sends the newest suffix that fits beside the rest of the welcome and keeps
+the full log. Session persistence uses atomic replacement; malformed session
+objects and individual corrupt/invalid-UTF-8 roll-log lines cannot hide the other
+saved sessions or readable rolls.
 
 GM Mode and online play are a self-contained subsystem, split the usual
 `ui → core → data` way. The full map is `docs/mm-session-architecture.md`; the
@@ -843,3 +850,13 @@ window reaches its stack through `toasts.notify_window`, which also carries the 
 "Saved to…" and "Exported…" lines. **Hovering a card holds it** — the dwell stops, the
 fade reverses — until the pointer leaves: a message that fades out from under the
 cursor of the person reading it has not been delivered.
+
+Client shutdown must also cancel a reconnect without a current socket. Context
+exit calls `close` unconditionally; adopting a completed handshake and closing
+are synchronized, and a still-running dial/reader prevents overlapping `connect`
+calls. A late redial closes its new socket rather than publishing Online.
+
+Hub creation reserves a capacity slot before writing/hosting, counting unhosted
+saved sessions too. Hosting failure removes the unclaimed session files (no GM
+has received their token) and releases the reservation; it returns a readable
+control error while keeping the channel usable.

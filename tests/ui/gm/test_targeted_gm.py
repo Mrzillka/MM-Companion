@@ -144,7 +144,7 @@ def test_a_players_feint_waits_for_accept_and_leaves_the_target_feinted(
     assert calls == []  # nothing until the GM says so
     window._targeted.accept("t1")
     ((line,),) = calls  # the Thug's resistance, against the feint's total
-    assert line[1] == 14 + spec.modifier
+    assert line[1] == 0  # Opposed rolls are adjudicated from both dice, not a fixed DC.
     assert _opposing(window, thug) == [("feinted", "Ana", None)]
     assert "Feinted (Ana)" in act.card.status()
 
@@ -235,13 +235,14 @@ def test_a_player_target_is_asked_and_told(window: GMWindow, monkeypatch) -> Non
     party = next(p for p in sources if p.name == "Thug")
     rolled: list = []
     monkeypatch.setattr(
-        window._roller, "roll_spec", lambda spec, **_kw: rolled.append(spec) or True
+        window._roller, "prepare_spec", lambda spec, **_kw: rolled.append(spec) or True
     )
     act = window._targeted.act_own(party, "feint", "standard", player, check)
     (thrown,) = rolled
     window._targeted.take_roll(_roll(thrown, 15, thrown.modifier))
     (prompt,) = asked
-    assert prompt["spec"]["targets"] == ["Bo"] and prompt["spec"]["dc"] == 15 + thrown.modifier
+    assert prompt["spec"]["targets"] == ["Bo"] and "dc" not in prompt["spec"]
+    assert str(15 + thrown.modifier) in prompt["spec"]["label"]
     answer = replace(thrown, label="Resist Feint", targets=("Bo",), follow_up=None, kind="best-of")
     window._targeted.take_roll({**_roll(answer, 3, 2), "degree": -2})
     assert sent == [("p2", "feinted", "Thug")]
@@ -265,7 +266,7 @@ def test_the_gms_npc_feints_off_the_roller(window: GMWindow, menu, monkeypatch) 
         window._targeted.take_roll(_roll(spec, 15, spec.modifier))
         return True
 
-    monkeypatch.setattr(window._roller, "roll_spec", roll_spec)
+    monkeypatch.setattr(window._roller, "prepare_spec", roll_spec)
     menu.picks = [0, 0, 0]  # the Brute; Feint (standard); the Thug's first attack
     window._gm_combat_action("feint")
     assert menu.shown[0] == ["Brute"]
@@ -300,7 +301,7 @@ def test_an_aimed_attack_counts_and_spends_what_aid_and_feint_left(
         window._attack.take_roll(_roll(spec, die, spec.modifier))
         return True
 
-    monkeypatch.setattr(window._roller, "roll_spec", roll_spec)
+    monkeypatch.setattr(window._roller, "prepare_spec", roll_spec)
     aimed = window._attack.aim_own(party, attack, target.ref, target.name)
     assert aimed.done
     said = "; ".join(aimed.said)
@@ -328,6 +329,8 @@ def test_a_hosted_feint_resists_through_the_server(qapp, window: GMWindow) -> No
         data, action, "standard", thug_char, attack_choices(thug_char, data)[0].spec
     )
     act = window._targeted.act_own(party, "feint", "standard", target, check)
+    assert not act.done
+    window._roller._start_roll()
     _wait(qapp, lambda: act.done)
     # The check, then the Brute's resistance off the server: both settled the action.
-    assert len(act.said) >= 2 and act.said[1].startswith("Brute "), act.said
+    assert len(act.said) >= 2 and any(s.startswith("Brute ") for s in act.said), act.said

@@ -361,6 +361,8 @@ class OpposingRule:
     defense: int = 0
     defense_as: str = ""
     spent_by: str = ""
+    consume: bool = True
+    any_action: bool = False
 
 
 @dataclass(frozen=True)

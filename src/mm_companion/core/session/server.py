@@ -25,9 +25,11 @@ receives ``(kind, payload)`` pairs where the payload is always a plain dict;
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from collections.abc import Callable, Iterable
+from dataclasses import replace
 from random import Random
 
 from mm_companion.core import storage
@@ -59,6 +61,7 @@ from .protocol import (
     ERROR_RATE_LIMIT,
     ERROR_SESSION_FULL,
     MAX_GROUP_LINES,
+    MAX_MESSAGE_BYTES,
     MAX_MOD_KEY,
     MAX_MOD_TEXT,
     MAX_SCENE_TEXT,
@@ -101,6 +104,7 @@ from .protocol import (
     SetScenePortrait,
     SetSessionName,
     Welcome,
+    encode,
     sanitize_action_id,
     sanitize_group_line,
     sanitize_mod_id,
@@ -135,11 +139,9 @@ MAX_LABEL_CHARS = 120
 MAX_NOTE_CHARS = 200
 
 #: How many recent rolls a :class:`~.protocol.Welcome` carries. The full history
-#: keeps growing across evenings (that is the point of persistence), and a roll
-#: dict is ~220 bytes against a :data:`~.protocol.MAX_MESSAGE_BYTES` of 256 KiB —
-#: past roughly a thousand rolls an uncapped welcome would fail to encode and
-#: the join would be refused outright. The full log stays on the server; a
-#: joining client gets the recent slice.
+#: keeps growing across evenings. This is an upper count: rich roll specs can be
+#: much larger than plain dice, so _bounded_welcome also limits the encoded bytes.
+#: The full log stays on the server; a joining client gets the recent slice.
 WELCOME_HISTORY_ROLLS = 200
 
 #: How long :meth:`SessionServer.stop` waits for each worker thread.
@@ -185,6 +187,19 @@ EVENT_HOST_STATE = "host_state"
 HOST_STATE_LISTENING = "listening"
 HOST_STATE_RELISTING = "relisting"
 HOST_STATE_UNREACHABLE = "unreachable"
+
+
+def _bounded_welcome(welcome: Welcome) -> Welcome:
+    """Keep the newest history suffix that fits beside the session's other state."""
+    size = len(encode(replace(welcome, history=[])))
+    kept: list[dict] = []
+    for record in reversed(welcome.history):
+        added = len(json.dumps(record, separators=(",", ":")).encode("utf-8")) + bool(kept)
+        if size + added > MAX_MESSAGE_BYTES:
+            break
+        kept.append(record)
+        size += added
+    return replace(welcome, history=list(reversed(kept)))
 
 
 class SessionServer:
@@ -1219,7 +1234,7 @@ class SessionServer:
 
         connection.set_timeout(IO_TIMEOUT)
         try:
-            connection.send(welcome)
+            connection.send(_bounded_welcome(welcome))
         except (OSError, ProtocolError):
             # The peer vanished between claiming the seat and being told about
             # it; give the seat back rather than leaving a dead socket in it.
@@ -1253,6 +1268,7 @@ class SessionServer:
                     )
                 )
             except (OSError, ProtocolError):
+                self._forget(slot.player_id, connection)
                 return None
 
         self._emit(

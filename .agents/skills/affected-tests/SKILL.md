@@ -9,10 +9,10 @@ The full suite is ~4,400 tests and takes about 16 minutes on the developer's
 machine. Most changes can only affect a small part of it. This skill runs that part.
 
 ```bash
-python .claude/skills/affected-tests/affected.py            # select and run
-python .claude/skills/affected-tests/affected.py --dry      # show what would be picked, run nothing
-python .claude/skills/affected-tests/affected.py --full     # run everything and rebuild the records
-python .claude/skills/affected-tests/affected.py -- -x      # anything after -- goes to pytest
+python .agents/skills/affected-tests/affected.py            # select and run
+python .agents/skills/affected-tests/affected.py --dry      # show what would be picked, run nothing
+python .agents/skills/affected-tests/affected.py --full     # run everything and rebuild the records
+python .agents/skills/affected-tests/affected.py -- -x      # anything after -- goes to pytest
 ```
 
 Run it from the repo root with the project's venv active. It needs the dev extras

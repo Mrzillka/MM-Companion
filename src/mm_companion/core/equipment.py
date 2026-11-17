@@ -266,8 +266,8 @@ class EquipmentItem:
 
         return self.build.name
 
-    def to_dict(self) -> dict:
-        """Serialize the *build* state; runtime (:attr:`worn`) is left out on purpose."""
+    def to_dict(self, *, include_runtime: bool = False) -> dict:
+        """Serialize the build, or a live snapshot including worn state and speed."""
 
         data: dict = {
             "catalog_id": self.catalog_id,
@@ -286,23 +286,30 @@ class EquipmentItem:
         # Written only when they say something, so an ordinary item's entry is
         # unchanged and an existing save round-trips byte for byte.
         if self.accessories:
-            data["accessories"] = [a.to_dict() for a in self.accessories]
+            data["accessories"] = [
+                a.to_dict(include_runtime=include_runtime) for a in self.accessories
+            ]
         if self.attaches_to:
             data["attaches_to"] = list(self.attaches_to)
         if self.attachment:
             data["attachment"] = [m.to_dict() for m in self.attachment]
+        if include_runtime:
+            data.update(worn=self.worn, current_speed=self.current_speed)
         return data
 
     @classmethod
     def from_dict(cls, raw: dict) -> EquipmentItem:
         override = raw.get("ep_override")
         platform = raw.get("platform")
+        speed = raw.get("current_speed")
         return cls(
             catalog_id=raw.get("catalog_id", ""),
             build=Power.from_dict(raw.get("build", {})),
             category=raw.get("category", ""),
             platform=PlatformSpec.from_dict(platform) if isinstance(platform, dict) else None,
             rank=max(1, int(raw.get("rank", 1) or 1)),
+            worn=raw.get("worn") is not False,
+            current_speed=speed if isinstance(speed, int) and not isinstance(speed, bool) else None,
             stacks=bool(raw.get("stacks", False)),
             ep_override=None if override is None else int(override),
             accessories=[cls.from_dict(a) for a in raw.get("accessories", ())],

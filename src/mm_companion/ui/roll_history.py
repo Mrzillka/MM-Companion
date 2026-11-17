@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
 from mm_companion.core.data_loader import load_game_data
 from mm_companion.core.rules import (
     KIND_IMPRESS,
+    KIND_POWER_SAVE,
     OWN_ATTACK_HINT,
     OWN_ATTACK_HINT_OTHER,
     RollSpec,
@@ -52,12 +53,19 @@ from mm_companion.core.rules import (
     own_attack_save,
     resistance_outcome,
     spec_parts,
+    targetable_attack,
 )
 from mm_companion.core.session.model import KIND_MOD, KIND_NOTE, KIND_REQUEST, KIND_ROLL
 from mm_companion.ui import theme
 from mm_companion.ui.session_bridge import SessionBridge
 from mm_companion.ui.toasts import announce
-from mm_companion.ui.widgets import WrappingButton, discard_widget, muted_style, tinted_style
+from mm_companion.ui.widgets import (
+    HelpButton,
+    WrappingButton,
+    discard_widget,
+    muted_style,
+    tinted_style,
+)
 
 #: Marks a roll only the GM can see. Shown on the GM's own history; a player's
 #: copy never receives a hidden roll at all.
@@ -219,16 +227,15 @@ def natural_kind(
     """Whether a roll came up a natural 20 or 1: :data:`NATURAL_TWENTY`,
     :data:`NATURAL_ONE`, or ``None``.
 
-    A graded roll says so itself (``critical`` is worked out from the face that came
-    up, so a minion's 20 that adds nothing is not one). An ungraded one goes by its
-    die — unless it was a routine 10 or a lucky re-roll, whose die may have been
-    lifted onto 20 and is not to be celebrated as a natural one.
+    A face is worth showing even when it adds no degree, as with a minion's 20.
+    Routine checks and lifted re-rolls are excluded; an actual critical on a
+    re-roll still identifies a genuine natural face.
     """
     if routine:
         return None
     if critical:
         return NATURAL_TWENTY if die == 20 else NATURAL_ONE
-    if degree is not None or lifted:
+    if lifted:
         return None
     if die == 20:
         return NATURAL_TWENTY
@@ -445,6 +452,30 @@ class QuickRollStar(QPushButton):
         )
 
 
+def concise_outcome(outcome: str) -> tuple[str, str]:
+    """Keep a conditional caveat off the result line, available behind a warning."""
+    match = re.fullmatch(r"(.*?) \((unless\b.*)\)", outcome, re.IGNORECASE)
+    return (match[1], match[2]) if match else (outcome, "")
+
+
+def outcome_widget(outcome: str, *, failed: bool) -> QWidget:
+    text, warning = concise_outcome(outcome)
+    line = QLabel(f"{escape_rich_text(text)}!")
+    line.setWordWrap(True)
+    line.setStyleSheet(tinted_style("tint.worse" if failed else "tint.warning", bold=True))
+    if not warning:
+        return line
+    holder = QWidget()
+    row = QHBoxLayout(holder)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(int(theme.metric("space.xxs")))
+    row.addWidget(line, 1)
+    help_button = HelpButton(warning, holder)
+    help_button.setText("⚠")
+    row.addWidget(help_button)
+    return holder
+
+
 def chain_widgets(
     spec: object,
     *,
@@ -511,12 +542,7 @@ def chain_widgets(
         )
     outcome = resistance_outcome(resolved, degree)
     if outcome:
-        line = QLabel(f"{escape_rich_text(outcome)}!")
-        line.setWordWrap(True)
-        # A failed save is harm; a made one that still leaves a Hit is a caveat.
-        tint = "tint.worse" if outcome_is_failure(degree) else "tint.warning"
-        line.setStyleSheet(tinted_style(tint, bold=True))
-        widgets.append(line)
+        widgets.append(outcome_widget(outcome, failed=outcome_is_failure(degree)))
     return widgets
 
 
@@ -683,6 +709,21 @@ def roll_working(
     return f"<span style='color:{muted}'>{working} =</span> {total}"
 
 
+def result_words(roll: dict, degree: int) -> str:
+    """Name the actual decision, rather than making players decode a checkmark."""
+    spec = RollSpec.from_dict(roll.get("spec"))
+    if spec is not None:
+        if targetable_attack(spec):
+            return "Hit" if degree > 0 else "Miss"
+        if (
+            spec.ladder is not None
+            or spec.kind == KIND_POWER_SAVE
+            or spec.label.startswith("Resist ")
+        ):
+            return "Resisted" if degree > 0 else "Failed resistance"
+    return "Success" if degree > 0 else "Failure"
+
+
 def roll_headline(roll: dict) -> str:
     """A roll's number line, as rich text: the die, the net bonus or penalty, the total,
     and how it went (``19 + 4 = 23 vs DC 15 · Success``).
@@ -706,8 +747,11 @@ def roll_headline(roll: dict) -> str:
     if degree is not None:
         colour = theme.color("tint.better" if int(degree) > 0 else "tint.worse")
         words = degree_html(int(degree), bool(roll.get("critical")), die, lead="· ")
+        words = words.replace(
+            "Success" if int(degree) > 0 else "Failure", result_words(roll, int(degree)), 1
+        )
         headline += f" <span style='color:{colour}'>{words}</span>"
-    elif (natural := roll_natural(roll)) is not None:
+    if not roll.get("critical") and (natural := roll_natural(roll)) is not None:
         # Ungraded, nothing else says it: the badge does.
         headline += f" <span style='white-space:nowrap'>· {natural_badge_html(natural)}</span>"
     return headline
@@ -1381,23 +1425,27 @@ def _table_cell(roll: dict, row: str) -> str:
     if row and label.startswith(f"{row}: "):
         label = label[len(row) + 2 :]
     die = int(roll.get("die", 0))
-    total = die + int(roll.get("bonus", 0)) - int(roll.get("penalty", 0))
-    text = f"{escape_rich_text(label)} <b>{total}</b>"
+    modifier = int(roll.get("bonus", 0)) - int(roll.get("penalty", 0))
+    working = roll_working(
+        die, modifier, routine=bool(roll.get("routine")), other_die=_other_die(roll)
+    )
+    text = f"{escape_rich_text(label)} <b>{working}</b>"
     dc = roll.get("dc")
     if dc is not None:
         text += f" vs {int(dc)}"
     degree = roll.get("degree")
     if degree is not None:
         degree = int(degree)
-        mark = "✓" if degree > 0 else "✗" * max(1, min(3, abs(degree)))
+        mark = result_words(roll, degree)
+        if abs(degree) > 1:
+            mark += f" ({abs(degree)} degrees)"
         colour = theme.color("tint.better" if degree > 0 else "tint.worse")
         text += f" <span style='color:{colour}'>{mark}</span>"
     muted = theme.color("text.muted.rich")
     if roll.get("routine"):
         text += f" <span style='color:{muted}'>(routine)</span>"
-    elif die == 1 or (die == 20 and not roll.get("minion")):
-        # A minion's 20 is no added success (PDF p25), so it is not called out.
-        text += f" <span style='color:{muted}'>(nat {die})</span>"
+    elif (natural := roll_natural(roll)) is not None:
+        text += f" {natural_badge_html(natural)}"
     return text
 
 
@@ -1679,8 +1727,11 @@ class GroupTableCard(HistoryCard):
             degree = None if degree is None else int(degree)
             outcome = resistance_outcome(spec, degree) if spec is not None else ""
             if outcome:
+                outcome, warning = concise_outcome(outcome)
                 tint = theme.color("tint.worse" if outcome_is_failure(degree) else "tint.warning")
                 text += f" → <span style='color:{tint}'><b>{escape_rich_text(outcome)}</b></span>"
+                if warning:
+                    text += " ⚠"
             self._add_line(text, self._undo_of(rolls))
             self._lines[-1].setToolTip(f"<qt>{self._row_hover(name, rolls)}</qt>")
         refresh_card_tooltip(self)
@@ -1771,6 +1822,7 @@ class ActionCard(HistoryCard):
         info = QVBoxLayout()
         tighten_card(layout, info)
         self._text = _rich(text)
+        self._info = info
         info.addWidget(self._text)
         self.button = QPushButton(button)
         self.button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1798,6 +1850,10 @@ class ActionCard(HistoryCard):
 
     def text(self) -> str:
         return self._text.text()
+
+    def add_controls(self, controls: QWidget) -> None:
+        """Put inline setup above this action's history button."""
+        self._info.insertWidget(1, controls)
 
     def set_text(self, text: str) -> None:
         self._text.setText(text)

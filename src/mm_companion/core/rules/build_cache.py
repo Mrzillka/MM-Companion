@@ -108,7 +108,7 @@ def build_scoped(func: Callable[..., T]) -> Callable[..., T]:
         memos = getattr(_state, "memos", None)
         if memos is None or args or kwargs:
             return func(char, game_data, *args, **kwargs)
-        key = (func.__qualname__, id(char), id(game_data))
+        key = (func, id(char), id(game_data))
         hit = memos.get(key)
         if hit is not None:
             return hit[2]

@@ -43,7 +43,7 @@ from ..data_loader.game_data import (
     CombatAction,
 )
 from .derived import defense_class_in_play
-from .rolls import RollSpec, add_part
+from .rolls import LADDER_DAMAGE, RollSpec, add_part
 
 __all__ = [
     "LINE_KEY_SEPARATOR",
@@ -121,7 +121,7 @@ def has_attack_check(spec: RollSpec, game_data: GameData) -> bool:
 def _ranked_saves(spec: RollSpec) -> list[RollSpec]:
     """The saves *spec* provokes whose rank is known (a DC to move, a rank to read)."""
 
-    return [f for f in spec.follow_ups() if f.dc is not None and f.effect_rank > 0]
+    return [f for f in spec.follow_ups() if f.dc is not None and f.effect_rank is not None]
 
 
 def _fixed_shifts(picks: Iterable[Pick], game_data: GameData) -> dict[str, list[tuple[str, int]]]:
@@ -315,11 +315,11 @@ def _relabel_save(label: str, old: int, new: int) -> str:
 
 
 def _shift_save(save: RollSpec, shift: int) -> RollSpec:
-    if save.dc is None or save.effect_rank <= 0:
+    if save.dc is None or save.effect_rank is None:
         return save
     dc = save.dc + shift
     ladder = save.ladder
-    if ladder is not None and ladder.rank:
+    if ladder is not None and (ladder.rank or ladder.kind == LADDER_DAMAGE):
         ladder = replace(ladder, rank=max(0, ladder.rank + shift))
     return replace(
         save,

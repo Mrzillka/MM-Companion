@@ -20,7 +20,8 @@ from dataclasses import dataclass, replace
 from ..character import Character
 from ..data_loader import GameData
 from .equipment import item_effective_build
-from .rolls import KIND_POWER_SAVE, RollSpec, power_rolls
+from .rolls import KIND_POWER_SAVE, LADDER_DAMAGE, RollSpec, power_rolls, shift_save_rank
+from .validation import leaf_powers
 
 __all__ = [
     "TeamEntry",
@@ -51,7 +52,17 @@ class TeamOption:
     @property
     def rank(self) -> int:
         """The effect's rank (0 when the save does not say)."""
+        if self.save.effect_rank is not None:
+            return self.save.effect_rank
         return self.save.ladder.rank if self.save.ladder is not None else 0
+
+    @property
+    def rank_known(self) -> bool:
+        """Whether rank zero is a real rank rather than an unmeasured save."""
+        ladder = self.save.ladder
+        return self.save.effect_rank is not None or (
+            ladder is not None and (ladder.kind == LADDER_DAMAGE or ladder.rank != 0)
+        )
 
 
 def _options_from(prefix: str, name: str, specs: list[RollSpec]) -> list[TeamOption]:
@@ -74,7 +85,7 @@ def team_attack_options(char: Character, game_data: GameData) -> list[TeamOption
     """Every attack *char* could bring to a team attack: its powers', then its gear's."""
 
     options: list[TeamOption] = []
-    for power in char.powers:
+    for power in leaf_powers(char.powers):
         options += _options_from("power", power.name, power_rolls(power, char, game_data))
     for item in char.equipment:
         build = item_effective_build(item, game_data)
@@ -98,7 +109,7 @@ def team_incompatibility(options: list[TeamOption], game_data: GameData) -> str:
         other = save.ladder.kind if save.ladder is not None else ""
         if save.trait_key != first.trait_key or other != kind:
             return "The attacks must have the same effect and the same resistance."
-    ranks = [o.rank for o in options if o.rank]
+    ranks = [o.rank for o in options if o.rank_known]
     spread = game_data.system.team_attack.rank_spread
     if ranks and max(ranks) - min(ranks) > spread:
         return f"The attacks' ranks must be within {spread} of each other."
@@ -173,17 +184,13 @@ def team_save_spec(save: RollSpec, bonus: int, *, title: str = "") -> RollSpec:
 
     if not bonus:
         return replace(save, title=title or save.title)
-    ladder = save.ladder
-    if ladder is not None and ladder.rank:
-        ladder = replace(ladder, rank=ladder.rank + bonus)
-    dc = None if save.dc is None else save.dc + bonus
+    shifted = shift_save_rank(save, bonus)
+    dc = shifted.dc
     label = save.label
     if dc is not None and save.dc is not None:
         label = label.replace(str(save.dc), str(dc), 1)
     return replace(
-        save,
-        dc=dc,
-        ladder=ladder,
+        shifted,
         label=f"{label} (team attack +{bonus})",
         title=title or save.title,
     )

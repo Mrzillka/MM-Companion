@@ -46,6 +46,7 @@ from mm_companion.core.rules import (
     self_action,
     self_action_changes,
     self_action_note,
+    self_action_options,
     split_line_key,
     team_join_spec,
 )
@@ -112,10 +113,20 @@ class CombatRunner:
         #: The team attack call joined (its spec), while :data:`TEAM_LINE` waits on the
         #: lane for the attack that is its entry.
         self.team_call: RollSpec | None = None
+        self._reaction_actors: dict[tuple[str, str], CombatActor] = {}
         panel.set_attack_choices(self.attack_choices)
         panel.set_line_shift(self.shift)
         panel.set_line_rearm(self.rearm)
         panel.linesRolled.connect(self.land_lasting)
+        panel.specRolled.connect(self._land_reaction)
+
+    def _land_reaction(self, spec: object) -> None:
+        if not isinstance(spec, RollSpec) or not spec.reaction:
+            return
+        actor = self._reaction_actors.pop((spec.reaction, spec.actor), None)
+        action = self_action(self._data, spec.reaction)
+        if actor is not None and action is not None:
+            actor.land(reaction_changes(action))
 
     # -- who acts ------------------------------------------------------------
 
@@ -351,12 +362,18 @@ class CombatRunner:
         panel = self._panel
         option = None
         if action.options:
-            index = choose_from_menu(
-                self._parent, [o.name for o in action.options], panel.menu_point()
-            )
-            if index is None:
+            options = self_action_options(self._data, action, actor.character)
+            if not options:
                 return None
-            option = action.options[index]
+            if len(options) == 1:
+                option = options[0]
+            else:
+                index = choose_from_menu(
+                    self._parent, [o.name for o in options], panel.menu_point()
+                )
+                if index is None:
+                    return None
+                option = options[index]
         option_id = option.id if option is not None else ""
         title = option.name if option is not None else action.name
         effect = action.effect_for(option_id)
@@ -397,7 +414,7 @@ class CombatRunner:
         spec = reaction_spec(self._data, action, actor.character, attack)
         if spec is None:
             return False
-        actor.land(reaction_changes(action))
+        self._reaction_actors[(action.id, actor.name)] = actor
         self._throw(spec, load=True)
         return True
 

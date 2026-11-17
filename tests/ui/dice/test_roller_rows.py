@@ -78,6 +78,20 @@ def test_bonus_and_penalty_rows_make_the_modifier(qapp) -> None:
     assert (panel._bonus_spin.value(), panel._penalty_spin.value()) == (0, 0)
 
 
+def test_a_roll_spends_equal_bonus_and_penalty(qapp) -> None:
+    panel = _panel(qapp)
+    panel.set_modifier_split(True)
+    panel._bonus_spin.setValue(5)
+    panel._penalty_spin.setValue(5)
+
+    panel.take_ten()
+    panel._finish_roll()
+
+    assert (panel._bonus_spin.value(), panel._penalty_spin.value()) == (0, 0)
+    panel._bonus_spin.setValue(2)
+    assert panel.adjustment() == 2
+
+
 def test_narrow_the_outer_steps_go(qapp) -> None:
     panel = _panel(qapp)
     controls = panel._controls

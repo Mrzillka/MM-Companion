@@ -151,7 +151,7 @@ def test_a_slam_replaces_a_charge_and_loads_the_own_save(qapp, data, menu, insta
     # Once the die settles, the slammer's own save is on the chip, filled in.
     own = panel.current_spec()
     assert own.label.startswith("Your own impact") and own.modifier == 4
-    assert own.dc == roll["spec"].follow_up.dc - 9 + 4
+    assert own.dc == roll["spec"].follow_up.dc - 9 + 5
 
 
 def test_aim_rolls_two_dice_and_keeps_the_higher(qapp, data, menu, monkeypatch) -> None:
@@ -276,3 +276,16 @@ def test_recover_with_nothing_to_shed_just_takes_the_bonus(qapp, data, menu) -> 
     sheet.dice.start_self_action("recover")
     assert _Menu.shown == []  # nothing to choose between
     assert [c.condition_id for c in hero.conditions] == ["recovering"]
+
+
+def test_instant_up_stands_without_a_check_or_hindered(qapp, data, menu):
+    from mm_companion.core.character import AdvantageSelection
+
+    hero = _hero(data)
+    hero.advantages.append(AdvantageSelection("Instant Up"))
+    apply_condition(hero, "prone", data)
+    sheet = CharacterSheet(data, hero)
+    sheet.dice.start_self_action("stand")
+    assert hero.conditions == []
+    assert sheet.dice.panel.current_spec() is None
+    assert _Menu.shown == []

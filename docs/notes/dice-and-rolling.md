@@ -1,5 +1,10 @@
 # The dice roller
 
+Queued condition checks are rebuilt by `core.rules.refresh_condition_check` just
+before each roll. Earlier End turn checks can remove penalties or supersede another
+condition; keeping their precomputed modifiers would roll against stale numbers.
+A check whose condition has gone is skipped.
+
 Matters when touching the roller, the roll history, compact mode or any stat block that rolls.
 
 Working notes for MM-Companion, split out of [AGENTS.md](../../AGENTS.md).
@@ -1400,3 +1405,7 @@ the **server** rolls it (`RollRequest.reroll`, protocol v12) and stamps `reroll`
 record itself — a client's label is not evidence, and every seat should see which dice
 were lucky. `reroll_label` adds "(reroll)" wherever a roll is named. It spends nothing —
 no Hero Point, no Luck rank — which is the player's to mark.
+
+Save-rank shifts use `rolls.shift_save_rank`: critical hits and team bonuses move
+the DC and measured effect/Damage ranks together. Known Damage rank zero must
+move too; non-Damage ladders whose zero means unmeasured keep that convention.

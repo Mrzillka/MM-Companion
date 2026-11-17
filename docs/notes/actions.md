@@ -827,7 +827,10 @@ each record's `bonus` / `penalty` (`attack_check`, `effect_rank`, `defense` — 
   are `maneuver_values`: the attack line's modifier (only when it *is* an attack check —
   its `marks` carry `trait_keys.attack_check`; an effect check takes no attack
   maneuver), the **lowest** `effect_rank` of the saves it provokes (a Linked attack
-  moves all of them), and the actor's Defense in play. A save whose rank is unknown
+  moves all of them), and the actor's Defense in play. This Linked allocation is
+  the app's interpretation: a shared attack check does not explicitly settle how
+  to allocate the tradeoff among unequal effects. A known rank zero participates
+  in the caps; `None` means unknown. A save whose rank is unknown
   (Mind Reading's opposed one, no DC) offers no effect rank.
 - **Combined**: `maneuver_limit(…, others)` adds the other lines' shifts before reading
   the caps, so two that raise the attack check share the room to double it, and two
@@ -970,3 +973,15 @@ These are in [the debts](debts.md):
   and Aim's lapse untracked.
 
 Counting earlier Impress attempts automatically was dropped: the GM sets the slider.
+
+Block's reaction is spent on a settled roll, not when its check is merely loaded.
+The panel's local `specRolled` cue preserves the prepared spec through a hosted
+result and skips abandonment/rerolls. The runner remembers the actor that loaded
+the reaction. Its manually entered DC is the attacker's result +1 (the block must
+beat it). Slam reads condition-adjusted speed and rounds halved self-damage up.
+
+Self-action options may declare `requiresAdvantage` (a data advantage id) and
+`replacesOptions`. `self_action_options` evaluates bought and active granted
+advantages; an available replacement hides the ordinary alternatives. A sole
+option runs directly. Stand's Instant Up path uses this seam to remove Prone
+without loading a check or applying Hindered.

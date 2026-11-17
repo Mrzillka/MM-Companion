@@ -361,6 +361,26 @@ def test_the_welcome_history_is_capped_to_the_recent_slice(
     assert [roll["seq"] for roll in client.history] == [4, 5, 6, 7, 8]
 
 
+def test_large_roll_records_do_not_prevent_a_later_player_joining(running_server, connect):
+    state = new_session("Long Campaign")
+    for _ in range(server_mod.WELCOME_HISTORY_ROLLS):
+        state.record_roll(
+            player_id="p",
+            player_name="Old Hand",
+            die=12,
+            spec={"label": "Blast", "outcomes": ["x" * 200] * 12},
+        )
+    original_count = len(state.rolls)
+    srv = running_server(state=state)
+
+    client, _ = connect(srv, "Late Joiner")
+
+    assert client.connected
+    assert 0 < len(client.history) < original_count
+    assert client.history[-1]["seq"] == state.rolls[-1].seq
+    assert len(state.rolls) == original_count
+
+
 def test_a_protocol_mismatch_is_refused(running_server) -> None:
     srv = running_server()
     connection = raw_connect(srv)
@@ -2072,3 +2092,95 @@ def test_a_lifted_reroll_is_never_a_critical(running_server) -> None:
     )
     assert record.critical is False and record.reroll is True
     assert RollRecord.from_dict(record.to_dict()).reroll is True
+
+
+def test_client_context_exit_stops_reconnect(running_server, monkeypatch):
+    monkeypatch.setattr(client_mod, "RECONNECT_DELAYS", (30.0,))
+    srv = running_server()
+    host, port = srv.address
+    client = SessionClient(host, port, token=srv.state.host_token, display_name="Volt")
+    try:
+        with client:
+            wait_for(lambda: client.player_id in srv.connected_player_ids(), message="seated")
+            srv._connections[client.player_id].close()
+            wait_for(
+                lambda: client.connection_state == client_mod.STATE_RECONNECTING,
+                message="waiting to reconnect",
+            )
+        assert client.connection_state == client_mod.STATE_OFFLINE
+        assert client._wake.is_set()
+    finally:
+        client.close()
+
+
+def test_close_during_redial_does_not_reopen_client(running_server, connect, brisk, monkeypatch):
+    brisk()
+    srv = running_server()
+    client, events = connect(srv, "Volt")
+    started = threading.Event()
+    release = threading.Event()
+    original_connect = client._transport.connect
+
+    def delayed_connect(*args, **kwargs):
+        started.set()
+        assert release.wait(TIMEOUT)
+        return original_connect(*args, **kwargs)
+
+    monkeypatch.setattr(client._transport, "connect", delayed_connect)
+    srv._connections[client.player_id].close()
+    assert started.wait(TIMEOUT)
+    reader = client._reader
+    try:
+        client.close()
+    finally:
+        release.set()
+    reader.join(timeout=TIMEOUT)
+    try:
+        assert not reader.is_alive()
+        assert client.connection_state == client_mod.STATE_OFFLINE
+        assert not client.connected
+        assert events.kinds().count(EVENT_CONNECTED) == 1
+    finally:
+        client.close()
+
+
+def test_close_during_first_dial_does_not_publish_online(running_server, monkeypatch):
+    srv = running_server()
+    host, port = srv.address
+    events = Events()
+    client = SessionClient(
+        host, port, token=srv.state.host_token, display_name="Volt", on_event=events
+    )
+    started = threading.Event()
+    release = threading.Event()
+    errors = []
+    original_connect = client._transport.connect
+
+    def delayed_connect(*args, **kwargs):
+        started.set()
+        assert release.wait(TIMEOUT)
+        return original_connect(*args, **kwargs)
+
+    def dial():
+        try:
+            client.connect()
+        except SessionClientError as exc:
+            errors.append(exc)
+
+    monkeypatch.setattr(client._transport, "connect", delayed_connect)
+    worker = threading.Thread(target=dial, daemon=True)
+    worker.start()
+    assert started.wait(TIMEOUT)
+    client.close()
+    with pytest.raises(SessionClientError, match="already connected"):
+        client.connect()
+    release.set()
+    worker.join(timeout=TIMEOUT)
+    try:
+        assert not worker.is_alive()
+        assert len(errors) == 1
+        assert client.connection_state == client_mod.STATE_OFFLINE
+        assert not client.connected
+        assert EVENT_CONNECTED not in events.kinds()
+    finally:
+        client.close()

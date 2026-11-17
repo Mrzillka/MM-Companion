@@ -132,9 +132,10 @@ class GMNpcConditionsMixin:
         rolled = replace(spec, label=f"{who}: {spec.label}", actor=who)
         # Set first, as _roll_as does: a hosted server can answer before roll_spec
         # returns, and a test's die does not tumble at all.
+        previous = self._recovering
         self._recovering = _Recovering(name, rolled)
         if not self._roller.roll_spec(rolled):
-            self._recovering = None
+            self._recovering = previous
 
     def _npc_display_name(self, name: str) -> str:
         """What an NPC is called on the board — numbered if it shares a name there."""

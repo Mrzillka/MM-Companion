@@ -541,6 +541,8 @@ class DiceRollerPanel(
     #: miss. Never raised for a reroll (that throws a roll already paid for) or for a roll
     #: the session never answered.
     linesRolled = Signal(object)
+    #: The locally prepared spec produced a result; never for an abandoned roll or reroll.
+    specRolled = Signal(object)
 
     def __init__(self, parent: QWidget | None = None, *, hidden_option: bool = False) -> None:
         super().__init__(parent)
@@ -1291,6 +1293,9 @@ class DiceRollerPanel(
         will want to throw again as it was.
         """
         self._modifier_spin.setValue(0)
+        # Equal Bonus and Penalty already have a zero net modifier, so setValue
+        # emits no signal to spread that reset into the two visible fields.
+        self._spread_modifier(0)
         rolled, self._rolled_lines = self._rolled_lines, ()
         for key, _value in rolled:
             self._lane.remove(key)
@@ -2315,10 +2320,13 @@ class DiceRollerPanel(
         Those inputs moving is the roll's doing, not the player's, so for as long as
         this runs they do not trade the result for the preview (:meth:`_inputs_edited`).
         """
+        settled_spec = None if self._rerolling else self._rolled_spec()
         self._rerolling = False
         self._flight = None
         self._winding_down = True
         try:
+            if settled_spec is not None:
+                self.specRolled.emit(settled_spec)
             self._settle_spec()
             self._spend_extras()
             self._spend_routine()

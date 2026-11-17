@@ -16,8 +16,9 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.core import library, npc_groups, storage
-from mm_companion.core.character import Character
+from mm_companion.core.character import Character, apply_runtime, capture_runtime
 from mm_companion.core.data_loader import load_game_data
+from mm_companion.core.diagnostics import log_exception
 from mm_companion.core.npc import quick_npc
 from mm_companion.core.rules import (
     RollSpec,
@@ -39,6 +40,7 @@ from mm_companion.ui.blocks.bus import (
     NOTE_REQUESTED,
     ROLL_REQUESTED,
 )
+from mm_companion.ui.character_files import read_character
 from mm_companion.ui.gm.model import (
     COLLAPSE_ALL,
     EXPAND_ALL,
@@ -125,8 +127,24 @@ class GMNpcBoardMixin:
             if summary.path is None:
                 continue
             name = summary.path.name
-            character = library.load_character(summary.path)
+            try:
+                character = library.load_character(summary.path)
+            except (OSError, ValueError):
+                log_exception(f"Refreshing NPC {summary.path}")
+                self._show_notice(
+                    f"Could not read {summary.path.name}; see logs/errors.log.",
+                    theme.color("tint.worse"),
+                )
+                continue
             initiative = previous[name].initiative if name in previous else None
+            open_window = self._window_for(summary.path)
+            live = (
+                open_window.sheet.character
+                if open_window is not None
+                else (previous[name].character if name in previous else None)
+            )
+            if live is not None:
+                apply_runtime(character, capture_runtime(live))
             self._npc_state[name] = _NpcEntry(
                 path=Path(summary.path),
                 summary=summary,
@@ -407,7 +425,10 @@ class GMNpcBoardMixin:
         if existing is not None:
             resurface(existing)
             return
-        character = library.load_character(path)
+        character = read_character(self, path)
+        if character is None:
+            return
+        apply_runtime(character, capture_runtime(entry.character))
         # A spare sheet is handed the creature in a moment; building one fresh is
         # most of a second, behind a loading screen over this window (ui/loading).
         with loading.loading(self, opening_text(character)):

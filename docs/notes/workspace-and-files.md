@@ -4,6 +4,13 @@ Matters when touching startup, settings, saving, loading or the character librar
 
 Working notes for MM-Companion, split out of [AGENTS.md](../../AGENTS.md).
 
+Whole-file writes use `core.files.atomic_write_text`: a unique temporary file in
+the destination directory, flushed and closed before `os.replace`. A failed write
+keeps the previous character/settings/session/note file intact. Character image
+references change only after the character save succeeds; failed sheet saves keep
+the dirty state, log the error, and show a warning. Character-file open failures
+share `ui.character_files.read_character`, so a bad file leaves the window usable.
+
 - On launch, `__main__.main()` shows a splash with a loading bar — up before the
   interface is imported, which is most of a start (see [the UI utilities
   notes](ui-utilities.md)) — and calls
@@ -174,3 +181,23 @@ Either file is rotated to `<name>.1` at startup once it passes `MAX_LOG_BYTES` (
 nowhere to write things down — and is Qt-free, so a headless entry point can call it
 too. The first thing to ask for when a user reports a crash or a blank window is these
 two files.
+
+Updates and Settings/mod restarts share `app_restart.close_windows`: build editors
+are asked before their sheets, independent sheets before GM Mode, and owned
+windows are left to their owners. An update Cancel ignores even a download success
+already queued by its worker. Cancellation-file failures retain installer polling;
+a bookkeeping-note write failure logs but still hands over once Setup is ready.
+
+Restart suppression lasts only while an update can still hand over. A failure or
+withdrawal restores the earlier setting; `defer_restart` invalidates older queued
+requests and drops ones made during suppression, so none reappear on restoration.
+
+Startup catches launcher/workspace setup failures, closes the splash, logs the
+exception and presents a readable error before returning failure. Trait rank maps
+are validated by `Character.from_dict`, before a malformed file can enter the
+library or a sheet; incoming live snapshots use that same check.
+
+Restart keeps automatic last-window quitting disabled while closing windows. It
+checks the replacement process result before quitting; a failed launch reopens a
+launcher and reports the failure. Queued duplicate restart requests are invalidated
+while this happens. A frozen executable restarts directly, without Python's `-m`.

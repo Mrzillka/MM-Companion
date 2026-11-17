@@ -24,6 +24,7 @@ from mm_companion.core.rules import (
     self_action,
     self_action_changes,
     self_action_note,
+    self_action_options,
     speed_rank,
     split_line_key,
 )
@@ -159,8 +160,8 @@ def test_a_slam_raises_the_damage_and_loads_the_slammers_own_save(data) -> None:
     assert spec.follow_up.ladder.rank == 9
     assert spec.modifier == 4  # still a Charge
     own = spec.then
-    # Resistance halves the rank before the save: 9 // 2 = 4.
-    assert own.dc == plain.follow_up.dc - 8 + 4
+    # Resistance halves the rank, rounding up: rank 9 becomes rank 5.
+    assert own.dc == plain.follow_up.dc - 8 + 5
     assert own.modifier == 4  # this sheet's Toughness, filled in
     assert not own.rolled_by_target and own.trait_key == "TOUGHNESS"
     assert "then" not in spec.to_dict()
@@ -179,6 +180,22 @@ def test_a_line_does_not_fit_an_attack_with_no_attack_check(data) -> None:
     assert line_fit(data, "aim", perception)
     assert apply_actions(perception, [("aim", None)], data) == perception
     assert line_fit(data, "aim", None) == ""
+
+
+def test_a_slam_can_start_from_a_known_zero_damage_rank(data):
+    from dataclasses import replace
+
+    hero = _hero(data)
+    attack = _attack(hero, data)
+    zero = replace(
+        attack.follow_up, effect_rank=0, dc=10, ladder=replace(attack.follow_up.ladder, rank=0)
+    )
+    attack = replace(attack, follow_up=zero)
+
+    assert line_fit(data, "charge/slam", attack) == ""
+    spec = apply_actions(attack, [("charge/slam", None)], data, hero)
+    assert spec.follow_up.effect_rank > 0
+    assert spec.follow_up.ladder.rank == spec.follow_up.effect_rank
 
 
 def test_a_slam_needs_a_damage_attack(data) -> None:
@@ -306,3 +323,31 @@ def test_one_die_leaves_no_other_and_routine_rolls_none() -> None:
 def test_twice_crosses_the_wire() -> None:
     assert RollRequest.from_payload({"twice": True}).twice
     assert RollRecord.from_dict({"die": 12, "other_die": "junk"}).other_die == 0
+
+
+def test_slam_uses_speed_after_condition_penalties(data):
+    hero = _hero(data, rank=1)
+    hero.powers.append(Power(name="Fast", effects=[PowerEffectInstance("speed", rank=6)]))
+    before = speed_rank(hero, data)
+    assert before >= 6
+    apply_condition(hero, "hindered", data)
+    assert speed_rank(hero, data) == before - 1
+    slammed = apply_actions(_attack(hero, data), [("charge/slam", None)], data, hero)
+    assert slammed.follow_up.effect_rank == before - 1
+
+
+def test_stand_options_follow_a_granted_instant_up_advantage(data):
+    hero = _hero(data)
+    power = Power(
+        name="Agile",
+        effects=[
+            PowerEffectInstance(
+                "enhanced_trait", rank=1, config={"traits": [{"trait": "Instant Up", "ranks": 1}]}
+            )
+        ],
+    )
+    hero.powers.append(power)
+    stand = self_action(data, "stand")
+    assert [o.id for o in self_action_options(data, stand, hero)] == ["instant"]
+    power.activated = False
+    assert [o.id for o in self_action_options(data, stand, hero)] == ["acrobatics", "speed", "slow"]

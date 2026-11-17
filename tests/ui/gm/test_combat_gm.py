@@ -383,3 +383,33 @@ def test_a_blocking_npc_with_no_attack_is_greyed_for_block(window) -> None:
     assert window._actor_reason(party, block) == ""
     apply_condition(plain, "blocking", data)
     assert window._actor_reason(party, block) == NO_ATTACKS_MARK
+
+
+def test_gm_block_counts_only_the_npcs_settled_checks(window, menu, instant_die):
+    key = _npc(window, "Thug")
+    window._gm_combat_action("block")
+    window._gm_combat_action("block")
+    character = window._npc_state[key].character
+    blocking = next(c for c in character.conditions if c.condition_id == "blocking")
+    assert blocking.count == 1
+    first = window._roller.current_spec()
+    assert first.actor == "Thug"
+    assert window._roller._start_roll()
+    assert blocking.count == 2
+    window._roller.reroll()
+    assert blocking.count == 2
+    window._gm_combat_action("block")
+    assert window._roller.current_spec().modifier == first.modifier - 2
+
+
+def test_gm_stand_uses_the_npcs_instant_up(window, menu):
+    from mm_companion.core.character import AdvantageSelection
+
+    key = _npc(window, "Thug")
+    character = window._npc_state[key].character
+    character.advantages.append(AdvantageSelection("Instant Up"))
+    apply_condition(character, "prone", window._data)
+    window._gm_combat_action("stand")
+    assert not any(c.condition_id in ("prone", "hindered") for c in character.conditions)
+    assert window._roller.current_spec() is None
+    assert menu.shown == []

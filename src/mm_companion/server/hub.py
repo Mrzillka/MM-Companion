@@ -167,6 +167,7 @@ class SessionHub:
         self._transport_factory = transport_factory or self._relay_transport
         self._entries: dict[str, _Entry] = {}
         self._lock = threading.RLock()
+        self._creating = 0
         self._running = False
         self._threads: list[threading.Thread] = []
         self._control_listener = None
@@ -280,15 +281,25 @@ class SessionHub:
         game here; what stops that being abused is the ceiling below and the
         per-connection limit its caller applies, not a password.
         """
+        state = new_session((name or "Session").strip()[:MAX_SESSION_NAME] or "Session")
         with self._lock:
-            if len(self._entries) >= self.max_sessions:
+            if len(self._entries) + len(self._unhosted) + self._creating >= self.max_sessions:
                 raise HubFullError(
                     f"this server is holding its limit of {self.max_sessions} sessions; "
                     "try again later, or point the app at another server"
                 )
-        state = new_session((name or "Session").strip()[:MAX_SESSION_NAME] or "Session")
-        store.save_session(state, self.workspace, write_rolls=True)
-        entry = self._host(state)
+            self._creating += 1
+        try:
+            store.save_session(state, self.workspace, write_rolls=True)
+            entry = self._host(state)
+        except OSError as exc:
+            # No owner has received this session's token yet. Keeping its files
+            # would resurrect an inaccessible table on the next server start.
+            store.delete_session(state.id, self.workspace)
+            raise HubError(f"could not create session: {exc}") from exc
+        finally:
+            with self._lock:
+                self._creating -= 1
         log.info("created session %r (%s)", state.name, state.id)
         return self._describe(entry)
 

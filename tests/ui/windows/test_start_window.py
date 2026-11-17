@@ -17,6 +17,19 @@ def test_list_saved_characters_is_empty_when_none_saved() -> None:
     assert list_saved_characters() == []
 
 
+def test_opening_a_corrupt_character_keeps_the_launcher(qapp, tmp_path, monkeypatch):
+    path = tmp_path / "broken.json"
+    path.write_text("null", encoding="utf-8")
+    window = StartWindow()
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args))
+
+    window._open_character(path)
+
+    assert not window._child_windows
+    assert warnings and "JSON object" in warnings[0][-1]
+
+
 def test_start_window_shows_the_action_buttons(qapp: QApplication) -> None:
     window = StartWindow()
     labels = {b.text() for b in window.findChildren(QPushButton) if not b.isHidden()}

@@ -35,6 +35,7 @@ from mm_companion.core import library, storage
 from mm_companion.core.library import CharacterSummary, list_saved_characters
 from mm_companion.core.session.client import SessionClientError
 from mm_companion.ui import loading
+from mm_companion.ui.character_files import read_character
 from mm_companion.ui.flow_layout import FlowContainer, FlowLayout
 from mm_companion.ui.main_window import MainWindow, opening_text
 from mm_companion.ui.session_bridge import SessionBridge
@@ -321,7 +322,9 @@ class StartWindow(QMainWindow):
         """Load a character from *path* into a read-only sheet."""
         if loading.fading(self):
             return
-        character = library.load_character(path)
+        character = read_character(self, path)
+        if character is None:
+            return
         self._open_behind_fade(
             opening_text(character),
             lambda: MainWindow(character=character, path=path, locked=True),
@@ -413,7 +416,9 @@ class StartWindow(QMainWindow):
         bridge = SessionBridge()
         player_id, player_token = dialog.reclaim_ids()
         path = dialog.character_path()
-        character = library.load_character(path) if path is not None else None
+        character = read_character(self, path) if path is not None else None
+        if path is not None and character is None:
+            return
         # The join waits on the network and the sheet is a build, so both go behind
         # one loading screen, with its bar up from the start; the warning waits until
         # the screen is down.

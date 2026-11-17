@@ -58,7 +58,11 @@ def snapshot_size(character: Character) -> int:
     :meth:`~mm_companion.core.session.client.SessionClient.send_snapshot` would
     send it.
     """
-    return len(encode(CharacterSnapshot(character=sanitize_snapshot(character.to_dict()))))
+    return len(
+        encode(
+            CharacterSnapshot(character=sanitize_snapshot(character.to_dict(include_runtime=True)))
+        )
+    )
 
 
 class SnapshotPusher(QObject):
@@ -121,7 +125,7 @@ class SnapshotPusher(QObject):
         client = self._bridge.client
         if client is None or not client.connected:
             return False
-        snapshot = self._sheet.character.to_dict()
+        snapshot = self._sheet.character.to_dict(include_runtime=True)
         portrait = self._portrait_payload(self._sheet.character.image_path)
         if portrait:
             # Rides in the snapshot dict; sanitize_snapshot keeps it (it only strips

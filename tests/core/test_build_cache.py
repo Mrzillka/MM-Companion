@@ -72,6 +72,22 @@ def test_outside_a_scope_nothing_is_memoized(data, hero, counted) -> None:
     assert len(counted) == 4
 
 
+def test_distinct_functions_with_the_same_name_have_distinct_cache_entries(data, hero):
+    from mm_companion.core.rules.build_cache import build_scoped
+
+    def make(value):
+        @build_scoped
+        def calculate(char, game_data):
+            return value
+
+        return calculate
+
+    first, second = make(1), make(2)
+    with stable_build():
+        assert first(hero, data) == 1
+        assert second(hero, data) == 2
+
+
 def test_inside_a_scope_the_build_is_gathered_once(data, hero, counted) -> None:
     with stable_build():
         for _ in range(4):

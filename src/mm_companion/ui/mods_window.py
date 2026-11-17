@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
 )
 
 from mm_companion.core import mods, storage
-from mm_companion.ui.app_restart import restart_app
+from mm_companion.ui.app_restart import defer_restart, restart_app
 from mm_companion.ui.wheel_guard import guard_wheel
 from mm_companion.ui.widgets import BOLD_STYLE, make_spin_box
 
@@ -204,9 +204,8 @@ class ModsWindow(QMainWindow):
 
     def _reload_mods(self) -> None:
         """Rebuild the list from workspace discovery, honoring the saved order."""
-        settings = storage.load_settings()
-        enabled = set(settings.get("enabled_mods", []))
-        order = list(settings.get("mod_order", []))
+        enabled = set(storage.mod_ids("enabled_mods"))
+        order = list(storage.mod_ids("mod_order"))
 
         discovered = mods.discover_workspace_mods()
         self._mods = {mod.id: mod for mod in discovered}
@@ -247,9 +246,8 @@ class ModsWindow(QMainWindow):
             self._configure_button.setVisible(False)
             return
 
-        settings = storage.load_settings()
-        enabled = mod.id in settings.get("enabled_mods", [])
-        trusted = mod.id in settings.get("trusted_mods", [])
+        enabled = mod.id in storage.mod_ids("enabled_mods")
+        trusted = mod.id in storage.mod_ids("trusted_mods")
 
         self._detail_name.setText(mod.name)
         self._detail_version.setText(f"Version {mod.version}" if mod.version else "")
@@ -273,11 +271,7 @@ class ModsWindow(QMainWindow):
         if mod is None:
             return
         enable = item.checkState() == Qt.CheckState.Checked
-        if (
-            enable
-            and mod.python_module
-            and mod.id not in storage.load_settings().get("trusted_mods", [])
-        ):
+        if enable and mod.python_module and mod.id not in storage.mod_ids("trusted_mods"):
             trust = self._prompt_trust(mod)
             mods.set_mod_enabled(mod.id, True)
             mods.set_mod_trusted(mod.id, trust)
@@ -345,7 +339,7 @@ class ModsWindow(QMainWindow):
             QMessageBox.warning(self, "Could not add mod", str(exc))
             return
         # Append the new mod to the end of the load order so it wins by default.
-        order = list(storage.load_settings().get("mod_order", []))
+        order = list(storage.mod_ids("mod_order"))
         if mod.id not in order:
             mods.set_mod_order(order + [mod.id])
         self._mark_dirty()
@@ -388,7 +382,7 @@ class ModsWindow(QMainWindow):
         super().closeEvent(event)
         if self._restart_on_close:
             # Defer so this window is fully closed before we tear the app down.
-            QTimer.singleShot(0, restart_app)
+            defer_restart(restart_app)
 
     def _prompt_restart(self) -> bool:
         choice = QMessageBox.question(

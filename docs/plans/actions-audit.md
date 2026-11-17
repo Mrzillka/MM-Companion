@@ -97,4 +97,8 @@ not a claim that every combination or session path has passed a runtime test.
   and 169 related action checks passed. Ruff and Black checks passed.
 - The local full run reached the unrelated PDF-printing check, where Windows COM
   repeatedly failed with 0x80040155. Full Linux CI is required before merging.
-- Do not merge or describe this audit as complete while the open findings remain.
+- The user authorized merging this fix set and publishing a minor release on
+  17 November. Open findings remain recorded; the release does not certify every
+  action combination or the deferred Grab/Escape workflow.
+
+- Full CI passed on Python 3.10, 3.11, 3.12 and 3.13 (5,254 passed, 1 skipped in each job): [run 44029227923](https://github.com/Mrzillka/MM-Companion/actions/runs/44029227923).

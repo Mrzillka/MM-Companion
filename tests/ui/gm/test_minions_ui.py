@@ -468,8 +468,9 @@ def test_a_minion_answering_a_save_lands_the_worst_and_its_card_says_so(
     sent: list[tuple[RollSpec, bool]] = []
     monkeypatch.setattr(
         window._roller,
-        "roll_spec",
-        lambda s, minion=False: sent.append((s, minion)) or True,
+        "prepare_spec",
+        lambda s, minion=False, before=None: (before(s) if before else True)
+        and (sent.append((s, minion)) or True),
     )
     window._roll_as(_damage_save(data), party, AnswerContext(seq=3))
     ((spec, minion),) = sent

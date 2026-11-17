@@ -90,7 +90,7 @@ def test_block_readies_then_loads_a_harder_block_each_time(qapp, data, menu, ins
     assert _Menu.shown == []  # readying asks nothing
     dice.start_self_action("block")  # a close attack comes: block it with the Punch
     first = dice.panel.current_spec()
-    assert first.dc is None and "attacker's result" in first.label
+    assert first.dc is None and "incoming attack" in first.label
     (blocking,) = hero.conditions
     assert blocking.count == 1  # loading/abandoning a check has spent nothing
     dice.start_self_action("block")
@@ -104,15 +104,14 @@ def test_block_readies_then_loads_a_harder_block_each_time(qapp, data, menu, ins
     assert second.modifier == first.modifier - 2
 
 
-def test_block_with_no_attack_readies_but_cannot_block(qapp, data) -> None:
+def test_block_with_no_attack_still_offers_the_basic_check(qapp, data) -> None:
     """Readying needs no attack; blocking picks one, so a Blocking character with
     none sees the tile greyed with the reason rather than a press that does nothing."""
     from mm_companion.core.character import Character
-    from mm_companion.ui.action_menu import NO_ATTACKS
 
     plain = Character.new_default(data)
     sheet = CharacterSheet(data, plain)
     assert sheet.dice.panel.open_actions().tile("block").isEnabled()
     sheet.dice.start_self_action("block")
     tile = sheet.dice.panel.open_actions().tile("block")
-    assert not tile.isEnabled() and NO_ATTACKS in tile.toolTip()
+    assert tile.isEnabled()

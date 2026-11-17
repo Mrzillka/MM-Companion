@@ -23,6 +23,7 @@ from mm_companion.core.rules import (
     has_attack_check,
     has_temporary,
     localize_spec,
+    opposed_action_degree,
     opposing_effects,
     opposing_spent,
     targeted_action,
@@ -107,9 +108,9 @@ def test_a_trick_rolls_deception_and_aid_rolls_against_dc_10(data, ana) -> None:
 
 def test_the_target_resists_with_the_best_of_its_candidates(data, thug) -> None:
     feint = targeted_action(data, "feint")
-    spec = targeted_resist_spec(data, feint, "Feint", 17)
+    spec = targeted_resist_spec(data, feint, "Feint", 17, attack_range="close")
     assert spec.kind == KIND_BEST_OF and spec.dc == 17
-    assert "Close Combat" in spec.trait_key and "Insight" in spec.trait_key
+    assert "combat-skill:close_combat" in spec.trait_key and "Insight" in spec.trait_key
     thug.skill_ranks["Insight"] = 9
     own = localize_spec(spec, thug, data)
     assert own.modifier == 9  # Insight (AWE 0 + 9) beats its attack-based combat skills (4)
@@ -170,7 +171,7 @@ def test_opposing_conditions_count_only_between_the_two_they_name(data, ana, thu
 def test_aided_defense_counts_against_the_named_attacker(data, ana, thug) -> None:
     apply_condition(ana, "aided_defense", data, parameter="Thug", amount=2)
     effects = opposing_effects(thug, "Thug", ana, "Ana", data)
-    assert effects.defense == 2 and effects.target_spent
+    assert effects.defense == 2 and not effects.target_spent
     assert defense_against(ana, data, effects) == defense_class_in_play(ana, data) + 2
 
 
@@ -185,3 +186,40 @@ def test_spending_takes_off_only_the_instance_named(data, ana) -> None:
 def test_a_change_carries_its_parameter_onto_the_sheet(data, thug) -> None:
     apply_condition_changes(thug, (ConditionChange("feinted", parameter="Ana"),), data)
     assert thug.conditions[0].parameter == "Ana"
+
+
+@pytest.mark.parametrize(
+    "actor_modifier,actor_die,target_modifier,target_die,expected",
+    [
+        (8, 10, 6, 12, 1),
+        (6, 12, 8, 10, -1),
+        (12, 10, 1, 20, -1),
+        (12, 1, 2, 10, -1),
+        (6, 20, 6, 20, 1),
+        (6, 10, 6, 10, 1),
+        (0, 20, 15, 10, 1),
+    ],
+)
+def test_opposed_actions_compare_modifiers_and_both_naturals(
+    actor_modifier, actor_die, target_modifier, target_die, expected
+):
+    assert (
+        opposed_action_degree(
+            actor_modifier, actor_die, target_modifier, target_die, tied_actor_wins=True
+        )
+        == expected
+    )
+
+
+def test_opposed_minion_and_routine_do_not_gain_a_twenty():
+    assert opposed_action_degree(0, 20, 15, 10, actor_added_success=False) == -1
+    assert opposed_action_degree(12, 10, 1, 20, target_natural=False) == 1
+    assert opposed_action_degree(6, 10, 6, 10, tied_actor_wins=False) == -1
+
+
+def test_trick_bonus_applies_to_a_targeted_check_and_aid_does_not(data, ana, thug):
+    apply_condition(ana, "trick_advantage", data, parameter="Thug", amount=5)
+    apply_condition(ana, "aided_attack", data, parameter="Thug", amount=2)
+    check = opposing_effects(ana, "Ana", thug, "Thug", data, check_only=True)
+    assert check.attack == 5
+    assert [c.condition_id for c in check.attacker_spent] == ["trick_advantage"]

@@ -250,8 +250,9 @@ Working notes for MM-Companion, split out of [AGENTS.md](../../AGENTS.md).
     below +0."), shown on the slider and box (`cap_reason`).
   - **The no-DC warning is a flag**: `NO_DC_SHORT` ("⚠ No DC") in its own label under
     the result, `NO_DC_WARNING` its tooltip (`warning_text()`).
-  - **Natural 20s and 1s** (`roll_history.natural_kind` / `roll_natural`: a graded roll
-    trusts `critical`, an ungraded one its die unless routine or a lucky re-roll):
+  - **Natural 20s and 1s** (`roll_history.natural_kind` / `roll_natural`: genuine faces
+    show even without an added degree, including minion 20s; exclude routine checks
+    and lifted lucky re-rolls):
     `dice.critical` / the new `dice.fumble` token for the halo; a burst over the die
     (`ui/roller/flourish.py`'s `DieBurst`: rays and sparks, or a breaking ring of
     shards), the halo pulsing (20) or the die shaking (1); a 20's numeral in gold; a

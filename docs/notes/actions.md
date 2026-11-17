@@ -977,11 +977,47 @@ Counting earlier Impress attempts automatically was dropped: the GM sets the sli
 Block's reaction is spent on a settled roll, not when its check is merely loaded.
 The panel's local `specRolled` cue preserves the prepared spec through a hosted
 result and skips abandonment/rerolls. The runner remembers the actor that loaded
-the reaction. Its manually entered DC is the attacker's result +1 (the block must
-beat it). Slam reads condition-adjusted speed and rounds halved self-damage up.
+the reaction. Its manually entered DC is the incoming attack's result; the table
+compares modifiers on ties. Slam uses the selected condition-adjusted movement
+mode and rounds halved self-damage up.
 
 Self-action options may declare `requiresAdvantage` (a data advantage id) and
 `replacesOptions`. `self_action_options` evaluates bought and active granted
 advantages; an available replacement hides the ordinary alternatives. A sole
 option runs directly. Stand's Instant Up path uses this seam to remove Prone
 without loading a check or applying Hindered.
+
+## Action audit corrections (17 November 2026)
+
+The decisions/findings live in [the action audit](../plans/actions-audit.md).
+These supersede older descriptions above of request popups and immediate rolls:
+
+- Roll asks point to the player's **history card**, without `RollPromptDialog`.
+  History follow-ups/requests use `prepare_spec`: load, click die, then clear the
+  single-use chip. Recover also loads its check instead of throwing immediately.
+- Aimed/targeted declarations use `prepare_spec(before=...)`: the declaration is
+  sent with the final maneuver-adjusted spec on the die click. NPC aimed/targeted
+  attacks prepare the GM roller too.
+- GM adjudication of attacks, targeted actions, Impress and Area is posted to
+  shared history through `action_result`, including actual condition changes.
+  Tables show arithmetic, explicit grades and genuine natural-face badges. A long
+  conditional Damage-success caveat moves behind a warning icon.
+- Targeted opposition compares totals/modifiers and applies the agreed combined
+  natural-face interpretation. Its rolls are ungraded until adjudicated; a shared
+  summary states the result and tiebreak. This replaces defender-always-wins ties
+  and the lead-20-as-DC+5 approximation on those actions.
+- `reaction.check` supplies Block's basic check without an attack power;
+  `reaction.attackRange` filters applicable attacks. Action `attackRange` filters
+  Charge/Grab/Trip. `resistByRange` selects Feint's matching combat category;
+  `combat-skill` reads owned focus/specialized rows.
+- `opposing.consume: false` keeps Aid Defense through repeated attacks;
+  `opposing.anyAction` includes Trick in non-attack targeted checks and named
+  Impress targets. Turn expiry and conflict limits are **reminders**, by decision.
+- Smash/Trip `followUp` defines an inline post-hit card: an object's separate
+  Hit/Broken/Destroyed resistance ladder, or optional throw/falling Damage.
+  Object conditions never land on the bearer. Object Toughness and target mass
+  require entered values; existing object Hits and falling protection are GM
+  inputs. Equipment damage is not persisted. A targeted declaration carries
+  `damage_rank` separately, since a spec's `effect_rank` is normally local-only.
+- An action's `reminder` accompanies its immediate history note or targeted
+  result. Full Grab/Escape is explicitly [deferred](../plans/grab-escape-follow-up.md).

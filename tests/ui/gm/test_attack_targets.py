@@ -98,12 +98,16 @@ def _ref(window: GMWindow, name: str) -> str:
 
 def _staged(degrees: list[int], calls: list):
     def fake(lines, *, lead_modifier=None, dc=None, critical_bonus=0, rng=None):
-        calls.append(list(lines))
+        calls.append(list(lines) if lead_modifier is None else [(lead_modifier, 0)])
         results = tuple(
             CheckResult(10, line[0], 10 + line[0], (dc or 0) + line[1], degree, False)
             for line, degree in zip(lines, degrees, strict=False)
         )
-        return GroupResult(None, None, results)
+        return GroupResult(
+            None if lead_modifier is None else 10,
+            None if lead_modifier is None else 10 + lead_modifier,
+            results,
+        )
 
     return fake
 
@@ -311,7 +315,7 @@ def test_the_gm_aims_an_npcs_tile_straight_through(window: GMWindow, data, monke
         window._attack.take_roll(_roll(spec, 19, 20))
         return True
 
-    monkeypatch.setattr(window._roller, "roll_spec", roll_spec)
+    monkeypatch.setattr(window._roller, "prepare_spec", roll_spec)
     target = next(t for t in window._aim_targets_for(brute) if t.ref == _ref(window, thug))
     assert all(t.ref != _ref(window, brute) for t in window._aim_targets_for(brute))
     window._aim_from_card(brute, (_attack_spec(data), target))
@@ -481,5 +485,7 @@ def test_a_hosted_aimed_attacks_save_comes_back_and_lands(qapp, window: GMWindow
     source = next(p for p in sources if p.name == "Thug")
     spec = replace(_attack_spec(data), modifier=40)  # a sure hit: there is a save to wait on
     aimed = window._attack.aim_own(source, spec, _ref(window, brute), "Brute")
+    assert not aimed.done
+    window._roller._start_roll()
     _wait(qapp, lambda: aimed.done)
     assert any("vs DC" in part and ":" in part for part in aimed.said[1:]), aimed.said

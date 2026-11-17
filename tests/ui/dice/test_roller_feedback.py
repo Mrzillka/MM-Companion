@@ -272,7 +272,7 @@ def test_a_natural_roll_bursts_and_says_so(qapp, monkeypatch, die, kind, token) 
 def test_a_lucky_reroll_or_a_take_ten_is_no_natural(qapp) -> None:
     assert roll_natural({"die": 20, "reroll": True}) is None
     assert roll_natural({"die": 10, "routine": True}) is None
-    assert roll_natural({"die": 20, "degree": 2, "critical": False}) is None  # a minion's
+    assert roll_natural({"die": 20, "degree": 2, "critical": False}) == NATURAL_TWENTY
     assert roll_natural({"die": 20, "degree": 3, "critical": True}) == NATURAL_TWENTY
     assert roll_natural({"die": 1}) == NATURAL_ONE
 

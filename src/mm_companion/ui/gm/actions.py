@@ -33,6 +33,10 @@ class GMActionsMixin:
 
     # -- the Impress action's host surface (see ImpressHost) ------------------
 
+    def action_result(self, title: str, text: str) -> None:
+        """Keep the GM's final adjudication in every player's shared history."""
+        self._post_note(f"{title}: {text}")
+
     def impress_parties(self) -> tuple[list[ImpressParty], list[ImpressParty]]:
         """Who may impress (the cast, and the seats) and who may be targeted (the board).
 
@@ -269,11 +273,11 @@ class GMActionsMixin:
 
     def area_roll_attack(
         self, spec: RollSpec, attacker: Character | None = None, *, before=None
-    ) -> None:
+    ) -> bool:
         """Roll an NPC's attack against the primary on this window's roller.
 
         A minion *attacker*'s natural 20 is no critical (PDF p25). *before* is the
         roller's (``roll_spec(before=)``): an aimed attack declares the spec the die is
         made of, the GM's maneuvers on it.
         """
-        self._roller.roll_spec(spec, minion=self.rolls_as_minion(attacker), before=before)
+        return self._roller.prepare_spec(spec, minion=self.rolls_as_minion(attacker), before=before)

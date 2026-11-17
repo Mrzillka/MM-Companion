@@ -33,9 +33,8 @@ from mm_companion.ui.action_ui import (
     KIND_OUTCOME,
     KIND_ROLL_ASK,
     KIND_ROLL_CLOSED,
-    RollPromptDialog,
 )
-from mm_companion.ui.blocks.bus import BUILD_CHANGED, CONDITION_CHANGED, EDITED, ROLL_REQUESTED
+from mm_companion.ui.blocks.bus import BUILD_CHANGED, CONDITION_CHANGED, EDITED
 from mm_companion.ui.session_bridge import SessionBridge, set_active_session
 from mm_companion.ui.session_portrait import encode_portrait
 from mm_companion.ui.toasts import notify_window
@@ -244,13 +243,9 @@ class ActionPromptReceiver(QObject):
 
     Three ``ActionPrompt`` kinds come this way (see :mod:`mm_companion.ui.action_ui`):
 
-    * ``"roll"`` opens a :class:`~mm_companion.ui.action_ui.RollPromptDialog` over the
-      window — one per action, updated in place when the next roll of the same action
-      is asked for (the save after a Dodge). Its button rolls on this sheet's own
-      roller, so the player's numbers go in and the roll lands in the shared history,
-      where the GM's table picks it up;
-    * ``"roll-closed"`` closes it: answered (perhaps from the history card instead),
-      rolled for them, or called off;
+    * ``"roll"`` points to the shared history's request card. Clicking that card
+      loads the roll on the sheet's die; no separate roll window interrupts play.
+    * ``"roll-closed"`` needs no local UI cleanup: the GM strikes the history card;
     * ``"outcome"`` is what the action did to them, as a notice over the sheet.
     """
 
@@ -259,20 +254,12 @@ class ActionPromptReceiver(QObject):
         self._window = window
         self._bridge = bridge
         self._attached = True
-        self._dialogs: dict[str, RollPromptDialog] = {}
         bridge.actionPrompted.connect(self.handle)
-
-    @property
-    def dialogs(self) -> dict[str, RollPromptDialog]:
-        return dict(self._dialogs)
 
     def handle(self, kind: str, action_id: str, payload: object) -> None:
         if not self._attached or not action_id:
             return
         if kind == KIND_ROLL_CLOSED:
-            dialog = self._dialogs.pop(action_id, None)
-            if dialog is not None:
-                dialog.close()
             return
         if not isinstance(payload, dict):
             return
@@ -287,42 +274,15 @@ class ActionPromptReceiver(QObject):
         if spec is None:
             return
         asker = str(payload.get("asker", ""))
-        dialog = self._dialogs.get(action_id)
-        if dialog is not None:
-            dialog.update_spec(spec, asker=asker)
-            dialog.raise_()
-            return
-        sheet = self._window.sheet
-        dialog = RollPromptDialog(
-            sheet.data,
-            sheet.character,
-            action_id=action_id,
-            spec=spec,
-            asker=asker,
-            roll=self._roll,
-            parent=self._window,
+        notify_window(
+            self._window,
+            f"{asker or 'The GM'} requests {spec.label}. Select it in history, then click the die.",
+            theme.color("accent.dice"),
         )
-        dialog.destroyed.connect(lambda *_x, a=action_id: self._dialogs.pop(a, None))
-        self._dialogs[action_id] = dialog
-        dialog.show()
-
-    def _roll(self, spec: RollSpec) -> bool:
-        """Roll *spec* on this sheet — its own roller, its own numbers filled in."""
-        sheet = self._window.sheet
-        dice = sheet.section("dice") if hasattr(sheet, "section") else None
-        panel = getattr(getattr(dice, "view", None), "panel", None)
-        if panel is not None:
-            return bool(panel.roll_spec(spec))
-        # No Dice block on this sheet (a mod took it out): whoever serves the topic rolls.
-        sheet.bus.publish_request(ROLL_REQUESTED, spec)
-        return True
 
     def detach(self) -> None:
         """Stop answering — the sheet closed, or the session ended."""
         self._attached = False
-        for dialog in list(self._dialogs.values()):
-            dialog.close()
-        self._dialogs.clear()
 
 
 def attach_player_session(window, bridge: SessionBridge) -> None:

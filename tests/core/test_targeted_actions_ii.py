@@ -224,7 +224,7 @@ def test_block_readies_then_each_block_is_harder(data, ana) -> None:
     assert reacting(block, ana)
     first = reaction_spec(data, block, ana, attack)
     assert first.modifier == attack.modifier and first.dc is None and first.follow_up is None
-    assert "attacker's result" in first.label
+    assert "incoming attack" in first.label
     apply_condition_changes(ana, reaction_changes(block), data)
     second = reaction_spec(data, block, ana, attack)
     assert second.modifier == attack.modifier - 2 and "1 earlier block" in second.label
@@ -234,3 +234,38 @@ def test_block_readies_then_each_block_is_harder(data, ana) -> None:
     # The start of the next turn resets it.
     clear_temporary(ana)
     assert not reacting(block, ana)
+
+
+@pytest.mark.parametrize(
+    "degree,expected", [(1, "Hit"), (-1, "Broken"), (-2, "Destroyed"), (-4, "Destroyed")]
+)
+def test_smash_uses_the_object_ladder(data, degree, expected):
+    from mm_companion.core.rules import action_followup_spec, resistance_outcome
+
+    spec = action_followup_spec(data, data.combat.action("smash"), 8, toughness=7, hits=2)
+    assert spec.dc == 18 and spec.modifier == 5
+    assert spec.ladder is None  # Object conditions must never land on the bearer.
+    assert resistance_outcome(spec, degree) == expected
+
+
+def test_trip_throw_distance_and_damage_use_the_special_trip_rule(data):
+    from mm_companion.core.rules import (
+        action_followup_spec,
+        action_throw_damage,
+        action_throw_limit,
+    )
+
+    action = data.combat.action("trip")
+    assert action_throw_limit(3, 8, 4) == 6
+    assert action_throw_damage(action, 20) == 16
+    assert action_followup_spec(data, action, 0) is None
+    spec = action_followup_spec(data, action, 6)
+    assert spec.dc == 16 and spec.ladder.rank == 6
+
+
+def test_object_defense_requires_two_success_degrees(data):
+    from mm_companion.core.rules import action_followup_spec, object_followup_caption
+
+    spec = action_followup_spec(data, data.combat.action("smash"), 8)
+    assert "Hits now 2" in object_followup_caption(spec, 1, 1, no_hit=True)
+    assert object_followup_caption(spec, 2, 1, no_hit=True) == "Unaffected by the defense"
